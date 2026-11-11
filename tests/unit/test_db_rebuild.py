@@ -937,6 +937,68 @@ class TestRecencyAwareRebuild:
             assert status == "DESTROYED"
             assert len(result.warnings) == 1
 
+    def test_newer_rows_beat_a_newer_file_mtime(self, tmp_path):
+        """#686: the older catalog was copied without keeping its mtime, so
+        its file looks newer.  The catalog whose rows are newer still wins:
+        rows rank first, mtime only breaks a tie."""
+        older_rows = _build_disc(
+            tmp_path,
+            "older",
+            FRESH_MTIME,
+            volumes=[("VOL001", "uuid-001", "VERIFIED", "2026-01-01 00:00:00")],
+        )
+        newer_rows = _build_disc(
+            tmp_path,
+            "newer",
+            STALE_MTIME,
+            volumes=[
+                ("VOL001", "uuid-001", "DESTROYED", "2026-01-01 00:00:00"),
+                ("VOL002", "uuid-002", "VERIFIED", "2026-04-01 00:00:00"),
+            ],
+        )
+        assert (
+            rebuild._source_freshness(newer_rows / "catalog.db")
+            > rebuild._source_freshness(older_rows / "catalog.db")
+        )
+        for idx, order in enumerate(([older_rows, newer_rows],
+                                     [newer_rows, older_rows])):
+            output_db = tmp_path / f"master-{idx}.db"
+            result = rebuild.rebuild_catalog(order, output_db)
+            assert result.ok
+            conn = get_connection(output_db)
+            status = conn.execute(
+                "SELECT status FROM volumes WHERE uuid = ?", ("uuid-001",)
+            ).fetchone()[0]
+            conn.close()
+            assert status == "DESTROYED"
+            # The older catalog's VERIFIED is reported, not applied.
+            assert len(result.warnings) == 1
+            assert "VOL001" in result.warnings[0]
+
+    def test_event_dates_count_as_row_freshness(self, tmp_path):
+        """A later event (a verify, a location move) makes a catalog newer
+        even when no volume was created after the other catalog's."""
+        a = _build_disc(
+            tmp_path, "a", FRESH_MTIME,
+            volumes=[("VOL001", "uuid-001", "BURNED", VOLUME_CREATED_AT)],
+        )
+        b = _build_disc(
+            tmp_path, "b", STALE_MTIME,
+            volumes=[("VOL001", "uuid-001", "VERIFIED", VOLUME_CREATED_AT)],
+        )
+        conn = get_connection(b / "catalog.db")
+        conn.execute(
+            "INSERT INTO volume_events (volume_id, event_type, event_date, "
+            "detail) VALUES (1, 'VERIFY_PASS', '2026-02-01 00:00:00', 'x')"
+        )
+        conn.commit()
+        conn.close()
+        os.utime(b / "catalog.db", (STALE_MTIME, STALE_MTIME))
+        assert (
+            rebuild._source_freshness(b / "catalog.db")
+            > rebuild._source_freshness(a / "catalog.db")
+        )
+
 
 class TestRebuildKeepsPasswordSplits:
     """#573: a rebuilt catalog keeps the recorded password splits."""
@@ -1004,6 +1066,53 @@ class TestRebuildKeepsPasswordSplits:
             conn.close()
             assert record is not None
             assert (record.threshold, record.shares, record.slip39_id) == (3, 4, 2)
+
+    def test_cleared_split_stays_cleared(self, tmp_path: Path) -> None:
+        """#686: disc 1 records a split; the split was cleared before disc 2
+        was staged.  Disc 2 knows the repository and has no split row, so
+        the rebuild ends with no split record, whatever the disc order and
+        even though disc 1's file carries the newer mtime."""
+        from lcsas.db.key_escrow import get_split_for_repo
+
+        disc1 = self._disc_with_split(
+            tmp_path, "d1", FRESH_MTIME,
+            (2, 3, 7, "2026-02-01T10:00:00+00:00"),
+        )
+        disc2 = _build_disc(
+            tmp_path, "d2", STALE_MTIME,
+            [("LCSAS_d2", "uuid-d2", "STAGING", "2026-03-01 00:00:00")],
+        )
+        for order, name in (([disc1, disc2], "a"), ([disc2, disc1], "b")):
+            out = tmp_path / f"rebuilt-{name}.db"
+            result = rebuild.rebuild_catalog(order, out)
+            assert result.ok
+            assert result.splits_merged == 0
+            conn = get_connection(out)
+            assert get_split_for_repo(conn, "repo1") is None
+            conn.close()
+
+    def test_split_kept_when_the_newer_disc_still_records_it(
+        self, tmp_path: Path,
+    ) -> None:
+        """Positive control for the test above: the newer disc carries the
+        split, so it survives."""
+        from lcsas.db.key_escrow import get_split_for_repo
+
+        old = _build_disc(
+            tmp_path, "old", FRESH_MTIME,
+            [("LCSAS_old", "uuid-old", "VERIFIED", VOLUME_CREATED_AT)],
+        )
+        new = self._disc_with_split(
+            tmp_path, "new", STALE_MTIME,
+            (2, 3, 7, "2026-02-01T10:00:00+00:00"),
+        )
+        out = tmp_path / "rebuilt.db"
+        result = rebuild.rebuild_catalog([old, new], out)
+        assert result.ok and result.splits_merged == 1
+        conn = get_connection(out)
+        record = get_split_for_repo(conn, "repo1")
+        conn.close()
+        assert record is not None and record.slip39_id == 7
 
     def test_disc_without_the_table_is_fine(self, tmp_path: Path) -> None:
         disc = self._disc_with_split(tmp_path, "d1", 1_000, None)

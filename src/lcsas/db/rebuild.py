@@ -56,31 +56,74 @@ def _parse_timestamp(value: object) -> float | None:
     return dt.timestamp()
 
 
-def _source_freshness(catalog_db: Path) -> float:
-    """Freshness ordinal for a disc catalog (bigger = newer).
+# Freshness of a catalog: (newest timestamp found in its rows, file mtime).
+# Tuples compare element by element, so the rows decide and the mtime only
+# breaks a tie (#686).
+Freshness = tuple[float, float]
 
-    Max of the catalog file's mtime (preserved by Rock Ridge in the ISO
-    image) and ``MAX(volumes.created_at)`` inside the catalog — the
-    row-derived value guards against copying that mangled the mtime
-    (FMA-06).
+# Timestamp columns that show how recent a catalog is.  Each is read with
+# its own MAX() and parsed in Python, because the columns do not share one
+# text format (CURRENT_TIMESTAMP vs isoformat with an offset).
+_FRESHNESS_COLUMNS = (
+    ("volumes", "created_at"),
+    ("volumes", "closed_at"),
+    ("volumes", "verified_at"),
+    ("volume_copies", "burn_date"),
+    ("volume_copies", "last_verified_at"),
+    ("volume_events", "event_date"),
+    ("burn_sessions", "created_at"),
+    ("key_escrow", "split_at"),
+)
+
+
+def _row_freshness(conn: sqlite3.Connection, schema: str = "main") -> float:
+    """Newest timestamp in the rows of a catalog (``-inf`` when none).
+
+    A catalog older than v10 lacks some of the tables; those are skipped.
     """
-    freshness = catalog_db.stat().st_mtime
+    tables = {
+        r[0] for r in conn.execute(
+            f"SELECT name FROM {schema}.sqlite_master WHERE type = 'table'"
+        )
+    }
+    newest = float("-inf")
+    for table, column in _FRESHNESS_COLUMNS:
+        if table not in tables:
+            continue
+        try:
+            row = conn.execute(
+                f"SELECT MAX({column}) FROM {schema}.{table}"
+            ).fetchone()
+        except sqlite3.Error:
+            continue  # column missing in an old catalog
+        ts = _parse_timestamp(row[0] if row else None)
+        if ts is not None and ts > newest:
+            newest = ts
+    return newest
+
+
+def _source_freshness(catalog_db: Path) -> Freshness:
+    """Freshness of a disc catalog (bigger = newer).
+
+    Ranked by the newest timestamp in the catalog's rows first; the file
+    mtime (preserved by Rock Ridge in the ISO image) only breaks a tie.
+    A catalog copied without keeping its mtime therefore cannot outrank
+    a catalog whose rows are newer (FMA-06, #686).
+    """
+    mtime = catalog_db.stat().st_mtime
     try:
         # Percent-encode so mount paths containing '?', '#', or spaces
         # survive SQLite's URI parsing.
         uri = "file:" + urllib.parse.quote(str(catalog_db)) + "?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         try:
-            row = conn.execute("SELECT MAX(created_at) FROM volumes").fetchone()
+            rows = _row_freshness(conn)
         finally:
             conn.close()
     except sqlite3.Error:
         # Unreadable/corrupt source — the merge itself will report it.
-        return freshness
-    row_ts = _parse_timestamp(row[0] if row else None)
-    if row_ts is not None and row_ts > freshness:
-        freshness = row_ts
-    return freshness
+        rows = float("-inf")
+    return (rows, mtime)
 
 
 @dataclass
@@ -110,9 +153,10 @@ def _merge_one_disc(
     target: sqlite3.Connection,
     source_db: Path,
     *,
-    source_freshness: float = 0.0,
-    status_freshness: dict[str, float] | None = None,
+    source_freshness: Freshness = (0.0, 0.0),
+    status_freshness: dict[str, Freshness] | None = None,
     warnings: list[str] | None = None,
+    escrow_freshness: dict[str, Freshness] | None = None,
 ) -> dict[str, int]:
     """Attach *source_db* and merge its data into *target*.
 
@@ -127,6 +171,10 @@ def _merge_one_disc(
     ignored — and if the stale status ranks *more alive* (the
     resurrection hazard) a warning is appended to *warnings*.
 
+    *escrow_freshness* does the same for recorded password splits: it maps
+    a repository key (``key_escrow.repo_id``) to the freshness of the
+    catalog that decided its split record (#686).
+
     Returns a dict mapping table name → rows inserted (plus the special
     key ``is_pruned_conflicts``: packs where a staler source disagreed
     with the kept ``is_pruned`` flag).
@@ -136,6 +184,8 @@ def _merge_one_disc(
         status_freshness = {}
     if warnings is None:
         warnings = []
+    if escrow_freshness is None:
+        escrow_freshness = {}
 
     # Use a safe alias to avoid conflicts with other attached catalogs.
     alias = "src"
@@ -411,28 +461,47 @@ def _merge_one_disc(
         #    on repo_id.  Every disc catalog carries them; dropping them made
         #    the stage preflight refuse a rebuilt catalog ("the catalog
         #    records no split") until the owner split the password again,
-        #    which supersedes the share cards already handed out.  Unlike the
-        #    tables above, the newest SPLIT wins, not the freshest catalog:
-        #    a re-split replaces the record, so a later split_at is the
-        #    one heirs follow.  A disc burned before the table lacks it.
+        #    which supersedes the share cards already handed out.
+        #
+        #    The freshest catalog that knows a repository decides its split
+        #    record, the same rule as volume status (#686): a split that was
+        #    recorded on an older disc and cleared before a newer disc was
+        #    staged must stay cleared, so a newer catalog with NO row for the
+        #    repository removes the row an older one would bring back.  A
+        #    catalog "knows" a repository it lists (by repo_id or by name:
+        #    splits recorded before #571 are keyed by name) or holds a split
+        #    for.  A disc burned before the table existed decides nothing.
+        inserted = 0
         if "key_escrow" in src_tables:
-            cur = target.execute(
-                f"""
-                INSERT INTO key_escrow
-                    (repo_id, threshold, shares, slip39_id, split_at)
-                SELECT repo_id, threshold, shares, slip39_id, split_at
-                FROM {alias}.key_escrow WHERE true
-                ON CONFLICT(repo_id) DO UPDATE SET
-                    threshold = excluded.threshold,
-                    shares = excluded.shares,
-                    slip39_id = excluded.slip39_id,
-                    split_at = excluded.split_at
-                WHERE excluded.split_at > key_escrow.split_at
-                """
+            known: set[str] = set()
+            for repo_id, name in target.execute(
+                f"SELECT repo_id, name FROM {alias}.repositories"
+            ).fetchall():
+                known.update((repo_id, name))
+            known.update(
+                r[0] for r in target.execute(
+                    f"SELECT repo_id FROM {alias}.key_escrow"
+                ).fetchall()
             )
-            counts["key_escrow"] = cur.rowcount
-        else:
-            counts["key_escrow"] = 0
+            for key in sorted(known):
+                last = escrow_freshness.get(key)
+                if last is not None and not source_freshness > last:
+                    continue
+                target.execute(
+                    "DELETE FROM key_escrow WHERE repo_id = ?", (key,)
+                )
+                cur = target.execute(
+                    f"""
+                    INSERT INTO key_escrow
+                        (repo_id, threshold, shares, slip39_id, split_at)
+                    SELECT repo_id, threshold, shares, slip39_id, split_at
+                    FROM {alias}.key_escrow WHERE repo_id = ?
+                    """,
+                    (key,),
+                )
+                inserted += max(cur.rowcount, 0)
+                escrow_freshness[key] = source_freshness
+        counts["key_escrow"] = inserted
 
         target.commit()
 
@@ -454,13 +523,15 @@ def rebuild_catalog(
     or data is merged into the existing file.
 
     Conflict resolution (recency-aware, FMA-06):
-    - Discs are merged NEWEST-first.  Freshness per disc is the max of the
-      ``catalog.db`` mtime and ``MAX(volumes.created_at)`` inside it, so
-      the merge result does not depend on the order discs are listed.
+    - Discs are merged NEWEST-first.  Freshness per disc is the newest
+      timestamp in the rows of its ``catalog.db`` (volumes, discs, events,
+      burn sessions, splits); the file mtime only breaks a tie (#686).
+      The merge result does not depend on the order discs are listed.
     - Records with the same natural key keep the freshest catalog's view
       (newest-first ordering + INSERT OR IGNORE).
-    - Recorded password splits (``key_escrow``) keep the newest
-      ``split_at`` per repository, whichever disc carries it (#573).
+    - Recorded password splits (``key_escrow``) follow the freshest
+      catalog that knows the repository, including a split cleared since
+      an older disc was staged (#573, #686).
     - Volume status follows the freshest catalog that mentions the volume,
       including downgrades to DEPRECATED/DESTROYED.  A stale disc claiming
       a volume is more alive than the freshest record (the resurrection
@@ -488,17 +559,27 @@ def rebuild_catalog(
     # baseline from its own rows (the file mtime is useless here — we
     # just touched it via ensure_schema), so a genuinely fresher disc
     # can still update a stale pre-existing master.
-    status_freshness: dict[str, float] = {}
-    baseline = _parse_timestamp(
-        conn.execute("SELECT MAX(created_at) FROM volumes").fetchone()[0]
-    )
-    if baseline is not None:
+    status_freshness: dict[str, Freshness] = {}
+    escrow_freshness: dict[str, Freshness] = {}
+    baseline_rows = _row_freshness(conn)
+    if baseline_rows != float("-inf"):
+        # No mtime for the output catalog: it wins a tie with a disc
+        # whose rows are just as new (it was rebuilt from that disc, or
+        # the disc was staged from it).
+        baseline: Freshness = (baseline_rows, float("inf"))
         for row in conn.execute("SELECT uuid FROM volumes"):
             status_freshness[row[0]] = baseline
+        for row in conn.execute(
+            "SELECT repo_id, name FROM repositories"
+        ).fetchall():
+            escrow_freshness[row[0]] = baseline
+            escrow_freshness[row[1]] = baseline
+        for row in conn.execute("SELECT repo_id FROM key_escrow").fetchall():
+            escrow_freshness[row[0]] = baseline
 
     # Sort newest-first.  Path is a deterministic tie-breaker; discs with
     # no catalog.db sort last (they only produce a skip error).
-    ordered: list[tuple[Path, Path | None, float]] = []
+    ordered: list[tuple[Path, Path | None, Freshness]] = []
     for disc_path in disc_paths:
         catalog_db = disc_path / "catalog.db"
         if catalog_db.is_file():
@@ -506,8 +587,12 @@ def rebuild_catalog(
                 (disc_path, catalog_db, _source_freshness(catalog_db))
             )
         else:
-            ordered.append((disc_path, None, float("-inf")))
-    ordered.sort(key=lambda entry: (-entry[2], str(entry[0])))
+            ordered.append(
+                (disc_path, None, (float("-inf"), float("-inf")))
+            )
+    ordered.sort(
+        key=lambda entry: (-entry[2][0], -entry[2][1], str(entry[0]))
+    )
 
     is_pruned_conflicts = 0
     for disc_path, source_db, freshness in ordered:
@@ -527,6 +612,7 @@ def rebuild_catalog(
                 source_freshness=freshness,
                 status_freshness=status_freshness,
                 warnings=result.warnings,
+                escrow_freshness=escrow_freshness,
             )
         except Exception as exc:
             _logger.error("Failed to merge %s: %s", disc_path, exc)
