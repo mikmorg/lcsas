@@ -674,7 +674,7 @@ def build_parser() -> argparse.ArgumentParser:
         "abort",
         help="Abort a never-burned session: delete its volumes and return "
              "their packs to the unarchived pool. Refused when a volume of "
-             "it was burned, even if its disc is not recorded yet.",
+             "it was burned but its disc is not recorded yet.",
     )
     sess_abort_p.add_argument(
         "ref", nargs="?", default="latest",

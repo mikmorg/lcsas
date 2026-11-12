@@ -1730,7 +1730,8 @@ class BurnOrchestrator:
 
         - ``VERIFY_PASS`` at a location: a disc was read back at that
           location.  An ISO verify records no location, so it does not
-          count.
+          count.  ``lcsas verify <label> --disc`` without ``--location``
+          records none either; its default detail "Disc verify" counts.
         - ``BURN_RECEIPT_IMPORTED``, unless its receipt says the disc
           failed verification (``verify_passed`` false).
         - ``LOCATION_MOVE``: a recorded disc was moved.
@@ -1751,7 +1752,7 @@ class BurnOrchestrator:
         for event_type, location, detail in rows:
             where = f" at {location}" if location else ""
             if event_type == "VERIFY_PASS":
-                if location:
+                if location or detail == "Disc verify":
                     return f"a disc of it passed verification{where}"
             elif event_type == "BURN_RECEIPT_IMPORTED":
                 try:

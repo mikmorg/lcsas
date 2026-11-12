@@ -236,6 +236,8 @@ def _receipt_event(conn, volume_id: int, verify_passed: object) -> None:
 @pytest.mark.parametrize("events, evidence", [
     ([("VERIFY_PASS", "Home", "Post-burn read-back")],
      "passed verification at Home"),
+    # 'lcsas verify <label> --disc' with no --location records no location.
+    ([("VERIFY_PASS", None, "Disc verify")], "passed verification"),
     ([("LOCATION_MOVE", "Home", "")], "was moved at Home"),
     ([("VERIFY_FAIL_REBURN", "Home", "")], "was burned again at Home"),
 ])
