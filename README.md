@@ -767,7 +767,7 @@ LCSAS shells out to three external binaries: **rustic**, **xorriso**, and **dvdi
 
 | Tool        | Version pinned in CI | Notes |
 |-------------|----------------------|-------|
-| rustic      | **v0.11.2**          | matches `.github/workflows/test.yml` |
+| rustic      | **v0.11.2**          | matches `.github/actions/install-rustic/action.yml` |
 | xorriso     | distro-provided      | any recent version is fine |
 | dvdisaster  | distro-provided      | RS03 encoder must be present |
 | cdemu       | distro-provided      | optional, only for the e2e blind-restore suite |
@@ -897,9 +897,15 @@ backports on the host if containers fail in unexplained ways.
 2. `apt-get install`s xorriso + dvdisaster
 3. `make dev` → `make -C recovery all test` (C smoke: build every recovery
    binary + run the C unit tests) → `make test-unit` →
-   `make test-integration` → e2e pipeline test → `make typecheck` →
+   `make test-integration` → `make test-e2e` → `make typecheck` →
    `make lint`
 4. A second `recovery-hardening` job runs the recovery-hardening suite,
    including `make shell-coverage`
+
+`.github/workflows/weekly.yml` is the only scheduled workflow. Every
+Monday it calls the slow canaries (bin-parity, the ECC repair proof, the
+macOS and Windows restore journeys, the upstream and format canaries, the
+live-USB drill and the opt-in hardening gates in `opt-in-gates.yml`) and
+files an issue for each one that goes red.
 
 The e2e blind-restore suite is intentionally excluded from CI (cdemu/vhba unavailable on GitHub runners). Run it locally before cutting a release.

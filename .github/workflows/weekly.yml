@@ -1,0 +1,214 @@
+name: weekly
+
+# The one scheduled workflow (#693).  Every Monday it calls each weekly
+# canary, then one canary watchdog files (or bumps) a tracking issue for
+# each canary that went red.  The gates themselves live in files with no
+# schedule; this file only schedules them.
+#
+#   bin-parity       bin-parity.yml       committed recovery binaries still
+#                                         rebuild byte-identical (GATE-08)
+#   ecc-repair       ecc-repair.yml       RS03 ECC repair proof (GATE-05)
+#   macos-tier1      macos-tier1.yml      Mach-O tier-1 binaries run on real
+#                                         macOS (GATE-03)
+#   macos-e2e        macos-e2e.yml        restore.sh journey on real macOS
+#   upstream-canary  upstream-canary.yml  pinned upstream artifacts still
+#                                         cold-fetch and verify (#372)
+#   windows-e2e      windows-e2e.yml      restore.bat journey on real Windows
+#                                         (INFRA-01 tier 3)
+#   format-canary    format-canary.yml    LATEST rustic vs the pinned readers
+#                                         (FMT-03)
+#   live-usb-smoke   live-usb-smoke.yml   live-USB Secure-Boot restore drill
+#                                         (BOOT-04)
+#   opt-in-gates     opt-in-gates.yml     the LCSAS_* opt-in hardening gates
+#                                         (#694)
+#
+# The canary jobs have no `needs:` between them, so one red canary never
+# stops another.  Only the watchdog waits for all of them.
+#
+# WHY THE GATES LIVE ELSEWHERE (#462): GitHub disables a workflow file that
+# has a `schedule:` trigger after 60 days without repository activity, and
+# a disabled file loses EVERY trigger, not just the schedule.  While
+# schedules shared files with PR triggers, the 2026-08-05 -> 10-15 quiet
+# spell switched off the REQUIRED `bin-parity-required` check and every PR
+# sat BLOCKED.  Split, a quiet spell can only switch off this file, and
+# test.yml's workflow-state check then turns the next push or PR red,
+# naming `gh workflow enable weekly.yml`.  Keep this file schedule-only:
+# test_schedule_only_workflows.py fails any scheduled file with PR or push
+# triggers.
+#
+# GitHub starts scheduled runs late, often by hours (2026-10: 7-11 h), so
+# do not read the cron below as the time the canaries run.  A schedule
+# fires only from the default branch: run `gh workflow run weekly.yml` to
+# try a change once it is on master.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"         # Mondays 05:17 UTC, off the hour
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # Inside a called workflow `github.event_name` is the CALLER's
+  # (`schedule` or `workflow_dispatch`), so a called file's PR-only logic
+  # (bin-parity's `changes` job, the *-required jobs) sees no PR and runs
+  # the gate in full.
+  bin-parity:
+    uses: ./.github/workflows/bin-parity.yml
+
+  ecc-repair:
+    # The called file's timeout-minutes (150, measured: #419) applies.
+    uses: ./.github/workflows/ecc-repair.yml
+
+  macos-tier1:
+    uses: ./.github/workflows/macos-tier1.yml
+
+  macos-e2e:
+    uses: ./.github/workflows/macos-e2e.yml
+
+  upstream-canary:
+    uses: ./.github/workflows/upstream-canary.yml
+
+  windows-e2e:
+    # The fixture artifact of a weekly run belongs to THIS run's id
+    # (windows-debug.yml's fixture_run_id input).
+    uses: ./.github/workflows/windows-e2e.yml
+
+  format-canary:
+    uses: ./.github/workflows/format-canary.yml
+
+  live-usb-smoke:
+    uses: ./.github/workflows/live-usb-smoke.yml
+
+  opt-in-gates:
+    uses: ./.github/workflows/opt-in-gates.yml
+
+  canary-watchdog:
+    # The one scheduled-canary watchdog (#420, #693).  Scheduled-run
+    # failures only email the workflow author: canaries rotted for weeks
+    # against a zero-issue backlog before anyone noticed (#418, #419), and
+    # bin-parity's four red Mondays in June 2026 (#408) went unticketed.
+    # Job-level on a fresh runner; cancelled-aware (a timeout-minutes kill
+    # is conclusion `cancelled`, invisible to failure()); explicit
+    # issues:write; no error swallowing -- if ticket-filing fails, this
+    # job fails loud.  needs: is load-bearing: without it needs.*.result
+    # is empty and this job never fires.  It must list EVERY job above
+    # (test_scheduled_canary_watchdogs.py checks), and each needs a title
+    # in the `case` below.  The titles are the ones the old per-canary
+    # watchdogs used, so open issues still match.
+    runs-on: ubuntu-24.04
+    needs:
+      - bin-parity
+      - ecc-repair
+      - macos-tier1
+      - macos-e2e
+      - upstream-canary
+      - windows-e2e
+      - format-canary
+      - live-usb-smoke
+      - opt-in-gates
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) one tracking issue per red canary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          red=$(jq -r 'to_entries[]
+                       | select(.value.result == "failure"
+                                or .value.result == "cancelled")
+                       | "\(.key) \(.value.result)"' <<<"$NEEDS_JSON")
+          if [ -z "$red" ]; then
+            echo "no canary is red"; exit 0
+          fi
+          # A for loop, not `while read ... <<<"$red"`: gh must not be
+          # handed the loop's stdin.
+          mapfile -t reds <<<"$red"
+          for row in "${reds[@]}"; do
+            job=${row%% *}
+            result=${row#* }
+            label=bug
+            case "$job" in
+              bin-parity)
+                title="bin-parity: scheduled reproducibility check went red"
+                detail=$(cat <<'EOF'
+          The committed recovery binaries no longer rebuild byte-identical under the pinned toolchain (GATE-08) -- environment/toolchain drift has broken reproducibility even with no repo change.  June 2026's four consecutive red Mondays (the #408 unstripped-DWARF breakage) went unticketed; this watchdog exists so that cannot recur.
+          EOF
+                ) ;;
+              ecc-repair)
+                title="ecc-weekly: RS03 repair proof went red"
+                detail=$(cat <<'EOF'
+          The RS03 ECC repair proof (`tests/integration/test_ecc_repair.py`) is red.  The disc-integrity repair path is unproven until this is green again -- every disc burned meanwhile could be unrepairable.
+          EOF
+                ) ;;
+              macos-tier1)
+                title="macos-tier1: committed Mach-O tier-1 binaries went red on real macOS"
+                detail=$(cat <<'EOF'
+          The cross-built macOS tier-1 binaries (zig cc -target <arch>-macos) failed to execute on a real macOS runner (GATE-03) -- a zig/SDK regression would otherwise ship green while leaving a Mac heir with an unproven tier-1 artifact.
+          EOF
+                ) ;;
+              macos-e2e)
+                title="macos-e2e: scheduled restore.sh journey went red"
+                detail=$(cat <<'EOF'
+          The Mac heir journey -- mount the discs under /Volumes, run `sh /Volumes/LCSAS_META/restore.sh` -- failed on a real macOS runner.  It is unproven until this is green again.
+          EOF
+                ) ;;
+              upstream-canary)
+                title="upstream-canary: pinned upstream artifact failed cold-fetch verification"
+                detail=$(cat <<'EOF'
+          A cold fetch of the artifacts pinned in recovery/UPSTREAM.sha256 no longer hash-verifies from the source URL (retag, deletion, or silent content change upstream -- issue #372's supply-chain scenario), or the source is unreachable.  Until resolved, a disaster recovery that needs to re-fetch upstream tools may fail.
+          EOF
+                ) ;;
+              windows-e2e)
+                title="windows-e2e: scheduled restore.bat journey went red"
+                detail=$(cat <<'EOF'
+          The single most likely heir journey -- Windows machine, double-click restore.bat (INFRA-01 tier 3) -- is unproven until this is green again.
+          EOF
+                ) ;;
+              format-canary)
+                title="format-canary: latest rustic may have drifted past the pinned reader contract (FMT-03)"
+                label=format-drift
+                detail=$(cat <<'EOF'
+          Data written by the LATEST upstream rustic could not be byte-faithfully restored by the pinned recovery readers (tier-1 C binary and/or tier-3 PurePythonRestorer) -- an early warning that the upstream repository format may have bumped past the frozen v1/v2 contract.  Before any operator upgrades the rustic on their NAS, the readers must learn the new format (update `SUPPORTED_REPO_VERSIONS` + all three tiers).
+          EOF
+                ) ;;
+              live-usb-smoke)
+                title="live-usb-smoke: scheduled Secure-Boot restore drill went red"
+                detail=$(cat <<'EOF'
+          The BOOT-04 no-OS recovery route (boot a stock live ISO, run restore.sh off the META disc) is unproven until this is green again.
+          EOF
+                ) ;;
+              opt-in-gates)
+                title="opt-in-gates: weekly LCSAS_* hardening gates went red"
+                detail=$(cat <<'EOF'
+          One of the opt-in recovery-hardening gates (malloc fault injection, tier-1 vs tier-2 differential, petabyte stress fixture, tier-3 zstd under aarch64 qemu) failed, or ran fewer tests than its floor.  The job name in the run says which.
+          EOF
+                ) ;;
+              *)
+                # A job added above without a case here still gets a ticket.
+                title="weekly: $job went red"
+                detail="No ticket text for this canary yet: add a case to weekly.yml's canary-watchdog."
+                ;;
+            esac
+            body="Scheduled $job run went red ($job: **$result**) on \`$GITHUB_SHA\`.
+
+          $detail  (A \`cancelled\` result usually means the job outgrew its timeout budget -- check step timings first.)
+          Run: $RUN_URL"
+            existing="$(gh issue list --state open \
+              --search "\"$title\" in:title" \
+              --json number --jq '.[0].number // empty')"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$body"
+            else
+              gh issue create --title "$title" --label "$label" --body "$body"
+            fi
+          done

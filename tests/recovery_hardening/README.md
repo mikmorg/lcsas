@@ -50,6 +50,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_blind_variant_xfail_ledger.py` | Hardening test (GATE-06): the blind-restore XFAIL ledger must stay |
 | `test_boot_docs_reality.py` | test_boot_docs_reality.py -- docs-vs-reality contract gate for `lcsas ...` |
 | `test_boot_path_quarantined.py` | Boot-path tripwire (BOOT-01/BOOT-07/BOOT-08, #688). |
+| `test_ci_gate_inventory.py` | Hardening: every documented opt-in gate is run by something (#694, #693). |
 | `test_ci_workflow_parity.py` | Hardening: CI workflow ↔ `make gate` suite parity (GATE-02). |
 | `test_coverage_fault_inject_cleanup.py` | Hardening test: the coverage fault sweep leaves no test fixtures behind. |
 | `test_cross_build_deps.py` | Guard the recovery cross-build source dependencies. |

@@ -24,9 +24,9 @@ name: bin-parity
 # disabled file loses every trigger, pull_request included.  A quiet spell
 # (2026-08-05 -> 10-15) did exactly that: `bin-parity-required` stopped
 # reporting and every PR sat BLOCKED behind green checks.  The weekly
-# toolchain-image-drift backstop now lives in bin-parity-weekly.yml, which
-# calls this file through `workflow_call`, so a quiet spell can only switch
-# off the schedule.  test_schedule_only_workflows.py keeps it that way.
+# toolchain-image-drift backstop now lives in weekly.yml, which calls
+# this file through `workflow_call`, so a quiet spell can only switch off
+# the schedule.  test_schedule_only_workflows.py keeps it that way.
 
 on:
   push:
@@ -41,7 +41,7 @@ on:
       - '.github/workflows/bin-parity.yml'
   pull_request:
   workflow_dispatch: {}
-  # The weekly run (bin-parity-weekly.yml).
+  # The weekly run (weekly.yml).
   workflow_call: {}
 
 permissions:

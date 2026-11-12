@@ -1,0 +1,173 @@
+name: opt-in-gates
+
+# The opt-in recovery-hardening gates that are too slow, or need too much
+# setup, for every push (#694).  Each test self-skips unless its LCSAS_*
+# variable is set, so before this file none of them ran anywhere: the docs
+# named gates that gave no protection.  weekly.yml calls this file every
+# Monday; run it by hand with `gh workflow run opt-in-gates.yml`.
+#
+#   fault-inject   LCSAS_FAULT_INJECT=1  malloc-failure sweep (first 100
+#                                        allocations) over every C test
+#                                        binary: a failed allocation must
+#                                        never crash.
+#   diff-petabyte  LCSAS_DIFF=1          tier-1 vs tier-2 restore of every
+#                                        content profile, byte for byte.
+#                  LCSAS_PETABYTE=1      1M-entry index + 1k files through
+#                                        tier 1 under RSS and time budgets.
+#   tier3-qemu     LCSAS_ZSTD_QEMU=1     the tier-3 Python reader's zstd
+#                  (make test-tier3-qemu) decoder under an aarch64 CPython.
+#
+# Every job PROVES its tests ran: a self-skipping test that skips here is
+# green with nothing checked, so each job counts passed tests with
+# scripts/ci_min_passed.py.
+#
+# No `schedule:` here (#462): GitHub disables a scheduled file after 60
+# quiet days.  The schedule and the canary watchdog live in weekly.yml.
+# A PR that changes this file (or the rustic action it uses) runs it, so
+# a change here is proven on real runners before it reaches Monday.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/opt-in-gates.yml"
+      - ".github/actions/install-rustic/**"
+  workflow_dispatch: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fault-inject:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+      - name: Build the C test binaries
+        run: make -C recovery all test
+      - name: Malloc fault-injection sweep
+        # The test's own default sweep (MAX_N=100 per binary).  The full
+        # sweep (LCSAS_FAULT_INJECT_MAX_N=10000) did not finish inside the
+        # test's 900 s subprocess timeout on the lab VM (2026-11-11), so it
+        # stays a by-hand run: `make -C recovery fault-inject`.
+        env:
+          LCSAS_FAULT_INJECT: "1"
+        run: |
+          pytest tests/recovery_hardening/test_tier1_fault_inject.py -v \
+            --junitxml=/tmp/fault-inject.xml
+      - name: The sweep ran (not skipped)
+        run: python3 scripts/ci_min_passed.py /tmp/fault-inject.xml --min-passed 1
+
+  diff-petabyte:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install rustic (pinned; the one pin lives in the action)
+        uses: ./.github/actions/install-rustic
+      - name: Install GNU time (the petabyte test reads peak RSS from it)
+        run: |
+          sh .github/scripts/apt-prepare.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends time
+          test -x /usr/bin/time
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+      - name: Build the host tier-1 binary
+        run: make -C recovery all
+      - name: Full differential suite + petabyte stress fixture
+        env:
+          LCSAS_DIFF: "1"
+          LCSAS_PETABYTE: "1"
+        run: |
+          pytest -m integration -v --junitxml=/tmp/diff-petabyte.xml \
+            tests/recovery_hardening/test_tier1_vs_tier2_differential.py \
+            tests/recovery_hardening/test_tier1_petabyte_fixture.py
+      - name: Every profile and the stress fixture ran (not skipped)
+        # 9 differential profiles + 3 petabyte tests.  A profile marked
+        # xfail does not count as passed: lower this with the marker.
+        run: python3 scripts/ci_min_passed.py /tmp/diff-petabyte.xml --min-passed 12
+
+  tier3-qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install qemu-user-static
+        run: |
+          sh .github/scripts/apt-prepare.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user-static
+          qemu-aarch64-static --version
+      - name: Install the aarch64 musl loader (/lib/ld-musl-aarch64.so.1)
+        # The pinned python-build-standalone musl builds are DYNAMICALLY
+        # linked: interpreter /lib/ld-musl-aarch64.so.1, NEEDED libc.so.
+        # An x86_64 runner has no aarch64 musl, so take the loader from
+        # Ubuntu 24.04's own musl package (noble's version, pinned by
+        # hash) and put it at the path the interpreter names.  This job
+        # tests the pure-Python zstd decoder on aarch64; it does NOT test
+        # whether an heir's host has a musl loader.
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          curl -fsSL -o musl.deb \
+            http://ports.ubuntu.com/pool/universe/m/musl/musl_1.2.4-2_arm64.deb
+          echo "79a04df7e8f54c74720ad474c04966204c03370654f4a43bec2968e80821e39f  musl.deb" \
+            | sha256sum --check
+          dpkg-deb -x musl.deb root
+          sudo install -D -m 0755 root/lib/aarch64-linux-musl/libc.so \
+            /lib/ld-musl-aarch64.so.1
+      - name: Fetch the pinned aarch64 CPython (recovery/UPSTREAM.sha256)
+        # The same python-build-standalone build the meta disc bundles for
+        # aarch64.  File name and hash are read from the manifest, so this
+        # step never carries a second pin.
+        run: |
+          set -euo pipefail
+          row=$(awk '$2 ~ /^python\/aarch64-unknown-linux-musl\// {print; exit}' \
+            recovery/UPSTREAM.sha256)
+          if [ -z "$row" ]; then
+            echo "no aarch64-unknown-linux-musl python in recovery/UPSTREAM.sha256" >&2
+            exit 1
+          fi
+          expected=${row%% *}
+          file=${row##*/}
+          # cpython-<ver>+<release>-<triple>-...: the release tag is the
+          # part between "+" and the next "-".
+          release=${file#*+}
+          release=${release%%-*}
+          dir="$RUNNER_TEMP/aarch64-python"
+          mkdir -p "$dir"
+          url="https://github.com/astral-sh/python-build-standalone/releases/download/$release/$file"
+          echo "Downloading $url"
+          curl -fsSL -o "$dir/python.tar.gz" "$url"
+          actual=$(sha256sum "$dir/python.tar.gz" | awk '{print $1}')
+          if [ "$expected" != "$actual" ]; then
+            echo "SHA256 mismatch: expected=$expected actual=$actual" >&2
+            exit 1
+          fi
+          tar -xzf "$dir/python.tar.gz" -C "$dir"
+          py="$dir/python/bin/python3"
+          # A loader or binfmt problem must fail HERE, not turn the test
+          # into a skip.
+          qemu-aarch64-static "$py" -c 'import platform; print(platform.machine())' \
+            | grep -qx aarch64
+          echo "LCSAS_AARCH64_PYTHON=$py" >> "$GITHUB_ENV"
+      - name: Install LCSAS (editable, with dev deps; zstandard builds the fixture)
+        run: make dev
+      - name: make test-tier3-qemu
+        env:
+          PYTEST_ADDOPTS: --junitxml=/tmp/tier3-qemu.xml
+        run: make test-tier3-qemu
+      - name: Both tests ran (not skipped)
+        run: python3 scripts/ci_min_passed.py /tmp/tier3-qemu.xml --min-passed 2

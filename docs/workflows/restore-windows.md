@@ -667,7 +667,7 @@ LEFT"):
 **Existing automated coverage:**
 
 - `.github/workflows/windows-e2e.yml` (run weekly through
-  `windows-e2e-weekly.yml`, by hand with `gh workflow run windows-e2e.yml
+  `weekly.yml`, by hand with `gh workflow run windows-e2e.yml
   --ref <branch>`, and on any PR touching `recovery/scripts/**`,
   `src/lcsas/meta/**`, `src/lcsas/staging/metadata.py`,
   `recovery/bin/x86_64-windows/**`, `tests/e2e/fixture_lib.py`,
