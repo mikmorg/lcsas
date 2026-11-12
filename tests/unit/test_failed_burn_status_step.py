@@ -20,8 +20,11 @@ import pytest
 from lcsas.cli.main import main
 from lcsas.db.connection import get_connection
 from lcsas.db.locations import ensure_location
+from lcsas.db.packs import register_pack
+from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.sessions import add_session_volume, create_session
+from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
 from lcsas.iso.xorriso import MediaStatus
 
@@ -59,6 +62,9 @@ metadata_reserve_mb = 0
         ensure_location(conn, LOCATION)
         vol = create_volume(conn, LABEL, "uuid-728", "TEST_TINY", 1000,
                             LOCATION, "STAGING")
+        register_repo(conn, "fam", "fam", str(mirror))
+        pack = register_pack(conn, "f" * 64, 100, "fam")
+        bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         create_session(conn, "TEST_TINY", str(staging), session_id=SESSION)
         add_session_volume(
             conn, SESSION, vol.volume_id, str(iso),

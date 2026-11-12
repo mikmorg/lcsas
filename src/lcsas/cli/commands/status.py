@@ -528,9 +528,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
             "packs to the unarchived pool.",
             len(burn_unknown), ", ".join(burn_unknown),
         )
+    # #728: nor for the packs of a failed burn, listed under "needs
+    # re-burn" with their step.
     if summary["staged"] > 0 and not (
         with_iso or ghost_labels or incomplete or burn_unknown
-        or staged_but_burned
+        or staged_but_burned or reburn_hints
     ):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
