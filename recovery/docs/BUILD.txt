@@ -33,15 +33,17 @@ CROSS-COMPILATION
 Override CC to target another architecture:
 
   make CC=aarch64-linux-musl-gcc bin/aarch64/lcsas-restore
-  make CC=riscv64-linux-musl-gcc bin/riscv64/lcsas-restore
   make CC=x86_64-linux-musl-gcc  bin/x86_64/lcsas-restore
 
 The recommended cross-compiler is `zig cc` (single binary, vendored
 musl libc, deterministic output):
 
   zig cc -target aarch64-linux-musl ...
-  zig cc -target riscv64-linux-musl ...
   zig cc -target x86_64-linux-musl ...
+
+The meta disc ships six approved targets: Linux x86_64 / aarch64 /
+armv7 (musl), Windows x86_64-gnu, and macOS x86_64 / arm64.  Other
+architectures, such as riscv64, are not shipped or tested.
 
 STATIC LINKAGE
 

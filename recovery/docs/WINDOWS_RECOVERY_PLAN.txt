@@ -11,18 +11,21 @@ Who it is for: an average heir with a Windows laptop, a USB BD
 reader, the meta disc, and the password.  No technical
 expertise beyond "double-click an icon" and "type a password".
 
-TARGET PATFORMS (in priority order)
+TARGET PLATFORMS (in priority order)
   1. Windows 10 1709 (Oct 2017) and later on x86_64
        Out-of-the-box: ships UCRT (Universal C Runtime) in the OS.
        This is the realistic support floor.
-  2. Windows 11 on ARM64 (Snapdragon X / Surface Pro X)
-       Same UCRT story; aarch64-windows binary not yet runtime-tested.
-  3. Windows 7 SP1 / 8 / 8.1 with KB2999226 installed
+  2. Windows 7 SP1 / 8 / 8.1 with KB2999226 installed
        KB2999226 (Sep 2015) backports UCRT to these older systems.
        Most patched 7/8 machines have it; unpatched ones won't.
        BEST-EFFORT: not actively tested in CI.
 
   REJECTED platforms:
+    Windows on ARM64 -- not one of the six approved targets, and
+    upstream rustic ships no aarch64-pc-windows-msvc build.  No
+    aarch64-windows binary ships; restore.bat stops on ARM64 with
+    a message.
+
     Windows XP / Vista / unpatched 7  -- UCRT is not available.
     A separate msvcrt-linked binary for these was decided against
     (see "Phase W5 -- legacy msvcrt build" below).
@@ -38,7 +41,7 @@ Use `zig cc` with `-target x86_64-windows-gnu`.  Rationale:
   * Single binary download (~50 MB).  Stable releases.  Bundles its
     own MinGW-w64 headers; no separate toolchain install.
   * Deterministic output.  Already part of recovery/Makefile (for
-    aarch64/riscv64 Linux targets).
+    the aarch64/armv7 Linux targets).
   * Adding a Windows target is one more Makefile entry.
 
 Alternative (documented in BUILD.txt as a fallback path):
@@ -160,14 +163,9 @@ Add to recovery/Makefile:
         mkdir -p bin/x86_64-windows
         cp build/win64/lcsas-restore.exe bin/x86_64-windows/
 
-    bin/aarch64-windows/lcsas-restore.exe: ARCH=aarch64-windows
-    bin/aarch64-windows/lcsas-restore.exe:
-        $(MAKE) clean
-        $(MAKE) BUILD=build/winarm64 \
-                CC="python3 -m ziglang cc -target aarch64-windows-gnu" \
-                LDFLAGS="-static"
-        mkdir -p bin/aarch64-windows
-        cp build/winarm64/lcsas-restore.exe bin/aarch64-windows/
+    (An aarch64-windows rule was planned here too.  It was dropped:
+    Windows on ARM64 is not an approved target.  See TARGET
+    PLATFORMS above.)
 
 EXE EXTENSION
 
@@ -210,7 +208,7 @@ script is authoritative; this sketch is kept for design history.
 
     REM Detect arch (PROCESSOR_ARCHITECTURE).
     if /i "%PROCESSOR_ARCHITECTURE%"=="AMD64" set ARCH=x86_64-windows
-    if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set ARCH=aarch64-windows
+    REM ARM64: rejected (no aarch64-windows binary ships).
 
     REM Discover RECOVERY root.
     set SCRIPT_DIR=%~dp0
@@ -340,8 +338,9 @@ PART 6 -- INTEGRATION WITH PYTHON ORCHESTRATOR
 src/lcsas/recovery/build.py
 
   Add to SUPPORTED_ARCHES:
-      ("x86_64", "aarch64", "riscv64",
-       "x86_64-windows", "aarch64-windows")
+      "x86_64-windows"
+  (This plan once also listed riscv64 and aarch64-windows.  Neither
+  is an approved target; see build.py for the list that ships.)
 
   Add to cross_build():
       if arch.endswith("-windows"):
@@ -377,10 +376,9 @@ OUT OF SCOPE for the Windows restore path:
     populated.
   * Hardlinks across drives.  Windows hardlinks need same-drive
     semantics; we silently copy instead.
-  * UEFI boot from disc on Windows hardware.  Windows boot loader
-    cannot chain to ISO9660 directly; this only affects the meta
-    disc.  Workaround: the heir boots a Linux live USB if they need
-    to boot from disc.
+  * Booting a disc.  No LCSAS disc is bootable.  With no working
+    operating system, the heir boots a live-Linux USB stick
+    (BOOT.txt).
 
 NON-GOALS
 
@@ -416,9 +414,10 @@ Phase W3 -- orchestrator integration (1 day):
   * Update _bundle_recovery_toolchain_artifacts
   * Update Python integration tests
 
-Phase W4 -- aarch64-windows + manual real-VM checklist (deferred):
-  * Cross-build aarch64-windows .exe
+Phase W4 -- manual real-VM checklist (deferred):
   * Document the manual Windows-VM test protocol
+  * (An aarch64-windows cross-build was planned here.  Dropped:
+    Windows on ARM64 is not an approved target.)
 
 ────────────────────────────────────────────────────────────────────
 PHASE W5 -- LEGACY MSVCRT BUILD              (DECIDED AGAINST, #491)
@@ -463,7 +462,6 @@ triple, per Phase 21.1):
     bin/
       x86_64-pc-windows-gnu/        lcsas-restore.exe  (UCRT, modern)
       x86_64-pc-windows-gnu-msvcrt/ lcsas-restore.exe  (msvcrt, legacy)
-      aarch64-pc-windows-msvc/      lcsas-restore.exe  (UCRT, ARM64)
 
 restore.bat probes for both, preferring the modern UCRT build but
 falling back to the msvcrt one when UCRT is unavailable.
