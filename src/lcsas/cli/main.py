@@ -6316,7 +6316,10 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             # Auto-fallback: use the Python reader (tier 3) bundled with LCSAS.
             # Link the disc data dir into the cache so PurePythonRestorer can
             # find the pack files without copying gigabytes.
-            from lcsas.restore.restic_fallback import PurePythonRestorer
+            from lcsas.restore.restic_fallback import (
+                PurePythonRestorer,
+                RestoreAbortedError,
+            )
 
             data_link = cache_dir / "data"
             disc_data = disc_path / "data"
@@ -6355,6 +6358,12 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             )
             try:
                 meta = restorer.restore(target=target, snapshot_id=snap_arg)
+            except RestoreAbortedError as exc:
+                # q (or the end of input) at the disc prompt exits 75, a
+                # full disk 1, as the bundled standalone_restorer.py does
+                # (#658).
+                logger.error("Python reader restore stopped: %s", exc)
+                return exc.exit_code
             except Exception as exc:
                 # Setup-level failure (wrong password, missing repo) — fail fast.
                 logger.error("Python reader restore failed: %s", exc)
