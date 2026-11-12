@@ -437,11 +437,16 @@ carries it on with no meta disc.
   `restore.sh` end-to-end against unpacked data discs. Tier 1's own
   swap prompt is covered by
   `recovery/tests/test_multidisc.py::case_interactive_swap`.
-- Not working yet: `tests/integration/test_interactive_restore.py` (a
-  pseudoterminal plus loop-device disc swaps, root only) and
-  `scripts/smoke_single_drive.py` still pass flags the current
-  `restore.sh` rejects (`--drive`, `--work-dir`), so they would fail at
-  once. They self-skip without root, so CI does not notice (#756).
+- Not proven yet: `tests/integration/test_interactive_restore.py` (a
+  pseudoterminal plus loop-mount disc swaps, root only) and
+  `scripts/smoke_single_drive.py` (a cdemu drive, root only) were
+  ported to the current `restore.sh` (#756): no retired flag, discs
+  found where they are mounted (`LCSAS_MOUNT_DIRS`), the newest-disc
+  step and tier 1's real disc question. Neither has been run as root
+  since, so neither counts as working coverage until it passes. Both
+  self-skip without root; `tests/unit/test_restore_sh_driver.py`
+  checks their shared driver against `restore.sh` and tier 1 on every
+  run.
 
 **Source refs:** `recovery/scripts/restore.sh` and `_write_restore_script`
 (`src/lcsas/meta/builder.py`).
@@ -654,7 +659,7 @@ catalog policy (no `catalog.db`).
 | `lcsas meta verify` | `tests/unit/test_meta_builder.py` (manifest + required-contents) | — | None significant. |
 | Meta disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `TestMovedRestoreScripts` (the two scripts under `recovery/scripts/` run from there, manifest rows), `TestMetaVolumeInfoTxt` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
 | Cross-platform bundling | `TestBundleUpstreamBinaries` (5 tests), `test_restore_sh_dispatcher.py` | — | Per-target restore exercised in recovery-toolchain CI. |
-| Single-drive bootstrap | `test_restore_sh_journey.py` (the newest-disc step), `recovery/tests/test_multidisc.py::case_interactive_swap` (tier 1's swap prompt) | `TestMetaVolumeRestore` (directory mode) | No working test swaps discs in one drive through `restore.sh`: `test_interactive_restore.py` uses retired flags (#756). |
+| Single-drive bootstrap | `test_restore_sh_journey.py` (the newest-disc step), `recovery/tests/test_multidisc.py::case_interactive_swap` (tier 1's swap prompt) | `TestMetaVolumeRestore` (directory mode) | No test proven to swap discs in one drive through `restore.sh`: `test_interactive_restore.py` was ported (#756) but not yet run as root. |
 | Catalog policy | Code inspection | `TestMetaVolumeRestore` exercises the disc catalog implicitly | No direct `--reseed` precedence test. |
 | Source refresh | `test_no_pycache_in_source`, `test_no_incomplete_marker_after_build` | — | No idempotency / re-run test. |
 | Docs-vs-reality | `tests/unit/test_doc_command_contract.py` (`test_meta_build_flags_in_docs_exist`) | — | — |

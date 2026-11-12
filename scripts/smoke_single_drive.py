@@ -4,14 +4,14 @@
 Builds a tiny synthetic repository, runs the LCSAS burn pipeline against
 it to produce a handful of small ISO images, builds the production
 meta disc + ISO image, and then drives the production ``restore.sh`` in
-single-drive mode against a cdemu-backed virtual drive — swapping discs
-by hand between phases.
+single-drive mode against a cdemu-backed virtual drive: each disc it asks
+for is loaded and mounted where restore.sh looks for discs (#756).
 
 This exists to gate the blind-restore acceptance test: if this smoke
 test cannot complete the restore with the unmodified production meta
 disc, the blind rig won't either.
 
-Run as:  python3 scripts/smoke_single_drive.py
+Run as:  sudo python3 scripts/smoke_single_drive.py  (root: mount, cdemu)
 """
 
 from __future__ import annotations
@@ -35,9 +35,14 @@ DB_PATH = ROOT / "catalog.db"
 META_STAGE = ROOT / "meta_stage"
 META_ISO = ISO_OUT / "LCSAS_META.iso"
 RESTORE_TARGET = ROOT / "restored"
-WORK_DIR = ROOT / "work"
+# restore.sh's work folder is its tools folder (LCSAS_TOOLS_DIR); it looks
+# for discs in MOUNT_DIR (LCSAS_MOUNT_DIRS), where the drive is mounted.
+TOOLS_DIR = ROOT / "lcsas-restore-tools"
+MOUNT_DIR = ROOT / "mnt"
 PW_FILE = ROOT / "smoke.pw"
 CDEMU = Path(__file__).parent / "cdemu_drive.sh"
+# The repository root, for tests.e2e.restore_sh_driver (and src/ for lcsas).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 REPO_NAME = "smoke"
 REPO_PASSWORD = "smoke-test-password"
@@ -63,7 +68,7 @@ def clean_root() -> None:
         subprocess.run(["sudo", "rm", "-rf", str(ROOT)], check=True)
     ROOT.mkdir(parents=True)
     for d in (SRC_DIR, MIRROR_DIR.parent, STAGING_DIR, ISO_OUT,
-              META_STAGE, RESTORE_TARGET, WORK_DIR):
+              META_STAGE, RESTORE_TARGET, MOUNT_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -209,93 +214,97 @@ def cdemu(*args: str) -> None:
     sh(["bash", str(CDEMU), *args], stdout=subprocess.DEVNULL)
 
 
-def run_restore(iso_files: list[Path]) -> int:
-    """Spawn restore.sh under expect-style driving so each disc-swap
-    prompt triggers a cdemu swap to the next disc.
+def cdemu_device() -> str:
+    out = subprocess.run(["bash", str(CDEMU), "device"], check=True,
+                         capture_output=True, text=True).stdout.strip()
+    return out or "/dev/sr0"
 
-    Rather than write an expect script, we drive restore.sh manually
-    from Python: it reads the pick list, we watch stderr for the
-    prompt, cdemu-swap to the named disc, send newline.
-    """
-    # Start cdemu if needed
-    cdemu("start")
+
+def eject(drive: Path) -> None:
+    if os.path.ismount(drive):
+        subprocess.run(["umount", str(drive)], check=False)
     with contextlib.suppress(Exception):
         cdemu("unload")
-    cdemu("load", str(META_ISO))
-    time.sleep(1)
+
+
+def insert(iso: Path, device: str, drive: Path) -> None:
+    """Put *iso* in the cdemu drive and mount it where restore.sh looks."""
+    eject(drive)
+    time.sleep(0.3)
+    cdemu("load", str(iso))
+    time.sleep(0.6)
+    drive.mkdir(parents=True, exist_ok=True)
+    sh(["mount", "-o", "ro", device, str(drive)])
+
+
+def run_restore(iso_files: list[Path]) -> int:
+    """Run the META disc's restore.sh under a pseudoterminal and answer it
+    as an heir with one drive would (#756).
+
+    restore.sh finds discs where they are mounted (LCSAS_MOUNT_DIRS):
+    each disc is loaded into the cdemu drive and mounted at
+    MOUNT_DIR/sr0.  Step 0 asks for the newest data disc; tier 1 then
+    names each disc it needs, which is loaded, then ENTER.  The command
+    line and the prompts come from tests/e2e/restore_sh_driver.py.
+    """
+    from tests.e2e.restore_sh_driver import (
+        ENTER,
+        QUIT,
+        build_restore_cmd,
+        build_restore_env,
+        drive_restore,
+    )
+
+    cdemu("start")
+    device = cdemu_device()
+    drive = MOUNT_DIR / "sr0"
+    eject(drive)
 
     restore_sh = META_STAGE / "restore.sh"
     assert restore_sh.is_file(), f"missing {restore_sh}"
 
-    iso_by_label: dict[str, Path] = {f.stem: f for f in iso_files}
-    iso_by_label["LCSAS_META"] = META_ISO
+    data_isos = sorted(iso_files, key=lambda p: p.stem)
+    by_label = {f.stem: f for f in data_isos}
+    newest = data_isos[-1]
 
-    env = {**os.environ, "LD_LIBRARY_PATH": str(META_STAGE / "tools" / "lib")}
-    cmd = [
-        "bash", str(restore_sh),
-        "--key", str(PW_FILE),
-        "--target", str(RESTORE_TARGET),
-        "--repo", REPO_NAME,
-        "--work-dir", str(WORK_DIR),
-    ]
+    def answer(prompt, n):
+        if prompt.kind == "newest":
+            print(f"\n[smoke] inserting the newest data disc {newest.stem}")
+            insert(newest, device, drive)
+            return ENTER
+        if prompt.kind == "ram":
+            return b"y\n"
+        if prompt.kind != "disc":
+            return None  # N: no other backup set
+        want = next((by_label[lab] for lab in prompt.labels
+                     if lab in by_label), None)
+        if want is None and prompt.labels:
+            print(f"\n[smoke] unknown disc labels {prompt.labels}; quitting")
+            return QUIT
+        want = want or newest
+        print(f"\n[smoke] swapping to {want.stem}")
+        insert(want, device, drive)
+        return ENTER
+
+    cmd = build_restore_cmd(META_STAGE, key=PW_FILE,
+                            target=RESTORE_TARGET, repo=REPO_NAME)
+    env = build_restore_env(
+        home=ROOT, tools_dir=TOOLS_DIR, mount_dir=MOUNT_DIR,
+        meta_disc=META_STAGE, tmpdir=ROOT / "tmp",
+        path=os.environ.get("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
+    )
+    (ROOT / "tmp").mkdir(exist_ok=True)
     print(f"  $ {' '.join(shlex.quote(c) for c in cmd)}")
 
-    import pty
-    import re
-    import select
+    def echo(chunk: bytes) -> None:
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
 
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.execvpe(cmd[0], cmd, env)
-
-    prompt_re = re.compile(rb"PLEASE INSERT DISC: (\S*)")
-    buf = b""
-    exit_code = None
-    while True:
-        try:
-            r, _, _ = select.select([fd], [], [], 0.5)
-        except InterruptedError:
-            continue
-        if r:
-            try:
-                chunk = os.read(fd, 4096)
-            except OSError:
-                break
-            if not chunk:
-                break
-            sys.stdout.buffer.write(chunk)
-            sys.stdout.buffer.flush()
-            buf += chunk
-            m = prompt_re.search(buf)
-            while m:
-                want = m.group(1).decode().strip()
-                buf = buf[m.end():]
-                if not want:
-                    want = iso_files[-1].stem
-                iso = iso_by_label.get(want)
-                if iso is None:
-                    print(f"\n[smoke] unknown disc label {want!r}; aborting")
-                    os.write(fd, b"skip\n")
-                    break
-                print(f"\n[smoke] swapping to {want}")
-                cdemu("unload")
-                time.sleep(0.3)
-                cdemu("load", str(iso))
-                time.sleep(0.6)
-                os.write(fd, b"\n")
-                m = prompt_re.search(buf)
-        try:
-            waited_pid, status = os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
-            break
-        if waited_pid == pid:
-            exit_code = os.waitstatus_to_exitcode(status)
-            break
-
-    if exit_code is None:
-        _, status = os.waitpid(pid, 0)
-        exit_code = os.waitstatus_to_exitcode(status)
-    return exit_code
+    try:
+        rc, _out = drive_restore(cmd, env, answer, timeout=900, echo=echo)
+    finally:
+        eject(drive)
+    return rc
 
 
 def verify_restore(manifest: dict[str, str]) -> bool:

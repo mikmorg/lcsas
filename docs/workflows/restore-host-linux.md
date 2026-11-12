@@ -282,8 +282,11 @@ assembling required packs into a local cache and running
 - `tests/unit/test_multi_copy_restore.py` — alternate-volume retry,
   partial-volume ingest, full multi-disc workflows.
 - `tests/integration/test_interactive_restore.py` — TTY prompt loop
-  (skipped without root and binaries). Broken: it passes `restore.sh`
-  flags that no longer exist (#756).
+  (skipped without root and binaries). Ported to the current
+  `restore.sh` interface (#756), but not yet run as root, so it is not
+  counted as working coverage. `tests/unit/test_restore_sh_driver.py`
+  checks its command line and prompts against `restore.sh` and tier 1
+  on every run.
 
   **Gaps:**
   - No test asserts behaviour when `--volume-dir` exists but is empty
@@ -370,8 +373,9 @@ every required pack; ingestion logs `ingested N packs` per volume.
   `recovery/tests/test_multidisc.py::case_interactive_swap` and for
   `restore exec`'s alternate-disc prompts by the mocked-`input()` tests
   in `tests/unit/test_cli_restore.py`. The `restore.sh` path is not
-  covered: `tests/integration/test_interactive_restore.py` passes
-  retired flags and would fail as root (#756).
+  covered yet: `tests/integration/test_interactive_restore.py` was
+  ported to the current flags and prompts (#756) but has not been run
+  as root.
 
 **Source refs:**
 - Ingest entry: `RestoreExecutor.ingest_volume()` in
