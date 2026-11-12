@@ -585,8 +585,14 @@ def _mark_burn_unknown(
     in the output catalog before it) that is STAGING/BURNING with no disc
     record and no burn evidence gets a NOTE starting with
     ``REBUILD_UNKNOWN_NOTE_PREFIX`` and is listed in
-    ``result.burn_unknown``.  A volume that already has the note is
-    listed, not noted again.
+    ``result.burn_unknown``.  A volume that already has the note (a disc
+    staged from a rebuilt catalog carries it) is listed, not noted again;
+    one the output catalog already had is neither.
+
+    The note is dated with the volume's ``created_at``, never "now": the
+    catalog's newest timestamp is its freshness (``_row_freshness``), and
+    a note newer than every disc would stop a later rebuild into this
+    catalog from taking a fresher disc's view of any volume.
     """
     from lcsas.db.volume_events import (
         REBUILD_UNKNOWN_NOTE_PREFIX,
@@ -596,13 +602,13 @@ def _mark_burn_unknown(
     )
 
     rows = conn.execute(
-        """SELECT v.volume_id, v.label, v.uuid FROM volumes v
+        """SELECT v.volume_id, v.label, v.uuid, v.created_at FROM volumes v
            WHERE v.status IN ('STAGING', 'BURNING')
              AND NOT EXISTS (SELECT 1 FROM volume_copies vc
                              WHERE vc.volume_id = v.volume_id)
            ORDER BY v.label"""
     ).fetchall()
-    for volume_id, label, uuid_ in rows:
+    for volume_id, label, uuid_, created_at in rows:
         if uuid_ in known_uuids or burn_evidence(conn, volume_id) is not None:
             continue
         if not rebuild_burn_unknown(conn, volume_id):
@@ -613,6 +619,7 @@ def _mark_burn_unknown(
                     f"rebuilt from discs, and none of them shows whether "
                     f"{label} was burned"
                 ),
+                event_date=created_at,
                 commit=False,
             )
         result.burn_unknown.append(label)

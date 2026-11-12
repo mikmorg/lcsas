@@ -27,10 +27,6 @@ from lcsas.db.connection import get_connection
 from lcsas.db.rebuild import rebuild_catalog
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
-from lcsas.db.volume_events import (
-    REBUILD_UNKNOWN_NOTE_PREFIX,
-    rebuild_burn_unknown,
-)
 from lcsas.db.volumes import get_volume_by_label
 from tests.unit.test_rebuild_newest_session import (
     _add_packs,
@@ -126,7 +122,7 @@ def test_rebuild_marks_and_lists_the_unread_volume(two_sessions, caplog):
         f"{env['y']}" in caplog.text
     assert "--never-burned" in caplog.text
     (note,) = _notes(env["db"], env["y"])
-    assert note.startswith(REBUILD_UNKNOWN_NOTE_PREFIX)
+    assert note.startswith("Catalog rebuild: burn state unknown")
     assert _notes(env["db"], env["x"]) == []
 
     # Rebuilt again into the same output: listed once, noted once.
@@ -209,6 +205,8 @@ def test_recording_the_disc_ends_the_refusal(two_sessions, caplog):
         conn.close()
     assert _verify_disc(env["db"], env["y"], "--location", "Home") == 0, \
         caplog.text
+    from lcsas.db.volume_events import rebuild_burn_unknown
+
     conn = get_connection(env["db"])
     try:
         vol = get_volume_by_label(conn, env["y"])
@@ -306,3 +304,46 @@ def test_volume_the_output_catalog_had_is_not_marked(tmp_path):
     assert result.ok
     assert result.burn_unknown == []
     assert _notes(config.db_path, y) == []
+
+
+def test_a_later_rebuild_still_takes_a_fresher_disc(tmp_path):
+    """The note must not make the rebuilt catalog look newer than its
+    discs: rebuilt again with a fresher disc, the volume takes that
+    disc's view (here: burned and verified at Home)."""
+    config = _config(tmp_path)
+    conn = get_connection(config.db_path)
+    create_all(conn)
+    register_repo(conn, "family", "Family",
+                  str(config.repositories["family"].mirror_path))
+    conn.commit()
+    orch = _orchestrator(config, conn)
+    _add_packs(conn, config, 1, 1, 50)
+    s1 = orch.stage()
+    _add_packs(conn, config, 2, 1, 50)
+    s2 = orch.stage()
+    orch.burn_session(s1.session_id, location="Home", skip_burn=True)
+    _add_packs(conn, config, 3, 1, 50)
+    s3 = orch.stage()
+    conn.close()
+    (y,) = [m.volume_label for m in s1.manifests]
+    (x,) = [m.volume_label for m in s2.manifests]
+    (z,) = [m.volume_label for m in s3.manifests]
+    db = tmp_path / "rebuilt.db"
+
+    _rebuild([s2.staging_dir / x], db)
+    assert _labels(db)[y] == "STAGING"
+    assert len(_notes(db, y)) == 1
+
+    result = rebuild_catalog([s3.staging_dir / z], db)
+    assert result.ok
+    assert not any(y in w for w in result.warnings), result.warnings
+    assert _labels(db)[y] == "VERIFIED"
+    conn = get_connection(db)
+    try:
+        vol = get_volume_by_label(conn, y)
+        locs = [r[0] for r in conn.execute(
+            "SELECT location FROM volume_copies WHERE volume_id = ? "
+            "AND status = 'ACTIVE'", (vol.volume_id,))]
+    finally:
+        conn.close()
+    assert locs == ["Home"]
