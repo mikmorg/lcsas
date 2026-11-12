@@ -190,3 +190,22 @@ def test_refused_stage_keeps_existing_sessions(tmp_path):
     assert sorted(p.name for p in config.staging_path.iterdir()) == [
         Path(first.staging_dir).name
     ]
+
+
+def test_interrupt_after_a_volume_finished_keeps_it(tmp_path, monkeypatch):
+    """Ctrl-C lands after a volume was finished but before stage()
+    noted it: the catalog says it was finished, so it and its ISO stay."""
+    orch, config, conn, packs, _x, _d = _single_env(tmp_path)
+    real = orch._stage_single_volume
+
+    def finish_then_interrupt(**kwargs):
+        real(**kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(orch, "_stage_single_volume", finish_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        orch.stage()
+    (session_id,) = _sessions(conn)
+    (vol,) = list_volumes(conn)
+    session_dir = config.staging_path / session_id.replace(":", "-")
+    assert (session_dir / f"{vol.label}.iso").is_file()

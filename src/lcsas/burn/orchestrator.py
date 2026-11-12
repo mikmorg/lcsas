@@ -1103,12 +1103,22 @@ class BurnOrchestrator:
         With no finished volume the session is removed: its staging
         directory first, then its row (a row with no directory is the
         harmless order, FUP-02).  Otherwise the finished volumes stay
-        staged, as before, and the log names them.  Never raises: the
-        stage's own error is what the caller sees.
+        staged, as before, and the log names them.  The catalog decides
+        which volumes were finished (the failed one is already deleted),
+        not *manifests*, which an interrupt can catch one volume behind.
+        Never raises: the stage's own error is what the caller sees.
         """
         try:
             self._conn.rollback()
-            if not manifests:
+            kept = [
+                str(r[0]) for r in self._conn.execute(
+                    "SELECT v.label FROM session_volumes sv "
+                    "JOIN volumes v USING (volume_id) "
+                    "WHERE sv.session_id = ? ORDER BY v.label",
+                    (session_id,),
+                )
+            ]
+            if not kept:
                 if session_dir.exists():
                     safe_remove_tree(session_dir)
                 delete_empty_session(self._conn, session_id)
@@ -1121,13 +1131,12 @@ class BurnOrchestrator:
             with contextlib.suppress(OSError):
                 self._write_session_manifest(session_id, session_dir,
                                              manifests)
-            kept = ", ".join(m.volume_label for m in manifests)
             _logger.error(
                 "Staging stopped after %d of %d volume(s). Burn session %s "
                 "keeps the volume(s) staged before the failure: %s. Burn "
                 "them with 'lcsas burn --session %s --location <name>', or "
                 "remove them with 'lcsas session abort %s'.",
-                len(manifests), planned, session_id, kept, session_id,
+                len(kept), planned, session_id, ", ".join(kept), session_id,
                 session_id,
             )
         except Exception as exc:  # never hide the stage's own error
