@@ -487,8 +487,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--fix", action="store_true", default=False,
         help="Delete ghost volumes (never-burned STAGING/BURNING volumes "
              "with zero copies whose staged ISO is gone), returning their "
-             "packs to the unarchived pool. Asks for confirmation unless "
-             "--yes is given.",
+             "packs to the unarchived pool. A volume whose events show a "
+             "disc of it was burned is never deleted. Asks for "
+             "confirmation unless --yes is given.",
     )
     cat_reconcile_p.add_argument(
         "--include-waiting", action="store_true", default=False,
@@ -4226,6 +4227,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
        but no disc record backs it.  Report-only.
     """
     from lcsas.db.connection import locked_connection
+    from lcsas.db.models import Volume
     from lcsas.db.queries import (
         get_durable_volumes_without_active_copies,
         get_ghost_volumes,
@@ -4235,6 +4237,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     )
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import staged_iso_present
+    from lcsas.db.volume_events import burn_evidence
     from lcsas.db.volumes import delete_volume
 
     config = _load_config_opt(args)
@@ -4244,11 +4247,39 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
+        candidates = get_ghost_volumes(conn, args.older_than_hours)
+        # #746: a volume with no disc record whose events show a good disc
+        # of it was burned (the #737 check session abort and stage --clean
+        # use) is a burned volume, not a ghost.  Never deleted, even with
+        # --include-waiting; its disc just needs recording.
+        burned_unrecorded: list[tuple[Volume, str]] = []
+        for v in candidates:
+            evidence = burn_evidence(conn, v.volume_id)
+            if evidence is not None:
+                burned_unrecorded.append((v, evidence))
+        if burned_unrecorded:
+            kept_ids = {v.volume_id for v, _why in burned_unrecorded}
+            candidates = [v for v in candidates
+                          if v.volume_id not in kept_ids]
+            logger.warning(
+                "%d volume(s) have no disc recorded, but a disc of each was "
+                "burned; they are not ghosts and --fix never deletes them:",
+                len(burned_unrecorded),
+            )
+            for v, why in burned_unrecorded:
+                logger.warning("  %s  (status=%s, but %s)", v.label, v.status,
+                               why)
+            logger.warning(
+                "  For each disc you hold, put it in the drive and run "
+                "'lcsas verify <label> --disc --location <where it is "
+                "kept>', or import its burn receipt with 'lcsas catalog "
+                "import-receipts'."
+            )
+
         # #647: a never-burned volume whose staged ISO still exists is
         # waiting to be burned (possibly on another machine, with its
         # receipt still to come), not a ghost.  --fix leaves it alone
         # unless --include-waiting.
-        candidates = get_ghost_volumes(conn, args.older_than_hours)
         waiting = [v for v in candidates if staged_iso_present(conn, v.volume_id)]
         if waiting:
             logger.info(

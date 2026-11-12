@@ -51,7 +51,7 @@ from lcsas.db.sessions import (
     update_session_volume_iso,
 )
 from lcsas.db.volume_copies import add_volume_copy
-from lcsas.db.volume_events import add_event
+from lcsas.db.volume_events import add_event, burn_evidence
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import (
     create_volume,
@@ -1753,50 +1753,10 @@ class BurnOrchestrator:
                 for row in rows]
 
     def _burn_evidence(self, volume_id: int) -> str | None:
-        """Why the volume's events say a good disc of it was burned, or None.
-
-        Only events that a never-burned volume, or one whose only disc
-        failed verification (#483), cannot carry count:
-
-        - ``VERIFY_PASS`` at a location: a disc was read back at that
-          location.  An ISO verify records no location, so it does not
-          count.  ``lcsas verify <label> --disc`` without ``--location``
-          records none either; its default detail "Disc verify" counts.
-        - ``BURN_RECEIPT_IMPORTED``, unless its receipt says the disc
-          failed verification (``verify_passed`` false).
-        - ``LOCATION_MOVE``: a recorded disc was moved.
-        - ``VERIFY_FAIL_REBURN``: written only when an earlier disc of
-          the volume was recorded.
-
-        ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
-        to STAGING and is re-staged or aborted (BURN-05, #483).
-        """
-        rows = self._conn.execute(
-            """SELECT event_type, location, detail FROM volume_events
-               WHERE volume_id = ?
-                 AND event_type IN ('VERIFY_PASS', 'BURN_RECEIPT_IMPORTED',
-                                    'LOCATION_MOVE', 'VERIFY_FAIL_REBURN')
-               ORDER BY event_date, event_id""",
-            (volume_id,),
-        ).fetchall()
-        for event_type, location, detail in rows:
-            where = f" at {location}" if location else ""
-            if event_type == "VERIFY_PASS":
-                if location or detail == "Disc verify":
-                    return f"a disc of it passed verification{where}"
-            elif event_type == "BURN_RECEIPT_IMPORTED":
-                try:
-                    receipt = json.loads(detail or "{}")
-                except ValueError:
-                    receipt = {}
-                if not (isinstance(receipt, dict)
-                        and receipt.get("verify_passed") is False):
-                    return f"a burn receipt of it was imported{where}"
-            elif event_type == "LOCATION_MOVE":
-                return f"a disc of it was moved{where}"
-            else:
-                return f"a disc of it was burned again{where}"
-        return None
+        """Why the volume's events say a good disc of it was burned, or
+        None (:func:`lcsas.db.volume_events.burn_evidence`, which
+        ``catalog reconcile --fix`` shares, #746)."""
+        return burn_evidence(self._conn, volume_id)
 
     def _reclaim_summary(self, volume_ids: list[int]) -> AbortSummary:
         """Count the distinct packs/bytes linked to the given volumes."""
