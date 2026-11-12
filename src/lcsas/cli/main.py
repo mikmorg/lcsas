@@ -280,7 +280,8 @@ def build_parser() -> argparse.ArgumentParser:
     stage_p.add_argument("--force", action="store_true",
                          help="With --clean: also abort a never-burned "
                               "session, deleting its volumes and returning "
-                              "their packs to the unarchived pool.")
+                              "their packs to the unarchived pool. A "
+                              "burned volume is never deleted.")
     stage_p.add_argument("--session", type=str, default=None,
                          help="Session ID (for --clean).")
     stage_p.add_argument("--dry-run", "-n", action="store_true", default=False,
@@ -672,7 +673,8 @@ def build_parser() -> argparse.ArgumentParser:
     sess_abort_p = session_sub.add_parser(
         "abort",
         help="Abort a never-burned session: delete its volumes and return "
-             "their packs to the unarchived pool.",
+             "their packs to the unarchived pool. Refused when a volume of "
+             "it was burned but its disc is not recorded yet.",
     )
     sess_abort_p.add_argument(
         "ref", nargs="?", default="latest",
@@ -2603,6 +2605,34 @@ def _collection_catalog_check(
     return repo_ids, problems
 
 
+def _for_location_check(conn: sqlite3.Connection, location: str) -> str | None:
+    """The error for a ``--for-location`` that is not registered, or None.
+
+    Worded like :func:`_collection_catalog_check`, plus the registered
+    locations: a typo must not stage discs for a place that does not
+    exist.
+    """
+    from lcsas.db.locations import (
+        UnknownLocationError,
+        list_locations,
+        resolve_location,
+    )
+
+    try:
+        resolve_location(conn, location)
+    except UnknownLocationError as exc:
+        hint = (f" (did you mean: {', '.join(exc.suggestions)}?)"
+                if exc.suggestions else "")
+        known = [loc.name for loc in list_locations(conn)]
+        listed = (f" Registered locations: {', '.join(known)}." if known
+                  else " No location is registered yet.")
+        return (
+            f"--for-location: location '{location}' is not registered"
+            f"{hint}.{listed} Add it with 'lcsas location add {location}'."
+        )
+    return None
+
+
 def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -2677,6 +2707,11 @@ def cmd_stage(args: argparse.Namespace) -> int:
             for_location = collection.location
             media_type = collection.media_type
         else:
+            if for_location is not None:
+                location_problem = _for_location_check(conn, for_location)
+                if location_problem is not None:
+                    logger.error("%s", location_problem)
+                    return 1
             try:
                 repo_ids = _resolve_repo_names_to_ids(
                     conn, args.repo, config,
@@ -4359,9 +4394,8 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
             )
         logger.warning(
             "That records the disc at its location and marks the volume "
-            "VERIFIED. Until then, do not run 'lcsas session abort' on "
-            "their burn session: it deletes volumes that have no disc "
-            "record."
+            "VERIFIED. Until then, 'lcsas session abort' and 'lcsas stage "
+            "--clean' refuse their burn session, so it keeps its ISOs."
         )
 
     if result.errors:
@@ -4388,6 +4422,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
     from lcsas.consolidate.merger import VolumeMerger
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
+    from lcsas.db.volumes import get_volume_by_id
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
@@ -4442,11 +4477,15 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             logger.info("Marked %d source volume(s) as DEPRECATED", len(args.volume_ids))
             return 0
 
+        # The owner and the heir know volumes by label, not catalog ID.
+        source_labels = " ".join(
+            get_volume_by_id(conn, vid).label for vid in args.volume_ids
+        )
         if not args.execute:
             logger.info("")
             logger.info("To execute: add --execute to stage and burn.")
-            logger.info("Then verify the new volumes and run: consolidate --deprecate %s",
-                       " ".join(str(v) for v in args.volume_ids))
+            logger.info("Then verify the new volumes and run: lcsas "
+                        "consolidate --deprecate %s", source_labels)
             return 0
 
         if config is None:
@@ -4456,7 +4495,6 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         # #677: only VERIFIED volumes can become CONSOLIDATING.  Refuse
         # anything else now, before the prompt, not with an invalid-
         # transition error after the owner typed "yes".
-        from lcsas.db.volumes import get_volume_by_id
         not_ready = [get_volume_by_id(conn, vid) for vid in args.volume_ids]
         not_ready = [v for v in not_ready if v.status != "VERIFIED"]
         if not_ready:
@@ -4538,12 +4576,14 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         logger.info(
             "Consolidation staged.  Next steps:\n"
             "  1. burn session %s\n"
-            "  2. verify the new volumes\n"
-            "  3. then deprecate sources with: consolidate --deprecate %s\n"
+            "  2. verify the new volumes (%s)\n"
+            "  3. then deprecate sources with: lcsas consolidate "
+            "--deprecate %s\n"
             "To cancel instead: lcsas session abort %s (the sources return "
             "to VERIFIED)",
             session.session_id,
-            " ".join(str(v) for v in args.volume_ids),
+            " ".join(m.volume_label for m in session.manifests),
+            source_labels,
             session.session_id,
         )
 
@@ -6243,8 +6283,15 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
         repo_name = repo_row["name"]
 
-        # Locate metadata on the disc (written as metadata/<repo_name>/).
-        disc_meta = disc_path / "metadata" / repo_name
+        # Locate metadata on the disc.  The injector writes it as
+        # metadata/<repo_id>/ (#743); a repository added with `repo add`
+        # has a UUID id, so the name alone does not find it.  The name
+        # is still tried for a repository whose id equals its name.
+        disc_meta = disc_path / "metadata" / repo_row["repo_id"]
+        if not disc_meta.is_dir():
+            by_name = disc_path / "metadata" / repo_name
+            if by_name.is_dir():
+                disc_meta = by_name
         if not disc_meta.is_dir():
             logger.error(
                 "Metadata for repository '%s' not found on disc.\n"
@@ -6282,7 +6329,10 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             # Auto-fallback: use the Python reader (tier 3) bundled with LCSAS.
             # Link the disc data dir into the cache so PurePythonRestorer can
             # find the pack files without copying gigabytes.
-            from lcsas.restore.restic_fallback import PurePythonRestorer
+            from lcsas.restore.restic_fallback import (
+                PurePythonRestorer,
+                RestoreAbortedError,
+            )
 
             data_link = cache_dir / "data"
             disc_data = disc_path / "data"
@@ -6321,6 +6371,12 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             )
             try:
                 meta = restorer.restore(target=target, snapshot_id=snap_arg)
+            except RestoreAbortedError as exc:
+                # q (or the end of input) at the disc prompt exits 75, a
+                # full disk 1, as the bundled standalone_restorer.py does
+                # (#658).
+                logger.error("Python reader restore stopped: %s", exc)
+                return exc.exit_code
             except Exception as exc:
                 # Setup-level failure (wrong password, missing repo) — fail fast.
                 logger.error("Python reader restore failed: %s", exc)

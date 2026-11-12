@@ -211,7 +211,8 @@ called from `cmd_session_abort`).
   containing exactly the source set's active packs, staged for the
   chosen location.
 - The owner gets a printed next-step list ending in
-  `consolidate --deprecate <ids>`.
+  `lcsas consolidate --deprecate <labels>`, naming the source volumes and
+  the new volumes by label.
 - Source `volume_copies` rows are untouched (deprecation happens
   later).
 - Exit code 0 on success.  1 on a refused source, an unknown
@@ -613,8 +614,9 @@ rebuilds the master.
 - No volume whose disc was read is left `STAGING`; the newest burn
   session's volumes are `BURNED` with no disc record until the owner
   runs `lcsas verify <label> --disc --location <where>` for each.
-  Until then, `lcsas session abort` of their session would delete them
-  (it deletes volumes with no disc record).
+  Until then, `lcsas session abort` and `lcsas stage --clean` refuse
+  their burn session (a burned volume is never deleted, even with
+  `--force`), so it keeps its ISOs.
 - Exit 0 if all discs merged; 1 if any disc was skipped or errored
   (master catalog still contains successfully-merged data).
 
