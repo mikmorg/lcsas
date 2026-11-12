@@ -76,14 +76,17 @@ def _receipt_already_imported(
     """
     from lcsas.db.volume_copies import get_copy_at_location
     from lcsas.db.volume_events import get_events_for_volume
+    from lcsas.utils.timestamps import same_instant
 
+    # #730: the catalog stores a receipt's burn date in UTC, so a date
+    # written with another offset is matched as the same instant.
     for prior in get_events_for_volume(conn, volume_id):
         if (
             prior.event_type in ("VERIFY_PASS", "VERIFY_FAIL",
                                  "VERIFY_FAIL_REBURN")
             and prior.location == location
             and burn_date
-            and prior.event_date == burn_date
+            and same_instant(prior.event_date, burn_date)
         ):
             return True
     for prior in get_events_for_volume(conn, volume_id, "BURN_RECEIPT_IMPORTED"):
@@ -102,7 +105,7 @@ def _receipt_already_imported(
     copy = get_copy_at_location(conn, volume_id, location)
     return (
         copy is not None
-        and copy.burn_date == burn_date
+        and same_instant(copy.burn_date, burn_date)
         and (copy.iso_sha256 or "") == receipt_hash
     )
 

@@ -22,6 +22,7 @@ def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
     from datetime import UTC, datetime
 
     from lcsas.db.volume_copies import find_stale_copies
+    from lcsas.utils.timestamps import parse_utc
 
     stale = find_stale_copies(conn, older_than_days)
     if not stale:
@@ -36,11 +37,14 @@ def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
         f"{older_than_days} days:"
     )
     for label, location, last_verified_at in stale:
+        when = parse_utc(last_verified_at)
         if last_verified_at is None:
             age = "never verified"
+        elif when is None:
+            age = f"unreadable date ({last_verified_at})"
         else:
-            days = (now - datetime.fromisoformat(last_verified_at)).days
-            age = f"{days} days ago ({last_verified_at[:10]})"
+            days = (now - when).days
+            age = f"{days} days ago ({when.date().isoformat()})"
         logger.info(f"  {label:<25} {location:<15} {age}")
     logger.info("Re-verify with: lcsas verify --all --disc")
     return 0
@@ -145,7 +149,7 @@ def _volumes_needing_reburn(
            FROM volume_events e JOIN volumes v USING (volume_id)
            WHERE e.event_type IN ('VERIFY_PASS', 'VERIFY_FAIL',
                                   'VERIFY_FAIL_REBURN')
-           ORDER BY e.event_date, e.event_id"""
+           ORDER BY julianday(e.event_date), e.event_id"""
     ):
         key = (int(row["volume_id"]), row["location"] or "<unknown>")
         newest[key] = (row["event_type"], row["label"])
@@ -258,7 +262,7 @@ def _status_json(
             "SELECT sv.session_id FROM session_volumes sv "
             "JOIN burn_sessions bs USING (session_id) "
             "WHERE sv.volume_id = ? "
-            "ORDER BY bs.created_at DESC, sv.rowid DESC LIMIT 1",
+            "ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC LIMIT 1",
             (v.volume_id,),
         ).fetchone()
         at(v.location)["waiting"].append({

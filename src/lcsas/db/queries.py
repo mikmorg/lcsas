@@ -83,7 +83,7 @@ _DEPRECATED_BY_LOSS_SQL = f"""(
           AND (substr(le.detail, 1, {len(AUTO_DEPRECATED_NOTE_PREFIX)})
                    = '{AUTO_DEPRECATED_NOTE_PREFIX}'
                OR le.detail LIKE 'Status changed: % → DEPRECATED')
-        ORDER BY le.event_date DESC, le.event_id DESC
+        ORDER BY julianday(le.event_date) DESC, le.event_id DESC
         LIMIT 1
     ) = 1
 )"""
@@ -165,7 +165,7 @@ def get_unarchived_packs(
                WHERE p.is_pruned = 0
                  AND p.repo_id = ?
                  AND NOT {_HAS_DURABLE_LINK}
-               ORDER BY p.created_at""",
+               ORDER BY julianday(p.created_at), p.pack_id""",
             (repo_id,),
         ).fetchall()
     else:
@@ -173,7 +173,7 @@ def get_unarchived_packs(
             f"""SELECT p.* FROM packs p
                WHERE p.is_pruned = 0
                  AND NOT {_HAS_DURABLE_LINK}
-               ORDER BY p.created_at"""
+               ORDER BY julianday(p.created_at), p.pack_id"""
         ).fetchall()
     return [_row_to_pack(r) for r in rows]
 
@@ -718,7 +718,7 @@ def get_ghost_volumes(
                  SELECT 1 FROM volume_copies vc
                  WHERE vc.volume_id = v.volume_id
              )
-             AND v.created_at <= datetime('now', ?)
+             AND julianday(v.created_at) <= julianday('now', ?)
            ORDER BY v.label""",
         (modifier,),
     ).fetchall()
@@ -890,7 +890,7 @@ def get_unarchived_or_missing_at_location(
                          AND e.event_type = 'VERIFY_FAIL'
                    )
              )
-           ORDER BY p.created_at""",
+           ORDER BY julianday(p.created_at), p.pack_id""",
         (location, location),
     ).fetchall()
     return [_row_to_pack(r) for r in rows]
@@ -929,7 +929,7 @@ def get_packs_missing_at_location(
            WHERE p.is_pruned = 0
              AND {_HAS_DURABLE_LINK}
              AND NOT {_HELD_AT_LOCATION}
-           ORDER BY p.created_at""",
+           ORDER BY julianday(p.created_at), p.pack_id""",
         (location,),
     ).fetchall()
     return [_row_to_pack(r) for r in rows]

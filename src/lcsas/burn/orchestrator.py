@@ -2066,7 +2066,7 @@ class BurnOrchestrator:
                       (SELECT sv.session_id FROM session_volumes sv
                        JOIN burn_sessions bs USING (session_id)
                        WHERE sv.volume_id = v.volume_id
-                       ORDER BY bs.created_at DESC, sv.rowid DESC
+                       ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC
                        LIMIT 1) AS session_id
                FROM volumes v
                WHERE v.status IN ('STAGING', 'BURNING')
