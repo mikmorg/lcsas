@@ -546,10 +546,10 @@ LCSAS releases the drive in three coordinated steps:
 
   2. LCSAS_META_DISC names the META disc's mount point for a caller
      that knows it, so restore.sh need not probe.  It was meant for
-     lcsas-init (initramfs PID 1), which also chdir("/")s before
-     exec; that live-boot path is quarantined in experimental/boot/
-     and no LCSAS disc boots.  Today the variable is set by hand or
-     by test rigs.
+     the init program of a live-boot path that was never shipped; no
+     LCSAS disc boots.  That code was deleted (#688) and survives
+     only at the repository tag archive/pre-1.0-history.  Today the
+     variable is set by hand or by test rigs.
 
   3. lcsas-restore takes a new --meta-disc CLI flag (also the env
      var LCSAS_META_DISC).  When set, the disc_locator:
