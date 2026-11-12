@@ -2605,6 +2605,34 @@ def _collection_catalog_check(
     return repo_ids, problems
 
 
+def _for_location_check(conn: sqlite3.Connection, location: str) -> str | None:
+    """The error for a ``--for-location`` that is not registered, or None.
+
+    Worded like :func:`_collection_catalog_check`, plus the registered
+    locations: a typo must not stage discs for a place that does not
+    exist.
+    """
+    from lcsas.db.locations import (
+        UnknownLocationError,
+        list_locations,
+        resolve_location,
+    )
+
+    try:
+        resolve_location(conn, location)
+    except UnknownLocationError as exc:
+        hint = (f" (did you mean: {', '.join(exc.suggestions)}?)"
+                if exc.suggestions else "")
+        known = [loc.name for loc in list_locations(conn)]
+        listed = (f" Registered locations: {', '.join(known)}." if known
+                  else " No location is registered yet.")
+        return (
+            f"--for-location: location '{location}' is not registered"
+            f"{hint}.{listed} Add it with 'lcsas location add {location}'."
+        )
+    return None
+
+
 def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -2679,6 +2707,11 @@ def cmd_stage(args: argparse.Namespace) -> int:
             for_location = collection.location
             media_type = collection.media_type
         else:
+            if for_location is not None:
+                location_problem = _for_location_check(conn, for_location)
+                if location_problem is not None:
+                    logger.error("%s", location_problem)
+                    return 1
             try:
                 repo_ids = _resolve_repo_names_to_ids(
                     conn, args.repo, config,

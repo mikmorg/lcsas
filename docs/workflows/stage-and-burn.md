@@ -180,7 +180,9 @@ machines, or when staging in advance for an unattended burn.
    (repository *names*, mapped to repo_ids by `_resolve_repo_names_to_ids`).
 4. `--for-location <name>` — stage packs missing at that location only;
    routes through `get_unarchived_or_missing_at_location`
-   (`BurnOrchestrator._gather_packs_for_staging`).
+   (`BurnOrchestrator._gather_packs_for_staging`). The location must be
+   registered: an unknown name is refused with the registered ones listed,
+   dry run or not (`_for_location_check` in `cmd_stage`).
    `--collection <name>` sets `--repo`, `--for-location` and `--media`
    from a `[collections.<name>]` table instead, plus its minimum fill
    (#701, [collections.md](collections.md)).
@@ -411,7 +413,8 @@ committing to a full stage.
    skipping the result-logging block.
 
 **Expected outcome:** Per-volume plan printed, no session created, no
-staging directories, no catalog mutation.
+staging directories, no catalog mutation. An unregistered
+`--for-location` is refused (exit 1) as in a real run.
 
 **Variant axes that apply:** Media type (all), repository filter (`--repo`),
 location filter (`--for-location`). No ISO is produced.
@@ -435,9 +438,11 @@ pack selection (selection is fixed at stage time).
 
 **Prerequisites:**
 
-- The target location must be registered (`lcsas location add <name>`). At
-  burn time, an unregistered `--location` is rejected unless you pass
-  `--create-location` (`resolve_location` in `cmd_burn_session`).
+- The target location must be registered (`lcsas location add <name>`).
+  `stage --for-location` refuses an unregistered name and lists the
+  registered ones. At burn time, an unregistered `--location` is rejected
+  unless you pass `--create-location` (`resolve_location` in
+  `cmd_burn_session`).
 - Catalog must reflect which packs already live at each location — this is
   populated by previous burns via `add_volume_copy` and by
   `lcsas catalog import-receipts` for split-machine burns.
