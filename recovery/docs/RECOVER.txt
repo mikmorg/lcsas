@@ -947,11 +947,13 @@ refuses and changes nothing.
 
 A volume of the newest burn session whose disc you did not give the
 rebuild has an unknown burn state: its disc may exist.  The rebuild
-marks it, 'lcsas status' lists it, and 'lcsas session abort', 'lcsas
-stage --clean' and 'lcsas catalog reconcile --fix' refuse to delete
-it.  If you find its disc, run the 'lcsas verify' command above for
-it.  Only if you are sure no disc of it was ever burned, delete it
-with:
+marks it, and the status report lists it:
+
+    lcsas status
+
+Abort, stage --clean and reconcile --fix all refuse to delete it.  If
+you find its disc, record it with the verify command above.  Only if
+you are sure no disc of it was ever burned, delete it with:
 
     lcsas session abort --volume <label> --never-burned
 
