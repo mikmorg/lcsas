@@ -9,8 +9,10 @@ import sqlite3
 import subprocess
 import sys
 import traceback
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from lcsas.cli.parser import build_parser
 from lcsas.log import get_logger, setup_logging
@@ -217,6 +219,68 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+_CatalogMode = Literal["write", "write-existing", "read", "unlocked-migrate", "unlocked"]
+
+
+@contextmanager
+def _open_catalog(
+    args: argparse.Namespace,
+    config: object | None = None,
+    *,
+    mode: _CatalogMode = "write",
+    db_path: Path | None = None,
+) -> Iterator[sqlite3.Connection]:
+    """Open the catalog a command addresses; close it (and the lock) on exit.
+
+    The path is *db_path* when the handler already has it, else
+    :func:`_resolve_db_path` of *args* and *config*.  *mode*:
+
+    ``write`` (the default)
+        Take the catalog lock (waiting up to ``--lock-timeout``), create
+        the catalog when it is not there, and bring its schema up to date.
+    ``write-existing``
+        The same, but a missing or uninitialised catalog is a
+        :class:`CatalogError` ("Run `lcsas init` first") instead of a new
+        catalog.
+    ``read``
+        No lock.  The catalog must exist and is not migrated
+        (:func:`_open_existing_catalog`).
+    ``unlocked-migrate``, ``unlocked``
+        No lock; the catalog is created when missing, and migrated or not.
+        Only ``volume impact`` and ``session list`` open it this way, as
+        they did before this helper existed.
+    """
+    from lcsas.db.connection import get_connection, locked_connection
+    from lcsas.db.schema import ensure_schema
+
+    if db_path is None:
+        db_path = _resolve_db_path(args, config)
+    if mode in ("write", "write-existing"):
+        if mode == "write-existing":
+            _open_existing_catalog(db_path).close()
+        with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
+            ensure_schema(conn)
+            yield conn
+        return
+    conn = _open_existing_catalog(db_path) if mode == "read" else get_connection(db_path)
+    try:
+        if mode == "unlocked-migrate":
+            ensure_schema(conn)
+        yield conn
+    finally:
+        conn.close()
+
+
+def _confirm(prompt: str, answer: str = "yes") -> bool:
+    """Ask *prompt* on the terminal: True when the reply is *answer*.
+
+    The reply is compared stripped and in any case.  EOFError (no terminal:
+    input is redirected) reaches the caller, which words that refusal and
+    its exit code.
+    """
+    return input(prompt).strip().lower() == answer
+
+
 def _resolve_repo_names_to_ids(
     conn: sqlite3.Connection,
     names: list[str] | None,
@@ -276,8 +340,6 @@ def cmd_init(args: argparse.Namespace) -> int:
       3. ``paths.database`` from the TOML config (``--config``)
       4. ``archive.db`` in the current working directory
     """
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
 
     # --db-path is init-only and outranks everything; the rest of the
     # ladder is the same one every other command walks.
@@ -287,26 +349,19 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     # Ensure parent directory exists (XDG paths may not exist yet)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with locked_connection(
-        db_path, timeout=_resolve_lock_timeout(args)
-    ) as conn:
-        ensure_schema(conn)
+    with _open_catalog(args, db_path=db_path):
+        pass  # opening it creates and migrates the catalog
     logger.info(f"Initialized the LCSAS catalog at {db_path}")
     return 0
 
 
 def cmd_repo_add(args: argparse.Namespace) -> int:
     """Register a new repository."""
-    from lcsas.db.connection import locked_connection
     from lcsas.db.repos import register_repo
-    from lcsas.db.schema import ensure_schema
     from lcsas.utils.fs import read_repo_key_ids
     from lcsas.utils.labels import generate_uuid
 
-    db_path = _resolve_db_path(args)
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args) as conn:
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()
 
@@ -349,12 +404,8 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
     """List registered repositories."""
     from lcsas.db.repos import list_repos
 
-    db_path = _resolve_db_path(args)
-    conn = _open_existing_catalog(db_path)
-    try:
+    with _open_catalog(args, mode="read") as conn:
         repos = list_repos(conn)
-    finally:
-        conn.close()
 
     if not repos:
         logger.info("No repositories registered.")
@@ -402,17 +453,14 @@ def _cmd_repo_set_status(
     repository could not be resolved, so callers can base follow-up advice
     on its config name without re-opening the catalog.
     """
-    from lcsas.db.connection import locked_connection
     from lcsas.db.repos import set_repo_status
-    from lcsas.db.schema import ensure_schema
 
     db_path = _resolve_db_path(args)
-    # locked_connection + ensure_schema (not _open_existing_catalog): a
+    # _open_catalog's write mode (not mode="read"): a
     # v9 catalog has no `status` column yet, so it must be migrated before
     # the UPDATE — otherwise this would fail on exactly the catalogs that
     # most need retiring.
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
+    with _open_catalog(args, db_path=db_path) as conn:
         try:
             repo = _find_repo(
                 conn, args.repo_id,
@@ -533,17 +581,12 @@ def _resolve_volume_refs(
 
 def cmd_repo_remove(args: argparse.Namespace) -> int:
     """Remove a repository from the catalog."""
-    from lcsas.db.connection import locked_connection
     from lcsas.db.packs import bulk_mark_pruned, list_packs
     from lcsas.db.repos import delete_repo
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.snapshots import delete_snapshots_for_repo
     from lcsas.db.volume_packs import get_volume_ids_for_pack
 
-    db_path = _resolve_db_path(args)
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args) as conn:
         try:
             repo = _find_repo(
                 conn, args.repo_id,
@@ -594,8 +637,7 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
             )
             try:
                 prompt = "Type 'yes' to confirm deletion, or anything else to cancel: "
-                response = input(prompt).strip()
-                if response.lower() != "yes":
+                if not _confirm(prompt):
                     logger.info("Removal canceled.")
                     return 0
             except EOFError:
@@ -644,10 +686,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     """Scan mirrors for new packs and register them in the catalog."""
     import json as _json
 
-    from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
     from lcsas.db.repos import resolve_repo
-    from lcsas.db.schema import ensure_schema
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
@@ -657,13 +697,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return 1
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    with locked_connection(
-        _resolve_db_path(args, config),
-        timeout=_resolve_lock_timeout(args),
-    ) as conn:
-        ensure_schema(conn)
-
-
+    with _open_catalog(args, config) as conn:
         # Config key → catalog repo_id, filled as each repository resolves.
         repos_db: dict[str, str] = {}
         repo_filter = set(args.repo) if args.repo else None
@@ -867,9 +901,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 def cmd_pack_unprune(args: argparse.Namespace) -> int:
     """Restore a wrongly-pruned pack to the active pool (BURN-09)."""
-    from lcsas.db.connection import locked_connection
     from lcsas.db.packs import unmark_pruned
-    from lcsas.db.schema import ensure_schema
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
@@ -879,8 +911,7 @@ def cmd_pack_unprune(args: argparse.Namespace) -> int:
         logger.error("Empty SHA-256 prefix.")
         return 1
 
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
+    with _open_catalog(args, db_path=db_path) as conn:
         # substr() prefix match: immune to LIKE wildcards in typed input.
         rows = conn.execute(
             "SELECT pack_id, sha256, is_pruned FROM packs "
@@ -1230,10 +1261,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
     from lcsas.db.volumes import list_volumes
 
-    db_path = _resolve_db_path(args)
-    conn = _open_existing_catalog(db_path)
     doc: dict[str, Any] = {}
-    try:
+    with _open_catalog(args, mode="read") as conn:
         if args.stale_copies:
             return _print_stale_copies(conn, args.older_than_days)
         if args.redundancy:
@@ -1334,8 +1363,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 stale_count=stale_count,
                 older_than_days=args.older_than_days,
             )
-    finally:
-        conn.close()
 
     if getattr(args, "json", False):
         print(json.dumps(doc, indent=2, sort_keys=True))
@@ -1512,21 +1539,21 @@ def _config_check_collections(
 
     errors = collection_password_errors(config)
     db_path = _resolve_db_path(args, config)
-    try:
-        conn = _open_existing_catalog(db_path)
-    except CatalogError:
-        logger.warning(
-            "No catalog at %s yet: the collections' locations and "
-            "repositories are not checked against it. Run this check "
-            "again after 'lcsas init', 'lcsas repo add' and 'lcsas "
-            "location add'.", db_path,
-        )
-        return errors
-    try:
+    with ExitStack() as stack:
+        try:
+            conn = stack.enter_context(
+                _open_catalog(args, mode="read", db_path=db_path)
+            )
+        except CatalogError:
+            logger.warning(
+                "No catalog at %s yet: the collections' locations and "
+                "repositories are not checked against it. Run this check "
+                "again after 'lcsas init', 'lcsas repo add' and 'lcsas "
+                "location add'.", db_path,
+            )
+            return errors
         for coll in config.collections.values():
             errors.extend(_collection_catalog_check(conn, config, coll)[1])
-    finally:
-        conn.close()
     return errors
 
 
@@ -1549,8 +1576,6 @@ def _report_unmanaged_staging(paths: list[Path]) -> None:
 
 def cmd_staging_clean(args: argparse.Namespace) -> int:
     """Detect and remove orphaned directories in the staging area."""
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.staging.cleanup import (
         clean_orphaned_staging,
         detect_orphaned_staging,
@@ -1565,11 +1590,7 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
     # concurrent `lcsas stage` cannot commit a new in-flight session whose
     # directory we already flagged.  Blocking the stage here is the point;
     # with the loud-wait mitigation it now sees a "waiting for lock" message.
-    with locked_connection(
-        _resolve_db_path(args, config),
-        timeout=_resolve_lock_timeout(args),
-    ) as conn:
-        ensure_schema(conn)
+    with _open_catalog(args, config) as conn:
         orphans = detect_orphaned_staging(config, conn)
         _report_unmanaged_staging(detect_unmanaged_staging(config, conn))
 
@@ -1582,8 +1603,7 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
             logger.info(f"  {p}")
 
         if not args.force:
-            confirm = input("Remove these directories? [y/N] ").strip().lower()
-            if confirm != "y":
+            if not _confirm("Remove these directories? [y/N] ", "y"):
                 logger.info("Aborted.")
                 return 0
             # Re-check under the still-held lock: the prompt may have sat for
@@ -1773,8 +1793,6 @@ def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
@@ -1792,12 +1810,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
 
     # No signal handler here: Ctrl-C raises KeyboardInterrupt, which
     # stage() already catches to delete a half-built volume (#699).
-    with locked_connection(
-        _resolve_db_path(args, config),
-        timeout=_resolve_lock_timeout(args),
-    ) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args, config) as conn:
         orch = BurnOrchestrator(
             config, conn,
             SubprocessXorrisoRunner(tmpdir=config.staging_path),
@@ -1935,8 +1948,6 @@ def _report_snapshot_coverage(result: Any) -> None:
 def cmd_burn_session(args: argparse.Namespace) -> int:
     """Burn a staged session to disc."""
     from lcsas.burn.orchestrator import BurnOrchestrator
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
@@ -1947,11 +1958,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
     if not _validate_config_or_exit(config):
         return 1
 
-    with locked_connection(
-        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
-    ) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args, config) as conn:
         orch = BurnOrchestrator(
             config, conn,
             SubprocessXorrisoRunner(tmpdir=config.staging_path),
@@ -2301,8 +2308,6 @@ def _iso_volume_id(iso_path: Path) -> str | None:
 
 def cmd_location(args: argparse.Namespace) -> int:
     """Handle location subcommands."""
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.utils.labels import sanitize_name
 
     config = _load_config_opt(args)
@@ -2310,11 +2315,7 @@ def cmd_location(args: argparse.Namespace) -> int:
         logger.error("--config is required for location.")
         return 1
 
-    with locked_connection(
-        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
-    ) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args, config) as conn:
         if args.location_command == "list":
             from lcsas.db.locations import list_locations
             from lcsas.db.queries import get_location_summary
@@ -2500,9 +2501,7 @@ def cmd_copy(args: argparse.Namespace) -> int:
     counting it, and its packs re-enter the next ``lcsas stage``.  The
     owner is told which packs that is, and which are gone for good.
     """
-    from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_lost_volume_ids
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.volume_copies import deprecate_copy, destroy_copy
     from lcsas.db.volumes import get_volume_by_label
 
@@ -2510,8 +2509,7 @@ def cmd_copy(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args, config)
     lost = args.copy_command == "destroy" and getattr(args, "lost", False)
 
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
+    with _open_catalog(args, db_path=db_path) as conn:
         vol = get_volume_by_label(conn, args.volume_label)
         if vol is None:
             logger.error(f"Volume '{args.volume_label}' not found.")
@@ -2664,22 +2662,17 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
     from datetime import UTC, datetime
 
     from lcsas.constants import STATUS_DEPRECATED
-    from lcsas.db.connection import get_connection
     from lcsas.db.queries import (
         get_at_risk_packs_for_volume,
         get_lost_volume_ids,
         volume_display_status,
     )
     from lcsas.db.repos import list_repos
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.volume_copies import get_copies_for_volume
     from lcsas.db.volumes import get_volume_by_label
 
     config = _load_config_opt(args)
-    db_path = _resolve_db_path(args, config)
-    conn = get_connection(db_path)
-    try:
-        ensure_schema(conn)
+    with _open_catalog(args, config, mode="unlocked-migrate") as conn:
         vol = get_volume_by_label(conn, args.volume_label)
         if vol is None:
             logger.error(f"Volume '{args.volume_label}' not found.")
@@ -2755,8 +2748,6 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
                  for rid, packs in by_repo.items()},
                 repo_names,
             )
-    finally:
-        conn.close()
     return 0
 
 
@@ -2888,13 +2879,11 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     an old receipt never brings back a disc recorded lost or destroyed
     (#666).
     """
-    from lcsas.db.connection import locked_connection
     from lcsas.db.locations import (
         UnknownLocationError,
         list_locations,
         resolve_location,
     )
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import get_staged_iso, staging_incomplete
     from lcsas.db.volume_copies import (
         add_volume_copy,
@@ -2918,11 +2907,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     already = 0
     imported = 0
     superseded = 0
-    with locked_connection(
-        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
-    ) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args, config) as conn:
         for receipt_file in args.receipt_files:
             # A receipt that cannot be imported is refused with a message
             # and the import goes on (#522); the exit code says so (#669).
@@ -3415,7 +3400,6 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     2. Durable volumes without an ACTIVE disc — status says a disc exists
        but no disc record backs it.  Report-only.
     """
-    from lcsas.db.connection import locked_connection
     from lcsas.db.models import Volume
     from lcsas.db.queries import (
         get_durable_volumes_without_active_copies,
@@ -3424,7 +3408,6 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         get_volume_pack_stats_by_repo,
         volume_display_status,
     )
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import staged_iso_present
     from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
     from lcsas.db.volumes import delete_volume
@@ -3433,9 +3416,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args, config)
     include_waiting = getattr(args, "include_waiting", False)
 
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args, db_path=db_path) as conn:
         candidates = get_ghost_volumes(conn, args.older_than_hours)
         # #746: a volume with no disc record whose events show a good disc
         # of it was burned (the #737 check session abort and stage --clean
@@ -3565,20 +3546,20 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
 
         if not args.yes:
             try:
-                response = input(
+                confirmed = _confirm(
                     f"Delete {len(ghosts)} ghost volume(s) and return "
                     f"their packs to the unarchived pool? A burn receipt "
                     f"for a deleted volume can no longer be imported, and "
                     f"any of their ISOs left in the staging area are "
                     f"orphaned. Type 'yes' to confirm: "
-                ).strip()
+                )
             except EOFError:
                 logger.error(
                     "No terminal available for confirmation — re-run with "
                     "--yes to confirm non-interactively."
                 )
                 return 1
-            if response.lower() != "yes":
+            if not confirmed:
                 logger.info("Reconcile canceled — no changes made.")
                 return 1
 
@@ -3700,15 +3681,10 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
     """Plan and optionally execute volume consolidation."""
     from lcsas.config.media import MediaType
     from lcsas.consolidate.merger import VolumeMerger
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.volumes import get_volume_by_id
 
     config = _load_config_opt(args)
-    db_path = _resolve_db_path(args, config)
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args, config) as conn:
         try:
             media_type = MediaType[args.target_media]
         except KeyError:
@@ -3808,8 +3784,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             len(plan.active_packs), plan.volumes_needed,
         )
         try:
-            response = input("Are you sure you want to proceed? Type 'yes' to confirm: ").strip()
-            if response.lower() != "yes":
+            if not _confirm("Are you sure you want to proceed? Type 'yes' to confirm: "):
                 logger.info("Consolidation canceled.")
                 return 0
         except EOFError:
@@ -4084,17 +4059,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
     - Manual marking: --mark-verified / --mark-failed for remote workflows
     - All volumes: --all to verify every BURNED/VERIFIED volume
     """
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.volume_events import add_event
     from lcsas.db.volumes import get_volume_by_label, update_status
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
     device = _resolve_device(args, config)
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
-
+    with _open_catalog(args, db_path=db_path) as conn:
         # --- All volumes: verify --all ---
         if args.verify_all:
             if args.disc:
@@ -6630,15 +6601,10 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
             STATUS_DEPRECATED,
             STATUS_VERIFIED,
         )
-        from lcsas.db.connection import locked_connection
-        from lcsas.db.schema import ensure_schema
 
         # #684: ensure_schema may migrate the catalog, so it runs under
         # the catalog lock like every other writer.
-        with locked_connection(
-            db_path, timeout=_resolve_lock_timeout(args)
-        ) as conn:
-            ensure_schema(conn)
+        with _open_catalog(args, db_path=db_path) as conn:
             # #684: count the volumes the heir can hold: burned (and
             # beyond) with at least one ACTIVE disc.  Not in-progress
             # STAGING/BURNING volumes, not DESTROYED ones, and not a
@@ -6875,11 +6841,8 @@ def _check_split_repo_registered(
     mirror = str(repo_cfg.mirror_path) if repo_cfg is not None else "<mirror_path>"
     db_path = _resolve_db_path(args, config)
     try:
-        conn = _open_existing_catalog(db_path)
-        try:
+        with _open_catalog(args, mode="read", db_path=db_path) as conn:
             repo = resolve_repo(conn, name, _config_mirror(config, name))
-        finally:
-            conn.close()
     except CatalogError:  # no file, or never initialised
         # An unmounted drive looks the same as a new archive here, so the
         # mount check comes first: 'init' on an empty mount point would
@@ -7145,15 +7108,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     # there is no catalog to write to, so drift-checking is unavailable —
     # warn loudly.
     if config is not None:
-        from lcsas.db.connection import locked_connection
-        from lcsas.db.schema import ensure_schema
-
         try:
-            with locked_connection(
-                _resolve_db_path(args, config),
-                timeout=_resolve_lock_timeout(args),
-            ) as conn:
-                ensure_schema(conn)
+            with _open_catalog(args, config) as conn:
                 _record_split_by_name(
                     conn, args.repo, threshold, shares, split_id,
                     _config_mirror(config, args.repo),
@@ -7204,16 +7160,13 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
     that makes the catalog agree.  It asks first, and logs one audit line
     naming what was cleared.
     """
-    from lcsas.db.connection import locked_connection
     from lcsas.db.key_escrow import clear_split, get_split_for_repo
     from lcsas.db.repos import resolve_repo
-    from lcsas.db.schema import ensure_schema
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
-    _open_existing_catalog(db_path).close()  # no catalog: say so, don't make one
-    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
-        ensure_schema(conn)
+    # No catalog: say so, don't make one.
+    with _open_catalog(args, mode="write-existing", db_path=db_path) as conn:
         try:
             repo = resolve_repo(conn, args.repo, _config_mirror(config, args.repo))
         except ValueError as exc:
@@ -7242,17 +7195,17 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
         )
         if not args.yes:
             try:
-                answer = input(
+                confirmed = _confirm(
                     "Type 'yes' to clear the recorded split, or anything else "
                     "to cancel: "
-                ).strip()
+                )
             except EOFError:
                 logger.error(
                     "No terminal available for confirmation (redirected "
                     "input). Pass --yes to clear without asking."
                 )
                 return 1
-            if answer.lower() != "yes":
+            if not confirmed:
                 logger.info("Nothing cleared.")
                 return 0
 
@@ -7461,15 +7414,13 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
 
 def cmd_session_list(args: argparse.Namespace) -> int:
     """List burn sessions stored in the catalog."""
-    from lcsas.db.connection import get_connection
     from lcsas.db.sessions import get_session_volumes, list_sessions
 
     config = _load_config_opt(args)
     if config is None:
         logger.error("--config is required for session list.")
         return 1
-    conn = get_connection(_resolve_db_path(args, config))
-    try:
+    with _open_catalog(args, config, mode="unlocked") as conn:
         sessions = list_sessions(conn, status_filter=args.status)
 
         if not sessions:
@@ -7498,8 +7449,6 @@ def cmd_session_list(args: argparse.Namespace) -> int:
             )
             if vols:
                 logger.info("  volumes(%d): %s", len(vols), vol_labels)
-    finally:
-        conn.close()
 
     return 0
 
@@ -7507,8 +7456,6 @@ def cmd_session_list(args: argparse.Namespace) -> int:
 def cmd_session_abort(args: argparse.Namespace) -> int:
     """Abort a never-burned burn session (or one stranded volume), reclaiming packs."""
     from lcsas.burn.orchestrator import BurnOrchestrator
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
@@ -7517,10 +7464,7 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
         logger.error("--config is required for session abort.")
         return 1
 
-    with locked_connection(
-        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
-    ) as conn:
-        ensure_schema(conn)
+    with _open_catalog(args, config) as conn:
         orch = BurnOrchestrator(
             config, conn,
             SubprocessXorrisoRunner(tmpdir=config.staging_path),
