@@ -8,7 +8,7 @@ import sqlite3
 import sys
 from typing import TYPE_CHECKING, Any
 
-from lcsas.cli.common import _open_catalog, _restage_hint
+from lcsas.cli.common import _open_catalog, _reburn_hint
 from lcsas.log import get_logger
 
 if TYPE_CHECKING:
@@ -362,6 +362,25 @@ def _cmd_status(args: argparse.Namespace) -> int:
         # BURN_RECEIPT_IMPORTED written after a failed receipt, don't count).
         needs_reburn = _volumes_needing_reburn(conn)
         failed_labels = {label for label, _, _ in needs_reburn}
+        # #728: one next step per failed burn.  The needs-re-burn line
+        # names it (burn the session again while its ISO is kept, else
+        # stage again), so a PARTIAL session holding one of those volumes
+        # gets no second, different line.
+        reburn_hints: dict[tuple[str, str], str] = {}
+        covered_sessions: set[str] = set()
+        for label, loc, has_disc in needs_reburn:
+            if has_disc or loc == "<unknown>":
+                continue
+            vid = int(conn.execute(
+                "SELECT volume_id FROM volumes WHERE label = ?", (label,)
+            ).fetchone()[0])
+            reburn_hints[(label, loc)] = _reburn_hint(conn, vid, loc)
+            covered_sessions.update(
+                str(r[0]) for r in conn.execute(
+                    "SELECT session_id FROM session_volumes "
+                    "WHERE volume_id = ?", (vid,),
+                )
+            )
         unburned = get_ghost_volumes(conn, older_than_hours=0)
         # #751: a volume with no disc record that was burned is not a
         # ghost: BURNED/VERIFIED with no disc row at all (a catalog rebuilt
@@ -409,7 +428,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
         # #671: a volume whose disc failed verification is listed under
         # "needs re-burn", not as waiting to be burned.
         waiting = [label for label in with_iso if label not in failed_labels]
-        ghost_labels = [v.label for v in unburned if v.label not in with_iso]
+        # #728: nor as a ghost once its ISO is gone: the needs-re-burn
+        # line then names the one step (stage it again for the location).
+        ghost_labels = [v.label for v in unburned
+                        if v.label not in with_iso
+                        and v.label not in failed_labels]
         # FMA-08: packs that live on exactly one disc.  Packs in
         # the <2-copies report with at least one live holder are on one
         # disc; zero-holder packs are the unarchived/staged buckets above.
@@ -515,6 +538,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
             summary["staged"],
         )
     for s in partial_sessions:
+        if s.session_id in covered_sessions:
+            continue
         logger.warning(
             "WARNING: session %s is PARTIAL — at least one burn failed "
             "verification and recorded no disc. Re-run: "
@@ -541,7 +566,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
             logger.warning(
                 "WARNING: %s needs re-burn at %s: its disc failed "
                 "verification and no disc of it is recorded there. %s",
-                label, loc, _restage_hint(loc),
+                label, loc, reburn_hints[(label, loc)],
             )
     if single_disc_packs:
         logger.warning(

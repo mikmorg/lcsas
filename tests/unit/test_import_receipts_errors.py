@@ -1007,7 +1007,9 @@ class TestFailedBurnNextStep:
             conn.commit()
         finally:
             conn.close()
-        next_step = "lcsas stage --for-location Bank_Box"
+        # #728: while the session's ISO is kept, the step is to burn the
+        # session again (what the burn command says too).
+        next_step = "lcsas burn --session sess-1 --location Bank_Box"
 
         # 1. The laptop burn failed its verify.
         failed = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)

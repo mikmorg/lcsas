@@ -309,9 +309,12 @@ where its discs will be kept (B).
   location).
 - A failed verify on B leaves the volume `STAGING` on A (#483), records
   no disc, and writes a `VERIFY_FAIL` event. `lcsas status` then lists
-  the volume under "needs re-burn", and the next step is to stage it
-  again for that location with `lcsas stage --for-location <location>`
-  and burn the new volume (#671; `cmd_catalog_import`).
+  the volume under "needs re-burn" with one next step (#671, #728;
+  `cmd_catalog_import`): while the session's ISO is still in A's
+  staging area, burn it again (`lcsas burn --session <id> --location
+  <location>`, or `burn-iso` it again on B and import that receipt);
+  once the ISO is gone, stage it again for that location with
+  `lcsas stage --for-location <location>` and burn the new volume.
 - A complete audit trail exists on A: every receipt-imported event
   includes the receipt filename in its detail field
   (`cmd_catalog_import`).
@@ -490,9 +493,11 @@ the command exits non-zero (#669).
       - `verify_passed: null` (`burn-iso --no-verify`) → `BURNED`.
       - `verify_passed: false` → back to `STAGING` (#483) +
         `VERIFY_FAIL` event, and no disc is recorded (BURN-05). The
-        message names the next step: stage the volume again for that
-        location with `lcsas stage --for-location <location>` and burn
-        the new volume (#671). A volume that already has a disc gets a
+        message names the next step, the same one `lcsas status` gives
+        (#671, #728): while the session's ISO is still in the staging
+        area, `lcsas burn --session <id> --location <location>`; once it
+        is gone, `lcsas stage --for-location <location>` and burn the
+        new volume. A volume that already has a disc gets a
         `VERIFY_FAIL_REBURN` event instead.
       An already-`VERIFIED` volume keeps its status. Every passing
       receipt writes a `VERIFY_PASS` event, as the direct burn does, so
@@ -613,8 +618,8 @@ behaviour.
   packs; a failed receipt returns a BURNING or BURNED volume with no disc
   to STAGING.
 - `tests/unit/test_import_receipts_errors.py::TestFailedBurnNextStep` (#671)
-  — fail, status, re-burn, pass: the import message and `lcsas status`
-  name `lcsas stage --for-location`, the for-location query takes the
+  — fail, status, re-burn, pass: with the ISO kept, the import message
+  and `lcsas status` name `lcsas burn --session` (#728), the for-location query takes the
   packs, and the passing re-burn clears "needs re-burn"; a pass at another
   location does not clear a failure.
 - `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` also

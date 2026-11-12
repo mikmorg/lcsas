@@ -11,8 +11,8 @@ from lcsas.cli.common import (
     _confirm,
     _load_config_opt,
     _open_catalog,
+    _reburn_hint,
     _resolve_db_path,
-    _restage_hint,
 )
 from lcsas.log import get_logger
 
@@ -509,7 +509,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     f"Receipt '{receipt_file}': the disc for '{label}' "
                     f"FAILED verification at {location}.  No disc was "
                     "recorded; that location still needs this volume.  "
-                    + _restage_hint(location)
+                    + _reburn_hint(conn, vol.volume_id, location)
                 )
             else:
                 if verify_passed:
