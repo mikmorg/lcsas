@@ -98,6 +98,25 @@ def update_session_status(
     conn.commit()
 
 
+def delete_empty_session(conn: sqlite3.Connection, session_id: str) -> None:
+    """Delete a burn session that holds no volume (#753).
+
+    For a ``lcsas stage`` that failed before any volume of its session
+    was finished.  Refuses a session that still has a volume.
+    """
+    held = conn.execute(
+        "SELECT COUNT(*) FROM session_volumes WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0]
+    if held:
+        raise ValueError(
+            f"Session '{session_id}' still has {held} volume(s); not deleted"
+        )
+    conn.execute("DELETE FROM burn_sessions WHERE session_id = ?",
+                 (session_id,))
+    conn.commit()
+
+
 def list_sessions(
     conn: sqlite3.Connection,
     status_filter: str | None = None,

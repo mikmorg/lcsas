@@ -45,6 +45,7 @@ from lcsas.db.repos import list_repos
 from lcsas.db.sessions import (
     add_session_volume,
     create_session,
+    delete_empty_session,
     get_session_volumes,
     resolve_session_id,
     update_session_status,
@@ -902,6 +903,11 @@ class BurnOrchestrator:
         snapshot_allow, left_out, unchecked = self._snapshot_coverage(
             session_packs)
 
+        # #753: every repository of the plan has its mirror data, checked
+        # before the burn session exists (a missing mirror used to fail
+        # inside the first volume, leaving the session behind).
+        self._mirror_preflight(volume_plans)
+
         # 3. Disk space pre-flight check [BURN-07]
         # Per volume we hold the staging tree (packs + disc catalog +
         # repository metadata) AND its ISO — ISOs persist for the whole
@@ -952,18 +958,62 @@ class BurnOrchestrator:
             session_id=session_id,
         )
 
-        ensure_dir(session_dir)
-
         # 5. Build staging dirs, create ISOs, apply ECC for each volume
         manifests: list[BurnManifest] = []
         iso_paths: list[Path] = []
 
+        # #753: a failure from here on (a refusal, xorriso, dvdisaster,
+        # Ctrl-C) removes the session when no volume of it was finished,
+        # and names the kept volumes otherwise.  _stage_single_volume has
+        # already removed the volume that failed.
+        try:
+            ensure_dir(session_dir)
+            self._stage_volumes(
+                volume_plans, mt, session_id, session_dir, for_location,
+                snapshot_allow, manifests, iso_paths,
+            )
+        except BaseException:
+            self._snapshot_allow = None
+            self._after_failed_stage(
+                session_id, session_dir, manifests, len(volume_plans),
+            )
+            raise
+
+        # Write session manifest JSON
+        self._write_session_manifest(session_id, session_dir, manifests)
+
+        return StageResult(
+            session_id=session_id,
+            media_type=mt,
+            staging_dir=session_dir,
+            manifests=manifests,
+            iso_paths=iso_paths,
+            snapshots_left_out=left_out,
+            snapshots_unchecked=unchecked,
+        )
+
+    def _stage_volumes(
+        self,
+        volume_plans: list[tuple[list[Pack], int]],
+        mt: MediaType,
+        session_id: str,
+        session_dir: Path,
+        for_location: str | None,
+        snapshot_allow: dict[str, set[str]],
+        manifests: list[BurnManifest],
+        iso_paths: list[Path],
+    ) -> None:
+        """Stage each planned volume of a burn session (one :meth:`stage`).
+
+        Appends each finished volume to *manifests* and *iso_paths* as it
+        is done, so a caller that catches a failure knows which volumes
+        were kept.
+        """
         # #676: above every label number ever issued, not only those of
         # the volumes still in the catalog.
         seq = next_label_seq(self._conn, self._config.label_prefix)
 
-        # #657: _stage_single_volume reads this for the whole session (an
-        # orchestrator serves one command, so no reset is needed on error).
+        # #657: _stage_single_volume reads this for the whole session.
         self._snapshot_allow = snapshot_allow
 
         for i, (selected_packs, total_bytes) in enumerate(volume_plans):
@@ -1000,18 +1050,68 @@ class BurnOrchestrator:
                 iso_paths.append(manifest.iso_path)
         self._snapshot_allow = None
 
-        # Write session manifest JSON
-        self._write_session_manifest(session_id, session_dir, manifests)
+    def _mirror_preflight(
+        self, volume_plans: list[tuple[list[Pack], int]],
+    ) -> None:
+        """Refuse the stage when a repository of the plan has no mirror
+        data directory, before any side effect (#753).
 
-        return StageResult(
-            session_id=session_id,
-            media_type=mt,
-            staging_dir=session_dir,
-            manifests=manifests,
-            iso_paths=iso_paths,
-            snapshots_left_out=left_out,
-            snapshots_unchecked=unchecked,
-        )
+        :meth:`_stage_single_volume` checks again for each volume.
+        """
+        mirror_paths = self._get_mirror_paths()
+        by_repo: dict[str, list[str]] = {}
+        for packs, _bytes in volume_plans:
+            for p in packs:
+                by_repo.setdefault(p.repo_id, []).append(p.sha256[:12])
+        for repo_id, shas in sorted(by_repo.items()):
+            mirror_path = mirror_paths.get(repo_id)
+            if mirror_path is None or not (mirror_path / "data").is_dir():
+                raise MirrorUnavailableError(repo_id, mirror_path, shas)
+
+    def _after_failed_stage(
+        self,
+        session_id: str,
+        session_dir: Path,
+        manifests: list[BurnManifest],
+        planned: int,
+    ) -> None:
+        """Clean up after :meth:`stage` failed inside its session (#753).
+
+        With no finished volume the session is removed: its staging
+        directory first, then its row (a row with no directory is the
+        harmless order, FUP-02).  Otherwise the finished volumes stay
+        staged, as before, and the log names them.  Never raises: the
+        stage's own error is what the caller sees.
+        """
+        try:
+            self._conn.rollback()
+            if not manifests:
+                if session_dir.exists():
+                    safe_remove_tree(session_dir)
+                delete_empty_session(self._conn, session_id)
+                _logger.error(
+                    "Staging failed; no volume was staged, so burn session "
+                    "%s and its staging directory were removed.", session_id,
+                )
+                return
+            import contextlib
+            with contextlib.suppress(OSError):
+                self._write_session_manifest(session_id, session_dir,
+                                             manifests)
+            kept = ", ".join(m.volume_label for m in manifests)
+            _logger.error(
+                "Staging stopped after %d of %d volume(s). Burn session %s "
+                "keeps the volume(s) staged before the failure: %s. Burn "
+                "them with 'lcsas burn --session %s --location <name>', or "
+                "remove them with 'lcsas session abort %s'.",
+                len(manifests), planned, session_id, kept, session_id,
+                session_id,
+            )
+        except Exception as exc:  # never hide the stage's own error
+            _logger.error(
+                "Could not clean up burn session %s after the failed stage: "
+                "%s. See 'lcsas session list'.", session_id, exc,
+            )
 
     def _snapshot_coverage(
         self, session_packs: set[str],

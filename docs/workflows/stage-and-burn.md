@@ -639,7 +639,10 @@ The pipeline is interrupt-safe in three places:
 1. **Inside `stage()`** — if the process dies after some volumes are
    staged, those volumes stay in `STAGING` with their finished ISOs in
    the staging area. The volume being built when it died is rolled back
-   on Ctrl-C. If the process was killed outright, that volume stays
+   on Ctrl-C or any error. If no volume of the session was finished, the
+   burn session and its staging directory are removed too; otherwise the
+   error names the volumes the session keeps (#753). If the process was
+   killed outright, that volume stays
    behind with an empty ISO hash, and `lcsas status` lists it as
    INCOMPLETE (#665). A second `lcsas stage` does **not** pick the packs
    of a volume whose finished ISO is waiting; it names the waiting
