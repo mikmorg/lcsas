@@ -129,6 +129,11 @@ attack (`docs/DISC_CONFIDENTIALITY.md`).
    consolidation never comes back by accident. Because the newest
    deprecating note decides, a lost volume that came back and was later
    consolidated is a deprecated volume, not a lost one.
+   A catalog from before #726 can hold a lost volume that got its disc
+   recorded and stayed `DEPRECATED` with an `ACTIVE` disc. Reading that
+   disc with `lcsas verify <label> --disc` revives it the same way:
+   `touch_last_verified()` calls `_revive_lost_volume()` when the check
+   passes (#752).
 
 ## Consequences
 

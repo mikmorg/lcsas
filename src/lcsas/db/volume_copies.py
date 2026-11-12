@@ -275,6 +275,12 @@ def touch_last_verified(
 
     Returns True if a row was updated (BURN-04: re-verification evidence
     for the disc-rot re-check cadence).
+
+    A lost volume whose disc was recorded again before #726 is still
+    DEPRECATED with this ACTIVE disc; the disc just read puts it back in
+    service, VERIFIED, as recording it would now (#752,
+    :func:`_revive_lost_volume`).  A volume deprecated by consolidation
+    stays DEPRECATED.
     """
     now = datetime.now(UTC).isoformat()
     result = conn.execute(
@@ -282,6 +288,8 @@ def touch_last_verified(
            WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
         (now, volume_id, location),
     )
+    if result.rowcount > 0:
+        _revive_lost_volume(conn, volume_id, location, verified=True)
     if commit:
         conn.commit()
     return result.rowcount > 0
