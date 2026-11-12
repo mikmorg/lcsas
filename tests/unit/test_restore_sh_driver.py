@@ -96,6 +96,7 @@ def test_tier1_done_and_quit_code_are_real():
 
 @pytest.mark.parametrize("needle", [
     drv.NEWEST_DISC_PROMPT, drv.ANOTHER_SET_PROMPT, drv.RAM_TARGET_PROMPT,
+    drv.OVERWRITE_PROMPT,
 ])
 def test_restore_sh_prompt_text_is_real(needle):
     text = drv.RESTORE_SH_SOURCE.read_text(encoding="utf-8")
@@ -160,6 +161,26 @@ def test_scanner_reads_restore_sh_questions_in_order():
            + b"\r\nRestore another backup set from these discs? [y/N] ")
     prompts = drv.PromptScanner().feed(out)
     assert [p.kind for p in prompts] == ["newest", "disc", "another"]
+
+
+def test_scanner_reads_the_overwrite_question():
+    prompts = drv.PromptScanner().feed(
+        b"Type YES to overwrite, anything else to stop: ")
+    assert [p.kind for p in prompts] == ["overwrite"]
+    assert drv.default_answer(prompts[0]) == drv.NO  # stop, never YES
+
+
+def test_disc_picker():
+    picker = drv.DiscPicker(["V_0001", "V_0003", "V_0002"])
+    # Named discs: the first one we have.
+    assert picker.pick(["V_9999", "V_0002"]) == "V_0002"
+    assert picker.pick(["V_9999"]) is None
+    # None named: the discs in turn, newest first, then round again.
+    assert [picker.pick([]) for _ in range(4)] == [
+        "V_0003", "V_0002", "V_0001", "V_0003"]
+    # A named question starts the turn again.
+    assert picker.pick(["V_0001"]) == "V_0001"
+    assert picker.pick([]) == "V_0003"
 
 
 # ---------------------------------------------------------------------------

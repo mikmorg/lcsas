@@ -40,6 +40,7 @@ from tests.e2e.restore_sh_driver import (
     EXIT_DISC_PROMPT_QUIT,
     QUIT,
     TIER1_DONE,
+    DiscPicker,
     Prompt,
     build_restore_cmd,
     build_restore_env,
@@ -274,17 +275,23 @@ class TestInteractiveRestore:
         return self.mount_dir / "drive"
 
     def _eject(self) -> None:
+        self._in_drive = None
         if os.path.ismount(self._drive):
             subprocess.run(["umount", str(self._drive)],
                            capture_output=True, check=False)
 
     def _insert(self, iso: Path) -> None:
+        # Already in: leave it (tier 1 may be reading it, and a box shown
+        # again after a stray ENTER asks for the disc that is in).
+        if getattr(self, "_in_drive", None) == iso and os.path.ismount(self._drive):
+            return
         self._eject()
         self._drive.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["mount", "-o", "ro,loop", str(iso), str(self._drive)],
             check=True, capture_output=True,
         )
+        self._in_drive = iso
 
     def _data_isos(self) -> list[Path]:
         return sorted(iso for iso in self.all_isos if "META" not in iso.stem)
@@ -304,7 +311,7 @@ class TestInteractiveRestore:
         newest data disc, or the oldest one when *bootstrap_oldest*.  At
         each tier 1 disc question the first disc it names is put in, then
         ENTER; when it names none (its catalog does not know the pack
-        yet), the newest data disc is put in.
+        yet), the data discs in turn, newest first (``DiscPicker``).
 
         *on_prompt*, if given, is called as ``on_prompt(prompt, n)`` for
         every disc question of tier 1 (n counts all questions from 1)
@@ -320,6 +327,7 @@ class TestInteractiveRestore:
         by_label = {iso.stem: iso for iso in data_isos}
         newest = data_isos[-1]
         bootstrap = data_isos[0] if bootstrap_oldest else newest
+        picker = DiscPicker(list(by_label))
         prompts: list[Prompt] = []
 
         def answer(prompt: Prompt, n: int) -> bytes | None:
@@ -340,9 +348,10 @@ class TestInteractiveRestore:
             if isinstance(action, Path):
                 self._insert(action)
                 return ENTER
-            want = next((by_label[lab] for lab in prompt.labels
-                         if lab in by_label), newest)
-            self._insert(want)
+            label = picker.pick(prompt.labels)
+            if label is None:  # it names discs we do not have
+                return QUIT
+            self._insert(by_label[label])
             return ENTER
 
         self._eject()  # only the META disc is "in" at the start

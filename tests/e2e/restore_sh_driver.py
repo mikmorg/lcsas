@@ -52,6 +52,7 @@ DISC_LOCATOR_SOURCE = (
 NEWEST_DISC_PROMPT = b"ENTER, S or Q: "
 ANOTHER_SET_PROMPT = b"Restore another backup set from these discs? [y/N] "
 RAM_TARGET_PROMPT = b"Continue restoring into RAM anyway? [y/N] "
+OVERWRITE_PROMPT = b"Type YES to overwrite, anything else to stop: "
 # What tier 1 prints (recovery/src/lcsas-restore/disc_locator.c, main.c).
 TIER1_LABELS_LINE = b"It is on any disc labelled:"
 TIER1_NO_RECORD_LINE = b"(catalog has no record of this pack ID)"
@@ -128,9 +129,10 @@ def build_restore_env(
 class Prompt:
     """One question the restore asked.
 
-    ``kind`` is ``"newest"`` (step 0), ``"disc"`` (tier 1), ``"another"``
-    or ``"ram"``.  For ``"disc"``, ``labels`` are the discs tier 1 named
-    (empty when its catalog has no record of the pack).
+    ``kind`` is ``"newest"`` (step 0), ``"disc"`` (tier 1), ``"another"``,
+    ``"ram"`` or ``"overwrite"`` (the target folder is not empty).  For
+    ``"disc"``, ``labels`` are the discs tier 1 named (empty when its
+    catalog has no record of the pack).
     """
 
     kind: str
@@ -150,7 +152,8 @@ class PromptScanner:
             hits: list[tuple[int, int, Prompt]] = []
             for needle, kind in ((NEWEST_DISC_PROMPT, "newest"),
                                  (ANOTHER_SET_PROMPT, "another"),
-                                 (RAM_TARGET_PROMPT, "ram")):
+                                 (RAM_TARGET_PROMPT, "ram"),
+                                 (OVERWRITE_PROMPT, "overwrite")):
                 i = self._buf.find(needle)
                 if i >= 0:
                     hits.append((i, i + len(needle), Prompt(kind)))
@@ -187,10 +190,37 @@ Answer = Callable[[Prompt, int], bytes | None]
 
 
 def default_answer(prompt: Prompt) -> bytes:
-    """ENTER at a disc question (after the disc is in), N at the others."""
+    """ENTER at a disc question (after the disc is in), N at the others
+    (at the overwrite question that stops the restore)."""
     if prompt.kind in ("newest", "disc"):
         return ENTER
     return NO
+
+
+class DiscPicker:
+    """Which data disc to put in for each of tier 1's disc questions.
+
+    The first disc it names that we have.  When it names none (its
+    catalog does not know the pack yet), the data discs in turn, newest
+    first, so a disc whose catalog lists the pack is reached instead of
+    offering the same disc for ever.
+    """
+
+    def __init__(self, labels: list[str]) -> None:
+        self._newest_first = sorted(labels, reverse=True)
+        self._unnamed = 0
+
+    def pick(self, named: list[str]) -> str | None:
+        """The label to put in, or None when none of *named* is ours."""
+        if named:
+            self._unnamed = 0
+            return next((lab for lab in named if lab in self._newest_first),
+                        None)
+        if not self._newest_first:
+            return None
+        lab = self._newest_first[self._unnamed % len(self._newest_first)]
+        self._unnamed += 1
+        return lab
 
 
 def drive_restore(

@@ -220,7 +220,11 @@ def cdemu_device() -> str:
     return out or "/dev/sr0"
 
 
+_in_drive: list[Path] = []
+
+
 def eject(drive: Path) -> None:
+    _in_drive.clear()
     if os.path.ismount(drive):
         subprocess.run(["umount", str(drive)], check=False)
     with contextlib.suppress(Exception):
@@ -228,13 +232,17 @@ def eject(drive: Path) -> None:
 
 
 def insert(iso: Path, device: str, drive: Path) -> None:
-    """Put *iso* in the cdemu drive and mount it where restore.sh looks."""
+    """Put *iso* in the cdemu drive and mount it where restore.sh looks.
+    A disc already in stays (tier 1 may be reading it)."""
+    if _in_drive == [iso] and os.path.ismount(drive):
+        return
     eject(drive)
     time.sleep(0.3)
     cdemu("load", str(iso))
     time.sleep(0.6)
     drive.mkdir(parents=True, exist_ok=True)
     sh(["mount", "-o", "ro", device, str(drive)])
+    _in_drive.append(iso)
 
 
 def run_restore(iso_files: list[Path]) -> int:
@@ -250,6 +258,7 @@ def run_restore(iso_files: list[Path]) -> int:
     from tests.e2e.restore_sh_driver import (
         ENTER,
         QUIT,
+        DiscPicker,
         build_restore_cmd,
         build_restore_env,
         drive_restore,
@@ -266,6 +275,7 @@ def run_restore(iso_files: list[Path]) -> int:
     data_isos = sorted(iso_files, key=lambda p: p.stem)
     by_label = {f.stem: f for f in data_isos}
     newest = data_isos[-1]
+    picker = DiscPicker(list(by_label))
 
     def answer(prompt, n):
         if prompt.kind == "newest":
@@ -276,12 +286,11 @@ def run_restore(iso_files: list[Path]) -> int:
             return b"y\n"
         if prompt.kind != "disc":
             return None  # N: no other backup set
-        want = next((by_label[lab] for lab in prompt.labels
-                     if lab in by_label), None)
-        if want is None and prompt.labels:
+        label = picker.pick(prompt.labels)
+        if label is None:
             print(f"\n[smoke] unknown disc labels {prompt.labels}; quitting")
             return QUIT
-        want = want or newest
+        want = by_label[label]
         print(f"\n[smoke] swapping to {want.stem}")
         insert(want, device, drive)
         return ENTER
