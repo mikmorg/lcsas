@@ -526,6 +526,11 @@ class TestCrossLocationCacheAssembly:
             shas = [p.sha256 for p in packs]
             executor.ingest_volume(cache, volume_dirs[label], shas, verify=False)
 
+        # Every pack reached the cache, despite HOME_002's destruction.
+        for sha in ALL_SHAS:
+            cached = cache / "data" / sha[:2] / sha
+            assert cached.read_bytes() == _pack_content(sha)
+
         pw = tmp_path / "pw.txt"
         pw.write_text("test")
         target = tmp_path / "restored"

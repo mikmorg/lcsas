@@ -162,7 +162,7 @@ class TestXorrisoMocked:
         """check_binary succeeds silently when the tool exists."""
         runner = SubprocessXorrisoRunner()
         with patch("shutil.which", return_value="/usr/bin/xorriso"):
-            runner.check_binary()  # should not raise
+            assert runner.check_binary() is None  # should not raise
 
 
 class TestReadDiscVolumeId:

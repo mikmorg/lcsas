@@ -20,7 +20,7 @@ class TestCheckBinary:
 
     def test_passes_when_binary_exists(self):
         runner = SubprocessRunnerBase("python3")
-        runner.check_binary()  # Should not raise
+        assert runner.check_binary() is None  # Should not raise
 
     def test_error_message_contains_binary_name(self):
         runner = SubprocessRunnerBase("my_missing_tool")

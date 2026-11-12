@@ -37,7 +37,7 @@ class TestRegisterAndRunCleanups:
 
     def test_no_callbacks_run_cleanups_is_noop(self):
         mgr = ShutdownManager()
-        mgr.run_cleanups()  # Should not raise
+        assert mgr.run_cleanups() is None  # Should not raise
 
 
 class TestInstallUninstall:

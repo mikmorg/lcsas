@@ -69,7 +69,7 @@ def test_destroyed_filter_query_runs() -> None:
     """The exact JOIN shape catalog.c uses must execute against the schema."""
     conn = _fresh_catalog()
     try:
-        conn.execute(
+        rows = conn.execute(
             "SELECT v.volume_id, v.label, v.status "
             "FROM volumes v "
             "JOIN volume_packs vp ON vp.volume_id = v.volume_id "
@@ -78,5 +78,6 @@ def test_destroyed_filter_query_runs() -> None:
             "ORDER BY v.volume_id",
             ("deadbeef",),
         ).fetchall()
+        assert rows == []
     finally:
         conn.close()

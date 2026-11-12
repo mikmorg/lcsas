@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import subprocess
 import sys
@@ -270,7 +269,7 @@ class TestLockedConnection:
         # Create a file that causes an error during PRAGMA/quick_check
         db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
 
-        with contextlib.suppress(sqlite3.DatabaseError, RuntimeError):
+        with pytest.raises((sqlite3.DatabaseError, RuntimeError)):
             get_connection(db)
 
         # If connection wasn't closed, a subsequent attempt would fail to open

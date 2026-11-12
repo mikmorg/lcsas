@@ -78,7 +78,8 @@ class TestBuildStandalone:
 
     def test_is_valid_python(self, standalone_text):
         """The output must compile without syntax errors."""
-        ast.parse(standalone_text)
+        tree = ast.parse(standalone_text)
+        assert tree.body
 
     def test_no_lcsas_imports(self, standalone_text):
         """The output must not reference the lcsas package."""

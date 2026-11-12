@@ -57,7 +57,8 @@ class TestFilesystem:
     def test_ensure_dir_idempotent(self, tmp_path):
         d = tmp_path / "existing"
         d.mkdir()
-        ensure_dir(d)  # should not raise
+        assert ensure_dir(d) == d  # should not raise
+        assert d.is_dir()
 
     def test_hardlink_or_copy_same_fs(self, tmp_path):
         src = tmp_path / "src.txt"
@@ -99,7 +100,8 @@ class TestFilesystem:
         assert not d.exists()
 
     def test_safe_remove_tree_nonexistent(self, tmp_path):
-        safe_remove_tree(tmp_path / "nope")  # should not raise
+        assert safe_remove_tree(tmp_path / "nope") is None  # should not raise
+        assert not (tmp_path / "nope").exists()
 
     def test_read_repo_key_ids(self, tmp_path):
         """Reads key file names from keys/ directory."""

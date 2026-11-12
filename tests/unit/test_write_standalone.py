@@ -39,7 +39,8 @@ class TestWriteStandaloneRestorer:
         """The generated file must compile."""
         injector.write_standalone_restorer()
         text = (staging_root / "standalone_restorer.py").read_text()
-        ast.parse(text)
+        tree = ast.parse(text)
+        assert tree.body
 
     def test_file_has_no_lcsas_imports(self, injector, staging_root):
         """The generated file must be self-contained."""

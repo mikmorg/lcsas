@@ -17,7 +17,7 @@ from lcsas.db.queries import (
     get_volumes_for_pack,
 )
 from lcsas.db.repos import register_repo
-from lcsas.db.volumes import create_volume, update_status, update_used_bytes
+from lcsas.db.volumes import create_volume, get_volume_by_id, update_status, update_used_bytes
 from lcsas.utils.labels import generate_uuid
 
 
@@ -524,6 +524,7 @@ class TestDbEdgeCases:
         )
         # Should not raise — the DB doesn't enforce this
         update_used_bytes(memory_db, vol.volume_id, 999)
+        assert get_volume_by_id(memory_db, vol.volume_id).used_bytes == 999
 
     def test_register_pack_zero_size(self, memory_db):
         """Zero-byte pack is accepted."""

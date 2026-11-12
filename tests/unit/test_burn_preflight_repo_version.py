@@ -125,7 +125,7 @@ def test_supported_version_passes(tmp_path, version):
     repo = tmp_path / "repo"
     _build_repo(repo, version=version)
     # Must not raise.
-    check_repo_recoverable(repo, _password_file(tmp_path))
+    assert check_repo_recoverable(repo, _password_file(tmp_path)) is None
 
 
 def test_v3_config_refused(tmp_path):
@@ -175,7 +175,7 @@ def test_empty_repo_version_only(tmp_path):
     for f in (repo / "index").iterdir():
         f.unlink()
     (repo / "index").rmdir()
-    check_repo_recoverable(repo, _password_file(tmp_path))
+    assert check_repo_recoverable(repo, _password_file(tmp_path)) is None
 
 
 def test_supported_versions_contract():

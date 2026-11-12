@@ -44,7 +44,7 @@ class TestParseBackup:
         with pytest.raises(ValueError, match="Could not extract snapshot_id"):
             parse_backup_output("not json at all")
 
-    def test_parse_empty(self):
+    def test_parse_backup_empty(self):
         import pytest
         with pytest.raises(ValueError, match="Could not extract snapshot_id"):
             parse_backup_output("")
@@ -64,10 +64,10 @@ class TestParseSnapshots:
         assert result[0].tags == ["daily"]
         assert result[1].tags == []
 
-    def test_parse_empty(self):
+    def test_parse_snapshots_empty(self):
         assert parse_snapshots_output("[]") == []
 
-    def test_parse_invalid(self):
+    def test_parse_snapshots_invalid(self):
         assert parse_snapshots_output("broken") == []
 
     # rustic 0.11.2 `snapshots --json`, trimmed: grouped by host/label/paths.
@@ -131,11 +131,11 @@ class TestParseRestorePlan:
         assert len(result.required_pack_hashes) == 3
         assert result.total_size_bytes == 1500
 
-    def test_parse_empty(self):
+    def test_parse_restore_plan_empty(self):
         result = parse_restore_plan_output("snap_y", "{}")
         assert result.required_pack_hashes == []
 
-    def test_parse_invalid(self):
+    def test_parse_restore_plan_invalid(self):
         with pytest.raises(ValueError, match="failed to parse JSON"):
             parse_restore_plan_output("snap_z", "nope")
 
@@ -151,6 +151,6 @@ class TestParsePrune:
         assert len(result.packs_to_delete) == 2
         assert result.space_freed_bytes == 50000
 
-    def test_parse_empty(self):
+    def test_parse_prune_empty(self):
         result = parse_prune_output("{}")
         assert result.packs_to_delete == []

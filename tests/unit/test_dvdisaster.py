@@ -141,7 +141,7 @@ class TestDVDisasterMocked:
         """check_binary succeeds silently when dvdisaster exists on PATH."""
         runner = SubprocessDVDisasterRunner()
         with patch("shutil.which", return_value="/usr/bin/dvdisaster"):
-            runner.check_binary()  # should not raise
+            assert runner.check_binary() is None  # should not raise
 
     def test_augment_raises_when_insufficient_disk_space(self, tmp_path):
         """augment_iso raises OSError when there is not enough free disk space."""
@@ -420,17 +420,17 @@ class TestLcsasEccRunner:
         cmd = mock_run.call_args[0][0]
         assert "augment" in cmd and "--out" in cmd
 
-    def test_verify_missing_file_raises(self, tmp_path):
+    def test_lcsas_runner_verify_missing_file_raises(self, tmp_path):
         runner = LcsasEccRunner()
         with pytest.raises(FileNotFoundError):
             runner.verify_iso(tmp_path / "absent.iso")
 
-    def test_augment_missing_file_raises(self, tmp_path):
+    def test_lcsas_runner_augment_missing_file_raises(self, tmp_path):
         runner = LcsasEccRunner()
         with pytest.raises(FileNotFoundError, match="ISO file not found"):
             runner.augment_iso(tmp_path / "absent.iso")
 
-    def test_repair_missing_file_raises(self, tmp_path):
+    def test_lcsas_runner_repair_missing_file_raises(self, tmp_path):
         runner = LcsasEccRunner()
         with pytest.raises(FileNotFoundError, match="ISO file not found"):
             runner.repair_iso(tmp_path / "absent.iso")
@@ -465,7 +465,7 @@ class TestLcsasEccRunner:
             runner.augment_iso(iso)
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
-    def test_augment_timeout_raises(self, mock_run, tmp_path):
+    def test_lcsas_runner_augment_timeout_raises(self, mock_run, tmp_path):
         """augment_iso raises RuntimeError when lcsas-ecc times out, and
         cleans up the temp file."""
         import subprocess as sp
@@ -508,7 +508,7 @@ class TestLcsasEccRunner:
         assert not iso.with_suffix(".iso.ecc.tmp").exists()
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
-    def test_repair_timeout_raises(self, mock_run, tmp_path):
+    def test_lcsas_runner_repair_timeout_raises(self, mock_run, tmp_path):
         import subprocess as sp
 
         mock_run.side_effect = sp.TimeoutExpired(cmd="lcsas-ecc", timeout=1)
@@ -517,7 +517,7 @@ class TestLcsasEccRunner:
             runner.repair_iso(self._iso(tmp_path))
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
-    def test_verify_timeout_raises(self, mock_run, tmp_path):
+    def test_lcsas_runner_verify_timeout_raises(self, mock_run, tmp_path):
         import subprocess as sp
 
         mock_run.side_effect = sp.TimeoutExpired(cmd="lcsas-ecc", timeout=1)
