@@ -56,6 +56,16 @@ class TestCmdStatusEdges:
         # The read-only command must NOT have created the DB or its parent.
         assert not db.exists(), "status created a catalog as a side effect"
 
+    def test_status_fails_without_catalog(self, tmp_path, capsys):
+        db = tmp_path / "nope.db"
+        result = main(["--db", str(db), "status"])
+        assert result != 0
+        combined = capsys.readouterr()
+        text = combined.out + combined.err
+        assert "lcsas init" in text
+        # The read-only command must NOT have created the catalog.
+        assert not db.exists(), "status created a catalog as a side effect"
+
 
 def _seed_ghost_volume(db: str, *, label: str = "GHOST_VOL",
                        age_hours: int = 48) -> None:
