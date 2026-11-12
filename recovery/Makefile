@@ -672,8 +672,7 @@ coverage-c-run:
 	        ../tests/recovery_hardening/test_tier1_auto_mount.py \
 	        ../tests/recovery_hardening/test_tier1_volume_label.py \
 	        ../tests/recovery_hardening/test_tier1_fault_handling.py \
-	        ../tests/recovery_hardening/test_tier1_unreadable_snapshot.py \
-	    || true
+	        ../tests/recovery_hardening/test_tier1_unreadable_snapshot.py
 	# Step 3b: exercise the LCSAS_STRESS_LOOKUPS diagnostic block in
 	# main.c (Linux-only) so coverage-c reports it.  ~1 s.  Uses the
 	# already-committed test fixture; no fixture regeneration needed.
@@ -735,7 +734,7 @@ coverage-c-run:
 	# repo.c / scrypt.c / catalog.c.
 	@cc -shared -fPIC -O0 -g -D_GNU_SOURCE \
 	    scripts/malloc_inject.c -o $(BUILD)/malloc_inject.so -ldl 2>/dev/null
-	@sh scripts/run_coverage_fault_inject.sh 100 || true
+	@sh scripts/run_coverage_fault_inject.sh 100
 	# Step 4: invoke gcovr (soft-skip if not installed)
 	@command -v gcovr >/dev/null 2>&1 || { echo "[coverage-c] gcovr not installed; run: pip install gcovr"; exit 0; }
 	# Step 5: generate reports narrowed to lcsas-restore sources only
