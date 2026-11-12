@@ -19,8 +19,8 @@ Sibling docs:
 
 - [`restore-host-linux.md`](restore-host-linux.md) – Linux host with the
   binaries on hand.
-- [`restore-bare-metal.md`](restore-bare-metal.md) – a wiped machine
-  (its boot path is not built today; no LCSAS disc is bootable).
+- [`restore-live-usb.md`](restore-live-usb.md) – a wiped machine:
+  boot a live-Linux USB (no LCSAS disc is bootable).
 - [`restore-disc-only.md`](restore-disc-only.md) – disc-only walkthrough
   ignoring host preinstall.
 
@@ -128,9 +128,15 @@ layout) or several.
 - Free space on the drive that holds `%LOCALAPPDATA%` (usually C:) for
   the tools folder: a few MB for the programs and the backup sets'
   metadata, plus the pack cache, which grows to about the size of the
-  data discs read. `restore.bat` makes no space check of its own
-  (`restore.sh` does); `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER
-  NOTES") shows how to size the restore with `--list-pending-packs`.
+  data discs read. `restore.bat` checks the space before the password
+  (#660): the folder and the pack cache each need about the archive
+  size (from the catalog, through `--list-pending-packs`), so one
+  drive that holds both needs twice that. It stops with the numbers
+  when a drive is short. That size counts every backup set on the
+  discs, so when there is more than one it asks `Carry on anyway?
+  [y/N]` instead, and `y` goes on. `LCSAS_SKIP_SPACE_CHECK=1` skips
+  the check; `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER NOTES")
+  explains it.
 
 **Steps:**
 

@@ -178,34 +178,6 @@ def update_session_volume_iso(
     conn.commit()
 
 
-def update_iso_sha256(
-    conn: sqlite3.Connection,
-    session_id: str,
-    volume_id: int,
-    iso_sha256: str,
-) -> None:
-    """Update the ISO SHA-256 hash for a session volume."""
-    conn.execute(
-        """UPDATE session_volumes SET iso_sha256 = ?
-           WHERE session_id = ? AND volume_id = ?""",
-        (iso_sha256, session_id, volume_id),
-    )
-    conn.commit()
-
-
-def delete_session(conn: sqlite3.Connection, session_id: str) -> None:
-    """Delete a session and its session_volumes entries (atomic)."""
-    with conn:
-        conn.execute(
-            "DELETE FROM session_volumes WHERE session_id = ?",
-            (session_id,),
-        )
-        conn.execute(
-            "DELETE FROM burn_sessions WHERE session_id = ?",
-            (session_id,),
-        )
-
-
 def get_staged_iso_path(
     conn: sqlite3.Connection,
     volume_id: int,

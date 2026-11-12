@@ -546,12 +546,16 @@ class TestSplitRecordedUnderRepoId:
             assert repo_id != "alpha"  # repo add assigns a UUID
             register_pack(conn, sha256=sha, size_bytes=len(content),
                           repo_id=repo_id)
+            xorriso = MagicMock()
+            xorriso.create_iso.side_effect = (
+                lambda src, out, label, **kw: Path(out).write_bytes(b"iso")
+            )
             orch = BurnOrchestrator(
-                config, conn, MagicMock(), MagicMock(),
+                config, conn, xorriso, MagicMock(),
                 prompt=NullOperatorPrompt(),
                 allow_escrow_drift=allow_drift,
             )
-            manifest = orch.prepare()
+            (manifest,) = orch.stage().manifests
         finally:
             conn.close()
         return manifest.staging_path

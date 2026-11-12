@@ -215,25 +215,15 @@ class TestCorruptDiscFailover:
             metadata_reserve_bytes=50_000,
             repositories=repo_configs,
         )
-        from lcsas.db.queries import get_unarchived_packs
+        from tests.e2e.fixture_lib import burn_to_isos
 
         xorriso = _TestXorrisoRunner()
         dvdisaster = _NoOpDVDisaster()
         orchestrator = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
-        self.iso_files: list[Path] = []
-        while get_unarchived_packs(conn):
-            try:
-                manifest = orchestrator.prepare(media_type=mt)
-                iso_path = iso_out / f"{manifest.volume_label}.iso"
-                orchestrator.execute(
-                    manifest,
-                    iso_output=iso_path,
-                    skip_burn=True,
-                )
-                self.iso_files.append(iso_path)
-            except ValueError:
-                break
+        self.iso_files: list[Path] = burn_to_isos(
+            orchestrator, iso_out, media_type=mt,
+        )
 
         conn.close()
 

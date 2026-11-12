@@ -13,7 +13,6 @@ from lcsas.db.volume_copies import (
     add_volume_copy,
     deprecate_copy,
     destroy_copy,
-    get_copies_at_location,
     get_copies_for_volume,
     get_iso_sha256_for_label,
     move_volume_copy,
@@ -114,19 +113,6 @@ class TestVolumeCopyCRUD:
         )
         copies = get_copies_for_volume(conn, volume.volume_id)
         assert copies[0].media_serial == "SER456"
-
-    def test_get_copies_at_location(self, conn):
-        v1 = create_volume(conn, "V1", generate_uuid(), "TEST_TINY", 1000000)
-        v2 = create_volume(conn, "V2", generate_uuid(), "TEST_TINY", 1000000)
-        add_volume_copy(conn, v1.volume_id, "Home_Shelf")
-        add_volume_copy(conn, v2.volume_id, "Home_Shelf")
-        add_volume_copy(conn, v1.volume_id, "Offsite_Safe")
-
-        at_home = get_copies_at_location(conn, "Home_Shelf")
-        assert len(at_home) == 2
-
-        at_offsite = get_copies_at_location(conn, "Offsite_Safe")
-        assert len(at_offsite) == 1
 
     def test_move_volume_copy(self, conn, volume):
         add_volume_copy(conn, volume.volume_id, "Home_Shelf")

@@ -211,6 +211,7 @@ one place that decides it
 
 - `--stale-copies [--older-than-days N]` — list ACTIVE discs never verified or overdue (default 365 days; FMA-05).
 - `--redundancy [--min-copies N]` — blast-radius report: under-replicated packs grouped by the disc that holds them (default threshold 2; FMA-08).
+- `--json` — the same summary as one JSON document on stdout, for scripts (#701). Messages go to stderr, so stdout holds only the document. Its `locations` table lists, per location, the disc count, the volumes waiting to be burned for it (`label`, `media_type`, `data_bytes`, `session_id`) and the volumes that need a re-burn there. The `format` field is 1; it changes only when a field changes meaning or is removed. Not with `--stale-copies` or `--redundancy`. See [collections.md](collections.md#status---json). The text output is unchanged.
 
 **Prerequisites:**
 - Catalog initialized (`lcsas init`); `cmd_status` opens it read-only and refuses to run against a non-existent catalog (it does **not** create one as a side effect).
@@ -239,7 +240,7 @@ one place that decides it
 **Test coverage:**
 - Existing: `get_archive_status_summary`, `list_volumes`, `find_stale_copies`, `get_redundancy_report` are covered by the queries/volumes/volume_copies suites.
 - Gaps:
-  - No CLI-level smoke test for `cmd_status` (including the `--stale-copies` / `--redundancy` branches).
+  - No CLI-level smoke test for the `--stale-copies` / `--redundancy` branches of `cmd_status`. `--json`, and the text summary's first line, are pinned by `tests/unit/test_collections.py::TestStatusJson`.
 
 **Source refs:**
 - `build_parser()` (`status` subparser), `cmd_status`, `_print_stale_copies`, `_print_redundancy_report` (`src/lcsas/cli/main.py`)
@@ -424,8 +425,9 @@ For whoever holds the archive after the owner. Every disc carries this schedule 
 2. Append events via `add_event(conn, volume_id, event_type, location=None, detail="", event_date=None)` — invalid event types raise `ValueError`.
 3. Read all events for one volume, newest-first: `get_events_for_volume(conn, volume_id, event_type=None)`.
 4. Read just the most-recent event (overall, or filtered by type) for a volume: `get_latest_event(conn, volume_id, event_type=None)`. This is the building block of "when was this volume last verified?"
-5. Pull a global feed of one event type across all volumes, limited: `get_events_by_type(conn, event_type, limit=100)`. This is what you would build a "recent failures across the archive" dashboard on top of.
-6. Single-event lookup by primary key: `get_event(conn, event_id)`.
+5. Single-event lookup by primary key: `get_event(conn, event_id)`.
+
+There is no query for one event type across all volumes; use sqlite3 (`SELECT * FROM volume_events WHERE event_type = 'VERIFY_FAIL' ORDER BY event_date DESC`).
 
 **Expected outcome:**
 - Calling `add_event` returns a fully-populated `VolumeEvent` (dataclass) with `event_id`, `event_date` (UTC ISO), and `detail` set.

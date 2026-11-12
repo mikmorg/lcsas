@@ -54,9 +54,10 @@ def detect_unmanaged_staging(
     """Return staging entries that orphan detection can't attribute (#486).
 
     These are REPORTED, never removed: the root-level files and the
-    directories not named like a burn session may belong to the single-volume
-    ``BurnOrchestrator.execute()`` path (``<staging>/<label>/`` and
-    ``<staging>/<label>.iso``) or to something that isn't LCSAS at all,
+    directories not named like a burn session may be left by the
+    single-volume ``prepare()``/``execute()`` path of older releases
+    (``<staging>/<label>/`` and ``<staging>/<label>.iso``; removed in
+    #699) or belong to something that isn't LCSAS at all,
     so only the owner can tell whether they're stale.  Also listed:
     ``*.iso.ecc.tmp`` files that a killed ECC augment left inside a
     tracked burn-session directory, which no cleanup ever reaches.

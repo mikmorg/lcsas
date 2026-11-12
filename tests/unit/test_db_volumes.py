@@ -12,7 +12,6 @@ from lcsas.db.volumes import (
     delete_volume,
     get_volume_by_id,
     get_volume_by_label,
-    get_volume_by_uuid,
     list_volumes,
     mark_closed,
     update_status,
@@ -42,16 +41,6 @@ class TestVolumesCRUD:
 
     def test_get_by_label_missing(self, memory_db):
         assert get_volume_by_label(memory_db, "NOPE") is None
-
-    def test_get_by_uuid(self, memory_db):
-        uid = generate_uuid()
-        create_volume(
-            memory_db, label="VOL_U", uuid=uid,
-            media_type="BD25", capacity_bytes=25_000_000_000,
-        )
-        vol = get_volume_by_uuid(memory_db, uid)
-        assert vol is not None
-        assert vol.uuid == uid
 
     def test_update_status(self, memory_db):
         vol = create_volume(
@@ -232,7 +221,6 @@ class TestDeprecationSafety:
         update_status(memory_db, v1.volume_id, "DEPRECATED", force=True)
         vol = get_volume_by_label(memory_db, "FORCE_D")
         assert vol.status == "DEPRECATED"
-
 
     def test_deprecation_guard_ignores_volumes_without_active_copies(self, memory_db):
         """BURN-10: a volume whose only copy is DESTROYED is not a replica.

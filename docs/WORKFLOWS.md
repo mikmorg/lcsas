@@ -33,13 +33,13 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 | restore-host-linux | [workflows/restore-host-linux.md](workflows/restore-host-linux.md) | Restore from a running Linux host with `lcsas restore`. |
 | restore-host-macos | [workflows/restore-host-macos.md](workflows/restore-host-macos.md) | Restore from a running macOS host (Apple Silicon or Intel). |
 | restore-live-usb | [workflows/restore-live-usb.md](workflows/restore-live-usb.md) | No-OS restore: boot a live-Linux USB (discs are not bootable), then restore. The route that works today. |
-| restore-bare-metal | [workflows/restore-bare-metal.md](workflows/restore-bare-metal.md) | initramfs / direct-boot restore from cold start — describes the quarantined boot stack (`experimental/boot/`); use restore-live-usb for the no-OS path that ships today. |
 | restore-windows | [workflows/restore-windows.md](workflows/restore-windows.md) | `restore.bat` end-to-end from a Windows host. |
 | restore-disc-only | [workflows/restore-disc-only.md](workflows/restore-disc-only.md) | Tier-3 single-disc restore with the Python reader. |
 | recovery-toolchain | [workflows/recovery-toolchain.md](workflows/recovery-toolchain.md) | `recovery build/test/manifest/verify`, cross-arch. |
 | meta-disc | [workflows/meta-disc.md](workflows/meta-disc.md) | The meta disc (not bootable): bundled recovery binaries + source. |
 | consolidate-and-catalog-ops | [workflows/consolidate-and-catalog-ops.md](workflows/consolidate-and-catalog-ops.md) | `consolidate` plus `catalog validate/rebuild`. |
 | verify-and-audit | [workflows/verify-and-audit.md](workflows/verify-and-audit.md) | `verify`, `status`, `session list`. |
+| collections | [workflows/collections.md](workflows/collections.md) | `[collections.<name>]` in lcsas.toml: `stage --collection`, `--min-fill`/`--partial`, `status --json` for scripts. |
 
 ## Variant axis registry
 
@@ -49,11 +49,10 @@ the code path or required setup.
 
 The matrix assumes a **single optical drive** as the canonical case. Multi-drive
 setups are supported, but the only workflows whose behavior materially changes
-between single-drive and multi-drive are the bare-metal and Windows restore
-paths (they document a RAM-relocation pattern for the single-drive case). Those
-two detail files — `workflows/restore-bare-metal.md` and
-`workflows/restore-windows.md` — still call out drive count in their own
-"Variant axes that apply" sections. Treat drive count as a per-workflow concern
+between single-drive and multi-drive is the Windows restore path (it documents
+a RAM-relocation pattern for the single-drive case). Its detail file,
+`workflows/restore-windows.md`, still calls out drive count in its own
+"Variant axes that apply" section. Treat drive count as a per-workflow concern
 rather than a top-level axis.
 
 - **Media type** — one of `CD700`, `BD25`, `BD50`, `BDXL100`, `MDISC25`,
@@ -65,7 +64,7 @@ rather than a top-level axis.
   `media.py`.
 - **Multi-repository** — single registered repository vs. several repositories
   sharing the same discs, each with its own password.
-- **OS** — Linux host, Linux bare-metal initramfs, Windows, macOS. Determines
+- **OS** — Linux host, Linux live USB, Windows, macOS. Determines
   which entry point (`lcsas`, `restore.sh`, `restore.bat`) is exercised.
 - **Storage stage** — the mirror (Rustic mirror on NAS/local disk), the
   staging area (assembled ISO image on SSD/HDD), the discs (burned discs).

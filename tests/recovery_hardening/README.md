@@ -21,21 +21,13 @@ make test-recovery-hardening   # this tier only
 A handful of tests in this tier are slow or need a special toolchain, so
 they self-skip unless an env var opts them in. They are NOT part of the
 default `make gate`; run them explicitly when touching the tier-1 C
-binary or before a release.  CI runs every one of them:
-`.github/workflows/opt-in-gates.yml` (called each Monday by `weekly.yml`)
-runs the fault-injection, differential, petabyte and qemu gates, and
-`audit-gate.yml` runs `make -C recovery coverage-c` and `sanitize` (what
-the coverage and sanitize tests wrap) on every PR touching tier-1 C.
-`test_ci_gate_inventory.py` fails if a variable named in the root
-CLAUDE.md is set by nothing.
+binary or before a release:
 
 | Env var | Enables |
 |---------|---------|
 | `LCSAS_COVERAGE=1` | `test_tier1_coverage_baseline.py` — runs `make coverage-c`, asserts `recovery/build/coverage.txt` is written. |
 | `LCSAS_SANITIZE=1` | `test_tier1_sanitize.py` — runs `make sanitize`, asserts 0 ASan/UBSan/LSan findings. |
 | `LCSAS_FAULT_INJECT=1` | `test_tier1_fault_inject.py` — malloc fault-injection sweep over every tier-1 unit binary. |
-| `LCSAS_DIFF=1` | `test_tier1_vs_tier2_differential.py` — every content profile, not just the smoke one: tier-1 and tier-2 restores must be byte-identical. |
-| `LCSAS_PETABYTE=1` | `test_tier1_petabyte_fixture.py` — 1M-entry index + 1k files through tier 1 under RSS and wall-clock budgets. |
 | `LCSAS_ZSTD_QEMU=1` | `test_tier3_zstd_qemu.py` — tier-3 zstd restore under aarch64 CPython via qemu-user (`make test-tier3-qemu`). |
 | `LCSAS_OPTIONAL_ARCHES` | suppresses skips for cross-compile arches a dev doesn't have a toolchain for. |
 
@@ -56,9 +48,8 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_blind_harness_leak_dirs.py` | The blind harness hides leftover directories by ACL, not chown/chmod. |
 | `test_blind_run_lock.py` | The blind harness's run lock works across users and leaves no file (#559). |
 | `test_blind_variant_xfail_ledger.py` | Hardening test (GATE-06): the blind-restore XFAIL ledger must stay |
-| `test_boot_config_paths.py` | BOOT-03: boot menu entry paths must equal the staged-tree paths. |
 | `test_boot_docs_reality.py` | test_boot_docs_reality.py -- docs-vs-reality contract gate for `lcsas ...` |
-| `test_boot_path_quarantined.py` | Boot-path quarantine tripwire (BOOT-08) + BOOT-06 record-keeping. |
+| `test_boot_path_quarantined.py` | Boot-path tripwire (BOOT-01/BOOT-07/BOOT-08, #688). |
 | `test_ci_gate_inventory.py` | Hardening: every documented opt-in gate is run by something (#694, #693). |
 | `test_ci_workflow_parity.py` | Hardening: CI workflow ↔ `make gate` suite parity (GATE-02). |
 | `test_coverage_fault_inject_cleanup.py` | Hardening test: the coverage fault sweep leaves no test fixtures behind. |
@@ -72,7 +63,6 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_format_canary.py` | FMT-03 format canary: round-trip LATEST rustic through the pinned readers. |
 | `test_format_txt_path_safety.py` | Hardening test: FORMAT.txt PATH SAFETY must match binary behaviour. |
 | `test_heir_doc_reality.py` | Static guard: heir manuals give commands that work as typed (#605, #609, #618, #619). |
-| `test_initramfs_manifest_sources.py` | BOOT-02: build_initramfs.sh must hard-fail on missing sources. |
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
 | `test_keyshare_windows_wine.py` | rc6: the committed Windows ``lcsas-keyshare.exe`` under wine. |
 | `test_last_verified_writer_exists.py` | Hardening test: volume_copies.last_verified_at must have a writer. |
@@ -98,6 +88,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_auto_gaps.py` | test_restore_auto_gaps.py -- restore_auto.sh usage-error exits and repo-discovery layouts. |
 | `test_restore_auto_repo_select.py` | test_restore_auto_repo_select.py -- restore_auto.sh per-repo selection. |
 | `test_restore_bat_ecc_dispatch_wine.py` | FMT-01: restore.bat --check-disc ECC repair path, end-to-end under wine. |
+| `test_restore_bat_free_space_wine.py` | restore.bat's free-space check, under wine (#660). |
 | `test_restore_bat_journey_wine.py` | restore.bat's questions under wine: disc, set, password, cards (#605-#608). |
 | `test_restore_bat_password_lifetime.py` | restore.bat temp-password-file lifetime (issue #384 review finding). |
 | `test_restore_bat_single_drive_wine.py` | restore.bat finishes a one-drive, two-disc restore under wine (#604, #615). |

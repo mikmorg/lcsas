@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lcsas.burn.operator import NullOperatorPrompt
-from lcsas.burn.orchestrator import BurnOrchestrator
+from lcsas.burn.orchestrator import BurnManifest, BurnOrchestrator
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.connection import get_memory_connection
@@ -109,6 +109,32 @@ def _seed_db_and_mirror(conn, config: LCSASConfig, num_packs: int = 5):
     return packs
 
 
+def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+    """Write a real (tiny) ISO so stage() has an image to hash and the
+    post-burn hash compare (FMA-03) has bytes; they match the fake device
+    reader of ``orch_env``."""
+    Path(output_iso).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_iso).write_bytes(b"fake-iso-data")
+    return Path(output_iso)
+
+
+def _fake_xorriso() -> MagicMock:
+    xorriso = MagicMock()
+    xorriso.create_iso.side_effect = _fake_create_iso
+    return xorriso
+
+
+def _stage_one(orch: BurnOrchestrator, **kwargs) -> BurnManifest:
+    """stage() a session of exactly one volume; return its manifest.
+
+    The volume's staging tree stays on disk beside its ISO, so tests read
+    the disc files from ``manifest.staging_path``.
+    """
+    result = orch.stage(**kwargs)
+    assert len(result.manifests) == 1, result.manifests
+    return result.manifests[0]
+
+
 @pytest.fixture
 def orch_env(tmp_path):
     """Create a complete orchestrator test environment."""
@@ -117,17 +143,7 @@ def orch_env(tmp_path):
     create_all(conn)
     packs = _seed_db_and_mirror(conn, config)
 
-    xorriso = MagicMock()
-
-    # create_iso writes a real (tiny) file so execute()'s post-burn hash
-    # compare has an image to hash (FMA-03); content matches the fake
-    # device reader below.
-    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
-        Path(output_iso).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_iso).write_bytes(b"fake-iso-data")
-        return Path(output_iso)
-
-    xorriso.create_iso.side_effect = _fake_create_iso
+    xorriso = _fake_xorriso()
     _wire_drive_identity(xorriso)
     dvdisaster = MagicMock()
 
@@ -154,112 +170,72 @@ def orch_env(tmp_path):
 
 
 # =========================================================================
-# BurnOrchestrator.prepare()
+# BurnOrchestrator.stage() — one volume (ported from the removed prepare()
+# tests, #699)
 # =========================================================================
 
 
-class TestPrepare:
-    def test_prepare_happy_path(self, orch_env):
-        """Prepare selects packs, creates staging, registers volume."""
+class TestStageOneVolume:
+    def test_stage_one_volume_happy_path(self, orch_env):
+        """stage() selects packs, builds the staging tree, registers the
+        volume as STAGING and links its packs."""
         orch = orch_env["orch"]
         conn = orch_env["conn"]
 
-        manifest = orch.prepare()
+        manifest = _stage_one(orch)
 
         assert manifest.volume_label.startswith("TEST_")
         assert manifest.total_data_bytes > 0
         assert len(manifest.selected_packs) > 0
         assert manifest.staging_path.is_dir()
         assert manifest.media_type == MediaType.TEST_TINY
-        # prepare() makes no burn session, so VOLUME_INFO.txt has no
-        # "Volume: N of M" line (#491).
         info = (manifest.staging_path / "VOLUME_INFO.txt").read_text()
         assert manifest.volume_label in info
-        assert "Volume:" not in info
 
-        # Volume should exist in DB with STAGING status
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
 
-        # Packs should be linked
         linked = get_pack_ids_for_volume(conn, manifest.volume_id)
         assert len(linked) == len(manifest.selected_packs)
 
-    def test_prepare_no_unarchived_raises(self, orch_env):
-        """ValueError when nothing to archive."""
+    def test_stage_nothing_left_after_durable_volume_raises(self, orch_env):
+        """ValueError once every pack is on a durable volume."""
         orch = orch_env["orch"]
 
-        # Archive all packs, then mark the volume durable: packs on a
-        # STAGING volume stay re-selectable under FMA-01 semantics.
-        manifest = orch.prepare()
+        # Packs on a STAGING volume stay re-selectable under FMA-01
+        # semantics, so mark the volume durable.
+        manifest = _stage_one(orch)
         update_status(orch_env["conn"], manifest.volume_id, "BURNING")
         update_status(orch_env["conn"], manifest.volume_id, "BURNED")
-        # Now try again — all packs linked to a durable volume
-        with pytest.raises(ValueError, match="No unarchived packs"):
-            orch.prepare()
+        with pytest.raises(ValueError, match="No packs need staging"):
+            orch.stage()
 
-    def test_prepare_packs_too_large_raises(self, tmp_path):
-        """ValueError when packs don't fit the media."""
+    def test_stage_packs_too_large_raises(self, tmp_path):
+        """ValueError when a pack can never fit the media."""
         config = _make_config(tmp_path)
         conn = get_memory_connection()
         create_all(conn)
         register_repo(conn, "family", "Family", str(config.repositories["family"].mirror_path))
 
-        # Register a pack that's larger than TEST_TINY capacity
         huge_size = MediaType.TEST_TINY.capacity_bytes + 1
         register_pack(conn, sha256="huge_pack", size_bytes=huge_size, repo_id="family")
 
-        # Ensure db_path exists for inject_catalog
         config.db_path.parent.mkdir(parents=True, exist_ok=True)
         config.db_path.write_bytes(b"x")
 
-        orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
-        with pytest.raises(ValueError, match="exceed.*usable capacity"):
-            orch.prepare()
+        orch = BurnOrchestrator(config, conn, _fake_xorriso(), MagicMock())
+        with pytest.raises(ValueError, match="exceed.*usable"):
+            orch.stage()
 
-    def test_prepare_with_repo_filter(self, tmp_path):
-        """Filter packs by specific repo_ids."""
-        config = _make_config(tmp_path)
-        conn = get_memory_connection()
-        create_all(conn)
-        register_repo(conn, "family", "Family", str(config.repositories["family"].mirror_path))
-        register_repo(conn, "work", "Work", "/mnt/mirror/work")
-
-        # Create packs in both repos
-        mirror_path = config.repositories["family"].mirror_path
-        data_dir = mirror_path / "data"
-        content_f = b"x" * 100
-        sha_f = _sha(content_f)
-        sha_w = "a" * 64  # never staged (filtered out), no file needed
-        register_pack(conn, sha256=sha_f, size_bytes=100, repo_id="family")
-        register_pack(conn, sha256=sha_w, size_bytes=200, repo_id="work")
-        (data_dir / sha_f).write_bytes(content_f)
-        # Minimum holographic metadata for the staged repo (BURN-01:
-        # repos with packs on the volume must be self-describing).
-        (mirror_path / "keys").mkdir(exist_ok=True)
-        (mirror_path / "config").write_text('{"version": 2}')
-
-        # Ensure db_path exists for inject_catalog
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        config.db_path.write_bytes(b"x")
-
-        orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
-        manifest = orch.prepare(repo_ids=["family"])
-
-        assert len(manifest.selected_packs) == 1
-        assert manifest.selected_packs[0].sha256 == sha_f
-
-    def test_prepare_volume_label_sequencing(self, orch_env):
-        """Subsequent prepares increment the sequence number."""
+    def test_stage_volume_label_sequencing(self, orch_env):
+        """A later session's volume takes the next label number."""
         orch = orch_env["orch"]
         conn = orch_env["conn"]
 
-        m1 = orch.prepare()
+        m1 = _stage_one(orch)
         # Mark volume as verified so packs become "archived"
-        from lcsas.db.volumes import update_status
         update_status(conn, m1.volume_id, "VERIFIED", force=True)
 
-        # Add more packs
         data_dir = orch_env["config"].repositories["family"].mirror_path / "data"
         for i in range(6, 9):
             content = _pack_bytes(i, 50)
@@ -267,147 +243,40 @@ class TestPrepare:
             register_pack(conn, sha256=sha, size_bytes=50, repo_id="family")
             (data_dir / sha).write_bytes(content)
 
-        m2 = orch.prepare()
-        # Parse seq numbers from labels
+        m2 = _stage_one(orch)
         seq1 = int(m1.volume_label.split("_")[-1])
         seq2 = int(m2.volume_label.split("_")[-1])
         assert seq2 == seq1 + 1
 
-    def test_prepare_staging_dir_has_data(self, orch_env):
-        """Staging directory should contain hardlinked pack files."""
-        orch = orch_env["orch"]
-        manifest = orch.prepare()
+    def test_stage_tree_has_data_volume_info_and_catalog(self, orch_env):
+        """The staging tree holds the packs, volume_info.json and the
+        disc catalog."""
+        config = orch_env["config"]
+        config.db_path.write_bytes(b"sqlite3_data")
+
+        manifest = _stage_one(orch_env["orch"])
 
         data_dir = manifest.staging_path / "data"
         assert data_dir.is_dir()
-        files = list(data_dir.iterdir())
-        assert len(files) > 0
-
-    def test_prepare_staging_has_volume_info(self, orch_env):
-        """Staging should have volume_info.json after prepare."""
-        orch = orch_env["orch"]
-        manifest = orch.prepare()
-
-        vi = manifest.staging_path / "volume_info.json"
-        assert vi.is_file()
-
-    def test_prepare_staging_has_catalog(self, orch_env):
-        """Staging should have catalog.db after prepare."""
-        orch = orch_env["orch"]
-        config = orch_env["config"]
-
-        # Create the source catalog DB file
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        config.db_path.write_bytes(b"sqlite3_data")
-
-        manifest = orch.prepare()
-        catalog = manifest.staging_path / "catalog.db"
-        assert catalog.is_file()
+        assert len(list(data_dir.iterdir())) > 0
+        assert (manifest.staging_path / "volume_info.json").is_file()
+        assert (manifest.staging_path / "catalog.db").is_file()
 
 
 # =========================================================================
-# BurnOrchestrator.execute()
+# Post-burn verify and burn failure (ported from the removed execute()
+# tests, #699; the others have twins in test_session_pipeline.py)
 # =========================================================================
 
 
-class TestExecute:
-    def _prepare(self, orch_env):
-        orch = orch_env["orch"]
-        config = orch_env["config"]
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        config.db_path.write_bytes(b"x")
-        return orch.prepare()
-
-    def test_execute_skip_burn(self, orch_env):
-        """ISO-only path on TEST_TINY: creates ISO, no physical burn.
-
-        TEST_TINY has 0% ECC overhead so DVDisaster is implicitly skipped
-        (see MediaType.ecc_overhead_pct).
-        """
-        orch = orch_env["orch"]
-        xorriso = orch_env["xorriso"]
-        dvdisaster = orch_env["dvdisaster"]
-        manifest = self._prepare(orch_env)
-
-        vol = orch.execute(manifest, skip_burn=True)
-
-        # xorriso.create_iso called, burn_iso NOT called
-        xorriso.create_iso.assert_called_once()
-        xorriso.burn_iso.assert_not_called()
-        # TEST_TINY ⇒ ECC implicitly skipped
-        dvdisaster.augment_iso.assert_not_called()
-
-        # Volume should be VERIFIED (via status update) and closed
-        assert vol.status == "VERIFIED"
-        assert vol.closed_at is not None
-
-    def test_execute_invokes_ecc_for_production_media(self, orch_env):
-        """ECC IS invoked when media_type.ecc_overhead_pct > 0 (production)."""
-        orch = orch_env["orch"]
-        dvdisaster = orch_env["dvdisaster"]
-        manifest = self._prepare(orch_env)
-        # Swap to a production media type with ECC overhead.
-        manifest.media_type = MediaType.BD25
-
-        # Override the staging-size preflight: real packs are far below the
-        # BD25 capacity so this remains a pure orchestration test.
-        orch.execute(manifest, skip_burn=True)
-
-        dvdisaster.augment_iso.assert_called_once()
-
-    def test_execute_with_burn(self, orch_env):
-        """Physical burn is called when skip_burn=False."""
-        orch = orch_env["orch"]
-        xorriso = orch_env["xorriso"]
-        manifest = self._prepare(orch_env)
-
-        orch.execute(manifest, skip_burn=False)
-
-        xorriso.burn_iso.assert_called_once()
-
-    def test_execute_verify_rejects_wrong_volume_id(self, orch_env):
-        """FMA-03: execute() must fail when the disc in the drive does
-        not identify as the volume just burned."""
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        xorriso = orch_env["xorriso"]
-        manifest = self._prepare(orch_env)
-
-        xorriso.read_disc_volume_id = MagicMock(
-            return_value="SOME_OTHER_DISC",
-        )
-
-        with pytest.raises(ValueError, match="identifies as 'SOME_OTHER_DISC'"):
-            orch.execute(manifest, skip_burn=False)
-
-        # Failure reverts BURNING → STAGING like every other burn error.
-        vol = get_volume_by_id(conn, manifest.volume_id)
-        assert vol.status == "STAGING"
-
-    def test_execute_verify_rejects_device_hash_mismatch(self, orch_env):
-        """FMA-03: execute() must fail when the device bytes do not hash
-        to the ISO just burned (readable-but-wrong content)."""
-        config = orch_env["config"]
-        conn = orch_env["conn"]
-        xorriso = orch_env["xorriso"]
-        orch = BurnOrchestrator(
-            config, conn, xorriso, orch_env["dvdisaster"],
-            device_reader=lambda device, length: "0" * 64,
-        )
-        manifest = self._prepare({**orch_env, "orch": orch})
-
-        with pytest.raises(ValueError, match="device hash mismatch"):
-            orch.execute(manifest, skip_burn=False)
-
-        vol = get_volume_by_id(conn, manifest.volume_id)
-        assert vol.status == "STAGING"
-
+class TestVerifyAndBurnFailure:
     def test_verify_rehashes_when_recorded_hash_empty(self, orch_env, tmp_path):
-        """#370: a crash between the volume commit and the ISO-hash update
-        leaves a modern session row with iso_sha256='' while the staged ISO
-        is still on disk.  Verify must RE-HASH the ISO and do the full
-        read-back comparison, not downgrade to readability-only (which would
-        pass any readable disc)."""
+        """A re-burn of a VERIFIED volume from a pre-Phase-13 session has
+        iso_sha256='' while its ISO is still on disk.  Verify must RE-HASH
+        the ISO and do the full read-back comparison, not downgrade to
+        readability-only (which would pass any readable disc).  A
+        never-burned volume with no hash is refused earlier, by
+        _burn_preflight (#665)."""
         from lcsas.db.models import SessionVolume
         from lcsas.utils.hashing import sha256_file
 
@@ -416,7 +285,7 @@ class TestExecute:
         xorriso = orch_env["xorriso"]
         xorriso.verify_disc = MagicMock(return_value=True)
 
-        manifest = self._prepare(orch_env)
+        manifest = _stage_one(orch_env["orch"])
         label = manifest.volume_label
         xorriso.read_disc_volume_id = MagicMock(return_value=label)
 
@@ -424,7 +293,7 @@ class TestExecute:
         iso.write_bytes(b"the burned disc image contents " * 4096)
         real_hash = sha256_file(iso)
 
-        # Crash-truncated row: hash empty, but the ISO is still on disk.
+        # Legacy row: hash empty, but the ISO is still on disk.
         sv = SessionVolume(
             session_id="s", volume_id=manifest.volume_id,
             iso_path=str(iso), iso_sha256="", iso_size_bytes=None,
@@ -447,153 +316,20 @@ class TestExecute:
         assert orch_ok._verify_burned_disc(
             sv, label, "/dev/sr0", None, iso) is True
 
-    def test_execute_custom_iso_output(self, orch_env, tmp_path):
-        """ISO output path can be overridden."""
-        orch = orch_env["orch"]
-        xorriso = orch_env["xorriso"]
-        manifest = self._prepare(orch_env)
-        custom_iso = tmp_path / "custom" / "output.iso"
-
-        orch.execute(manifest, iso_output=custom_iso, skip_burn=True)
-
-        call_args = xorriso.create_iso.call_args
-        assert call_args[0][1] == custom_iso
-
-    def test_execute_failure_reverts_status(self, orch_env):
-        """If xorriso.create_iso throws, status reverts BURNING → STAGING."""
+    def test_burn_failure_returns_volume_to_staging(self, orch_env):
+        """If the physical burn fails, the volume goes back to STAGING."""
         orch = orch_env["orch"]
         conn = orch_env["conn"]
         xorriso = orch_env["xorriso"]
-        manifest = self._prepare(orch_env)
-
-        xorriso.create_iso.side_effect = subprocess.CalledProcessError(1, "xorriso")
-
-        with pytest.raises(subprocess.CalledProcessError):
-            orch.execute(manifest, skip_burn=True)
-
-        vol = get_volume_by_id(conn, manifest.volume_id)
-        assert vol.status == "STAGING"
-
-    def test_execute_ecc_failure_reverts_status(self, orch_env):
-        """If dvdisaster fails on production media, status reverts."""
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        dvdisaster = orch_env["dvdisaster"]
-        manifest = self._prepare(orch_env)
-        # ECC only runs on production media; swap to BD25 to exercise it.
-        manifest.media_type = MediaType.BD25
-
-        dvdisaster.augment_iso.side_effect = subprocess.CalledProcessError(1, "dvdisaster")
-
-        with pytest.raises(subprocess.CalledProcessError):
-            orch.execute(manifest, skip_burn=True)
-
-        vol = get_volume_by_id(conn, manifest.volume_id)
-        assert vol.status == "STAGING"
-
-    def test_execute_burn_failure_reverts_status(self, orch_env):
-        """If physical burn fails, status reverts."""
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        xorriso = orch_env["xorriso"]
-        manifest = self._prepare(orch_env)
+        manifest = _stage_one(orch)
 
         xorriso.burn_iso.side_effect = subprocess.CalledProcessError(1, "xorriso")
 
         with pytest.raises(subprocess.CalledProcessError):
-            orch.execute(manifest, skip_burn=False)
+            orch.burn_session(location="Home_Shelf", skip_burn=False)
 
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
-
-    def test_execute_status_transitions(self, orch_env):
-        """Status transitions: STAGING → BURNING → VERIFIED."""
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        manifest = self._prepare(orch_env)
-
-        # Before execute, should be STAGING
-        vol = get_volume_by_id(conn, manifest.volume_id)
-        assert vol.status == "STAGING"
-
-        vol = orch.execute(manifest, skip_burn=True)
-        assert vol.status == "VERIFIED"
-
-    def test_execute_iso_unlink_failure_doesnt_rollback_burn(self, orch_env):
-        """ISO unlink failure should not revert VERIFIED status (disc is safe)."""
-        from unittest.mock import patch
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        manifest = self._prepare(orch_env)
-
-        # Create a mock ISO file
-        manifest.iso_path = Path(manifest.staging_path) / "test.iso"
-        manifest.iso_path.write_bytes(b"ISO DATA")
-
-        # Patch iso_path.unlink() to raise OSError
-        with patch.object(Path, "unlink", side_effect=OSError("Permission denied")):
-            vol = orch.execute(manifest, skip_burn=True)
-
-        # Volume should still be VERIFIED (burn succeeded, ISO cleanup failed)
-        assert vol.status == "VERIFIED"
-
-        # Verify DB also shows VERIFIED
-        db_vol = get_volume_by_id(conn, manifest.volume_id)
-        assert db_vol.status == "VERIFIED"
-
-
-# =========================================================================
-# BurnOrchestrator.abort()
-# =========================================================================
-
-
-class TestAbort:
-    def test_abort_removes_volume_and_staging(self, orch_env):
-        """Abort deletes the DB volume and cleans up staging dir."""
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        config = orch_env["config"]
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        config.db_path.write_bytes(b"x")
-        manifest = orch.prepare()
-
-        assert manifest.staging_path.is_dir()
-        vol_id = manifest.volume_id
-
-        orch.abort(manifest)
-
-        assert not manifest.staging_path.exists()
-        with pytest.raises(ValueError):
-            get_volume_by_id(conn, vol_id)
-
-    def test_abort_removes_iso_file(self, orch_env, tmp_path):
-        """Abort removes ISO file if it was created."""
-        orch = orch_env["orch"]
-        config = orch_env["config"]
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        config.db_path.write_bytes(b"x")
-        manifest = orch.prepare()
-
-        # simulate an ISO file existing
-        iso_file = tmp_path / "test.iso"
-        iso_file.write_bytes(b"ISO_CONTENT")
-        manifest.iso_path = iso_file
-
-        orch.abort(manifest)
-
-        assert not iso_file.exists()
-
-    def test_abort_no_iso_file(self, orch_env):
-        """Abort succeeds even if there's no ISO file."""
-        orch = orch_env["orch"]
-        config = orch_env["config"]
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        config.db_path.write_bytes(b"x")
-        manifest = orch.prepare()
-        manifest.iso_path = None
-
-        orch.abort(manifest)
-        assert not manifest.staging_path.exists()
 
 
 # =========================================================================
@@ -622,61 +358,6 @@ class TestGetMirrorPaths:
         paths = orch._get_mirror_paths()
         assert "default" in paths
         assert paths["default"] == tmp_path / "mirror"
-
-
-# =========================================================================
-# Preflight binary checks
-# =========================================================================
-
-
-class TestPreflightChecks:
-    """execute() raises BinaryError before touching state if a tool is missing."""
-
-    def _prepare(self, orch_env):
-        return orch_env["orch"].prepare()
-
-    def test_execute_fails_if_xorriso_missing(self, orch_env):
-        """execute() raises BinaryError when xorriso not on PATH (before DB update)."""
-        from lcsas.exceptions import BinaryError
-        from lcsas.utils.subprocess import SubprocessRunnerBase
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        manifest = self._prepare(orch_env)
-
-        # Replace mock with real runner whose binary check will fail
-        real_xorriso = SubprocessRunnerBase.__new__(SubprocessRunnerBase)
-        real_xorriso._binary = "xorriso_not_on_path_____"
-        orch._xorriso = real_xorriso
-
-        with pytest.raises(BinaryError, match="xorriso_not_on_path"):
-            orch.execute(manifest, skip_burn=True)
-
-        # Volume status must still be STAGING (no state change)
-        vol = get_volume_by_id(conn, manifest.volume_id)
-        assert vol.status == "STAGING"
-
-    def test_execute_fails_if_dvdisaster_missing(self, orch_env):
-        """execute() raises BinaryError when dvdisaster missing on production media.
-
-        ECC preflight only runs when ``media_type.ecc_overhead_pct > 0`` —
-        we swap the manifest to BD25 to exercise the preflight path.
-        """
-        from lcsas.exceptions import BinaryError
-        from lcsas.utils.subprocess import SubprocessRunnerBase
-        orch = orch_env["orch"]
-        conn = orch_env["conn"]
-        manifest = self._prepare(orch_env)
-        manifest.media_type = MediaType.BD25
-
-        real_dvd = SubprocessRunnerBase.__new__(SubprocessRunnerBase)
-        real_dvd._binary = "dvdisaster_not_on_path_____"
-        orch._dvdisaster = real_dvd
-
-        with pytest.raises(BinaryError, match="dvdisaster_not_on_path"):
-            orch.execute(manifest, skip_burn=True)
-
-        vol = get_volume_by_id(conn, manifest.volume_id)
-        assert vol.status == "STAGING"
 
 
 # =========================================================================
@@ -1143,17 +824,18 @@ class TestBurnSession:
 
 
 # =========================================================================
-# #483: a failed post-burn verify leaves the same state on both burn paths
+# #483: a failed post-burn verify returns the volume to STAGING
 # =========================================================================
 
 
 class TestFailedVerifyParity:
-    """#483: execute() put a volume whose disc failed post-burn verification
-    back to STAGING, while burn_session() left it BURNED.  BURNED is durable
-    (FMA-01), so after a failed session burn the packs counted as archived
-    with no verified disc behind them, and ``lcsas stage`` never offered
-    them again.  Both paths now return the volume to STAGING, record no
-    copy, and put its packs back in the unarchived pool."""
+    """#483: burn_session() used to leave a volume whose disc failed
+    post-burn verification BURNED.  BURNED is durable (FMA-01), so the
+    packs counted as archived with no verified disc behind them, and
+    ``lcsas stage`` never offered them again.  It now returns the volume to
+    STAGING, records no copy, and puts its packs back in the unarchived
+    pool.  (The single-volume execute() path it was once compared with was
+    removed in #699.)"""
 
     @staticmethod
     def _failing_orch(orch_env, failure):
@@ -1172,16 +854,6 @@ class TestFailedVerifyParity:
             )
         return orch_env["orch"]
 
-    def _via_execute(self, orch_env, failure) -> list[int]:
-        orch = self._failing_orch(orch_env, failure)
-        config = orch_env["config"]
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        config.db_path.write_bytes(b"x")
-        manifest = orch.prepare()
-        with pytest.raises(ValueError, match="verification failed|identifies as"):
-            orch.execute(manifest, skip_burn=False)
-        return [manifest.volume_id]
-
     def _via_burn_session(self, orch_env, failure) -> list[int]:
         orch = self._failing_orch(orch_env, failure)
 
@@ -1198,20 +870,18 @@ class TestFailedVerifyParity:
         return [r.volume_id for r in receipts]
 
     @pytest.mark.parametrize("failure", ["readback", "wrong_disc", "hash_mismatch"])
-    @pytest.mark.parametrize("path", ["execute", "burn_session"])
     def test_failed_verify_returns_the_volume_to_staging(
-        self, orch_env, path, failure,
+        self, orch_env, failure,
     ):
         from lcsas.db.volume_copies import get_copies_for_volume
 
         conn = orch_env["conn"]
-        burn = self._via_execute if path == "execute" else self._via_burn_session
-        volume_ids = burn(orch_env, failure)
+        volume_ids = self._via_burn_session(orch_env, failure)
 
         unarchived = {p.pack_id for p in get_unarchived_packs(conn)}
         for volume_id in volume_ids:
             vol = get_volume_by_id(conn, volume_id)
-            assert vol.status == "STAGING", (path, failure)
+            assert vol.status == "STAGING", failure
             assert vol.closed_at is None
             assert get_copies_for_volume(conn, volume_id) == []
             pack_ids = get_pack_ids_for_volume(conn, volume_id)
@@ -1325,7 +995,7 @@ class TestEscrowDrift:
 
         orch = self._split_orch(orch_env, key_split=True)
         with pytest.raises(EscrowDriftError) as ei:
-            orch.prepare()
+            _stage_one(orch)
         msg = str(ei.value)
         assert "key_split=true" in msg
         assert "no split" in msg
@@ -1339,7 +1009,7 @@ class TestEscrowDrift:
         record_split(orch_env["conn"], "family", 3, 5, 12345)
         orch = self._split_orch(orch_env, key_split=False)
         with pytest.raises(EscrowDriftError) as ei:
-            orch.prepare()
+            _stage_one(orch)
         msg = str(ei.value)
         assert "key_split=false" in msg
         assert "3-of-5" in msg
@@ -1351,7 +1021,7 @@ class TestEscrowDrift:
         record_split(orch_env["conn"], "family", 3, 5, 999)
         orch = self._split_orch(orch_env, key_split=True, k=2, n=5)
         with pytest.raises(EscrowDriftError) as ei:
-            orch.prepare()
+            _stage_one(orch)
         msg = str(ei.value)
         assert "2-of-5" in msg
         assert "3-of-5" in msg
@@ -1362,7 +1032,7 @@ class TestEscrowDrift:
 
         record_split(orch_env["conn"], "family", 3, 5, 777)
         orch = self._split_orch(orch_env, key_split=True, k=3, n=5)
-        manifest = orch.prepare()  # must not raise
+        manifest = _stage_one(orch)  # must not raise
         assert manifest.volume_id > 0
 
     def test_allow_drift_proceeds_and_logs_event(self, orch_env):
@@ -1370,7 +1040,7 @@ class TestEscrowDrift:
         from lcsas.db.volume_events import get_events_for_volume
 
         orch = self._split_orch(orch_env, key_split=True, allow_drift=True)
-        manifest = orch.prepare()  # drift present, but override set
+        manifest = _stage_one(orch)  # drift present, but override set
         events = get_events_for_volume(orch_env["conn"], manifest.volume_id)
         notes = [e for e in events if e.event_type == "NOTE"]
         assert any("KEY-08 split drift override" in e.detail for e in notes)
@@ -1403,7 +1073,7 @@ def uuid_orch_env(tmp_path):
         "config": config,
         "conn": conn,
         "repo_id": repo_id,
-        "xorriso": MagicMock(),
+        "xorriso": _fake_xorriso(),
         "dvdisaster": MagicMock(),
     }
 
@@ -1429,7 +1099,7 @@ class TestEscrowDriftUuidRepo:
         env = uuid_orch_env
         record_split(env["conn"], env["repo_id"], 3, 5, 777)
         orch = self._split_orch(env, key_split=True, k=3, n=5)
-        manifest = orch.prepare()  # must not raise
+        manifest = _stage_one(orch)  # must not raise
         text = self._start_here(manifest)
         assert "YOUR PASSWORD IS SPLIT INTO 5 SHARE CARDS" in text
         assert "You need ANY 3 of them." in text
@@ -1440,7 +1110,7 @@ class TestEscrowDriftUuidRepo:
         env = uuid_orch_env
         record_split(env["conn"], "family", 3, 5, 777)  # pre-#571 shape
         orch = self._split_orch(env, key_split=True, k=3, n=5)
-        manifest = orch.prepare()  # must not raise
+        manifest = _stage_one(orch)  # must not raise
         assert manifest.volume_id > 0
 
     def test_legacy_name_keyed_record_reaches_disc_text(self, uuid_orch_env):
@@ -1452,7 +1122,7 @@ class TestEscrowDriftUuidRepo:
         record_split(env["conn"], "family", 3, 4, 777)
         orch = self._split_orch(env, key_split=True, k=2, n=5,
                                 allow_drift=True)
-        text = self._start_here(orch.prepare())
+        text = self._start_here(_stage_one(orch))
         assert "YOUR PASSWORD IS SPLIT INTO 4 SHARE CARDS" in text
         assert "You need ANY 3 of them." in text
         assert "any 2" not in text.lower()
@@ -1464,7 +1134,7 @@ class TestEscrowDriftUuidRepo:
         record_split(env["conn"], "family", 3, 5, 12345)
         orch = self._split_orch(env, key_split=False)
         with pytest.raises(EscrowDriftError) as ei:
-            orch.prepare()
+            _stage_one(orch)
         msg = str(ei.value)
         assert "password split drift for repository 'family':" in msg
         assert "key_split=false" in msg
@@ -1476,7 +1146,7 @@ class TestEscrowDriftUuidRepo:
         env = uuid_orch_env
         orch = self._split_orch(env, key_split=True)
         with pytest.raises(EscrowDriftError) as ei:
-            orch.prepare()
+            _stage_one(orch)
         msg = str(ei.value)
         assert "password split drift for repository 'family':" in msg
         assert "'lcsas --config ... key split --repo family'" in msg
@@ -1775,7 +1445,7 @@ class TestPerRepoKeySplit:
         from lcsas.db.key_escrow import record_split
 
         record_split(orch_env["conn"], "family", 2, 3, 4242)
-        manifest = self._mixed_orch(orch_env).prepare()  # no drift
+        manifest = _stage_one(self._mixed_orch(orch_env))  # no drift
         start = (manifest.staging_path / "START_HERE.txt").read_text(
             encoding="utf-8"
         )
@@ -1792,5 +1462,5 @@ class TestPerRepoKeySplit:
 
         record_split(orch_env["conn"], "family", 2, 3, 4242)
         with pytest.raises(EscrowDriftError) as ei:
-            self._mixed_orch(orch_env, k=3, n=5).prepare()
+            _stage_one(self._mixed_orch(orch_env, k=3, n=5))
         assert "[repos.family] or [defaults]" in str(ei.value)

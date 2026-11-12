@@ -286,13 +286,6 @@ class StagingBuilder:
             bad or [f"unexpected extra pack file(s) under {self._data_dir}"]
         )
 
-    def _find_pack_file(self, data_dir: Path, sha256: str) -> Path | None:
-        """Locate a pack file in the mirror data directory.
-
-        Checks two-level hash-prefix layout first, then flat.
-        """
-        return find_pack_file(data_dir, sha256)
-
     def cleanup(self) -> None:
         """Remove the entire staging directory tree."""
         safe_remove_tree(self._root)

@@ -31,10 +31,6 @@ class ShutdownManager:
         self._prev_sigterm: _SignalHandler = signal.SIG_DFL
         self._prev_sigint: _SignalHandler = signal.SIG_DFL
 
-    @property
-    def shutting_down(self) -> bool:
-        return self._shutting_down
-
     def register(self, callback: Callable[[], None]) -> None:
         """Register a cleanup callback (LIFO order on shutdown)."""
         self._callbacks.append(callback)

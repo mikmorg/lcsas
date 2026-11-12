@@ -33,7 +33,7 @@ MAKEFILE = (
 TOOLS = {
     "lcsas-ecc": ("ECC_SRCS", "ECC_DIR"),
     "lcsas-keyshare": ("KEYSHARE_SRCS", "KEYSHARE_DIR"),
-    # restore's per-arch recipe also emits iso9660 + init, so its source
+    # restore's per-arch recipe also emits iso9660, so its source
     # var (ARCH_SRCS) covers SRCDIR (the restore tool dir).
     "lcsas-restore": ("ARCH_SRCS", "SRCDIR"),
 }

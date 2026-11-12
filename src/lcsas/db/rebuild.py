@@ -12,9 +12,6 @@ from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
-# SQLite 3.33.0 introduced UPDATE...FROM syntax (Sept 2020)
-_MIN_SQLITE_VERSION = (3, 33, 0)
-
 # Liveness rank for volume statuses.  Recency — not rank — decides which
 # status wins a merge conflict (FMA-06); the rank is used only to DETECT
 # the resurrection hazard (a stale catalog claiming a volume is more
@@ -28,16 +25,6 @@ _STATUS_RANK = {
     "DEPRECATED": 1,
     "DESTROYED": 0,
 }
-
-
-def _check_sqlite_version() -> tuple[int, int, int]:
-    """Return the SQLite version as a (major, minor, patch) tuple."""
-    version_str = sqlite3.sqlite_version
-    parts = version_str.split(".")
-    try:
-        return (int(parts[0]), int(parts[1]), int(parts[2]))
-    except (IndexError, ValueError):
-        return (int(parts[0]), int(parts[1]), 0)
 
 
 def _parse_timestamp(value: object) -> float | None:

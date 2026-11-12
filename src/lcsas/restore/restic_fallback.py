@@ -386,7 +386,7 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     # A bit-rotted or truncated key file raises OSError, ValueError
     # (bad JSON, UTF-8 or base64), TypeError, KeyError or AttributeError
     # (wrong shapes); all of it means "this file is damaged", never
-    # "wrong password", so _try_keys can move on to the next one (#481).
+    # "wrong password", so try_keys can move on to the next one (#481).
     try:
         with open(key_file, encoding="utf-8") as f:
             key_doc = json.load(f)
@@ -433,7 +433,7 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
         ) from None
 
 
-def _try_keys(keys_dir: Path, password: bytes) -> MasterKey:
+def try_keys(keys_dir: Path, password: bytes) -> MasterKey:
     """Try all key files in the directory until one works.
 
     Args:
@@ -788,7 +788,7 @@ class PurePythonRestorer:
     def _load_key(self) -> None:
         """Decrypt the master key from the repository's key files."""
         keys_dir = self.repo_path / "keys"
-        self._master_key = _try_keys(keys_dir, self._password)
+        self._master_key = try_keys(keys_dir, self._password)
         _log("Master key decrypted successfully.")
 
     def _decrypt(self, encrypted: bytes) -> bytes:

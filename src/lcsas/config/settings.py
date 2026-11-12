@@ -32,7 +32,8 @@ class LCSASConfig:
     default_media_type: MediaType = MediaType.BD25
     # Deprecated: ignored by RS03 augmented images (BURN-07) — dvdisaster
     # pads to the smallest fitting medium and the padding IS the redundancy.
-    # Kept so existing TOMLs keep parsing; validate_config warns if non-15.
+    # Kept so existing TOMLs keep parsing; load_config warns when a config
+    # sets it (#699).
     default_ecc_redundancy_pct: int = 15
     default_location: str = "Home_Shelf"
 
@@ -67,6 +68,10 @@ class LCSASConfig:
 
     # Repository definitions (populated from config file)
     repositories: dict[str, RepositoryConfig] = field(default_factory=dict)
+
+    # Collections (#701): [collections.<name>] tables, each a location +
+    # media type + minimum fill + the repositories staged for it.
+    collections: dict[str, CollectionConfig] = field(default_factory=dict)
 
     # ── Survivability / human documentation fields ───────────────
     # These appear on START_HERE.txt on every disc to help a non-
@@ -107,6 +112,29 @@ class RepositoryConfig:
     key_split: bool | None = None
     key_threshold: int | None = None
     key_shares: int | None = None
+    # Folders backed up into this repository (#701).  Descriptive only:
+    # LCSAS does not run backups; it shows these so one file describes
+    # the repository.  They are never written to a disc.
+    sources: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CollectionConfig:
+    """One ``[collections.<name>]`` table (#701).
+
+    A collection is the set of discs kept at one location: which
+    repositories go there, on which media type, and how full the last
+    volume of a stage must be.  ``lcsas stage --collection <name>``
+    applies all four.
+    """
+
+    name: str
+    location: str
+    repos: tuple[str, ...]
+    # None = the [defaults] media_type.
+    media_type: MediaType | None = None
+    # Percent of a volume's pack space (0 = no minimum).
+    min_fill_pct: float = 0.0
 
 
 def _xdg_db_path() -> str:
@@ -131,7 +159,9 @@ def unknown_toml_keys(raw: dict[str, Any]) -> list[str]:
     """
     found: list[str] = []
 
-    known_sections = {"paths", "defaults", "repos", "survivability"}
+    known_sections = {
+        "paths", "defaults", "repos", "survivability", "collections",
+    }
     known_paths = {"mirror_base", "staging", "database"}
     known_defaults = {
         "media_type", "ecc_redundancy_pct", "location",
@@ -145,7 +175,7 @@ def unknown_toml_keys(raw: dict[str, Any]) -> list[str]:
     }
     known_repo_keys = {
         "mirror_path", "password_file", "encryption_key_id",
-        "key_split", "key_threshold", "key_shares",
+        "key_split", "key_threshold", "key_shares", "sources",
     }
 
     unknown_sections = set(raw.keys()) - known_sections
@@ -171,6 +201,16 @@ def unknown_toml_keys(raw: dict[str, Any]) -> list[str]:
                 found.append(
                     f"Unknown [repos.{repo_name}] keys: {sorted(unknown_repo)} (typo?)"
                 )
+    collections = raw.get("collections", {})
+    if isinstance(collections, dict):
+        for coll_name, coll_cfg in collections.items():
+            if isinstance(coll_cfg, dict):
+                unknown_coll = set(coll_cfg.keys()) - set(_COLLECTION_TYPES)
+                if unknown_coll:
+                    found.append(
+                        f"Unknown [collections.{coll_name}] keys: "
+                        f"{sorted(unknown_coll)} (typo?)"
+                    )
     return found
 
 
@@ -198,12 +238,18 @@ _SURVIVE_TYPES = {
 _REPO_TYPES = {
     "mirror_path": "str", "password_file": "str", "encryption_key_id": "str",
     "key_split": "bool", "key_threshold": "int", "key_shares": "int",
+    "sources": "strlist",
+}
+_COLLECTION_TYPES = {
+    "location": "str", "media_type": "str", "min_fill_pct": "number",
+    "repos": "strlist",
 }
 _TYPE_WORDS = {
     "str": "a quoted string",
     "int": "a whole number without quotes",
     "number": "a number without quotes",
     "bool": "true or false without quotes",
+    "strlist": 'a list of quoted strings, like ["a", "b"]',
 }
 
 # Largest share count `lcsas key split` makes (SLIP-0039 allows 16 shares).
@@ -215,6 +261,10 @@ def _type_ok(kind: str, value: object) -> bool:
         return isinstance(value, str)
     if kind == "bool":
         return isinstance(value, bool)
+    if kind == "strlist":
+        return isinstance(value, list) and all(
+            isinstance(v, str) for v in value
+        )
     # bool is an int subclass: `key_threshold = true` is not a number.
     if isinstance(value, bool):
         return False
@@ -242,7 +292,8 @@ def _type_errors(raw: dict[str, Any]) -> list[str]:
                     f"not {table[key]!r}"
                 )
 
-    for section in ("paths", "defaults", "survivability", "repos"):
+    for section in ("paths", "defaults", "survivability", "repos",
+                    "collections"):
         if section in raw and not isinstance(raw[section], dict):
             errors.append(f"[{section}] must be a table")
     check("[paths]", raw.get("paths", {}), _PATHS_TYPES)
@@ -252,6 +303,13 @@ def _type_errors(raw: dict[str, Any]) -> list[str]:
     if isinstance(repos, dict):
         for name, repo_cfg in repos.items():
             check(f"[repos.{name}]", repo_cfg, _REPO_TYPES)
+    collections = raw.get("collections", {})
+    if isinstance(collections, dict):
+        for name, coll_cfg in collections.items():
+            if not isinstance(coll_cfg, dict):
+                errors.append(f"[collections.{name}] must be a table")
+                continue
+            check(f"[collections.{name}]", coll_cfg, _COLLECTION_TYPES)
     return errors
 
 
@@ -284,7 +342,6 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
 
         [defaults]
         media_type = "BD25"
-        ecc_redundancy_pct = 15
         location = "Home_Shelf"
         optical_device = "/dev/sr0"
         label_prefix = "LCSAS"
@@ -302,6 +359,9 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         [repos.family]
         mirror_path = "/mnt/mirror/family"
         password_file = "/root/keys/family.key"
+        # Optional, descriptive only (#701): the folders backed up into
+        # this repository.  LCSAS does not run backups.
+        sources = ["/srv/photos", "/srv/documents"]
 
         [repos.work]
         mirror_path = "/mnt/mirror/work"
@@ -311,6 +371,15 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         key_split = true
         key_threshold = 2
         key_shares = 3
+
+        # Optional (#701): `lcsas stage --collection bank` stages family
+        # and work for Bank_Box on MDISC100, holding back a last volume
+        # that fills less than 90% of its pack space.
+        [collections.bank]
+        location = "Bank_Box"
+        media_type = "MDISC100"
+        min_fill_pct = 90
+        repos = ["family", "work"]
     """
     config_path = config_path.resolve()
     base_dir = config_path.parent
@@ -367,7 +436,10 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
             key_split=None if repo_split is None else bool(repo_split),
             key_threshold=repo_cfg.get("key_threshold"),
             key_shares=repo_cfg.get("key_shares"),
+            sources=tuple(repo_cfg.get("sources", ())),
         )
+
+    collections = _load_collections(raw.get("collections", {}), repos)
 
     # NB: loading a config deliberately performs no I/O on the repository paths.
     # A missing mirror_path / password_file is reported by validate_config()
@@ -401,6 +473,17 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
             "defaulting to /mnt/staging — set this explicitly to avoid surprises.",
             config_path,
         )
+    if "ecc_redundancy_pct" in defaults:
+        # Kept as a known key so old configs still load (#699), but it
+        # does nothing: RS03 augmented images cannot take a redundancy
+        # setting (man dvdisaster); the padding to the medium size IS the
+        # redundancy.
+        _logger.warning(
+            "Config: '[defaults] ecc_redundancy_pct' in '%s' is ignored: "
+            "the error-correction data fills the free space up to the disc "
+            "size. Remove the line to silence this warning.",
+            config_path,
+        )
 
     config = LCSASConfig(
         mirror_base_path=resolve(paths.get("mirror_base", "/mnt/mirror")),
@@ -421,6 +504,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
             defaults.get("allow_unverified_repo_format", False)
         ),
         repositories=repos,
+        collections=collections,
         archive_owner=survive.get("archive_owner", ""),
         archive_description=survive.get("archive_description", ""),
         key_storage_hints=survive.get("key_storage_hints", ""),
@@ -430,6 +514,102 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
     if problems:
         raise ValueError("; ".join(problems))
     return config
+
+
+def _load_collections(
+    raw: dict[str, Any],
+    repos: dict[str, RepositoryConfig],
+) -> dict[str, CollectionConfig]:
+    """Build the ``[collections.<name>]`` tables (#701).
+
+    Checked lexically, with no catalog: each collection needs a location
+    and at least one repository, every repository it names must have a
+    ``[repos.<name>]`` table, the media type must exist and the minimum
+    fill must be 0 to 100.  Whether the location and the repositories are
+    registered in the catalog is checked by ``lcsas config check`` and by
+    ``lcsas stage --collection``.  _type_errors has already checked the
+    value types.
+    """
+    errors: list[str] = []
+    collections: dict[str, CollectionConfig] = {}
+    for name, cfg in raw.items():
+        where = f"[collections.{name}]"
+        location = cfg.get("location", "")
+        if not location:
+            errors.append(f"{where} has no location (required)")
+        names = list(dict.fromkeys(cfg.get("repos", [])))
+        if not names:
+            errors.append(
+                f"{where} has no repos (required: a list of [repos.<name>] "
+                f"names)"
+            )
+        unknown = [n for n in names if n not in repos]
+        if unknown:
+            errors.append(
+                f"{where} repos names {', '.join(repr(n) for n in unknown)}, "
+                f"which has no [repos.<name>] table"
+            )
+        media: MediaType | None = None
+        media_str = cfg.get("media_type")
+        if media_str is not None:
+            try:
+                media = MediaType[media_str.upper()]
+            except KeyError:
+                valid = ", ".join(m.name for m in MediaType)
+                errors.append(
+                    f"{where} media_type '{media_str}' is unknown. "
+                    f"Valid: {valid}"
+                )
+        min_fill = cfg.get("min_fill_pct", 0)
+        if not 0 <= min_fill <= 100:
+            errors.append(
+                f"{where} min_fill_pct must be between 0 and 100, "
+                f"not {min_fill!r}"
+            )
+        collections[name] = CollectionConfig(
+            name=name,
+            location=location,
+            repos=tuple(names),
+            media_type=media,
+            min_fill_pct=float(min_fill),
+        )
+    if errors:
+        raise ValueError("; ".join(errors))
+    return collections
+
+
+def collection_password_errors(
+    config: LCSASConfig, names: list[str] | None = None,
+) -> list[str]:
+    """Collection repositories without a readable password file (#701).
+
+    A burn proves each repository restorable with its password file
+    (FMT-03), so a collection repository needs one unless
+    ``allow_unverified_repo_format`` is set.  A file that does not exist
+    is already reported by validate_config.  *names* limits the check to
+    those collections.
+    """
+    errors: list[str] = []
+    for cname, coll in config.collections.items():
+        if names is not None and cname not in names:
+            continue
+        for rname in coll.repos:
+            repo = config.repositories.get(rname)
+            if repo is None:
+                continue  # the loader already refused this
+            pw = repo.password_file
+            if pw is None:
+                if not config.allow_unverified_repo_format:
+                    errors.append(
+                        f"collection '{cname}': repo '{rname}' has no "
+                        f"password_file"
+                    )
+            elif pw.exists() and not os.access(pw, os.R_OK):
+                errors.append(
+                    f"collection '{cname}': repo '{rname}': password_file "
+                    f"is not readable: {pw}"
+                )
+    return errors
 
 
 def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
@@ -465,21 +645,6 @@ def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
         else:
             seen[key] = name
     return errors
-
-
-def default_config(
-    mirror_base: Path,
-    staging: Path,
-    db_path: Path,
-    media_type: MediaType = MediaType.BD25,
-) -> LCSASConfig:
-    """Create a minimal config without a TOML file (useful for testing)."""
-    return LCSASConfig(
-        mirror_base_path=mirror_base,
-        staging_path=staging,
-        db_path=db_path,
-        default_media_type=media_type,
-    )
 
 
 def validate_config(config: LCSASConfig) -> list[str]:
@@ -529,17 +694,6 @@ def validate_config(config: LCSASConfig) -> list[str]:
         errors.append(
             f"default_ecc_redundancy_pct out of range (0-100): "
             f"{config.default_ecc_redundancy_pct}"
-        )
-    elif config.default_ecc_redundancy_pct != 15:
-        # Deprecated knob, kept so existing TOMLs parse.  RS03 augmented
-        # images cannot take a redundancy setting (man dvdisaster), so a
-        # non-default value must not silently masquerade as extra (or
-        # reduced) protection.
-        _logger.warning(
-            "default_ecc_redundancy_pct (%d) has no effect on RS03 augmented "
-            "images; effective redundancy is the padding of the smallest "
-            "fitting medium",
-            config.default_ecc_redundancy_pct,
         )
 
     # metadata_reserve_bytes (must be non-negative; zero is allowed but risky)

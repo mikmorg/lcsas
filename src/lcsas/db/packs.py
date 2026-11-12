@@ -50,16 +50,6 @@ def register_pack(
     return result
 
 
-def get_pack_by_id(conn: sqlite3.Connection, pack_id: int) -> Pack:
-    """Fetch a pack by primary key. Raises ValueError if not found."""
-    row = conn.execute(
-        "SELECT * FROM packs WHERE pack_id = ?", (pack_id,)
-    ).fetchone()
-    if row is None:
-        raise ValueError(f"Pack with id {pack_id} not found")
-    return _row_to_pack(row)
-
-
 def get_pack_by_sha256(conn: sqlite3.Connection, sha256: str) -> Pack | None:
     """Fetch a pack by its SHA-256 hash."""
     row = conn.execute(

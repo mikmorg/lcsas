@@ -9,9 +9,10 @@
 
 Historical note: earlier docs routed this scenario to "boot the meta
 disc directly". No disc any build ever produced was bootable — the boot
-scaffolding was never built, and was dropped in 2026-06 and quarantined
-to `experimental/boot/` (see `experimental/boot/README.md` for the
-decision record and the revival precondition in BOOT-08).
+scaffolding was never built. It was dropped in 2026-06 and deleted in
+2026-11 (#688). The repository tag `archive/pre-1.0-history` still holds it;
+`experimental/boot/README.md` at that tag has the decision record and
+the revival precondition (BOOT-08).
 
 Sibling docs for gentler scenarios:
 
@@ -109,4 +110,7 @@ of this replacement path is BOOT-04's deliverable.)
   `tests/recovery_hardening/test_no_boot_deadend_routing.py`
 - Docs-vs-CLI contract gate:
   `tests/recovery_hardening/test_boot_docs_reality.py`
-- Dropped boot scaffolding: `experimental/boot/README.md`
+- Dropped boot scaffolding: `experimental/boot/README.md` at the
+  repository tag `archive/pre-1.0-history`
+- Boot tripwire test:
+  `tests/recovery_hardening/test_boot_path_quarantined.py`

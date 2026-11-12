@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from lcsas.db.packs import (
     bulk_register,
-    get_pack_by_id,
     get_pack_by_sha256,
     list_packs,
     mark_pruned,
@@ -43,15 +40,11 @@ class TestPacksCRUD:
     def test_get_by_sha256_missing(self, memory_db):
         assert get_pack_by_sha256(memory_db, "nope") is None
 
-    def test_get_by_id_not_found(self, memory_db):
-        with pytest.raises(ValueError, match="not found"):
-            get_pack_by_id(memory_db, 9999)
-
     def test_mark_pruned(self, memory_db):
         pack = register_pack(memory_db, sha256="prune_me", size_bytes=100, repo_id="_test")
         assert pack.is_pruned is False
         mark_pruned(memory_db, pack.pack_id)
-        updated = get_pack_by_id(memory_db, pack.pack_id)
+        updated = get_pack_by_sha256(memory_db, pack.sha256)
         assert updated.is_pruned is True
 
     def test_unmark_pruned_roundtrip(self, memory_db):
@@ -62,13 +55,13 @@ class TestPacksCRUD:
             memory_db, sha256="roundtrip", size_bytes=100, repo_id="_test"
         )
         mark_pruned(memory_db, pack.pack_id)
-        assert get_pack_by_id(memory_db, pack.pack_id).is_pruned is True
+        assert get_pack_by_sha256(memory_db, pack.sha256).is_pruned is True
         assert all(
             p.sha256 != "roundtrip" for p in get_unarchived_packs(memory_db)
         )
 
         unmark_pruned(memory_db, pack.pack_id)
-        assert get_pack_by_id(memory_db, pack.pack_id).is_pruned is False
+        assert get_pack_by_sha256(memory_db, pack.sha256).is_pruned is False
         # Back in the unarchived (burnable) pool.
         assert any(
             p.sha256 == "roundtrip" for p in get_unarchived_packs(memory_db)

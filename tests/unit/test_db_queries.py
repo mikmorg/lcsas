@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-import json
-
 from lcsas.db.queries import (
     get_archive_status_summary,
     get_missing_packs,
     get_packs_for_volume,
-    get_packs_only_on_volumes,
-    get_packs_stranded_on_unburned_volumes,
+    get_packs_on_volumes,
     get_pick_list,
     get_redundancy_report,
-    get_snapshots_by_path,
-    get_snapshots_by_tag,
     get_total_unarchived_bytes,
     get_unarchived_packs,
     get_volumes_for_pack,
 )
-from lcsas.db.snapshots import upsert_snapshot
 
 
 class TestUnarchived:
@@ -186,7 +180,7 @@ class TestConsolidation:
         from lcsas.db.volumes import get_volume_by_label
         vol1 = get_volume_by_label(populated_db, "LCSAS_BD_2026_001")
         vol2 = get_volume_by_label(populated_db, "LCSAS_BD_2026_002")
-        packs = get_packs_only_on_volumes(
+        packs = get_packs_on_volumes(
             populated_db, [vol1.volume_id, vol2.volume_id]
         )
         # Should get packs 1-10 (unique across vol1 and vol2)
@@ -390,65 +384,6 @@ class TestReconcileQueries:
             conn, stale_ghost.volume_id) == [("_test", 2, 350)]
 
 
-class TestStrandedPacks:
-    """get_packs_stranded_on_unburned_volumes — packs whose only claims
-    are stale never-burned (STAGING/BURNING) volumes.  [BURN-03]"""
-
-    def test_stranded_packs_query(self, memory_db):
-        from lcsas.db.packs import register_pack
-        from lcsas.db.volume_packs import bulk_link_packs
-        from lcsas.db.volumes import create_volume
-        from lcsas.utils.labels import generate_uuid
-
-        conn = memory_db
-
-        def _vol(label, status):
-            return create_volume(
-                conn, label=label, uuid=generate_uuid(),
-                media_type="BD25", capacity_bytes=25_000_000_000,
-                status=status,
-            )
-
-        old_staging = _vol("STALE_STAGING", "STAGING")
-        fresh_staging = _vol("FRESH_STAGING", "STAGING")
-        verified = _vol("VERIFIED_VOL", "VERIFIED")
-
-        # Age the stale volume beyond the 24 h cutoff
-        conn.execute(
-            """UPDATE volumes SET created_at = datetime('now', '-48 hours')
-               WHERE volume_id = ?""",
-            (old_staging.volume_id,),
-        )
-        conn.commit()
-
-        pack_stranded = register_pack(
-            conn, sha256="stranded_pack", size_bytes=100, repo_id="_test")
-        pack_also_verified = register_pack(
-            conn, sha256="also_on_verified", size_bytes=100, repo_id="_test")
-        pack_verified_only = register_pack(
-            conn, sha256="verified_only", size_bytes=100, repo_id="_test")
-        pack_fresh = register_pack(
-            conn, sha256="fresh_staging_pack", size_bytes=100, repo_id="_test")
-        register_pack(
-            conn, sha256="unarchived_pack", size_bytes=100, repo_id="_test")
-
-        bulk_link_packs(conn, old_staging.volume_id,
-                        [pack_stranded.pack_id, pack_also_verified.pack_id])
-        bulk_link_packs(conn, verified.volume_id,
-                        [pack_also_verified.pack_id, pack_verified_only.pack_id])
-        bulk_link_packs(conn, fresh_staging.volume_id, [pack_fresh.pack_id])
-
-        stranded = get_packs_stranded_on_unburned_volumes(conn, 24)
-        assert {p.sha256 for p in stranded} == {"stranded_pack"}
-
-        # With a zero-hour cutoff the fresh STAGING claim is stale too.
-        stranded_now = get_packs_stranded_on_unburned_volumes(
-            conn, older_than_hours=0)
-        assert {p.sha256 for p in stranded_now} == {
-            "stranded_pack", "fresh_staging_pack",
-        }
-
-
 class TestBatchBoundary:
     """Test batch processing with >900 items to exercise multiple loop iterations."""
 
@@ -515,7 +450,7 @@ class TestBatchBoundary:
         assert len(missing) == len(all_shas)  # All are missing (no volumes)
 
     def test_packs_only_on_volumes_large_batch(self, memory_db):
-        """Test get_packs_only_on_volumes with >900 volume IDs."""
+        """Test get_packs_on_volumes with >900 volume IDs."""
         from lcsas.db.packs import register_pack
         from lcsas.db.repos import register_repo
         from lcsas.db.volume_packs import bulk_link_packs
@@ -545,158 +480,9 @@ class TestBatchBoundary:
             bulk_link_packs(memory_db, vid, [pack.pack_id])
 
         # Query should return the pack when searching across >900 volumes
-        packs = get_packs_only_on_volumes(memory_db, volume_ids)
+        packs = get_packs_on_volumes(memory_db, volume_ids)
         assert len(packs) == 1
         assert packs[0].sha256 == "a" * 64
-
-
-# ---------------------------------------------------------------------------
-# Snapshot JSON helpers (get_snapshots_by_path, get_snapshots_by_tag)
-# ---------------------------------------------------------------------------
-
-
-class TestSnapshotsByPath:
-    """Tests for get_snapshots_by_path using json_each()."""
-
-    def test_exact_path_match(self, memory_db):
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            paths=json.dumps(["/home/user/docs", "/home/user/photos"]),
-        )
-        upsert_snapshot(
-            memory_db, "snap2", "_test", "host1", "2025-01-02T00:00:00",
-            paths=json.dumps(["/var/log"]),
-        )
-        results = get_snapshots_by_path(memory_db, "/home/user/docs")
-        assert len(results) == 1
-        assert results[0].snapshot_id == "snap1"
-
-    def test_wildcard_path(self, memory_db):
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            paths=json.dumps(["/home/user/docs"]),
-        )
-        upsert_snapshot(
-            memory_db, "snap2", "_test", "host1", "2025-01-02T00:00:00",
-            paths=json.dumps(["/home/admin/docs"]),
-        )
-        upsert_snapshot(
-            memory_db, "snap3", "_test", "host1", "2025-01-03T00:00:00",
-            paths=json.dumps(["/var/log"]),
-        )
-        results = get_snapshots_by_path(memory_db, "/home/%/docs")
-        ids = {s.snapshot_id for s in results}
-        assert ids == {"snap1", "snap2"}
-
-    def test_no_match(self, memory_db):
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            paths=json.dumps(["/home/user/docs"]),
-        )
-        results = get_snapshots_by_path(memory_db, "/nonexistent")
-        assert results == []
-
-    def test_filter_by_repo(self, memory_db):
-        from lcsas.db.repos import register_repo
-        register_repo(memory_db, "repo_b", "B", "/b")
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            paths=json.dumps(["/shared/data"]),
-        )
-        upsert_snapshot(
-            memory_db, "snap2", "repo_b", "host2", "2025-01-02T00:00:00",
-            paths=json.dumps(["/shared/data"]),
-        )
-        results = get_snapshots_by_path(memory_db, "/shared/data", repo_id="repo_b")
-        assert len(results) == 1
-        assert results[0].snapshot_id == "snap2"
-
-    def test_ordered_newest_first(self, memory_db):
-        for i in range(1, 4):
-            upsert_snapshot(
-                memory_db, f"snap{i}", "_test", "host1",
-                f"2025-01-0{i}T00:00:00",
-                paths=json.dumps(["/data"]),
-            )
-        results = get_snapshots_by_path(memory_db, "/data")
-        assert [s.snapshot_id for s in results] == ["snap3", "snap2", "snap1"]
-
-    def test_empty_paths_not_matched(self, memory_db):
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            paths="[]",
-        )
-        results = get_snapshots_by_path(memory_db, "%")
-        assert results == []
-
-
-class TestSnapshotsByTag:
-    """Tests for get_snapshots_by_tag using json_each()."""
-
-    def test_exact_tag_match(self, memory_db):
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            tags=json.dumps(["daily", "important"]),
-        )
-        upsert_snapshot(
-            memory_db, "snap2", "_test", "host1", "2025-01-02T00:00:00",
-            tags=json.dumps(["weekly"]),
-        )
-        results = get_snapshots_by_tag(memory_db, "important")
-        assert len(results) == 1
-        assert results[0].snapshot_id == "snap1"
-
-    def test_no_match(self, memory_db):
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            tags=json.dumps(["daily"]),
-        )
-        results = get_snapshots_by_tag(memory_db, "monthly")
-        assert results == []
-
-    def test_filter_by_repo(self, memory_db):
-        from lcsas.db.repos import register_repo
-        register_repo(memory_db, "repo_b", "B", "/b")
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            tags=json.dumps(["backup"]),
-        )
-        upsert_snapshot(
-            memory_db, "snap2", "repo_b", "host2", "2025-01-02T00:00:00",
-            tags=json.dumps(["backup"]),
-        )
-        results = get_snapshots_by_tag(memory_db, "backup", repo_id="repo_b")
-        assert len(results) == 1
-        assert results[0].snapshot_id == "snap2"
-
-    def test_multiple_snapshots_same_tag(self, memory_db):
-        for i in range(1, 4):
-            upsert_snapshot(
-                memory_db, f"snap{i}", "_test", "host1",
-                f"2025-01-0{i}T00:00:00",
-                tags=json.dumps(["common"]),
-            )
-        results = get_snapshots_by_tag(memory_db, "common")
-        assert len(results) == 3
-        # Newest first
-        assert results[0].snapshot_id == "snap3"
-
-    def test_empty_tags_not_matched(self, memory_db):
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            tags="[]",
-        )
-        results = get_snapshots_by_tag(memory_db, "anything")
-        assert results == []
-
-    def test_partial_tag_no_match(self, memory_db):
-        """Tag match is exact, not LIKE."""
-        upsert_snapshot(
-            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
-            tags=json.dumps(["daily-backup"]),
-        )
-        results = get_snapshots_by_tag(memory_db, "daily")
-        assert results == []
 
 
 class TestLocationSummary:

@@ -48,12 +48,14 @@ SOURCE LAYOUT
   bin/<arch>/          prebuilt binaries (output of cross-compile)
 
   (The former boot/ live-boot scaffolding was dropped -- never
-  bootable, never built -- and quarantined to ../experimental/boot/
-  in the source repository.  It does not ship on discs.)
+  bootable, never built -- and deleted in 2026.  The source
+  repository keeps it only at the tag archive/pre-1.0-history.
+  It does not ship on discs.)
 
 DESIGN DECISIONS
 
-See ../plans/ in the LCSAS repository for the full design plan.
+The full design plans were removed from the LCSAS source repository
+in 2026; they remain at the tag archive/pre-1.0-history.
 Summary:
 
   Architectures:   six approved targets: Linux x86_64 / aarch64 / armv7
@@ -63,10 +65,9 @@ Summary:
                    roadmap.md in the source repository).
   Bootstrap:       prebuilt + source; no compiler bundled
   Userland:        none vendored (BusyBox was planned, never added;
-                   the boot stack is experimental -- see
-                   ../experimental/boot/ in the source repository)
+                   the boot stack was dropped)
   Kernel:          none built (Linux LTS 6.6 + FreeBSD 13.4 were
-                   planned; configs quarantined with the boot stack)
+                   planned; configs deleted with the boot stack)
   Language:        strict C89 + POSIX sh (no bashisms)
 
 PHASE STATUS
@@ -82,16 +83,17 @@ PHASE STATUS
       round-trip.
     - SQLite 3.46.0 vendored; disc catalog query module (catalog.c).
     - lcsas-iso9660 mini-reader (no kernel mount-loop needed).
-    - lcsas-init C89 init for the live-boot initramfs.  (The C89 init
-      source exists, but no userland or kernel was ever built; the
-      live-boot stack itself was dropped -- see the Phase 3 note.)
+    - lcsas-init C89 init for the live-boot initramfs.  (Never used:
+      no userland or kernel was ever built.  The init source was
+      deleted with the live-boot stack -- see the Phase 3 note.)
     - Reproducible-build verification (make repro-check).
     - End-to-end integration test against a Python-built synthetic
       restic repository, covering both v1 and v2 layouts.
 
   Phase 3 (Multi-arch + FreeBSD): SOURCE COMPLETE
     - Cross-compile Makefile targets for aarch64 / riscv64 (using
-      musl-cross or zig cc).
+      musl-cross or zig cc).  (The riscv64 target was removed in
+      2026; it was never one of the six approved targets.)
     - Linux 6.6 LTS kernel configs for all three arches.
     - FreeBSD 13.4 kernel config and bootloader configuration.
     - Boot menus (isolinux.cfg / grub.cfg) wired for all four boot
@@ -100,7 +102,8 @@ PHASE STATUS
 
     The live-boot items above (kernel configs, boot menus, initramfs
     assembly) were DROPPED in 2026: the boot stack was never built
-    and no LCSAS disc was ever bootable.  The scaffolding is
-    quarantined under ../experimental/boot/ in the source repository;
-    the no-OS restore path is now a current live-Linux USB stick.
+    and no LCSAS disc was ever bootable.  The scaffolding was
+    deleted; the source repository keeps it only at the tag
+    archive/pre-1.0-history.  The no-OS restore path is now a
+    current live-Linux USB stick.
     See docs/BOOT.txt.

@@ -700,9 +700,12 @@ class TestStagedIsoCheck:
         db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"}, staged_for="Bank_Box")
         _stage_record(db, "VOL_NEW", "", None)
         r = _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box"))
+        # #665: a never-burned volume with no ISO hash is a stage that did
+        # not finish; its receipt needs --allow-incomplete-staging too.
         assert _run(cfg, r) == 1
-        assert "no ISO hash was recorded" in capsys.readouterr().out
-        assert _run(cfg, r, flags=("--allow-unhashed",)) == 0
+        assert "did not finish" in capsys.readouterr().out
+        assert _run(cfg, r, flags=("--allow-unhashed",
+                                   "--allow-incomplete-staging")) == 0
         assert "no ISO hash was recorded" in capsys.readouterr().out
 
 
@@ -923,7 +926,7 @@ class TestFirstDiscStates:
         from lcsas.db.packs import register_pack
         from lcsas.db.queries import get_unarchived_packs
         from lcsas.db.repos import register_repo
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
 
         cfg = _write_config(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
@@ -933,7 +936,7 @@ class TestFirstDiscStates:
             register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
             pack = register_pack(conn, "f" * 64, 100, "repo1")
             vol = get_volume_by_label(conn, "VOL_NEW")
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         finally:
             conn.close()
 
@@ -988,7 +991,7 @@ class TestFailedBurnNextStep:
         from lcsas.db.packs import register_pack
         from lcsas.db.queries import get_unarchived_or_missing_at_location
         from lcsas.db.repos import register_repo
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
 
         tmp_path, cfg, db = staged_env
         # The staged ISO is still in the staging area.
@@ -1000,7 +1003,7 @@ class TestFailedBurnNextStep:
             register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
             pack = register_pack(conn, "f" * 64, 100, "repo1")
             vol = get_volume_by_label(conn, "VOL_NEW")
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
             conn.commit()
         finally:
             conn.close()
@@ -1045,7 +1048,7 @@ class TestFailedBurnNextStep:
         failed one is no longer listed: the location needs nothing from it."""
         from lcsas.db.packs import register_pack
         from lcsas.db.repos import register_repo
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
 
         tmp_path, cfg, db = staged_env
         conn = get_connection(db)
@@ -1053,7 +1056,7 @@ class TestFailedBurnNextStep:
             register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
             pack = register_pack(conn, "f" * 64, 100, "repo1")
             vol = get_volume_by_label(conn, "VOL_NEW")
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         finally:
             conn.close()
         failed = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)
@@ -1068,7 +1071,7 @@ class TestFailedBurnNextStep:
         try:
             new = create_volume(conn, "VOL_NEXT", "uuid-next", "TEST_TINY", 1000,
                                 "Bank_Box", "STAGING")
-            link_pack_to_volume(conn, new.volume_id, pack.pack_id)
+            bulk_link_packs(conn, new.volume_id, [pack.pack_id])
         finally:
             conn.close()
 
@@ -1090,3 +1093,48 @@ class TestFailedBurnNextStep:
         out = capsys.readouterr().out
         assert "VOL_GOOD needs re-burn at Vault" in out
         assert "needs re-burn at Offsite" not in out
+
+
+class TestIncompleteStaging:
+    """#665: a volume whose staging never finished (no ISO hash recorded)
+    may have been burned from an ISO without RS03 data; its receipt is
+    refused unless --allow-incomplete-staging."""
+
+    @pytest.fixture
+    def staged(self, tmp_path):
+        from lcsas.db.sessions import add_session_volume, create_session
+
+        cfg = _write_config(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_S": "STAGING"}, staged_for="Offsite")
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, "VOL_S")
+            assert vol is not None
+            create_session(conn, media_type="TEST_TINY",
+                           staging_dir=str(tmp_path / "staging" / "s1"),
+                           session_id="s1")
+            # The stage was cut short: the session row has no ISO hash.
+            add_session_volume(conn, "s1", vol.volume_id,
+                               str(tmp_path / "staging" / "s1" / "VOL_S.iso"),
+                               iso_sha256="")
+        finally:
+            conn.close()
+        return tmp_path, cfg, db
+
+    def test_receipt_is_refused(self, staged, capsys):
+        tmp_path, cfg, db = staged
+        before = _dump(db)
+        r = _receipt(tmp_path, "r.json", _good("VOL_S", "Offsite"))
+        assert _run(cfg, r) == 1
+        cap = capsys.readouterr()
+        out = cap.out + cap.err
+        assert "did not finish" in out
+        assert "--allow-incomplete-staging" in out
+        assert _dump(db) == before
+
+    def test_override_imports(self, staged):
+        tmp_path, cfg, db = staged
+        r = _receipt(tmp_path, "r.json", _good("VOL_S", "Offsite"))
+        assert _run(cfg, r, flags=("--allow-incomplete-staging",
+                                   "--allow-unhashed")) == 0
+        _assert_imported(db, "VOL_S", "Offsite")

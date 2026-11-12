@@ -108,7 +108,7 @@ class TestCmdRepoRemove:
         """repo remove refuses while active packs sit on active volumes."""
         from lcsas.db.connection import get_connection
         from lcsas.db.packs import register_pack
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
         from lcsas.db.volumes import create_volume
         from lcsas.utils.labels import generate_uuid
 
@@ -131,7 +131,7 @@ class TestCmdRepoRemove:
             pack = register_pack(
                 conn, sha256="active_pack_1", size_bytes=4096, repo_id=repo_id
             )
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         finally:
             conn.close()
         capsys.readouterr()  # clear
@@ -161,7 +161,7 @@ class TestCmdRepoRemove:
         from lcsas.db.connection import get_connection
         from lcsas.db.packs import list_packs, register_pack
         from lcsas.db.repos import list_repos
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
         from lcsas.db.volumes import create_volume
         from lcsas.utils.labels import generate_uuid
 
@@ -183,7 +183,7 @@ class TestCmdRepoRemove:
             pack = register_pack(
                 conn, sha256="force_pack_1", size_bytes=4096, repo_id=repo_id
             )
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         finally:
             conn.close()
 
@@ -772,7 +772,6 @@ class _FakeRecoveryBuilder:
             arch="x86_64",
             lcsas_restore=self.recovery_dir / "build" / "lcsas-restore",
             lcsas_iso9660=None,
-            lcsas_init=None,
         )
 
     def cross_build(self, arch: str, cc=None, verbose: bool = False):
@@ -785,7 +784,6 @@ class _FakeRecoveryBuilder:
             arch=arch,
             lcsas_restore=self.recovery_dir / "bin" / arch / "lcsas-restore",
             lcsas_iso9660=None,
-            lcsas_init=None,
         )
 
     def run_tests(self, verbose: bool = False) -> bool:

@@ -18,7 +18,7 @@ from lcsas.log import get_logger, setup_logging
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lcsas.config.settings import LCSASConfig
+    from lcsas.config.settings import CollectionConfig, LCSASConfig
     from lcsas.db.models import Pack
     from lcsas.iso.xorriso import XorrisoRunner
 
@@ -204,6 +204,12 @@ def build_parser() -> argparse.ArgumentParser:
                                "grouped by the volume holding them (FMA-08).")
     status_p.add_argument("--min-copies", type=int, default=2,
                           help="Copy threshold for --redundancy (default: 2).")
+    status_p.add_argument("--json", action="store_true", default=False,
+                          help="Print the summary as one JSON document on "
+                               "stdout (messages go to stderr), with the "
+                               "volumes waiting to be burned per location. "
+                               "For scripts; see docs/workflows/"
+                               "collections.md.")
 
     # --- burn ---
     burn_p = subparsers.add_parser("burn", help="Burn staged ISOs to disc.")
@@ -253,6 +259,22 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Stage only packs missing at this location.")
     stage_p.add_argument("--repo", type=str, default=None, nargs="*",
                          help="Names of the repositories to stage (default: all).")
+    stage_p.add_argument("--collection", type=str, default=None,
+                         metavar="NAME",
+                         help="Stage the [collections.NAME] of the config: "
+                              "its repos, for its location (as "
+                              "--for-location), on its media_type, with "
+                              "its min_fill_pct. Not with --repo, "
+                              "--for-location or --media.")
+    stage_p.add_argument("--min-fill", type=float, default=None,
+                         metavar="PCT",
+                         help="Do not stage a last volume whose packs fill "
+                              "less than PCT%% of its pack space (0-100); "
+                              "the full volumes before it are staged. "
+                              "Overrides a collection's min_fill_pct.")
+    stage_p.add_argument("--partial", action="store_true", default=False,
+                         help="Stage the last volume even if it is below "
+                              "the minimum fill.")
     stage_p.add_argument("--clean", action="store_true",
                          help="Clean up staged ISOs for a session.")
     stage_p.add_argument("--force", action="store_true",
@@ -423,6 +445,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Let a passing receipt make its volume VERIFIED even when the "
              "receipt's ISO hash cannot be matched to the staged ISO (one "
              "of the two hashes is missing). Check the disc first.",
+    )
+    cat_import_p.add_argument(
+        "--allow-incomplete-staging", action="store_true", default=False,
+        help="Import a receipt for a volume whose staging did not finish "
+             "(no ISO hash recorded; its ISO may lack RS03 error "
+             "correction). Check the disc first (#665).",
     )
     cat_import_p.add_argument(
         "--allow-other-location", action="store_true", default=False,
@@ -759,9 +787,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(
             "host",
             # Linux musl targets (Phase 21.10.b + 21.11).
-            "x86_64", "aarch64", "armv7", "riscv64",
-            # Windows-gnu targets via `zig cc` (Phase 21.10.b).
-            "x86_64-windows", "aarch64-windows",
+            "x86_64", "aarch64", "armv7",
+            # Windows-gnu target via `zig cc` (Phase 21.10.b).
+            "x86_64-windows",
             # macOS targets via `zig cc -target X-macos` (Phase 21.12).
             "x86_64-macos", "aarch64-macos",
         ),
@@ -1260,12 +1288,33 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
         logger.info("No repositories registered.")
         return 0
 
+    config = _config_if_loadable(args)
     for repo in repos:
         logger.info(
             f"  {repo.name:<20} {repo.status:<8} {repo.repo_id}  "
             f"{repo.mirror_path}"
         )
+        # #701: the folders lcsas.toml says are backed up into it.
+        sources = _config_sources(config, repo)
+        if sources:
+            logger.info(f"    sources: {', '.join(sources)}")
     return 0
+
+
+def _config_sources(config: LCSASConfig | None, repo: Any) -> tuple[str, ...]:
+    """The ``sources`` of the ``[repos.<name>]`` table for catalog *repo*.
+
+    Matched by mirror path first, then by name, as resolve_repo does.
+    """
+    if config is None:
+        return ()
+    from lcsas.db.repos import same_mirror_path
+
+    for rc in config.repositories.values():
+        if same_mirror_path(rc.mirror_path, repo.mirror_path):
+            return rc.sources
+    named = config.repositories.get(repo.name)
+    return named.sources if named is not None else ()
 
 
 def _cmd_repo_set_status(
@@ -1952,8 +2001,136 @@ def _volumes_needing_reburn(
     return sorted(result)
 
 
+class _LogToStderr:
+    """Send the ``lcsas`` log to stderr while active (``status --json``).
+
+    The log normally goes to stdout; a JSON document on stdout must be
+    the only thing there, so a script can parse it.
+    """
+
+    def __enter__(self) -> None:
+        import logging
+
+        lg = logging.getLogger("lcsas")
+        self._saved = lg.handlers[:]
+        handler = logging.StreamHandler(sys.stderr)
+        if self._saved:
+            handler.setLevel(self._saved[0].level)
+            handler.setFormatter(self._saved[0].formatter)
+        lg.handlers = [handler]
+
+    def __exit__(self, *exc: object) -> None:
+        import logging
+
+        logging.getLogger("lcsas").handlers = self._saved
+
+
+# Version of the `lcsas status --json` document.  Bump it when a field
+# changes meaning or is removed; adding a field does not need a bump.
+STATUS_JSON_FORMAT = 1
+
+
+def _status_json(
+    conn: sqlite3.Connection,
+    *,
+    summary: dict[str, Any],
+    volumes: list[Any],
+    shown_status: dict[int, str],
+    disc_locations: dict[int, list[str]],
+    waiting: list[Any],
+    incomplete: list[str],
+    incomplete_sessions: list[str],
+    ghost_labels: list[str],
+    partial_sessions: list[str],
+    needs_reburn: list[tuple[str, str, bool]],
+    single_disc_packs: int,
+    stale_count: int,
+    older_than_days: int,
+) -> dict[str, Any]:
+    """The ``lcsas status --json`` document (#701).
+
+    The same facts as the text summary.  ``locations`` has one entry per
+    registered location (and per location a waiting volume was staged
+    for): its disc count, the volumes waiting to be burned for it and the
+    volumes that need a re-burn there.
+    """
+    from lcsas.db.locations import list_locations
+
+    locations: dict[str, dict[str, Any]] = {
+        loc.name: {"discs": 0, "waiting": [], "needs_reburn": []}
+        for loc in list_locations(conn)
+    }
+
+    def at(name: str) -> dict[str, Any]:
+        return locations.setdefault(
+            name, {"discs": 0, "waiting": [], "needs_reburn": []},
+        )
+
+    for locs in disc_locations.values():
+        for name in locs:
+            at(name)["discs"] += 1
+    for v in waiting:
+        row = conn.execute(
+            "SELECT sv.session_id FROM session_volumes sv "
+            "JOIN burn_sessions bs USING (session_id) "
+            "WHERE sv.volume_id = ? "
+            "ORDER BY bs.created_at DESC, sv.rowid DESC LIMIT 1",
+            (v.volume_id,),
+        ).fetchone()
+        at(v.location)["waiting"].append({
+            "label": v.label,
+            "media_type": v.media_type,
+            "data_bytes": v.used_bytes,
+            "session_id": None if row is None else str(row["session_id"]),
+        })
+    reburn = []
+    for label, loc, has_disc in needs_reburn:
+        known = loc != "<unknown>"
+        if known:
+            at(loc)["needs_reburn"].append(label)
+        reburn.append({"label": label, "location": loc if known else None,
+                       "disc_at_location": has_disc})
+    return {
+        "format": STATUS_JSON_FORMAT,
+        "packs": dict(summary),
+        "volumes": [
+            {
+                "label": v.label,
+                "media_type": v.media_type,
+                "status": shown_status[v.volume_id],
+                "discs_at": disc_locations.get(v.volume_id, []),
+                "staged_for": (v.location if v.status in ("STAGING", "BURNING")
+                               else None),
+            }
+            for v in volumes
+        ],
+        "locations": locations,
+        "waiting": [v.label for v in waiting],
+        "incomplete": {"labels": incomplete, "sessions": incomplete_sessions},
+        "ghosts": ghost_labels,
+        "partial_sessions": partial_sessions,
+        "needs_reburn": reburn,
+        "single_disc_packs": single_disc_packs,
+        "stale_discs": {"count": stale_count,
+                        "older_than_days": older_than_days},
+    }
+
+
 def cmd_status(args: argparse.Namespace) -> int:
-    """Show archive status summary."""
+    """Show archive status summary (``--json``: one JSON document, #701)."""
+    if not getattr(args, "json", False):
+        return _cmd_status(args)
+    if args.stale_copies or args.redundancy:
+        logger.error(
+            "--json gives the summary only; it cannot be combined with "
+            "--stale-copies or --redundancy."
+        )
+        return 1
+    with _LogToStderr():
+        return _cmd_status(args)
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
     from lcsas.db.queries import (
         get_archive_status_summary,
         get_ghost_volumes,
@@ -1972,6 +2149,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     db_path = _resolve_db_path(args)
     conn = _open_existing_catalog(db_path)
+    doc: dict[str, Any] = {}
     try:
         if args.stale_copies:
             return _print_stale_copies(conn, args.older_than_days)
@@ -2024,8 +2202,30 @@ def cmd_status(args: argparse.Namespace) -> int:
         under = get_redundancy_report(conn, min_copies=2)
         live_map = get_live_volumes_for_packs(conn, [p.pack_id for p in under])
         single_disc_packs = [p for p in under if live_map.get(p.pack_id)]
+        if getattr(args, "json", False):
+            doc = _status_json(
+                conn,
+                summary=summary,
+                volumes=volumes,
+                shown_status={v.volume_id: volume_display_status(v, lost_ids)
+                              for v in volumes},
+                disc_locations=disc_locations,
+                waiting=[v for v in unburned if v.label in waiting],
+                incomplete=incomplete,
+                incomplete_sessions=incomplete_sessions,
+                ghost_labels=ghost_labels,
+                partial_sessions=[s.session_id for s in partial_sessions],
+                needs_reburn=needs_reburn,
+                single_disc_packs=len(single_disc_packs),
+                stale_count=stale_count,
+                older_than_days=args.older_than_days,
+            )
     finally:
         conn.close()
+
+    if getattr(args, "json", False):
+        print(json.dumps(doc, indent=2, sort_keys=True))
+        return 0
 
     logger.info(f"Packs: {summary['total']} total, "
                f"{summary['archived']} archived, "
@@ -2142,6 +2342,8 @@ def cmd_config_check(args: argparse.Namespace) -> int:
                 "unknown sections or keys (listed above): fix the typo or "
                 "remove them"
             )
+    if config.collections:
+        errors.extend(_config_check_collections(args, config))
 
     if not errors:
         if not config.repositories:
@@ -2155,6 +2357,39 @@ def cmd_config_check(args: argparse.Namespace) -> int:
     for err in errors:
         logger.error(f"  {err}")
     return 1
+
+
+def _config_check_collections(
+    args: argparse.Namespace, config: LCSASConfig,
+) -> list[str]:
+    """``config check`` errors for the ``[collections.*]`` tables (#701).
+
+    The loader has already checked that each collection names only
+    configured repositories.  This adds the password files and, when the
+    catalog exists, that each location and repository is registered.
+    The catalog is never created here.
+    """
+    from lcsas.config.settings import collection_password_errors
+    from lcsas.exceptions import CatalogError
+
+    errors = collection_password_errors(config)
+    db_path = _resolve_db_path(args, config)
+    try:
+        conn = _open_existing_catalog(db_path)
+    except CatalogError:
+        logger.warning(
+            "No catalog at %s yet: the collections' locations and "
+            "repositories are not checked against it. Run this check "
+            "again after 'lcsas init', 'lcsas repo add' and 'lcsas "
+            "location add'.", db_path,
+        )
+        return errors
+    try:
+        for coll in config.collections.values():
+            errors.extend(_collection_catalog_check(conn, config, coll)[1])
+    finally:
+        conn.close()
+    return errors
 
 
 def _report_unmanaged_staging(paths: list[Path]) -> None:
@@ -2274,6 +2509,100 @@ def _sync_mirrors_before_stage(
     return True
 
 
+def _stage_collection_and_fill(
+    args: argparse.Namespace, config: LCSASConfig,
+) -> tuple[CollectionConfig | None, float]:
+    """The ``--collection`` table and the minimum fill in effect (#701).
+
+    ``--min-fill`` overrides the collection's ``min_fill_pct``.  Raises
+    ValueError for an unknown collection, a flag the collection already
+    sets, a collection repository without a readable password file, or a
+    minimum fill outside 0-100.
+    """
+    from lcsas.config.settings import collection_password_errors
+
+    collection = None
+    name = getattr(args, "collection", None)
+    if name:
+        clash = [
+            flag for flag, given in (
+                ("--repo", getattr(args, "repo", None) is not None),
+                ("--for-location", bool(getattr(args, "for_location", None))),
+                ("--media", bool(getattr(args, "media", None))),
+            ) if given
+        ]
+        if clash:
+            raise ValueError(
+                f"--collection {name} sets the repositories, the location "
+                f"and the media type; do not also pass {', '.join(clash)}."
+            )
+        collection = config.collections.get(name)
+        if collection is None:
+            known = ", ".join(sorted(config.collections)) or "none"
+            raise ValueError(
+                f"Unknown collection '{name}': the config has no "
+                f"[collections.{name}] table (its collections: {known})."
+            )
+        problems = collection_password_errors(config, [name])
+        if problems:
+            raise ValueError("; ".join(problems))
+    min_fill = getattr(args, "min_fill", None)
+    if min_fill is None:
+        return collection, collection.min_fill_pct if collection else 0.0
+    if not 0 <= min_fill <= 100:
+        raise ValueError(f"--min-fill must be between 0 and 100, not {min_fill:g}")
+    return collection, float(min_fill)
+
+
+def _collection_catalog_check(
+    conn: sqlite3.Connection,
+    config: LCSASConfig,
+    collection: CollectionConfig,
+) -> tuple[list[str], list[str]]:
+    """Catalog repo_ids of *collection*'s repositories, and its problems (#701).
+
+    Every repository must be registered and active and the location must
+    be registered.  Unlike ``--repo``, a name that does not resolve is an
+    error, not a warning: staging four of five repositories would leave
+    one silently off the collection's discs.
+    """
+    from lcsas.db.locations import UnknownLocationError, resolve_location
+    from lcsas.db.repos import resolve_repo
+
+    where = f"collection '{collection.name}'"
+    problems: list[str] = []
+    try:
+        resolve_location(conn, collection.location)
+    except UnknownLocationError as exc:
+        hint = (f" (did you mean: {', '.join(exc.suggestions)}?)"
+                if exc.suggestions else "")
+        problems.append(
+            f"{where}: location '{collection.location}' is not registered"
+            f"{hint}. Add it with 'lcsas location add {collection.location}'."
+        )
+    repo_ids: list[str] = []
+    for name in collection.repos:
+        try:
+            repo = resolve_repo(conn, name, _config_mirror(config, name))
+        except ValueError as exc:
+            problems.append(f"{where}: repo '{name}': {exc}")
+            continue
+        if repo is None:
+            problems.append(
+                f"{where}: repo '{name}' is not registered in the catalog. "
+                f"Add it with 'lcsas repo add {name} <mirror_path>'."
+            )
+        elif repo.status != "active":
+            problems.append(
+                f"{where}: repo '{name}' is {repo.status} in the catalog; "
+                f"take it out of the collection or 'lcsas repo activate "
+                f"{name}'."
+            )
+        else:
+            repo_ids.append(repo.repo_id)
+    return repo_ids, problems
+
+
 def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -2282,7 +2611,6 @@ def cmd_stage(args: argparse.Namespace) -> int:
     from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
-    from lcsas.utils.shutdown import ShutdownManager
 
     config = _load_config_opt(args)
     if config is None:
@@ -2290,92 +2618,116 @@ def cmd_stage(args: argparse.Namespace) -> int:
         return 1
     if not _validate_config_or_exit(config):
         return 1
-
-    shutdown = ShutdownManager()
-    shutdown.install()
-
     try:
-        with locked_connection(
-            _resolve_db_path(args, config),
-            timeout=_resolve_lock_timeout(args),
-        ) as conn:
-            ensure_schema(conn)
+        collection, min_fill = _stage_collection_and_fill(args, config)
+    except ValueError as e:
+        logger.error("%s", e)
+        return 1
 
-            orch = BurnOrchestrator(
-                config, conn,
-                SubprocessXorrisoRunner(tmpdir=config.staging_path),
-                SubprocessDVDisasterRunner(tmpdir=config.staging_path),
-                allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
-                allow_low_redundancy=getattr(
-                    args, "allow_low_redundancy", False,
-                ),
-            )
+    # No signal handler here: Ctrl-C raises KeyboardInterrupt, which
+    # stage() already catches to delete a half-built volume (#699).
+    with locked_connection(
+        _resolve_db_path(args, config),
+        timeout=_resolve_lock_timeout(args),
+    ) as conn:
+        ensure_schema(conn)
 
-            if args.clean:
-                session_ref = args.session or "latest"
-                try:
-                    orch.clean_session(session_ref, force=args.force)
-                except ValueError as e:
-                    logger.error("%s", e)
-                    return 1
-                logger.info(f"Cleaned session: {session_ref}")
-                return 0
+        orch = BurnOrchestrator(
+            config, conn,
+            SubprocessXorrisoRunner(tmpdir=config.staging_path),
+            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
+            allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
+            allow_low_redundancy=getattr(
+                args, "allow_low_redundancy", False,
+            ),
+        )
 
-            media_type = None
-            if args.media:
-                try:
-                    media_type = MediaType[args.media]
-                except KeyError:
-                    valid = ", ".join(m.name for m in MediaType)
-                    logger.error(f"Unknown media type '{args.media}'. "
-                                 f"Valid types: {valid}")
-                    return 1
-
+        if args.clean:
+            session_ref = args.session or "latest"
             try:
-                repo_ids = _resolve_repo_names_to_ids(conn, args.repo, config)
+                orch.clean_session(session_ref, force=args.force)
+            except ValueError as e:
+                logger.error("%s", e)
+                return 1
+            logger.info(f"Cleaned session: {session_ref}")
+            return 0
+
+        media_type = None
+        if args.media:
+            try:
+                media_type = MediaType[args.media]
+            except KeyError:
+                valid = ", ".join(m.name for m in MediaType)
+                logger.error(f"Unknown media type '{args.media}'. "
+                             f"Valid types: {valid}")
+                return 1
+
+        for_location = args.for_location
+        repo_ids: list[str] | None
+        if collection is not None:
+            # #701: the collection sets the location, the media type
+            # and the repositories; each must exist in the catalog.
+            repo_ids, problems = _collection_catalog_check(
+                conn, config, collection,
+            )
+            if problems:
+                for problem in problems:
+                    logger.error("%s", problem)
+                return 1
+            for_location = collection.location
+            media_type = collection.media_type
+        else:
+            try:
+                repo_ids = _resolve_repo_names_to_ids(
+                    conn, args.repo, config,
+                )
             except ValueError as e:
                 logger.error(str(e))
                 return 1
 
-            # #656: a disc carries each mirror's snapshots as they are now,
-            # so the catalog must know every pack file in the mirrors first.
-            if not _sync_mirrors_before_stage(
-                conn, repo_ids, dry_run=getattr(args, "dry_run", False),
-            ):
-                return 1
+        # #656: a disc carries each mirror's snapshots as they are now,
+        # so the catalog must know every pack file in the mirrors first.
+        if not _sync_mirrors_before_stage(
+            conn, repo_ids, dry_run=getattr(args, "dry_run", False),
+        ):
+            return 1
 
-            from lcsas.db.key_escrow import EscrowDriftError
-            try:
-                result = orch.stage(
-                    media_type=media_type,
-                    for_location=args.for_location,
-                    repo_ids=repo_ids,
-                    dry_run=getattr(args, "dry_run", False),
-                )
-            except EscrowDriftError as e:
-                logger.error("%s", e)
-                logger.error(
-                    "Refusing to stage. Pass --allow-escrow-drift to override "
-                    "(discs may print wrong share instructions)."
-                )
-                return 1
+        from lcsas.db.key_escrow import EscrowDriftError
+        try:
+            result = orch.stage(
+                media_type=media_type,
+                for_location=for_location,
+                repo_ids=repo_ids,
+                dry_run=getattr(args, "dry_run", False),
+                min_fill_pct=min_fill,
+                partial=getattr(args, "partial", False),
+            )
+        except EscrowDriftError as e:
+            logger.error("%s", e)
+            logger.error(
+                "Refusing to stage. Pass --allow-escrow-drift to override "
+                "(discs may print wrong share instructions)."
+            )
+            return 1
 
-            if getattr(args, "dry_run", False):
-                return 0
+        if getattr(args, "dry_run", False):
+            return 0
+        if result.session_id == "":
+            # #701: the only volume was below the minimum fill; stage()
+            # said so.  Not an error: the packs wait for more data.
+            return 0
 
-            logger.info(f"Session: {result.session_id}")
-            logger.info(f"Staged {len(result.manifests)} volume(s):")
-            for m in result.manifests:
-                iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
-                logger.info(
-                    "  %s  (%.1f GB, %d packs)",
-                    m.iso_path, iso_size / 1e9, len(m.selected_packs),
-                )
-            logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
-            _report_snapshot_coverage(result)
-        return 0
-    finally:
-        shutdown.uninstall()
+        logger.info(f"Session: {result.session_id}")
+        logger.info(f"Staged {len(result.manifests)} volume(s):")
+        for m in result.manifests:
+            iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
+            logger.info(
+                "  %s  (%.1f GB, %d packs)",
+                m.iso_path, iso_size / 1e9, len(m.selected_packs),
+            )
+        logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
+        _report_snapshot_coverage(result)
+    return 0
 
 
 def _report_snapshot_coverage(result: Any) -> None:
@@ -3355,7 +3707,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         resolve_location,
     )
     from lcsas.db.schema import ensure_schema
-    from lcsas.db.sessions import get_staged_iso
+    from lcsas.db.sessions import get_staged_iso, staging_incomplete
     from lcsas.db.volume_copies import (
         add_volume_copy,
         get_copies_for_volume,
@@ -3371,6 +3723,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         return 1
     allow_unhashed = bool(getattr(args, "allow_unhashed", False))
     allow_other_location = bool(getattr(args, "allow_other_location", False))
+    allow_incomplete = bool(getattr(args, "allow_incomplete_staging", False))
     absent = object()
 
     refused = 0
@@ -3514,6 +3867,26 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     f"location {vol.location}, but the receipt says "
                     f"{location}; skipping.  If the disc really is kept at "
                     f"{location}, import it again with --allow-other-location."
+                )
+                refused += 1
+                continue
+
+            # #665: a volume whose staging never finished (no ISO hash was
+            # recorded, so mastering or ECC was cut short) may have been
+            # burned from an ISO without RS03 data.  Never record such a
+            # disc as good on the receipt's word alone.
+            if (
+                first_disc and staging_incomplete(conn, vol.volume_id)
+                and not allow_incomplete
+            ):
+                logger.error(
+                    f"Receipt '{receipt_file}': the staging of '{label}' did "
+                    "not finish (no ISO hash was recorded), so its ISO may "
+                    "lack RS03 error correction; skipping.  Abort that burn "
+                    "session ('lcsas session abort <session>') and stage "
+                    "again.  If you have checked the disc and want it "
+                    "recorded anyway, import again with "
+                    "--allow-incomplete-staging."
                 )
                 refused += 1
                 continue
@@ -4130,10 +4503,6 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         from lcsas.burn.orchestrator import BurnOrchestrator
         from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
         from lcsas.iso.xorriso import SubprocessXorrisoRunner
-        from lcsas.utils.shutdown import ShutdownManager
-
-        shutdown = ShutdownManager()
-        shutdown.install()
 
         orch = BurnOrchestrator(
             config, conn,
@@ -4839,8 +5208,6 @@ def cmd_recovery(args: argparse.Namespace) -> int:
         print(f"built {a.arch}: {a.lcsas_restore}")
         if a.lcsas_iso9660:
             print(f"  + {a.lcsas_iso9660}")
-        if a.lcsas_init:
-            print(f"  + {a.lcsas_init}")
         return 0
 
     if sub == "test":
@@ -6634,7 +7001,7 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_restore_plan(args)
         elif args.restore_command == "exec":
             return cmd_restore_exec(args)
-        elif args.restore_command in ("standalone", "from-disc"):
+        elif args.restore_command == "standalone":
             return cmd_restore_from_disc(args)
         else:
             logger.error("Usage: lcsas restore {plan,exec,standalone}")
@@ -7135,7 +7502,7 @@ def _verify_password_unlocks_repo(
     from lcsas.restore.restic_fallback import (
         IntegrityError,
         NoKeyUnlockedError,
-        _try_keys,
+        try_keys,
     )
 
     if not keys_dir.is_dir():
@@ -7152,7 +7519,7 @@ def _verify_password_unlocks_repo(
             "Pass --no-verify-repo to skip (dangerous)."
         )
     try:
-        _try_keys(keys_dir, password)
+        try_keys(keys_dir, password)
     except NoKeyUnlockedError as e:
         damaged = "; ".join(why for _, why in e.corrupt)
         if not e.rejected:
@@ -7196,14 +7563,14 @@ def _recombine_roundtrip_error(
     from itertools import combinations
 
     from lcsas.keyshare import KeyShareError, decode_master_secret, recover_secret
-    from lcsas.keyshare.slip39 import _Share
+    from lcsas.keyshare.slip39 import Share
 
     # Read K from share metadata.  A corrupted/short mnemonic here is itself a
     # verification failure (its checksum won't parse).
     threshold: int | None = None
     for i, mn in enumerate(mnemonics):
         try:
-            threshold = _Share.from_mnemonic(mn).member_threshold
+            threshold = Share.from_mnemonic(mn).member_threshold
             break
         except KeyShareError as e:
             return f"share {i + 1} is not a valid SLIP-0039 share: {e}"
