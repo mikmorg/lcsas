@@ -1825,7 +1825,10 @@ class TestCmdConsolidate:
 
         def _fake_stage(self, media_type, pack_sha256s, for_location=None):
             staged.append(list(pack_sha256s))
-            return SimpleNamespace(session_id="SESSION-469", manifests=[object()])
+            return SimpleNamespace(
+                session_id="SESSION-469",
+                manifests=[SimpleNamespace(volume_label="NEW_VOL_0009")],
+            )
 
         monkeypatch.setattr("builtins.input", lambda _prompt="": "yes")
         monkeypatch.setattr(
@@ -1843,16 +1846,44 @@ class TestCmdConsolidate:
         assert len(staged) == 1 and len(staged[0]) == 2
         assert "Unexpected error" not in caplog.text
         assert "burn session SESSION-469" in caplog.text
-        assert (
-            "consolidate --deprecate " + " ".join(str(v) for v in vol_ids)
-            in caplog.text
-        )
         conn = get_connection(str(db))
         try:
+            labels = [get_volume_by_id(conn, vid).label for vid in vol_ids]
             for vid in vol_ids:
                 assert get_volume_by_id(conn, vid).status == "CONSOLIDATING"
         finally:
             conn.close()
+        # Labels, not catalog IDs (#741): the owner and the heir use labels.
+        assert "verify the new volumes (NEW_VOL_0009)" in caplog.text
+        assert (
+            "lcsas consolidate --deprecate " + " ".join(labels)
+            in caplog.text
+        )
+
+    def test_consolidate_plan_names_sources_by_label(
+        self, tmp_path, caplog,
+    ):
+        """The plan's '--deprecate' hint names the volumes by label (#741)."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volumes import get_volume_by_id
+
+        db = tmp_path / "test.db"
+        vol_ids = _seed_db_with_volumes(db, num_volumes=2, packs_per_volume=1)
+        cfg = _write_consolidate_config(tmp_path, db)
+        caplog.clear()
+        assert main([
+            "--config", cfg, "consolidate", *[str(v) for v in vol_ids],
+            "--target-media", "BDXL100",
+        ]) == 0, caplog.text
+        conn = get_connection(str(db))
+        try:
+            labels = [get_volume_by_id(conn, vid).label for vid in vol_ids]
+        finally:
+            conn.close()
+        assert (
+            "run: lcsas consolidate --deprecate " + " ".join(labels)
+            in caplog.text
+        )
 
 
 class TestVerifyDiscIdentityAndEvidence:

@@ -274,6 +274,36 @@ class TestFromDiscValidation:
         result = cmd_restore_from_disc(args)
         assert result == 1
 
+    def test_metadata_found_by_repo_id_not_name(self, tmp_path):
+        """#743: discs hold metadata/<repo_id>/; a UUID id must be found."""
+        disc = tmp_path / "disc"
+        disc.mkdir()
+        repo_id = "3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f"
+        conn = sqlite3.connect(str(disc / "catalog.db"))
+        conn.row_factory = sqlite3.Row
+        create_all(conn)
+        register_repo(conn, repo_id, "family", "/mnt/mirror/family", "")
+        conn.commit()
+        conn.close()
+        meta = disc / "metadata" / repo_id
+        meta.mkdir(parents=True)
+        pw = tmp_path / "pw"
+        pw.write_text("x")
+
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.side_effect = FileNotFoundError("rustic not found")
+        mock_executor = MagicMock()
+        mock_executor.prepare_cache.return_value = None
+
+        args = _make_disc_args(disc=disc, password_file=pw)
+        with (
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            patch("lcsas.restore.executor.RestoreExecutor", return_value=mock_executor),
+        ):
+            cmd_restore_from_disc(args)
+        mock_executor.prepare_cache.assert_called_once()
+        assert mock_executor.prepare_cache.call_args.args[1] == meta
+
     def test_rustic_not_found_returns_1(self, tmp_path):
         """FileNotFoundError from restore_dry_run returns exit code 1."""
         disc = tmp_path / "disc"
@@ -780,3 +810,65 @@ class TestFromDiscBatchMode:
         ):
             result = cmd_restore_from_disc(args)
         assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# Python reader (tier 3) branch: no rustic on the host
+# ---------------------------------------------------------------------------
+
+
+class TestFromDiscPythonReader:
+    """With no rustic, 'restore standalone' runs the Python reader.  Its
+    exit codes match the bundled standalone_restorer.py (#658, #740): 75
+    when the reader typed q (or input ended) at the disc prompt, 1 for a
+    full disk or a restore that could not start."""
+
+    @staticmethod
+    def _run(tmp_path, restore_side_effect):
+        from lcsas.exceptions import BinaryError
+
+        disc = tmp_path / "disc"
+        (disc / "data").mkdir(parents=True)
+        _write_catalog(disc / "catalog.db", repo_name="family")
+        _write_disc_metadata(disc / "metadata" / "family")
+        restorer = MagicMock()
+        restorer.restore.side_effect = restore_side_effect
+        password = tmp_path / "password"
+        password.write_text("pw\n")
+        args = _make_disc_args(
+            disc=disc, target_path=tmp_path / "out",
+            cache_dir=tmp_path / "cache", password_file=password,
+        )
+        with (
+            patch("lcsas.utils.subprocess.check_binary_version",
+                  side_effect=BinaryError("rustic not found")),
+            patch("lcsas.restore.restic_fallback.PurePythonRestorer",
+                  return_value=restorer),
+        ):
+            return cmd_restore_from_disc(args)
+
+    def test_quit_at_disc_prompt_exits_75(self, tmp_path, caplog):
+        from lcsas.restore.restic_fallback import (
+            EXIT_READER_QUIT,
+            RestoreAbortedError,
+        )
+
+        rc = self._run(tmp_path, RestoreAbortedError(
+            "stopped at the disc prompt.  Files restored so far are kept.",
+            exit_code=EXIT_READER_QUIT,
+        ))
+        assert rc == 75
+        assert "stopped at the disc prompt" in caplog.text
+
+    def test_full_disk_exits_1(self, tmp_path, caplog):
+        from lcsas.restore.restic_fallback import RestoreAbortedError
+
+        rc = self._run(tmp_path, RestoreAbortedError("disk full",
+                                                     exit_code=1))
+        assert rc == 1
+        assert "Python reader restore stopped: disk full" in caplog.text
+
+    def test_setup_failure_exits_1(self, tmp_path, caplog):
+        rc = self._run(tmp_path, ValueError("wrong password"))
+        assert rc == 1
+        assert "Python reader restore failed: wrong password" in caplog.text

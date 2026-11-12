@@ -180,7 +180,9 @@ machines, or when staging in advance for an unattended burn.
    (repository *names*, mapped to repo_ids by `_resolve_repo_names_to_ids`).
 4. `--for-location <name>` — stage packs missing at that location only;
    routes through `get_unarchived_or_missing_at_location`
-   (`BurnOrchestrator._gather_packs_for_staging`).
+   (`BurnOrchestrator._gather_packs_for_staging`). The location must be
+   registered: an unknown name is refused with the registered ones listed,
+   dry run or not (`_for_location_check` in `cmd_stage`).
    `--collection <name>` sets `--repo`, `--for-location` and `--media`
    from a `[collections.<name>]` table instead, plus its minimum fill
    (#701, [collections.md](collections.md)).
@@ -191,7 +193,9 @@ machines, or when staging in advance for an unattended burn.
    (`BurnOrchestrator._trim_underfilled`).
 5. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
    without touching the staging area, the catalog, or the disc
-   (`BurnOrchestrator.stage`).
+   (`BurnOrchestrator.stage`). It checks for password split drift like a
+   real run: on drift it refuses with exit code 1, unless
+   `--allow-escrow-drift`.
 6. `--allow-escrow-drift` — proceed even when `lcsas.toml`'s `key_split`/K/N
    disagrees with the recorded split (KEY-08); the override is logged
    as a volume event. Without it, an `EscrowDriftError` aborts the stage so a
@@ -411,7 +415,10 @@ committing to a full stage.
    skipping the result-logging block.
 
 **Expected outcome:** Per-volume plan printed, no session created, no
-staging directories, no catalog mutation.
+staging directories, no catalog mutation. A dry run refuses (exit 1) where
+the real run would refuse for password split drift or an unregistered
+`--for-location`. When nothing needs staging it prints the same "No packs
+need staging." as the real run and exits 1 like it.
 
 **Variant axes that apply:** Media type (all), repository filter (`--repo`),
 location filter (`--for-location`). No ISO is produced.
@@ -435,9 +442,11 @@ pack selection (selection is fixed at stage time).
 
 **Prerequisites:**
 
-- The target location must be registered (`lcsas location add <name>`). At
-  burn time, an unregistered `--location` is rejected unless you pass
-  `--create-location` (`resolve_location` in `cmd_burn_session`).
+- The target location must be registered (`lcsas location add <name>`).
+  `stage --for-location` refuses an unregistered name and lists the
+  registered ones. At burn time, an unregistered `--location` is rejected
+  unless you pass `--create-location` (`resolve_location` in
+  `cmd_burn_session`).
 - Catalog must reflect which packs already live at each location — this is
   populated by previous burns via `add_volume_copy` and by
   `lcsas catalog import-receipts` for split-machine burns.
@@ -675,6 +684,15 @@ the staging directory and marks the session `CLEANED`
 a never-burned session, deleting its volumes and returning their packs to the
 unarchived pool. Volumes that already reached `VERIFIED` keep their catalog
 rows; the disc remains the source of truth.
+
+A volume that was burned but has no disc recorded is never deleted, even with
+`--force`. A catalog rebuilt from discs records the newest discs like this
+(`BURNED`, no disc). A `STAGING` volume counts too when its events record a
+good disc (a passed disc check at a location, a passed burn receipt, a disc
+move). Then `stage --clean` and `session abort` refuse the whole burn session,
+name the volume, and delete nothing. Record each disc first with
+`lcsas verify <label> --disc --location <where it is kept>` (or import its
+burn receipt), then run the command again.
 
 ---
 

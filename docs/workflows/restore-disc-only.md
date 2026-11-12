@@ -367,7 +367,9 @@ identifying the snapshot ID and hostname
 (the pure-Python success log in `cmd_restore_from_disc()`).
 A partial pure-Python restore — some files skipped under tolerant
 traversal — exits `2` and leaves a `RESTORE_FAILURES.txt` manifest
-under the target.
+under the target.  `q` (or the end of input) at the Python reader's
+disc box stops the whole restore with exit code `75`, as the bundled
+`standalone_restorer.py` does.  A full disk stops it with exit code `1`.
 
 **Variant axes that apply:**
 
@@ -397,9 +399,12 @@ under the target.
   exercised by `tests/integration/test_disc_only_restore.py` (rustic
   path) and `tests/integration/test_pure_python_restore.py` (fallback
   path).
+- Existing: the pure-Python branch's exit codes (75 for `q` at the
+  disc box, 1 for a full disk or a failed start), with the reader
+  faked — `tests/unit/test_restore_from_disc.py::TestFromDiscPythonReader`.
 - Gap: no test drives the pure-Python branch of `cmd_restore_from_disc`
-  end-to-end through the CLI (that branch returns separately, before
-  the rustic-path code).
+  end-to-end through the CLI with a real repository (that branch
+  returns separately, before the rustic-path code).
 
 **Source refs:**
 the `restore standalone` subparser in `build_parser()`
