@@ -919,13 +919,13 @@ class MetaVolumeBuilder:
 
             recovery/
             ├── bin/<arch>/lcsas-restore       (if built)
+            ├── bin/<arch>/lcsas-keyshare      (if built)
+            ├── bin/<arch>/lcsas-ecc           (if built)
             ├── bin/<arch>/lcsas-iso9660       (if built)
-            ├── bin/<arch>/lcsas-init          (if built)
             ├── src/                            C source
             ├── vendored/                       sqlite + zstd amalgamation
             ├── scripts/                        POSIX-sh drivers
             ├── docs/                           plain-text docs
-            ├── boot/                           kernel/loader configs
             ├── Makefile
             └── VERSION
 

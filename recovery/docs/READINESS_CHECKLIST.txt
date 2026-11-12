@@ -42,8 +42,10 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     AUTOMATED: that the burned docs advertise no boot-the-disc path
     is enforced by tests/recovery_hardening/
     test_boot_path_quarantined.py (always-on).  A boot-the-disc
-    drill applies only if experimental/boot/ is ever revived (see
-    its README for the QEMU boot-smoke revival gate).
+    drill applies only if the dropped boot stack is ever revived.
+    It was deleted (#688); the repository tag archive/pre-1.0-history
+    holds it, and its experimental/boot/README.md there names the
+    QEMU boot-smoke gate a revival must build first.
     HOW OFTEN: once per meta disc build.
 
 [ ] WINDOWS DOUBLE-CLICK DRILL — on a stock Windows 10/11 VM (no admin
@@ -185,10 +187,10 @@ ONGOING MAINTENANCE  (monthly, or after each burn session)
     repair path itself (below-threshold repair restores byte-identical;
     above-threshold damage fails loud rather than silently) is tested
     against the real dvdisaster binary by
-    tests/integration/test_ecc_repair.py.  That proof runs weekly in CI
-    (the ecc-weekly workflow on Mondays, and ecc-repair on any PR
-    touching the ECC wrapper) and is also available locally via the
-    opt-in LCSAS_ECC_REPAIR=1 invocation.
+    tests/integration/test_ecc_repair.py.  That proof runs in CI
+    (every Monday from the one scheduled workflow, weekly.yml, and
+    ecc-repair.yml on any PR touching the ECC wrapper) and is also
+    available locally via the opt-in LCSAS_ECC_REPAIR=1 invocation.
     Recording matters: the verify history travels in the disc
     catalog of every later disc, so an heir can ask "when was each
     disc last confirmed good?" decades from now.

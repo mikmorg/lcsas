@@ -330,6 +330,7 @@ restore.sh and restore.bat both do so, with or without
 LCSAS_TIER_FALLBACK, and exit 75 themselves.  Tier 3 uses the same
 code for the same stop (rc8); restore.sh treats it the same way:
 no "FAILED" report, the tools folder stays, and it exits 75.
+restore.bat runs no tier 3, so it has no such case.
 
 Tier 1 exit status, in full:
   0   restored (or, with --list-snapshots, listed)
@@ -404,7 +405,7 @@ able to restore.  No `pip install`, no package manager, no upstream
 release matrix that still needs to exist in 2076.  That's why
 tier 1 deserves the cross-compile work even though Phase 21 shipped
 the tier-2 cross-bundle as a shortcut -- see
-docs/CROSS_PLATFORM_META_RFC.md §6 Q6.
+docs/history/CROSS_PLATFORM_META_RFC.md §6 Q6.
 
 WHY THE REBUILD-FROM-SOURCE TIERS WERE REMOVED
 

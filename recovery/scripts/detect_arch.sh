@@ -1,8 +1,11 @@
 #!/bin/sh
 # detect_arch.sh -- normalize uname -m output.
 #
-# POSIX-sh.  Prints one of: x86_64 aarch64 riscv64
-# Exits 1 if architecture is not supported.
+# POSIX-sh.  Prints x86_64, aarch64 or riscv64; exits 1 for any other
+# machine, and restore.sh then falls back to `uname -m`.  restore.sh's
+# own target table decides what is supported: armv7 is (it reaches the
+# table through that fallback); riscv64 is NOT one of the six approved
+# targets, so restore.sh stops with "unsupported Linux machine".
 set -eu
 
 m="$(uname -m)"

@@ -203,8 +203,9 @@ MITIGATION:
     burned.  A self-maintained boot medium has neither property --
     a 2026-frozen kernel + unsigned GRUB decays against 2040
     machines, which is why the bundled boot stack was dropped
-    (experimental/boot/README.md).  The procedure's load-bearing
-    content is pinned by
+    (deleted in #688; its experimental/boot/README.md survives only
+    at the repository tag archive/pre-1.0-history).  The procedure's
+    load-bearing content is pinned by
     tests/recovery_hardening/test_live_usb_procedure_docs.py and
     end-to-end validated (Secure-Boot QEMU drill) by
     tests/e2e/test_live_usb_restore.py [BOOT-04].

@@ -775,9 +775,9 @@ open('$(abspath $(BUILD))/coverage.txt', 'w').write(line + '\n')"
 #
 #   MANIFEST.sha256 lists the files WE AUTHOR under recovery/, so an
 #   heir can `sha256sum -c` a disc and detect tampering or bit-rot.
-#   CROSS_PLATFORM_META_RFC.md Q4 fixes the split: files we author go
-#   here, files we merely trust from upstream (rustic, CPython) go in
-#   UPSTREAM.sha256.
+#   docs/history/CROSS_PLATFORM_META_RFC.md Q4 fixes the split: files
+#   we author go here, files we merely trust from upstream (rustic,
+#   CPython) go in UPSTREAM.sha256.
 #
 #   "Files we author" == "files tracked by git under recovery/", minus:
 #     * bin/           -- built artifacts, not source.  Their integrity

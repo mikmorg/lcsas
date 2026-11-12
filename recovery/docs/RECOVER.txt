@@ -942,7 +942,13 @@ This checks the disc, records it at that location, and marks the
 volume VERIFIED.  The location must already exist (see 'lcsas
 location list'; add one with 'lcsas location add').  Until you have
 done this for every listed volume, do not run 'lcsas session abort'
-on that burn session: it deletes volumes that have no disc record.
+on that burn session: while a listed volume has no disc record, abort
+refuses and changes nothing.
+
+Take care with abort at any time after a rebuild: a volume of the
+newest burn session whose disc you did not give the rebuild looks
+never burned, and 'lcsas session abort' deletes it, even though its
+disc may exist.  Give the rebuild every disc of that session you hold.
 Older burn sessions are unaffected — their burn records were
 captured on later discs and are merged back in (volume_events,
 burn_sessions, and session_volumes all survive the rebuild).

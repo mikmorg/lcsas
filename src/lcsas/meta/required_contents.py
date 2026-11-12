@@ -23,8 +23,8 @@ meta disc must contain*.  It is imported by:
   the builder cannot drift.
 
 The contract reflects the 2026-06 required-contents agreement: all six
-approved rust triples (``docs/CROSS_PLATFORM_META_RFC.md`` §6 Q6) plus the
-root-level restore artifacts.  Older meta discs that predate this contract
+approved rust triples (``docs/history/CROSS_PLATFORM_META_RFC.md`` §6 Q6)
+plus the root-level restore artifacts.  Older meta discs that predate this contract
 will (correctly) report ABSENT for targets they never shipped — that is
 the desired honest signal, not a false alarm.
 

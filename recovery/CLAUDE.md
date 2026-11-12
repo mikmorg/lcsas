@@ -59,7 +59,9 @@ check, alongside `bin-parity-required`.
 Tier-1 recovery binary: `recovery/src/lcsas-restore/` — C89, static,
 depends only on kernel + libc.  Sibling tier-1 tools under
 `recovery/src/`: `lcsas-keyshare` (SLIP-0039 combiner), `lcsas-ecc`
-(RS03 verify/repair), `lcsas-iso9660`, `lcsas-init`.  Vendored
+(RS03 verify/repair), `lcsas-iso9660`.  (`lcsas-init`, the live-boot
+init, was deleted with the boot stack in #688; it survives only at
+the tag `archive/pre-1.0-history`.)  Vendored
 dependencies: sqlite3 and zstd (source in `recovery/vendored/`; built
 alongside our code — not runtime dependencies).
 
