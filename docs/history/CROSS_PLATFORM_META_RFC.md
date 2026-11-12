@@ -558,4 +558,4 @@ slices.
 2026-05-17.  All six approved targets have tier-1 (`lcsas-restore`),
 tier-2 (`rustic-static`), and tier-3 (CPython) coverage.  See §6 Q6 for the
 tier-1 cross-compilation detail and the forward-looking roadmap at
-[`development/roadmap.md`](development/roadmap.md) for what comes next.
+[`development/roadmap.md`](../development/roadmap.md) for what comes next.

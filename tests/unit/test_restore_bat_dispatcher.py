@@ -18,7 +18,7 @@ def test_restore_bat_uses_new_target_name():
     """restore.bat must build paths under bin\\x86_64-pc-windows-gnu\\.
 
     This is the canonical target name from
-    docs/CROSS_PLATFORM_META_RFC.md §3.  The meta-builder writes its
+    docs/history/CROSS_PLATFORM_META_RFC.md §3.  The meta-builder writes its
     bundle to bin\\x86_64-pc-windows-gnu\\, so the .bat must match.
     """
     content = RESTORE_BAT.read_text()

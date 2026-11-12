@@ -44,7 +44,7 @@ git's index.  The ``manifest`` Make target now generates from
 disagree.
 
 The forward-only gap this closes was real and had already been recorded in
-docs/PROJECT_REVIEW_2026-07.md:289 ("new authored file with no row is
+docs/history/PROJECT_REVIEW_2026-07.md:289 ("new authored file with no row is
 invisible"): when the completeness half was missing, the manifest had silently
 gone stale by 161 files, including the ENTIRE src/lcsas-ecc/ C source and the
 slip39/, rs03/ and tree/ fuzz corpora.

@@ -2,8 +2,8 @@
 
 > Forward-looking roadmap plus a concise record of completed work.  For the
 > living architecture reference see [`../architecture.md`](../architecture.md);
-> for the cross-platform meta disc design see
-> [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md).
+> for the cross-platform meta disc design (historical RFC) see
+> [`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md).
 
 LCSAS (Linux Cold Storage Archival Suite) orchestrates Rustic, Xorriso, and
 DVDisaster to write deduplicated, encrypted data packs onto optical media
@@ -31,7 +31,7 @@ roughly in descending order of "addresses a real limitation owners have hit."
 
 | Item | Status | Notes |
 |---|---|---|
-| **RISC-V meta disc target** | Blocked on upstream | `riscv64gc-*` has no upstream rustic / python-build-standalone artifact yet. Add when upstream ships. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q1. |
+| **RISC-V meta disc target** | Blocked on upstream | `riscv64gc-*` has no upstream rustic / python-build-standalone artifact yet. Add when upstream ships. See [`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6 Q1. |
 | **Windows ARM64 (`aarch64-pc-windows-msvc`)** | Blocked on upstream | No upstream rustic artifact. Non-goal until it lands. |
 | **FreeBSD / OpenBSD targets** | Deferred | No upstream rustic artifact; different binary formats. |
 | **Cloud storage (S3/rclone)** | Out of scope | Architectural extension; would add a fourth storage stage (remote) after the mirror, the staging area and the discs. |
@@ -111,7 +111,7 @@ recovery tiers now cover **all six approved targets**:
 
 Tier-1 (`lcsas-restore`) cross-compiles via `zig cc -target X-{musl,windows-gnu,macos}`
 — notably the macOS targets need no Apple SDK because zig bundles enough
-libSystem. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md)
+libSystem. See [`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md)
 §6 Q6 for the full sequence. Phase 21 also added 90+ tests across
 `cmd_consolidate`, the dispatcher, bundlers, and verify paths.
 

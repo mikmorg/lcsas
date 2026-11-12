@@ -270,7 +270,7 @@ binaries are built.
 results up from `recovery/bin/<arch>/` automatically.
 `RecoveryBuilder.SUPPORTED_ARCHES` names only the six approved targets of the
 required-contents contract. See
-[`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6.
+[`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6 Q6.
 
 **Source refs:** `APPROVED_TARGETS` / `required_target_paths`
 (`src/lcsas/meta/required_contents.py`);

@@ -1,5 +1,7 @@
 # Live-USB Restore (No Working Operating System)
 
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the no-OS journey and the tests that validate it. The steps themselves are in BOOT.txt and RECOVER.txt.
+
 > The *no-OS* restore journey: the heir (or the owner) has the LCSAS
 > discs but no computer with a working operating system. **LCSAS discs
 > are NOT bootable** — the route is any other working computer, or a

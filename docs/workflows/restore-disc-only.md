@@ -1,5 +1,7 @@
 # Disc-Only Restore with the Python Reader (Tier 3)
 
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the tier-3 Python reader in depth, with its variant axes, expected outcomes, and tests. The heir's short route to tier 3 is in RECOVER.txt.
+
 > Recovery tier 3 — the fallback of last resort. A single LCSAS data disc,
 > a Python 3.10+ interpreter, the password, and **nothing else**.
 > No meta disc. No network. No `rustic`/`restic` binary. No installed

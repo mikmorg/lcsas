@@ -517,7 +517,7 @@ The **meta disc** solves this by bundling *everything* needed for a restore onto
 
 | Path | Contents |
 |------|----------|
-| `recovery/bin/<triple>/` | Per-platform tier-1 (`lcsas-restore`), share combiner (`lcsas-keyshare`), disc repair (`lcsas-ecc`) and tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
+| `recovery/bin/<triple>/` | Per-platform tier-1 (`lcsas-restore`), share combiner (`lcsas-keyshare`), disc repair (`lcsas-ecc`) and tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md). |
 | `metadata/<id>/` | Every backup set's keys, index and snapshots as of the meta disc's build, with its `LCSAS_REPO.txt` (the set's name).  The newest data disc carries newer copies. |
 | `tools/` | Portable Linux x86_64 tools (rustic, Python 3) and shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
@@ -555,71 +555,23 @@ on the meta disc.
 
 #### Physical Disc Swap (the normal path)
 
-Insert the meta disc, mount it, and run `restore.sh` directly.  The script
-prompts you interactively and pauses whenever it needs the next data disc.
+Insert the meta disc, mount it, and run `restore.sh` from it. The script
+asks which backup set to restore and for its password, and pauses whenever it
+needs the next data disc.
 
-```bash
-# 1. Mount the meta disc
-sudo mount /dev/sr0 /mnt
-
-# 2. Start the restore.  It copies its tools to ~/lcsas-restore-tools,
-#    so the meta disc can come out, then asks its questions
-sh /mnt/restore.sh ~/restored/ latest
-
-# First it asks for your NEWEST data disc (the latest year in the
-# label, then the highest number): eject the meta disc, insert that
-# disc, mount it if needed, press Enter.
-#
-# With multiple repositories on the archive the script prints a numbered menu:
-#   Choose a repository (number or name): <pick one and press Enter>
-# (single-repository archives skip the prompt), then:
-#   Password:   <type your password and press Enter>
-# (or the words of its share cards, when its password is split)
-#
-# When a data disc is needed it prints a swap prompt:
-#   Insert the right disc and press ENTER to retry.
-#
-# Eject the current disc and insert the requested data disc.  Once it
-# is mounted the restore carries on by itself (Linux/macOS; press Enter
-# if it doesn't, or on Windows).  Repeat until it prints
-# "restore complete".  To stop, type q at a swap prompt; carry on
-# later with:  sh ~/lcsas-restore-tools/resume.sh
-```
-
-See [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) for the
-complete restore guide, including the disc swap steps and all
+The heir's step-by-step procedure is not repeated here. It lives in one
+place: [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) (Linux and
+macOS) and [`recovery/docs/RECOVER_WINDOWS.txt`](recovery/docs/RECOVER_WINDOWS.txt)
+(Windows), both on the meta disc. They cover the exact commands, the
+questions the script asks, the disc swap steps, resuming a stopped restore,
+restoring from ISO images when you have no optical drive, and all
 environment variables.
-
-#### Restoring from ISO Images (no optical drive)
-
-If you have ISO images on disk rather than physical discs, you can
-loop-mount each one as needed.  The workflow is identical to the physical
-path — `restore.sh` uses `/dev/sr0` (or whatever device you mount the
-ISO on), so mount each ISO in turn when the swap prompt appears:
-
-```bash
-# Mount the meta ISO
-sudo mount -o loop lcsas_meta.iso /mnt
-sh /mnt/restore.sh ~/restored/ latest
-
-# When it asks for your newest data disc, mount the newest data ISO
-# in place of the meta ISO (in another terminal), then press Enter:
-sudo umount /mnt
-sudo mount -o loop lcsas_data_0002.iso /mnt
-
-# When a swap prompt appears, mount the next data ISO:
-sudo umount /mnt
-sudo mount -o loop lcsas_data_0001.iso /mnt
-# press Enter at the swap prompt
-
-# Repeat for each data ISO as prompted.
-```
 
 ### Supported recovery platforms
 
 The meta disc can carry prebuilt recovery binaries for six target
 platforms.  The supported matrix (cross-platform meta disc work
-landed across Phase 21.1–21.12 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
+landed across Phase 21.1–21.12 — see the original design RFC (historical) [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md)):
 
 | Target | OS | Notes |
 |---|---|---|
@@ -720,7 +672,7 @@ durability layer.
 ### Decisions about coverage gaps
 
 Targets **not** currently bundled, and the rationale (full discussion
-in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
+in the original design RFC (historical) [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md) §6 Q1):
 
 - **RISC-V** — upstream rustic (tier 2) does not yet ship a release
   artifact for `riscv64gc-unknown-linux-gnu`, and we don't cross-compile

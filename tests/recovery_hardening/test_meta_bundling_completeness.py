@@ -43,7 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_BIN = REPO_ROOT / "recovery" / "bin"
 
 
-# Targets the codebase claims to support (docs/CROSS_PLATFORM_META_RFC.md
+# Targets the codebase claims to support (docs/history/CROSS_PLATFORM_META_RFC.md
 # §6 Q6 enumerates these as the six approved triples).  The rust-triple
 # column is driven from the single-source-of-truth APPROVED_TARGETS
 # (src/lcsas/meta/required_contents.py); the short-arch + exe columns
