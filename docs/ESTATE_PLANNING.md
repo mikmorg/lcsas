@@ -345,7 +345,7 @@ The **meta disc** holds no catalog. It contains:
 | File | Purpose |
 |------|---------|
 | `restore.sh` | Automated restore script |
-| `README_RESTORE.md` | Detailed restore guide (Markdown) |
+| `README_RESTORE.md` | Short guide that points at the restore manual (Markdown) |
 | `README_RESTORE.txt` | Same content, plain text |
 | `tools/` | Portable Linux binaries (rustic, xorriso, python3) |
 | `lcsas/` | Full LCSAS source code |

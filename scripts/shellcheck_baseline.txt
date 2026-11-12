@@ -1,11 +1,7 @@
 # shellcheck findings accepted when the ratchet was added (#484).
-# Format: <file> <code> <count>.  Regenerate: scripts/shellcheck_gate.py --print recovery/scripts/*.sh src/lcsas/meta/assets/*.sh
-# restore_legacy.sh's two SC2034 (BOOTSTRAP_META and EXPECTED_PACKS set but
-# unused) came with it when #689 moved it out of meta/builder.py; fixing them
-# changes the bytes on the meta disc.
+# Format: <file> <code> <count>.  Regenerate: scripts/shellcheck_gate.py --print recovery/scripts/*.sh
 recovery/scripts/restore.sh SC2004 1
 recovery/scripts/restore.sh SC2015 2
 recovery/scripts/restore.sh SC2034 1
 recovery/scripts/restore.sh SC2166 2
 recovery/scripts/run_coverage_fault_inject.sh SC2086 1
-src/lcsas/meta/assets/restore_legacy.sh SC2034 2

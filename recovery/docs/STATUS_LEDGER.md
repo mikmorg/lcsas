@@ -126,7 +126,8 @@ Reopen and build it if any of these turns up:
 
 `volume_info.json` is written to every staging root
 (`staging/metadata.py::write_volume_info`) and was read only by the *Python*
-restore path (`meta/restore_single_drive.py::verify_disc`).  Now each
+restore path (`meta/restore_single_drive.py::verify_disc`, retired in
+#689).  Now each
 `refresh_discovered()` in `disc_locator.c` also reads it, through the
 existing `json_q`, for every disc root it visits, and prints
 `[lcsas-restore] mounted volume <label> at <path>` once per insertion.
@@ -168,9 +169,10 @@ instead of resolving missing packs reactively.
 Resolved as **won't-fix by design** (#350, commit 985c118): the catalog
 structurally lacks a snapshot→pack mapping, so the tier-1 pick list
 (`catalog.c::lcsas_catalog_print_pending_packs`) is whole-archive **by
-design**.  Per-snapshot pick lists remain a tier-3 capability
-(`meta/restore_single_drive.py::_build_pick_list` groups packs by volume
-per snapshot).  See the #350 discussion for the full rationale.
+design**.  Per-snapshot pick lists were a capability of the legacy
+driver's helper (`meta/restore_single_drive.py::_build_pick_list` grouped
+packs by volume per snapshot), retired with it in #689.  See the #350
+discussion for the full rationale.
 
 ### Priority order for resuming
 

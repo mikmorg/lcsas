@@ -50,7 +50,9 @@ A run passes iff **all** of the following hold after the agent declares
 8. **(v2)** The agent invoked the interactive `restore.sh`.  Direct
    invocation of `restore-auto.sh`, `restore_legacy.sh`,
    `restore_c89.sh`, `restore.bat`, or `standalone_restorer.py`
-   fails the run.  (`restore.sh` may itself `exec` whichever tier is
+   fails the run (the first three were retired from the meta disc in
+   #689; `setup.py` strips `restore_auto.sh` and `restore.bat` from
+   the test meta disc, so the agent cannot run them).  (`restore.sh` may itself `exec` whichever tier is
    appropriate — that is allowed; we are checking what the *agent*
    typed at the top of a shell command.)
 9. **(v2)** The agent never *read* a script file.  No
@@ -87,8 +89,8 @@ A run passes iff **all** of the following hold after the agent declares
   disc swaps.  The test must exercise that flow as a human would: a
   persistent terminal (tmux), typed password via `send-keys`, response
   to disc-swap prompts.  Pipe-based / env-var-fed shortcuts and direct
-  invocations of `restore-auto.sh` are explicitly out-of-scope and are
-  detected by `verify.sh`.
+  invocations of the automation wrapper (`restore_auto.sh` since #689)
+  are explicitly out-of-scope.
 
 ---
 
@@ -207,8 +209,7 @@ xorriso -as mkisofs -V LCSAS_META \
 
 That is the entire step. The meta disc contains:
 
-- `restore.sh` (production) — the bash wrapper
-- `tools/restore_single_drive.py` (production) — stdlib helper
+- `restore.sh` (production) — the one restore driver (POSIX sh)
 - `tools/bin/{rustic,xorriso,python3}` — bundled binaries
 - `README_RESTORE.md` / `README_RESTORE.txt` — production docs
 - `START_HERE.txt` — production landing page
@@ -570,14 +571,13 @@ the blind agent (think time + simulated swap sleeps), <5 s for verify.
 ## Pre-flight checklist (before first execution)
 
 1. ✅ `MediaType.TEST_TINY` — defined in `src/lcsas/config/media.py`.
-2. ✅ Single-drive helper `src/lcsas/meta/restore_single_drive.py` — landed,
-   8 unit tests passing.
-3. ✅ Production `restore.sh` defaults to single-drive mode — landed in
-   `src/lcsas/meta/builder.py:RESTORE_SCRIPT` (since #689 the file
-   `src/lcsas/meta/assets/restore_legacy.sh`). Bash syntax + bundling
-   asserted by unit tests.
-4. ✅ `tools/restore_single_drive.py` bundled by `MetaVolumeBuilder` —
-   landed; verified by `test_single_drive_helper_bundled`.
+2. ✅ Single-drive helper `src/lcsas/meta/restore_single_drive.py` — landed;
+   retired in #689 with the legacy bash driver that used it.
+3. ✅ Production `restore.sh` defaults to single-drive mode — since #689
+   the one driver, `recovery/scripts/restore.sh`, copied to the meta
+   disc root; tier 1 asks for each disc.
+4. ✅ (retired in #689) `tools/restore_single_drive.py` is no longer on
+   the meta disc.
 5. ✅ `README_RESTORE.md` leads with single-drive recipe — landed.
 6. ☐ `setup.py`, `run.sh`, `verify.sh`, `teardown.sh`, `disc-loader.c`,
    `cdr-robotctl`, `merge_timeline.py`, `agent_prompt.txt` — to be

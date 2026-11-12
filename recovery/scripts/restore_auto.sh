@@ -2,11 +2,20 @@
 # restore_auto.sh -- non-interactive variant of restore.sh.
 #
 # Reads password from $LCSAS_PWFILE (must be set).  Restores the latest
-# snapshot of every repository discovered under $RECOVERY/repos/.
+# snapshot of every backup set (repository) it finds, each into its own
+# folder TARGET_ROOT/<id>, by running restore.sh once per set.  This is
+# the meta disc's one automation script (#689); on the disc run it as
+#   LCSAS_PWFILE=/full/path/pw sh /mnt/recovery/scripts/restore_auto.sh \
+#       /mnt/recovery ~/restored
+#
+# Where it looks for the sets (each a folder holding keys/):
+#   $RECOVERY/repos/*/           when $RECOVERY/repos/ exists; otherwise
+#   $RECOVERY/*/, $RECOVERY/metadata/*/ and $RECOVERY/../metadata/*/
+#   (the last is the meta disc's metadata/ folder, next to recovery/).
 #
 # Exit codes:
 #   0 -- all repositories restored
-#   1 -- at least one repository failed
+#   1 -- at least one repository failed, or no repository was found
 #   2 -- usage error
 set -eu
 
@@ -32,16 +41,24 @@ LCSAS_NEWEST_DISC_PROMPT=0
 LCSAS_ANOTHER_SET=0
 export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_SET
 
-# Discover repositories: each subdir of $RECOVERY/repos/ with a keys/ entry.
+# Discover the sets: each folder with a keys/ folder, once per id (the
+# meta disc and a hand-made tree can both hold a copy of one set).
 if [ -d "$RECOVERY/repos" ]; then
-    repos_root="$RECOVERY/repos"
+    set -- "$RECOVERY/repos"
 else
-    repos_root="$RECOVERY"
+    set -- "$RECOVERY" "$RECOVERY/metadata" "$RECOVERY/../metadata"
 fi
+seen="/"
+found=0
 
-for r in "$repos_root"/*/; do
+for root in "$@"; do
+for r in "$root"/*/; do
     [ -d "$r" ] || continue
     [ -d "$r/keys" ] || continue
+    r="${r%/}"
+    case "$seen" in *"/${r##*/}/"*) continue ;; esac
+    seen="$seen${r##*/}/"
+    found=$((found + 1))
     name="$(basename "$r")"
     out="$TARGET/$name"
     mkdir -p "$out"
@@ -70,5 +87,15 @@ for r in "$repos_root"/*/; do
         fail=1
     fi
 done
+done
+
+if [ "$found" -eq 0 ]; then
+    printf '!!! no backup set found: no folder with keys/ under\n' >&2
+    printf '    %s/repos, %s, %s/metadata or %s/../metadata.\n' \
+           "$RECOVERY" "$RECOVERY" "$RECOVERY" "$RECOVERY" >&2
+    printf '    Nothing was restored.  Run restore.sh itself with a data disc\n' >&2
+    printf '    mounted, and LCSAS_REPO=<id> to choose the set.\n' >&2
+    exit 1
+fi
 
 exit "$fail"

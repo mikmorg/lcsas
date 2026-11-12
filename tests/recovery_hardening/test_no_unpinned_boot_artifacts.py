@@ -37,15 +37,13 @@ _BOOT_NAME_RE = re.compile(
 )
 
 # Builder-authored entry-point scripts, written at build time from
-# reviewed in-repo source (heredocs in builder.py or verbatim copies
-# of files under src/lcsas/ and manifest-pinned recovery/scripts/).
-# They are text, not opaque artifacts — anything NOT in this list and
-# not manifest-pinned fails the gate.  restore-auto.sh and
-# restore_legacy.sh moved into recovery/scripts/ (#491), where the
-# builder gives them MANIFEST.sha256 rows, so they are not listed here.
+# reviewed in-repo source (verbatim copies of files under src/lcsas/
+# and manifest-pinned recovery/scripts/).  They are text, not opaque
+# artifacts — anything NOT in this list and not manifest-pinned fails
+# the gate.  #689 retired the legacy bash drivers and the root copy
+# restore_c89.sh: restore.sh is the disc's one restore driver.
 _AUTHORED_SCRIPTS = {
     "restore.sh",
-    "restore_c89.sh",
     "restore.bat",
     "keyshare_combine.py",
     "standalone_restorer.py",

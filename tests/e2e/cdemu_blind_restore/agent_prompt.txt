@@ -190,9 +190,8 @@ restore.sh asks up to three things via its terminal:
 WHAT YOU MAY NOT DO
 ===================
 
-  - You may not run restore-auto.sh, restore_legacy.sh,
-    restore_c89.sh, restore.bat, or standalone_restorer.py
-    directly.  Only restore.sh.  (restore.sh itself may exec
+  - You may not run restore_auto.sh, restore.bat, or
+    standalone_restorer.py directly.  Only restore.sh.  (restore.sh itself may exec
     whichever tier is appropriate — that is fine.)
   - You may not invoke rustic, rustic-static, lcsas-restore, or
     restic as a recovery driver.  restore.sh is the only allowed

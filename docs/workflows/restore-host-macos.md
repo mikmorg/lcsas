@@ -234,10 +234,8 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   those discs: insert them one at a time.  Mounting every disc first (Finder will hold them
   all in `/Volumes`) and running the restore remains the simplest path
   for a first run.  The
-  `INSERT DISC:` box is the older bash flow in `restore_legacy.sh`;
-  `tools/restore_single_drive.py` on the disc (source:
-  `src/lcsas/meta/restore_single_drive.py`) only builds the pick list
-  and ingests packs, and has no prompt of its own.
+  `INSERT DISC:` box was the older bash flow in `restore_legacy.sh`,
+  retired from the meta disc in #689.
 - (Fixed, #533) **Repository picker with two or more data discs
   mounted:** every data disc carries `metadata/<repo>/`, and repository
   discovery de-duplicated by path, so with N data discs mounted a

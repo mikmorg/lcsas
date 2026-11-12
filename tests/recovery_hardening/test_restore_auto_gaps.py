@@ -11,7 +11,10 @@ wrong-password tests in test_restore_auto_repo_select.py:
   discovered as direct children of $RECOVERY that carry a keys/ directory;
   scripts/, docs/ and keys-less directories are ignored;
 * the repos/ layout wins when both exist, and a non-zero restore.sh exit
-  other than 77 fails the run while the remaining repos are still attempted.
+  other than 77 fails the run while the remaining repos are still attempted;
+* the meta disc's layout (#689): sets in <disc root>/metadata/<id>/, next to
+  the recovery/ folder, are found, each once, and finding no set at all is
+  exit 1, not a silent success.
 
 restore.sh is stubbed; nothing here needs a recovery binary.
 """
@@ -259,3 +262,53 @@ class TestReposDirLayout:
         assert res.returncode == 0, res.stderr
         assert [c.split("|")[0] for c in run.calls()] == ["alpha"]
         assert not (run.target / "keyless").exists()
+
+
+# ---------------------------------------------------------------------------
+# #689: the meta disc's layout, and no set found
+# ---------------------------------------------------------------------------
+
+
+class TestMetaDiscLayout:
+    """On a meta disc RECOVERY is the disc's recovery/ folder and the sets
+    sit next to it, in <disc root>/metadata/<id>/.  restore_auto.sh used to
+    look only in $RECOVERY/repos/ and $RECOVERY/, found nothing there and
+    exited 0 having restored nothing (#689)."""
+
+    def test_sets_in_the_disc_roots_metadata_are_restored(self, tmp_path):
+        run = _Run(tmp_path)
+        _make_repo(tmp_path / "metadata", "set-a")
+        _make_repo(tmp_path / "metadata", "set-b")
+        (tmp_path / "metadata" / "keyless").mkdir()
+        _write_stub(run.recovery)
+
+        res = run.run(str(run.recovery), str(run.target))
+
+        assert res.returncode == 0, res.stderr
+        assert sorted(run.calls()) == [
+            f"set-a|{run.recovery}|{run.target / 'set-a'}|latest",
+            f"set-b|{run.recovery}|{run.target / 'set-b'}|latest",
+        ]
+
+    def test_a_set_in_two_places_is_restored_once(self, tmp_path):
+        run = _Run(tmp_path)
+        _make_repo(run.recovery / "metadata", "set-a")
+        _make_repo(tmp_path / "metadata", "set-a")
+        _make_repo(tmp_path / "metadata", "set-b")
+        _write_stub(run.recovery)
+
+        res = run.run(str(run.recovery), str(run.target))
+
+        assert res.returncode == 0, res.stderr
+        assert sorted(c.split("|")[0] for c in run.calls()) == ["set-a", "set-b"]
+
+    def test_no_set_anywhere_fails_and_says_so(self, tmp_path):
+        run = _Run(tmp_path)
+        _write_stub(run.recovery)
+
+        res = run.run(str(run.recovery), str(run.target))
+
+        assert res.returncode == 1, res.stderr
+        assert "no backup set found" in res.stderr
+        assert "Nothing was restored" in res.stderr
+        assert run.calls() == []

@@ -6,9 +6,10 @@ archive discs, minus only the password:
 * Portable copies of ``rustic``, ``xorriso``, and ``python3``
   with all required shared libraries.
 * The full LCSAS source code.
-* A ``restore.sh`` bootstrap script that orchestrates the restore
-  using only the bundled tools — no system-installed software required.
-* Human-readable ``README_RESTORE.md`` with step-by-step instructions.
+* The one restore driver, ``restore.sh`` (``recovery/scripts/restore.sh``
+  from the source tree), at the disc root.
+* A short ``README_RESTORE.md`` that points at the on-disc manuals
+  (``recovery/docs/RECOVER.txt``, ``RECOVER_WINDOWS.txt``).
 * Project documentation (``docs/``).
 """
 
@@ -193,34 +194,18 @@ def _get_tool_version(tool_path: Path) -> str:
     return "unknown"
 
 
-# ── On-disc restore scripts and README (src/lcsas/meta/assets/) ─────
+# ── On-disc README (src/lcsas/meta/assets/) ──────────────────────────
 #
-# The two bash restore drivers and README_RESTORE.md live as plain files
-# under ``assets/`` next to this module (#689), so shellcheck lints them
-# (``make shellcheck``) and a review shows line-level diffs.  They are
-# read here, once, at import, and written to the meta disc byte for byte:
-# ``tests/unit/test_meta_assets_golden.py`` pins their SHA-256.
+# README_RESTORE.md lives as a plain file under ``assets/`` next to this
+# module (#689), read here once at import and written to the meta disc
+# byte for byte (``tests/unit/test_meta_assets_golden.py`` pins its
+# SHA-256).  It is a short pointer: the restore steps live in one place,
+# recovery/docs/RECOVER.txt (and RECOVER_WINDOWS.txt).
 #
-# * ``restore_legacy.sh`` (``RESTORE_SCRIPT``) is the LEGACY driver.  When
-#   ``recovery/scripts/restore.sh`` (the POSIX-sh / 3-tier driver) is
-#   available, which is normally the case, the builder writes that one as
-#   the meta disc's primary ``/restore.sh`` and this one as
-#   ``recovery/scripts/restore_legacy.sh`` (off the disc root, #491) for
-#   anyone who still wants the explicit ``--key/--isos/--target`` flag
-#   interface.  On a build with no recovery/ tree it is the root
-#   ``/restore.sh`` itself, so the script finds the disc root from either
-#   place (``DISC_ROOT`` in the script).
-#   Two tests pin this legacy contract:
-#     * tests/integration/test_meta_volume_restore.py: full end-to-end ISO
-#       restore via the flag-based CLI
-#     * tests/unit/test_meta_builder.py: the legacy ``ACTUAL_PACKS``
-#       pack-count check and the single-drive ``INSERT DISC:`` UX
-#   Before deleting this script, retarget those tests at the new driver
-#   (or delete the legacy-only ones outright).
-# * ``restore-auto.sh`` (``RESTORE_AUTO_SCRIPT``) is the non-interactive
-#   disc-swap driver, written to ``recovery/scripts/restore-auto.sh``.
-# * ``README_RESTORE.md`` (``README_RESTORE``) is the heir's Markdown
-#   guide; ``README_RESTORE.txt`` is rendered from it by ``_strip_markdown``.
+# The disc has ONE restore driver, recovery/scripts/restore.sh, copied
+# to the disc root as restore.sh (#689 retired the legacy bash driver,
+# its Python helper and the bash restore-auto.sh).  The non-interactive
+# wrapper is recovery/scripts/restore_auto.sh, which runs restore.sh.
 
 _ASSETS_DIR = Path(__file__).resolve().with_name("assets")
 
@@ -231,8 +216,6 @@ def _read_asset(name: str) -> str:
     return (_ASSETS_DIR / name).read_bytes().decode("utf-8")
 
 
-RESTORE_SCRIPT = _read_asset("restore_legacy.sh")
-RESTORE_AUTO_SCRIPT = _read_asset("restore-auto.sh")
 README_RESTORE = _read_asset("README_RESTORE.md")
 
 
@@ -265,11 +248,21 @@ def render_meta_volume_info_txt(built_at: datetime) -> str:
     )
 
 
-# Where the two non-heir restore scripts live on the meta disc, relative to
-# its root.  Both used to sit at the root next to restore.sh; #491
-# (UX_CONCERNS 002) moved them here so the root shows heirs one script.
-RESTORE_AUTO_SCRIPT_PATH = "recovery/scripts/restore-auto.sh"
-RESTORE_LEGACY_SCRIPT_PATH = "recovery/scripts/restore_legacy.sh"
+# The non-interactive wrapper on the meta disc, relative to its root: the
+# source tree's recovery/scripts/restore_auto.sh, copied with the rest of
+# recovery/.  It runs restore.sh once per backup set.
+RESTORE_AUTO_SCRIPT_PATH = "recovery/scripts/restore_auto.sh"
+
+# Files older builds wrote that #689 retired: a rebuild into an old
+# output folder removes them, so the disc holds one restore driver.
+_RETIRED_META_FILES = (
+    "restore_legacy.sh",
+    "restore-auto.sh",
+    "restore_c89.sh",
+    "recovery/scripts/restore_legacy.sh",
+    "recovery/scripts/restore-auto.sh",
+    "tools/restore_single_drive.py",
+)
 
 
 # ── recovery/ bundling: which files go on the disc (#562) ────────────
@@ -536,11 +529,10 @@ class MetaVolumeBuilder:
         ├── lcsas/
         │   └── src/lcsas/    LCSAS Python package
         ├── docs/             architecture docs
-        ├── recovery/scripts/ restore-auto.sh (automation) and
-        │                     restore_legacy.sh (superseded), kept off
-        │                     the root so heirs see restore.sh (#491)
-        ├── restore.sh        bootstrap script
-        ├── README_RESTORE.md human instructions
+        ├── recovery/         tier-1 binaries, scripts (restore_auto.sh
+        │                     for automation), docs (RECOVER.txt)
+        ├── restore.sh        the one restore driver
+        ├── README_RESTORE.md pointer to recovery/docs/RECOVER.txt
         ├── VOLUME_INFO.txt   plain-text "what this disc is"
         └── volume_info.json  self-describing metadata
     """
@@ -629,6 +621,9 @@ class MetaVolumeBuilder:
         Returns:
             Path to the meta disc root directory.
         """
+        # The disc's one restore driver comes from the recovery/ tree;
+        # check for it before the slow tool bundling (#689).
+        self._require_restore_driver(self._recovery_dir / "scripts" / "restore.sh")
         self._output.mkdir(parents=True, exist_ok=True)
 
         # Mark incomplete until all steps succeed
@@ -640,13 +635,11 @@ class MetaVolumeBuilder:
         self._bundle_docs()
         self._bundle_dvdisaster_source()
         self._bundle_standalone_restorer()
-        self._bundle_restore_helper()
         self._bundle_keyshare_combiner()
         self._bundle_metadata()
         if self._bundle_recovery_toolchain:
             self._bundle_recovery_toolchain_artifacts()
         self._write_restore_script()
-        self._write_restore_auto_script()
         self._write_readme()
         self._write_readme_txt()
         self._write_volume_info()
@@ -885,24 +878,6 @@ class MetaVolumeBuilder:
         _write_and_sync(restorer_path, build_standalone())
         os.chmod(str(restorer_path), 0o755)
 
-    def _bundle_restore_helper(self) -> None:
-        """Copy restore_single_drive.py into the meta disc's tools/ dir.
-
-        The helper is a stdlib-only Python driver for the single-drive
-        disc-swap restore flow. ``restore.sh`` shells out to it for the
-        bootstrap, ingest, and finalize phases.
-        """
-        src = Path(__file__).parent / "restore_single_drive.py"
-        if not src.is_file():
-            raise FileNotFoundError(
-                f"restore_single_drive.py missing from source tree: {src}"
-            )
-        tools_dir = self._output / "tools"
-        tools_dir.mkdir(parents=True, exist_ok=True)
-        dst = tools_dir / "restore_single_drive.py"
-        shutil.copy2(str(src), str(dst))
-        os.chmod(str(dst), 0o755)
-
     def _bundle_keyshare_combiner(self) -> None:
         """Place keyshare_combine.py at the meta disc root.
 
@@ -919,8 +894,8 @@ class MetaVolumeBuilder:
         tree (the tier-1 C binary, vendored sqlite/zstd, recovery
         scripts).  These two artifacts live in the main ``src/`` tree
         and are copied onto the meta disc at build time -- exactly like
-        ``standalone_restorer.py`` and ``restore_single_drive.py``, which
-        are likewise absent from that manifest.  They are pinned by git
+        ``standalone_restorer.py``, which is likewise absent from that
+        manifest.  They are pinned by git
         (every ``src/`` file is version-controlled) and the wordlist is
         additionally guarded by the 45 official SLIP-0039 conformance
         vectors in the test suite.  Adding ``./src/...`` rows to a
@@ -972,15 +947,8 @@ class MetaVolumeBuilder:
             shutil.rmtree(str(dst))
         self._copy_recovery_tree(src, dst)
 
-        # Copy the new POSIX restore.sh to the meta disc root so
-        # existing automation that looks for /restore.sh finds the new
-        # driver too.  (The legacy bash heredoc is still written by
-        # _write_restore_script for backward compat.)
-        new_restore = dst / "scripts" / "restore.sh"
-        if new_restore.is_file():
-            top_link = self._output / "restore_c89.sh"
-            shutil.copy2(str(new_restore), str(top_link))
-            os.chmod(str(top_link), 0o755)
+        # _write_restore_script copies scripts/restore.sh to the disc
+        # root as restore.sh, the disc's one restore driver (#689).
 
         # Surface restore.bat at the meta disc root so Windows heirs
         # who insert the disc see "restore.bat" in File Explorer and
@@ -1163,7 +1131,7 @@ class MetaVolumeBuilder:
         # only on genuine corruption, never on incompleteness.
         self._verify_cached_upstream_archives(cache_root)
 
-        # Approved targets per docs/CROSS_PLATFORM_META_RFC.md §3.  We
+        # Approved targets per docs/history/CROSS_PLATFORM_META_RFC.md §3.  We
         # iterate this list rather than `os.listdir(cache_root)` so a
         # corrupted/extra directory in the cache can't silently extend
         # what we ship.
@@ -1284,7 +1252,7 @@ class MetaVolumeBuilder:
         target, or `make build-recovery` to do all reachable targets
         in one shot.
 
-        See `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6 for the gap
+        See `docs/history/CROSS_PLATFORM_META_RFC.md` §6 Q6 for the gap
         analysis; Phase 21.11 / 21.12 closed the remaining targets.
         """
         # rust-triple → (short_arch_dir_name, lcsas-restore_filename)
@@ -1636,87 +1604,79 @@ class MetaVolumeBuilder:
         """Per-repo outcome of the last ``_bundle_metadata`` run (#435)."""
         return list(self._metadata_results)
 
+    def _require_restore_driver(self, driver: Path) -> None:
+        """Fail loud when the recovery/ tree's restore.sh is missing.
+
+        The meta disc has one restore driver, ``recovery/scripts/restore.sh``
+        (#689).  The builder used to fall back to a legacy bash driver
+        when there was no recovery/ tree; that driver is retired, and a
+        meta disc without the recovery/ tree has no tier-1 binaries
+        either.  So a build from an install with no recovery/ tree (a
+        wheel, or the host-A Docker image, which copies only ``src/``)
+        stops here with a clear message instead of burning a disc that
+        cannot restore.
+        """
+        if self._bundle_recovery_toolchain and driver.is_file():
+            return
+        raise MetaBuildError(
+            f"the restore driver {driver} is missing. A meta disc needs "
+            "the recovery/ tree of an LCSAS source checkout: run "
+            "`lcsas meta build` from the checkout, or pass "
+            "--project-root <checkout>."
+        )
+
     def _write_restore_script(self) -> None:
-        """Install the meta disc's top-level ``restore.sh``.
+        """Install the meta disc's one restore driver as ``/restore.sh``.
 
-        Behavior:
-
-        * If the C89 recovery toolchain bundle is available (the new
-          POSIX-sh driver in ``recovery/scripts/restore.sh``), copy
-          *that* in as ``/restore.sh``.  This is Python-free for tiers
-          1-2 and only touches Python at tier 3 (LCSAS_ALLOW_PYTHON_TIER).
-        * Otherwise, fall back to the legacy bash heredoc
-          (``RESTORE_SCRIPT``), which carries a hard Python dependency
-          from earlier days and is kept only for compatibility with
-          discs that predate the recovery/ tree.
-
-        In the first case the legacy script is *also* written, as
-        ``recovery/scripts/restore_legacy.sh`` (``RESTORE_LEGACY_SCRIPT_PATH``),
-        so it remains accessible as a manual third option if needed.  It
-        lives there, not at the disc root, so the root shows heirs one
-        restore script (#491, UX_CONCERNS 002), and it gets a row in
-        ``recovery/MANIFEST.sha256`` like every file under recovery/.
+        It is the POSIX-sh driver ``recovery/scripts/restore.sh`` from the
+        bundled recovery/ tree, stamped with the build SHA and date.  It
+        is Python-free for tiers 1-2 and only touches Python at tier 3
+        (LCSAS_ALLOW_PYTHON_TIER).  The copy left in recovery/scripts/
+        becomes a two-line redirect to the root one, so the disc holds
+        the driver once.  No recovery/ tree is a build error (#689).
         """
         script_path = self._output / "restore.sh"
         new_driver = self._output / "recovery" / "scripts" / "restore.sh"
-        # An older build left restore_legacy.sh at the disc root (#491).
-        (self._output / "restore_legacy.sh").unlink(missing_ok=True)
-        if new_driver.is_file():
-            shutil.copy2(str(new_driver), str(script_path))
-            os.chmod(str(script_path), 0o755)
-            # Stamp build SHA + date into the restore script placeholders.
-            import subprocess as _sp
-            try:
-                _sha = _sp.check_output(
-                    ["git", "rev-parse", "--short", "HEAD"],
-                    cwd=str(Path(__file__).resolve().parent),
-                    text=True,
-                    stderr=_sp.DEVNULL,
-                ).strip()
-            except Exception:
-                _sha = "unknown"
-            _build_date = date.today().isoformat()
-            _content = script_path.read_text(encoding="utf-8")
-            _content = _content.replace("@@BUILD_SHA@@", _sha).replace(
-                "@@BUILD_DATE@@", _build_date
-            )
-            _write_and_sync(script_path, _content)
-            # Stash the legacy bash driver in recovery/scripts/ for
-            # compatibility / for anyone who specifically wants it.  Off
-            # the disc root (#491); it finds tools/ two levels up.
-            legacy = self._output / RESTORE_LEGACY_SCRIPT_PATH
-            _write_and_sync(legacy, RESTORE_SCRIPT)
-            os.chmod(str(legacy), 0o755)
-            self._refresh_recovery_manifest_row(
-                legacy, "./scripts/restore_legacy.sh", add_missing=True
-            )
-            # Replace the inner copy with a redirect so heirs (and
-            # agents) who navigate into recovery/scripts/ land on the
-            # canonical root-level entry, not a silent duplicate.
-            # "$(dirname "$0")/../../restore.sh" resolves to /mnt/restore.sh
-            # regardless of where the disc is mounted.
-            _write_and_sync(
-                new_driver,
-                "#!/bin/sh\n"
-                "exec \"$(dirname \"$0\")/../../restore.sh\" \"$@\"\n",
-            )
-            os.chmod(str(new_driver), 0o755)
-            # The recovery/MANIFEST.sha256 row for scripts/restore.sh was
-            # written from the source-tree file (either copied in or
-            # regenerated by _regenerate_recovery_manifest, which keeps
-            # non-bin rows verbatim), but we just replaced that file with
-            # the redirect stub above.  Refresh the row so an heir's
-            # `sha256sum -c recovery/MANIFEST.sha256` matches the stub on
-            # disc instead of reporting a scary MISMATCH on the single
-            # most important recovery file (issue #365).
-            self._refresh_recovery_manifest_row(
-                new_driver, "./scripts/restore.sh"
-            )
-        else:
-            # No recovery/ tree was bundled (e.g. older builds).  Fall
-            # back to the historical bash driver.
-            _write_and_sync(script_path, RESTORE_SCRIPT)
-            os.chmod(str(script_path), 0o755)
+        self._require_restore_driver(new_driver)
+        # Files an older build left behind: the retired drivers (#689).
+        for rel in _RETIRED_META_FILES:
+            (self._output / rel).unlink(missing_ok=True)
+        shutil.copy2(str(new_driver), str(script_path))
+        os.chmod(str(script_path), 0o755)
+        # Stamp build SHA + date into the restore script placeholders.
+        import subprocess as _sp
+        try:
+            _sha = _sp.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(Path(__file__).resolve().parent),
+                text=True,
+                stderr=_sp.DEVNULL,
+            ).strip()
+        except Exception:
+            _sha = "unknown"
+        _build_date = date.today().isoformat()
+        _content = script_path.read_text(encoding="utf-8")
+        _content = _content.replace("@@BUILD_SHA@@", _sha).replace(
+            "@@BUILD_DATE@@", _build_date
+        )
+        _write_and_sync(script_path, _content)
+        # Replace the inner copy with a redirect so heirs (and agents)
+        # who navigate into recovery/scripts/ land on the root-level
+        # entry, not a silent duplicate.  "$(dirname "$0")/../../restore.sh"
+        # resolves to /mnt/restore.sh wherever the disc is mounted.
+        _write_and_sync(
+            new_driver,
+            "#!/bin/sh\n"
+            "exec \"$(dirname \"$0\")/../../restore.sh\" \"$@\"\n",
+        )
+        os.chmod(str(new_driver), 0o755)
+        # The recovery/MANIFEST.sha256 row for scripts/restore.sh was
+        # written from the source-tree file, but we just replaced that
+        # file with the redirect stub above.  Refresh the row so an heir's
+        # `sha256sum -c recovery/MANIFEST.sha256` matches the stub on
+        # disc instead of reporting a scary MISMATCH on the single most
+        # important recovery file (issue #365).
+        self._refresh_recovery_manifest_row(new_driver, "./scripts/restore.sh")
 
     def _refresh_recovery_manifest_row(
         self, on_disc: Path, rel: str, *, add_missing: bool = False
@@ -1759,25 +1719,6 @@ class MetaVolumeBuilder:
             replaced = True
         if replaced:
             _write_and_sync(manifest, "\n".join(out) + "\n")
-
-    def _write_restore_auto_script(self) -> None:
-        """Write the non-interactive restore-auto.sh script.
-
-        It goes to ``recovery/scripts/restore-auto.sh``
-        (``RESTORE_AUTO_SCRIPT_PATH``), not the disc root: it is for
-        automation only, and the root should show heirs one restore script
-        (#491, UX_CONCERNS 002).  The script finds tools/ two levels up.
-        Not to be confused with ``recovery/scripts/restore_auto.sh`` (with
-        an underscore), the POSIX-sh wrapper copied from the source tree.
-        """
-        (self._output / "restore-auto.sh").unlink(missing_ok=True)
-        script_path = self._output / RESTORE_AUTO_SCRIPT_PATH
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_and_sync(script_path, RESTORE_AUTO_SCRIPT)
-        os.chmod(str(script_path), 0o755)
-        self._refresh_recovery_manifest_row(
-            script_path, "./scripts/restore-auto.sh", add_missing=True
-        )
 
     def _write_readme(self) -> None:
         """Write the human-readable restore instructions."""
@@ -1832,8 +1773,9 @@ class MetaVolumeBuilder:
                 "tool_versions": tool_versions,
                 "lcsas_source": True,
                 "restore_script": "restore.sh",
-                # Key name kept for readers of older discs; the value
-                # moved off the disc root in #491.
+                # Key name kept for readers of older discs.  Since #689
+                # it names the one non-interactive wrapper,
+                # recovery/scripts/restore_auto.sh.
                 "restore_auto_script": RESTORE_AUTO_SCRIPT_PATH,
                 "documentation": True,
             },

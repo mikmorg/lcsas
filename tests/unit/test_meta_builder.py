@@ -21,10 +21,8 @@ import pytest
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.meta import builder as _builder_mod
 from lcsas.meta.builder import (
-    RESTORE_AUTO_SCRIPT,
+    _RETIRED_META_FILES,
     RESTORE_AUTO_SCRIPT_PATH,
-    RESTORE_LEGACY_SCRIPT_PATH,
-    RESTORE_SCRIPT,
     MetaBuildError,
     MetaVolumeBuilder,
     _get_tool_version,
@@ -305,12 +303,14 @@ class TestMetaVolumeBuilder:
         assert vi["type"] == "meta"
         assert (self.output / "VOLUME_INFO.txt").is_file()
 
-        # #491: the automation and legacy scripts live off the disc root.
+        # #689: one restore driver; the one automation script is the
+        # POSIX recovery/scripts/restore_auto.sh, and the retired legacy
+        # driver, its helper and the bash restore-auto.sh are gone.
         assert vi["contents"]["restore_auto_script"] == RESTORE_AUTO_SCRIPT_PATH
         assert (self.output / RESTORE_AUTO_SCRIPT_PATH).is_file()
-        assert (self.output / RESTORE_LEGACY_SCRIPT_PATH).is_file()
-        assert not (self.output / "restore-auto.sh").exists()
-        assert not (self.output / "restore_legacy.sh").exists()
+        retired = [r for r in _RETIRED_META_FILES if (self.output / r).exists()]
+        assert not retired, f"retired files on the meta disc: {retired}"
+        assert sorted(p.name for p in self.output.glob("*.sh")) == ["restore.sh"]
         assert "rustic" in vi["contents"]["tools"]
         assert "xorriso" in vi["contents"]["tools"]
         assert "python3" in vi["contents"]["tools"]
@@ -521,20 +521,6 @@ class TestMetaVolumeBuilder:
         )
         assert "python3" in content, "restore.sh missing python3 invocation"
 
-    def test_restore_script_has_pack_count_check(self):
-        """restore_legacy.sh (kept for compat) checks pack count post-ingest.
-
-        The active POSIX-sh driver no longer performs this check itself —
-        each cascade tier exits non-zero on failure, which is sufficient.
-        The legacy bash driver retains the explicit check.
-        """
-        legacy = self.output / "recovery" / "scripts" / "restore_legacy.sh"
-        assert legacy.is_file(), "restore_legacy.sh not bundled on meta disc"
-        content = legacy.read_text()
-        assert "ACTUAL_PACKS" in content, (
-            "restore_legacy.sh missing post-ingest pack count check"
-        )
-
     def test_inner_restore_sh_is_redirect_stub(self):
         """recovery/scripts/restore.sh on the meta disc must be a redirect stub.
 
@@ -560,17 +546,6 @@ class TestMetaVolumeBuilder:
             ".incomplete marker still present after successful build"
         )
 
-    def test_single_drive_helper_bundled(self):
-        """tools/restore_single_drive.py must be present and executable."""
-        helper = self.output / "tools" / "restore_single_drive.py"
-        assert helper.is_file(), "restore_single_drive.py not bundled in tools/"
-        assert os.access(str(helper), os.X_OK)
-        content = helper.read_text()
-        # Sanity: subcommand names the bash wrapper depends on.
-        assert "bootstrap" in content
-        assert "ingest" in content
-        assert "finalize" in content
-
     def test_keyshare_combiner_and_package_bundled(self):
         """K2.4(b): the production build ships the share combiner.
 
@@ -591,136 +566,36 @@ class TestMetaVolumeBuilder:
         assert (pkg / "wordlist.txt").is_file(), "SLIP-0039 wordlist not bundled"
         assert (pkg / "slip39.py").is_file()
 
-    def test_restore_script_single_drive_default(self):
-        """restore_legacy.sh drives the single-drive multi-disc UX.
 
-        The single-drive disc-swap helper is part of the legacy bash
-        driver; the new POSIX-sh driver delegates that responsibility
-        to the C-based lcsas-restore binary.  We assert the legacy
-        contract because that's where these markers still live.
-        """
-        legacy = self.output / "recovery" / "scripts" / "restore_legacy.sh"
-        assert legacy.is_file()
-        content = legacy.read_text()
-        assert "INSERT DISC:" in content
-        assert "restore_single_drive.py" in content
-        assert 'MODE="single-drive"' in content
-        assert "RESTORE COMPLETE" in content
-
-
-# ── Lightweight tests for the single-drive bits (no rustic required) ──
-
-
-class TestSingleDriveBitsStandalone:
-    """Validate single-drive helper bundling and restore.sh content
-    without invoking the full meta disc build (which needs rustic).
-    """
-
-    def test_restore_script_constant_has_single_drive_dispatch(self):
-        from lcsas.meta.builder import RESTORE_SCRIPT
-        assert "INSERT DISC:" in RESTORE_SCRIPT
-        assert 'MODE="single-drive"' in RESTORE_SCRIPT
-        assert "restore_single_drive.py" in RESTORE_SCRIPT
-        assert "RESTORE COMPLETE" in RESTORE_SCRIPT
-        # Both modes still supported
-        assert "--isos" in RESTORE_SCRIPT
-        assert "--drive" in RESTORE_SCRIPT
-
-    def test_restore_script_passes_bash_syntax(self, tmp_path):
-        from lcsas.meta.builder import RESTORE_SCRIPT
-        script = tmp_path / "restore.sh"
-        script.write_text(RESTORE_SCRIPT)
-        result = subprocess.run(
-            ["bash", "-n", str(script)],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stderr
-
-    def test_bundle_restore_helper_writes_file(self, tmp_path):
-        from lcsas.meta.builder import MetaVolumeBuilder
-        b = MetaVolumeBuilder(tmp_path / "meta")
-        (tmp_path / "meta").mkdir()
-        b._bundle_restore_helper()
-        dst = tmp_path / "meta" / "tools" / "restore_single_drive.py"
-        assert dst.is_file()
-        assert os.access(str(dst), os.X_OK)
-        content = dst.read_text()
-        assert "phase_bootstrap" in content
-        assert "phase_ingest" in content
-        assert "phase_finalize" in content
-
-
-# ── #491 (UX_CONCERNS 002): restore-auto.sh / restore_legacy.sh off the root ──
+# ── #689: one restore driver; restore_auto.sh is the one automation script ──
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _partial_meta_tree(out: Path, cache: Path, recovery_dir: Path | None = None) -> None:
-    """Build the parts of a meta tree the moved scripts depend on.
+def _partial_meta_tree(out: Path, cache: Path) -> None:
+    """Build the parts of a meta tree the restore scripts depend on.
 
     Skips the ~200 MB tool bundling (no rustic/xorriso needed) and points
     the upstream-binary cache at an empty dir so nothing large is copied.
     """
     out.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
-    builder = MetaVolumeBuilder(out, recovery_dir=recovery_dir)
+    builder = MetaVolumeBuilder(out)
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("LCSAS_RECOVERY_CACHE", str(cache))
         builder._bundle_standalone_restorer()
-        builder._bundle_restore_helper()
         builder._bundle_recovery_toolchain_artifacts()
         builder._write_restore_script()
-        builder._write_restore_auto_script()
         builder._write_readme()
         builder._write_volume_info()
 
 
-def _sandbox_path(base: Path) -> Path:
-    """A PATH dir holding only the coreutils the scripts need to start.
-
-    No rustic, restic, python3, sudo or mount: the scripts must find
-    their tools on the disc, and nothing they run can touch a real drive.
-    """
-    sbin = base / "sbin"
-    sbin.mkdir()
-    for name in ("dirname", "mktemp", "mkdir", "chmod", "rm", "basename"):
-        found = shutil.which(name)
-        if found is None:
-            pytest.skip(f"{name} not on PATH")
-        (sbin / name).symlink_to(found)
-    return sbin
-
-
-def _stub(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\nexit 0\n")
-    path.chmod(0o755)
-
-
-def _run_script(
-    script: Path, args: list[str], base: Path
-) -> subprocess.CompletedProcess[str]:
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash not available")
-    tmp = base / "tmp"
-    tmp.mkdir(exist_ok=True)
-    return subprocess.run(
-        [bash, str(script), *args],
-        capture_output=True,
-        text=True,
-        env={"PATH": str(base / "sbin"), "HOME": str(base), "TMPDIR": str(tmp)},
-        cwd=str(base),
-        stdin=subprocess.DEVNULL,
-        timeout=60,
-    )
-
-
 class TestMovedRestoreScripts:
-    """#491: the automation-only ``restore-auto.sh`` and the superseded
-    ``restore_legacy.sh`` live in ``recovery/scripts/`` on the meta disc,
-    not next to ``restore.sh`` at the root, and still work from there."""
+    """#689: the meta disc holds ONE restore driver, ``restore.sh`` at the
+    root (``recovery/scripts/restore.sh`` is a redirect to it), and ONE
+    automation script, the POSIX ``recovery/scripts/restore_auto.sh``.
+    (#491 had moved the bash ``restore-auto.sh`` and ``restore_legacy.sh``
+    off the root; #689 retired both.)"""
 
     @pytest.fixture()
     def meta_tree(self, tmp_path: Path) -> Path:
@@ -728,28 +603,23 @@ class TestMovedRestoreScripts:
         _partial_meta_tree(out, tmp_path / "empty-cache")
         return out
 
-    def test_scripts_are_off_the_root(self, meta_tree: Path) -> None:
-        assert not (meta_tree / "restore-auto.sh").exists()
-        assert not (meta_tree / "restore_legacy.sh").exists()
-        for rel in (RESTORE_AUTO_SCRIPT_PATH, RESTORE_LEGACY_SCRIPT_PATH):
-            script = meta_tree / rel
-            assert script.is_file(), f"{rel} missing"
-            assert os.access(script, os.X_OK), f"{rel} not executable"
-            result = subprocess.run(
-                ["bash", "-n", str(script)], capture_output=True, text=True,
-            )
-            assert result.returncode == 0, f"{rel}: {result.stderr}"
-        # restore.sh stays at the root; the POSIX-sh restore_auto.sh (a
-        # different script) is still the verbatim source-tree copy.
-        assert (meta_tree / "restore.sh").is_file()
+    def test_one_restore_driver(self, meta_tree: Path) -> None:
+        assert sorted(p.name for p in meta_tree.glob("*.sh")) == ["restore.sh"]
+        retired = [r for r in _RETIRED_META_FILES if (meta_tree / r).exists()]
+        assert not retired, f"retired files on the meta disc: {retired}"
+        inner = (meta_tree / "recovery" / "scripts" / "restore.sh").read_text()
+        assert inner.startswith("#!/bin/sh\nexec "), inner
+        assert len(inner.splitlines()) == 2, inner
+        # The automation script is the verbatim source-tree copy.
         src_auto = _REPO_ROOT / "recovery" / "scripts" / "restore_auto.sh"
-        assert (
-            meta_tree / "recovery" / "scripts" / "restore_auto.sh"
-        ).read_bytes() == src_auto.read_bytes()
+        on_disc = meta_tree / RESTORE_AUTO_SCRIPT_PATH
+        assert on_disc.read_bytes() == src_auto.read_bytes()
+        assert os.access(on_disc, os.X_OK)
 
-    def test_manifest_pins_the_moved_scripts(self, meta_tree: Path) -> None:
+    def test_manifest_pins_the_scripts(self, meta_tree: Path) -> None:
         """Every file under recovery/ needs a MANIFEST.sha256 row (`lcsas
-        meta verify --strict`, BOOT-07 gate); the rows must match."""
+        meta verify --strict`, BOOT-07 gate); the rows must match, and no
+        row may name a retired script."""
         import hashlib
 
         manifest = meta_tree / "recovery" / "MANIFEST.sha256"
@@ -758,140 +628,103 @@ class TestMovedRestoreScripts:
             parts = line.strip().split("  ", 1)
             if len(parts) == 2 and not line.startswith("#"):
                 rows[parts[1]] = parts[0]
-        for rel in (RESTORE_AUTO_SCRIPT_PATH, RESTORE_LEGACY_SCRIPT_PATH):
+        for rel in (RESTORE_AUTO_SCRIPT_PATH, "recovery/scripts/restore.sh"):
             key = "./" + rel.removeprefix("recovery/")
             assert key in rows, f"no MANIFEST row for {key}"
             digest = hashlib.sha256((meta_tree / rel).read_bytes()).hexdigest()
             assert rows[key] == digest, f"MANIFEST row for {key} does not match"
+        for gone in ("./scripts/restore-auto.sh", "./scripts/restore_legacy.sh"):
+            assert gone not in rows, f"MANIFEST still names {gone}"
 
-    def test_volume_info_names_the_new_path(self, meta_tree: Path) -> None:
+    def test_volume_info_names_the_auto_script(self, meta_tree: Path) -> None:
         info = json.loads((meta_tree / "volume_info.json").read_text())
         rel = info["contents"]["restore_auto_script"]
-        assert rel == "recovery/scripts/restore-auto.sh"
+        assert rel == "recovery/scripts/restore_auto.sh"
         assert (meta_tree / rel).is_file()
+        assert info["contents"]["restore_script"] == "restore.sh"
 
-    def test_readme_points_at_the_new_paths(self, meta_tree: Path) -> None:
+    def test_readme_points_at_the_manuals(self, meta_tree: Path) -> None:
+        """#689 (C): README_RESTORE is a short pointer to the manuals."""
         readme = (meta_tree / "README_RESTORE.md").read_text()
-        assert "| `recovery/scripts/restore-auto.sh` |" in readme
-        assert "| `recovery/scripts/restore_legacy.sh` |" in readme
+        assert "`recovery/docs/RECOVER.txt`" in readme
+        assert "`recovery/docs/RECOVER_WINDOWS.txt`" in readme
+        assert "| `recovery/scripts/restore_auto.sh` |" in readme
         assert "| `VOLUME_INFO.txt` |" in readme
-        assert "| `restore-auto.sh` |" not in readme
-        assert "| `restore_legacy.sh` |" not in readme
-        assert "bash /mnt/recovery/scripts/restore_legacy.sh --key" in readme
-        assert "bash /mnt/recovery/scripts/restore-auto.sh --key" in readme
-        for stale in ("./restore-auto.sh", "./restore_legacy.sh"):
-            assert stale not in readme, f"README still runs {stale} from the root"
+        for stale in ("restore-auto.sh", "restore_legacy.sh", "restore_c89.sh",
+                      "restore_single_drive.py", "--disc-cmd", "--isos"):
+            assert stale not in readme, f"README still names {stale}"
+        for rel in ("recovery/docs/RECOVER.txt", "recovery/docs/RECOVER_WINDOWS.txt",
+                    "restore.bat", RESTORE_AUTO_SCRIPT_PATH):
+            assert (meta_tree / rel).is_file(), f"README names missing {rel}"
 
-    def test_script_constants_resolve_the_disc_root(self) -> None:
-        """No disc-root path may hang off SCRIPT_DIR (= recovery/scripts/)."""
-        for name, text in (
-            ("RESTORE_SCRIPT", RESTORE_SCRIPT),
-            ("RESTORE_AUTO_SCRIPT", RESTORE_AUTO_SCRIPT),
-        ):
-            for stale in (
-                '"$SCRIPT_DIR/tools"',
-                "$SCRIPT_DIR/standalone_restorer.py",
-                "$SCRIPT_DIR/metadata",
-            ):
-                assert stale not in text, f"{name} still uses {stale}"
-            assert 'TOOLS="$DISC_ROOT/tools"' in text, name
-            assert "*/recovery/scripts)" in text, name
-
-    def test_legacy_script_runs_from_recovery_scripts(
+    def test_auto_script_finds_the_sets_on_the_meta_disc(
         self, meta_tree: Path, tmp_path: Path
     ) -> None:
-        """Run restore_legacy.sh (directory mode, an empty ISO dir) from
-        its new place: it must pick the tools and the Python reader from
-        the disc root, then stop at "No .iso files found"."""
-        _sandbox_path(tmp_path)
-        _stub(meta_tree / "tools" / "bin" / "python3")
-        key = tmp_path / "key"
-        key.write_text("pw\n")
-        isos = tmp_path / "isos"
-        isos.mkdir()
-        args = [
-            "--key", str(key), "--isos", str(isos), "--target", str(tmp_path / "out"),
+        """Run restore_auto.sh as the README says (RECOVERY = the disc's
+        recovery/ folder): it must find the backup sets in the disc root's
+        metadata/ and run restore.sh once per set, by id.  restore.sh is
+        replaced with a recording stub: this tests the discovery only."""
+        record = tmp_path / "calls.txt"
+        stub = meta_tree / "recovery" / "scripts" / "restore.sh"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'printf "%s|%s\\n" "$LCSAS_REPO" "$2" >> "$RECORD"\n'
+        )
+        for set_id in ("set-a", "set-b"):
+            (meta_tree / "metadata" / set_id / "keys").mkdir(parents=True)
+        (meta_tree / "metadata" / "no-keys").mkdir()
+        pw = tmp_path / "pw"
+        pw.write_text("pw\n")
+        out = tmp_path / "restored"
+        env = {**os.environ, "LCSAS_PWFILE": str(pw), "RECORD": str(record)}
+        result = subprocess.run(
+            ["sh", str(meta_tree / RESTORE_AUTO_SCRIPT_PATH),
+             str(meta_tree / "recovery"), str(out)],
+            capture_output=True, text=True, env=env, timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        assert sorted(record.read_text().splitlines()) == [
+            f"set-a|{out}/set-a", f"set-b|{out}/set-b",
         ]
-        script = meta_tree / RESTORE_LEGACY_SCRIPT_PATH
 
-        result = _run_script(script, args, tmp_path)
-        out = result.stdout + result.stderr
-        assert result.returncode == 1, out
-        assert (
-            f"Using: {meta_tree}/tools/bin/python3 {meta_tree}/standalone_restorer.py"
-            in out
-        ), out
-        assert "No .iso files found" in out, out
-
-        # With a bundled rustic present, the cascade picks it from tools/.
-        _stub(meta_tree / "tools" / "bin" / "rustic")
-        result = _run_script(script, args, tmp_path)
-        out = result.stdout + result.stderr
-        assert f"Using: {meta_tree}/tools/bin/rustic" in out, out
-        assert "No .iso files found" in out, out
-
-    def test_auto_script_runs_from_recovery_scripts(
+    def test_auto_script_with_no_set_fails(
         self, meta_tree: Path, tmp_path: Path
     ) -> None:
-        """Run restore-auto.sh from its new place with no disc in a fake
-        drive: it must find the helper in tools/, the Python reader and
-        the repository metadata at the disc root, then stop at "no disc
-        loaded"."""
-        _sandbox_path(tmp_path)
-        _stub(meta_tree / "tools" / "bin" / "python3")
-        (meta_tree / "metadata").mkdir()
-        key = tmp_path / "key"
-        key.write_text("pw\n")
-        result = _run_script(
-            meta_tree / RESTORE_AUTO_SCRIPT_PATH,
-            [
-                "--key", str(key), "--target", str(tmp_path / "out"),
-                "--repo", "family", "--drive", str(tmp_path / "no-drive"),
-            ],
-            tmp_path,
+        """No metadata/ on the disc (a build with no catalog): nothing to
+        restore is an error, not a silent success (#689)."""
+        pw = tmp_path / "pw"
+        pw.write_text("pw\n")
+        env = {**os.environ, "LCSAS_PWFILE": str(pw)}
+        result = subprocess.run(
+            ["sh", str(meta_tree / RESTORE_AUTO_SCRIPT_PATH),
+             str(meta_tree / "recovery"), str(tmp_path / "restored")],
+            capture_output=True, text=True, env=env, timeout=60,
         )
-        out = result.stdout + result.stderr
-        assert result.returncode == 1, out
-        assert "restore_single_drive.py not found" not in out, out
-        assert "Falling back to the Python reader" in out, out
-        assert "Seeding repository metadata from the meta disc" in out, out
-        assert "no disc loaded" in out, out
+        assert result.returncode == 1, result.stderr
+        assert "no backup set found" in result.stderr
 
-    def test_legacy_script_still_works_as_root_restore_sh(self, tmp_path: Path) -> None:
-        """A build without the recovery/ tree writes RESTORE_SCRIPT as the
-        root restore.sh; from there the disc root is its own folder."""
+    def test_build_without_recovery_tree_fails_loud(self, tmp_path: Path) -> None:
+        """#689 (A): a build with no recovery/ tree used to write the legacy
+        bash driver as the root restore.sh.  That driver is retired, so the
+        build now stops with a MetaBuildError naming the missing driver."""
         out = tmp_path / "meta"
-        _partial_meta_tree(out, tmp_path / "empty-cache", tmp_path / "no-recovery")
-        assert (out / "restore.sh").read_text() == RESTORE_SCRIPT
-        assert not (out / RESTORE_LEGACY_SCRIPT_PATH).exists()
-        assert (out / RESTORE_AUTO_SCRIPT_PATH).is_file()
+        builder = MetaVolumeBuilder(out, recovery_dir=tmp_path / "no-recovery")
+        with pytest.raises(MetaBuildError, match="restore driver"):
+            builder.build()
+        assert not (out / "restore.sh").exists()
 
-        _sandbox_path(tmp_path)
-        _stub(out / "tools" / "bin" / "python3")
-        key = tmp_path / "key"
-        key.write_text("pw\n")
-        isos = tmp_path / "isos"
-        isos.mkdir()
-        result = _run_script(
-            out / "restore.sh",
-            ["--key", str(key), "--isos", str(isos), "--target", str(tmp_path / "t")],
-            tmp_path,
-        )
-        text = result.stdout + result.stderr
-        assert f"Using: {out}/tools/bin/python3 {out}/standalone_restorer.py" in text, text
-        assert "No .iso files found" in text, text
-
-    def test_rebuild_removes_stale_root_copies(self, tmp_path: Path) -> None:
-        """Building into a tree from an older build leaves no root copies."""
+    def test_rebuild_removes_stale_retired_files(self, tmp_path: Path) -> None:
+        """Building into a tree from an older build leaves none of the
+        retired drivers behind (#491 root copies, #689 retirements)."""
         out = tmp_path / "meta"
-        out.mkdir()
-        for name in ("restore-auto.sh", "restore_legacy.sh"):
-            (out / name).write_text("#!/bin/sh\n")
+        for rel in _RETIRED_META_FILES:
+            (out / rel).parent.mkdir(parents=True, exist_ok=True)
+            (out / rel).write_text("#!/bin/sh\n")
         _partial_meta_tree(out, tmp_path / "empty-cache")
-        assert not (out / "restore-auto.sh").exists()
-        assert not (out / "restore_legacy.sh").exists()
+        left = [rel for rel in _RETIRED_META_FILES if (out / rel).exists()]
+        assert not left, f"stale retired files survived a rebuild: {left}"
+        assert (out / "restore.sh").is_file()
         assert (out / RESTORE_AUTO_SCRIPT_PATH).is_file()
-        assert (out / RESTORE_LEGACY_SCRIPT_PATH).is_file()
 
     def test_manifest_row_upsert(self, tmp_path: Path) -> None:
         """add_missing appends a row; without it a missing row is not added,
@@ -2691,16 +2524,16 @@ class TestBoundedMirrorProbe:
 
 
 class TestWriteRestoreScriptFallback:
-    def test_legacy_fallback_when_no_recovery_driver(self, tmp_path: Path):
-        # No recovery/scripts/restore.sh in the output -> the else branch
-        # writes the legacy bash heredoc as restore.sh (builder.py:2456-2457).
+    def test_no_recovery_driver_fails_loud(self, tmp_path: Path):
+        # No recovery/scripts/restore.sh in the output: there is no
+        # legacy fallback any more (#689); the builder raises and writes
+        # no restore.sh.
         out = tmp_path / "out"
         out.mkdir()
         b = MetaVolumeBuilder(out, project_root=tmp_path)
-        b._write_restore_script()
-        script = out / "restore.sh"
-        assert script.is_file()
-        assert os.access(script, os.X_OK)
+        with pytest.raises(MetaBuildError, match="restore driver"):
+            b._write_restore_script()
+        assert not (out / "restore.sh").exists()
 
     def test_build_sha_unknown_when_git_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -858,8 +858,8 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           stderr lines.  Default ON.
 
 Most heirs don't need any of these.  See the meta disc's
-README_RESTORE.md and TROUBLESHOOTING.md for the heir-friendly
-walkthrough.
+recovery/docs/RECOVER.txt for the heir-friendly walkthrough, and
+docs/TROUBLESHOOTING.md when something goes wrong.
 EOF
             exit 0 ;;
         --repo)
@@ -1087,7 +1087,7 @@ esac
 # ── Target detection (arch + OS) ──────────────────────────────────
 #
 # Picks one of the six targets bundled by the meta disc builder (see
-# docs/CROSS_PLATFORM_META_RFC.md §3 and recovery/UPSTREAM.sha256):
+# docs/history/CROSS_PLATFORM_META_RFC.md §3, recovery/UPSTREAM.sha256):
 #
 #   x86_64-unknown-linux-musl        Linux x86_64
 #   aarch64-unknown-linux-musl       Linux ARM64
@@ -1693,7 +1693,7 @@ fi
 #
 # A restic-format repository is a directory containing keys/ and
 # index/ subdirs.  The historical layout placed it directly at
-# ${RECOVERY}/repo (used by restore_legacy.sh).  Modern LCSAS
+# ${RECOVERY}/repo (the retired legacy bash driver's).  Modern LCSAS
 # archives instead carry each repository's metadata under
 # metadata/<repo_id>/ on every disc — the layout where the meta disc
 # and every data disc both ship the repository metadata for every

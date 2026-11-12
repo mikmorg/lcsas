@@ -81,8 +81,8 @@ all the discs plus the password to a computer professional."*
 **Current state:** If the owner used different passwords per
 repository, nothing on disc tells the heir which password goes with
 which repository.  The modern `restore.sh` prompts interactively for a
-single password per invocation; the legacy `restore_legacy.sh` accepts
-a single `--key` argument.  Neither path lets you specify
+single password per invocation; the legacy `restore_legacy.sh` (retired
+in #689) accepted a single `--key` argument.  Neither path lets you specify
 per-repository passwords in one run.
 
 **Fix:** Write `PASSWORD_INFO.txt` listing each repository, its human
@@ -260,8 +260,8 @@ hints about where the password is kept.
 
 **Current state:** Different repositories may use different password
 files.  The modern `restore.sh` prompts for one password per invocation
-(re-run once per repository); the legacy `restore_legacy.sh` accepts a
-single `--key` flag.  Neither maps passwords to repositories on disc.
+(re-run once per repository); the legacy `restore_legacy.sh` (retired in
+#689) accepted a single `--key` flag.  Neither maps passwords to repositories on disc.
 
 **Fix:** `PASSWORD_INFO.txt` (§1.5) and enhance the entry-point scripts to
 loop over repositories with per-repository passwords.

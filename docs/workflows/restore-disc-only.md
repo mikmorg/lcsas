@@ -506,9 +506,9 @@ other volumes' discs you must fetch to complete a snapshot.
   (pick list generated from the disc catalog).
 - `tests/recovery_hardening/test_tier1_volume_label.py`: tier-1 parses
   `volume_info.json` as `write_volume_info()` writes it and names the
-  mounted disc (#456).  The Python-side parser (`verify_disc` in
-  `src/lcsas/meta/restore_single_drive.py`) is still only checked for
-  the file's existence (`test_isos_are_self_describing`).
+  mounted disc (#456).  (The Python-side parser, `verify_disc` in
+  `restore_single_drive.py`, was retired with the legacy bash driver in
+  #689.)
 
 **Source refs:**
 `HolographicInjector.inject_catalog()` and `write_volume_info()` in

@@ -22,7 +22,7 @@ picked the right repo.
 
 What this catches:
   - Future "simplification" of the discovery logic that breaks back-compat
-    with /repo/ legacy layouts (still used by restore_legacy.sh's repos).
+    with /repo/ legacy layouts (the retired restore_legacy.sh's repos).
   - Forgetting to add a new search path when the production layout
     changes (e.g. /run/media/$USER/* on systemd-mount).
   - LCSAS_REPO env getting renamed without updating discovery.
@@ -193,8 +193,8 @@ def test_multi_tenant_invalid_lcsas_repo_errors(tmp_path: Path) -> None:
 
 
 def test_legacy_repo_dir_still_works(tmp_path: Path) -> None:
-    """${RECOVERY}/repo/{keys,index} is the legacy layout used by
-    restore_legacy.sh and the per-disc 'restic-style' assembly some
+    """${RECOVERY}/repo/{keys,index} is the legacy layout used by the
+    retired restore_legacy.sh and the per-disc 'restic-style' assembly some
     operators do by hand.  Discovery must keep finding it."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()

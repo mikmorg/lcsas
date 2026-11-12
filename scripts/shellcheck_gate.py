@@ -10,8 +10,7 @@ new) and when it has FEWER (the baseline is stale: lower it in the same
 change, so a fixed warning can't silently come back).
 
 Each file is checked in the dialect its shebang names: ``bash`` for a bash
-script (the meta disc's bash drivers under ``src/lcsas/meta/assets/``,
-#689), POSIX ``sh`` for everything else.
+script, POSIX ``sh`` for everything else.
 
 Usage: shellcheck_gate.py FILE...           (CI / ``make shellcheck``)
        shellcheck_gate.py --print FILE...   (print a fresh baseline)

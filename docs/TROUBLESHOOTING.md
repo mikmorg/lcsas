@@ -111,10 +111,10 @@ sudo mount /dev/sr0 /mnt
 ```
 
 Older recovery binaries said `(no --catalog supplied; cannot
-suggest a disc)` here.  The legacy `restore_legacy.sh` prints
-`INSERT DISC: <label>` instead (blank for the first disc); there,
-insert the disc it names, or your newest data disc when it names
-none.
+suggest a disc)` here.  Meta discs made before #689 also carried a
+legacy `restore_legacy.sh` that printed `INSERT DISC: <label>` instead
+(blank for the first disc); there, insert the disc it names, or your
+newest data disc when it names none.
 
 ---
 
@@ -219,11 +219,8 @@ to manually assemble a rustic-format repository by hand:
     --password-file ~/key.txt restore latest ~/restored/
 ```
 
-This is essentially what `restore_auto.sh RECOVERY_ROOT TARGET_ROOT`
-(with `LCSAS_PWFILE` set) does for you non-interactively when every
-pack is already laid out under `RECOVERY_ROOT`.  The end result is
-identical to a successful `restore.sh` run — just slower and more
-manual.
+The end result is identical to a successful `restore.sh` run — just
+slower and more manual.
 
 ---
 
