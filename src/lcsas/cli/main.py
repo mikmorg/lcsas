@@ -83,8 +83,20 @@ def _volume_ref(text: str) -> int | str:
     return int(text) if text.isdigit() else text
 
 
+def _usage(line: str) -> Callable[[argparse.Namespace], int]:
+    """Handler for a group given no subcommand: log *line*, exit 1."""
+    def handler(args: argparse.Namespace) -> int:
+        logger.error(line)
+        return 1
+    return handler
+
+
 def build_parser() -> argparse.ArgumentParser:
-    """Build the argument parser with all subcommands."""
+    """Build the argument parser with all subcommands.
+
+    Each (sub)parser names its handler with ``set_defaults(func=...)``;
+    :func:`dispatch` calls it.
+    """
     parser = _LcsasArgumentParser(
         prog="lcsas",
         description="Linux Cold Storage Archival Suite — "
@@ -115,21 +127,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- init ---
     init_p = subparsers.add_parser("init", help="Initialize the LCSAS catalog and config.")
+    init_p.set_defaults(func=cmd_init)
     init_p.add_argument("--db-path", type=Path, default=None,
                         help="Path for the SQLite catalog file. "
                              "Overrides --config's [paths].database when set.")
 
     # --- repo ---
     repo_p = subparsers.add_parser("repo", help="Manage backup repositories.")
+    repo_p.set_defaults(func=_usage("Usage: lcsas repo {add,list,remove,retire,activate}"))
     repo_sub = repo_p.add_subparsers(dest="repo_command")
 
     repo_add = repo_sub.add_parser("add", help="Register a new repository.")
+    repo_add.set_defaults(func=cmd_repo_add)
     repo_add.add_argument("name", help="Repository name (e.g., 'family').")
     repo_add.add_argument("mirror_path", type=Path, help="Path to the local mirror.")
 
-    repo_sub.add_parser("list", help="List registered repositories.")
+    repo_list = repo_sub.add_parser("list", help="List registered repositories.")
+    repo_list.set_defaults(func=cmd_repo_list)
 
     repo_rm = repo_sub.add_parser("remove", help="Remove a repository.")
+    repo_rm.set_defaults(func=cmd_repo_remove)
     repo_rm.add_argument("repo_id", metavar="REPO",
                          help="Repository name (or its catalog ID) to remove.")
     repo_rm.add_argument("--force", action="store_true",
@@ -144,6 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "(unlike `repo remove --force`). Reversible with "
                     "`lcsas repo activate`.",
     )
+    repo_retire.set_defaults(func=cmd_repo_retire)
     repo_retire.add_argument("repo_id", metavar="REPO",
                              help="Repository name (or its catalog ID) to retire.")
 
@@ -151,6 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
         "activate",
         help="Mark a retired repository active again.",
     )
+    repo_activate.set_defaults(func=cmd_repo_activate)
     repo_activate.add_argument(
         "repo_id", metavar="REPO",
         help="Repository name (or its catalog ID) to activate.")
@@ -160,6 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
         "scan",
         help="Scan mirrors for new packs and register them in the catalog.",
     )
+    scan_p.set_defaults(func=cmd_scan)
     scan_p.add_argument(
         "--repo", type=str, default=None, nargs="*",
         help="Specific repository names to scan (default: all).",
@@ -180,12 +200,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- pack ---
     pack_p = subparsers.add_parser("pack", help="Manage individual packs in the catalog.")
+    pack_p.set_defaults(func=_usage("Usage: lcsas pack {unprune}"))
     pack_sub = pack_p.add_subparsers(dest="pack_command")
 
     pack_unprune_p = pack_sub.add_parser(
         "unprune",
         help="Restore a wrongly-pruned pack to the active pool.",
     )
+    pack_unprune_p.set_defaults(func=cmd_pack_unprune)
     pack_unprune_p.add_argument(
         "sha256",
         help="Pack ID: the pack's SHA-256 (a unique prefix is accepted).",
@@ -193,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- status ---
     status_p = subparsers.add_parser("status", help="Show archive status summary.")
+    status_p.set_defaults(func=cmd_status)
     status_p.add_argument("--stale-copies", action="store_true", default=False,
                           help="List discs never verified or not "
                                "verified within the threshold (FMA-05).")
@@ -213,6 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- burn ---
     burn_p = subparsers.add_parser("burn", help="Burn staged ISOs to disc.")
+    burn_p.set_defaults(func=cmd_burn_session)
     burn_p.add_argument("--media", type=str, default=None,
                         help="Accepted but ignored: a burn session keeps the "
                              "media type it was staged with (set it with "
@@ -253,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
             "staged data, e.g. ~14 minutes for 25 GB at 30 MB/s."
         ),
     )
+    stage_p.set_defaults(func=cmd_stage)
     stage_p.add_argument("--media", type=str, default=None,
                          help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
     stage_p.add_argument("--for-location", type=str, default=None,
@@ -310,6 +335,7 @@ def build_parser() -> argparse.ArgumentParser:
             "import the emitted receipts back with 'catalog import-receipts'."
         ),
     )
+    burniso_p.set_defaults(func=cmd_burn_iso)
     burniso_p.add_argument("iso_path", type=Path, help="Path to .iso file.")
     burniso_p.add_argument("--device", type=str, default=None,
                            help="Optical device path (overrides config; "
@@ -340,10 +366,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- staging ---
     staging_p = subparsers.add_parser("staging", help="Manage the staging area.")
+    staging_p.set_defaults(func=_usage("Usage: lcsas staging {clean}"))
     staging_sub = staging_p.add_subparsers(dest="staging_command")
     staging_clean_p = staging_sub.add_parser(
         "clean", help="Remove orphaned directories from the staging area.",
     )
+    staging_clean_p.set_defaults(func=cmd_staging_clean)
     staging_clean_p.add_argument(
         "--force", action="store_true", default=False,
         help="Skip confirmation prompt.",
@@ -351,6 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- location ---
     loc_p = subparsers.add_parser("location", help="Manage the locations where discs are kept.")
+    loc_p.set_defaults(func=cmd_location)
     loc_sub = loc_p.add_subparsers(dest="location_command")
 
     loc_sub.add_parser("list", help="List all locations and their status.")
@@ -388,12 +417,14 @@ def build_parser() -> argparse.ArgumentParser:
         "copy",
         help="Record the fate of a disc (deprecate/destroy).",
     )
+    copy_p.set_defaults(func=_usage("Usage: lcsas copy {deprecate,destroy}"))
     copy_sub = copy_p.add_subparsers(dest="copy_command")
 
     copy_dep_p = copy_sub.add_parser(
         "deprecate",
         help="Record a disc as deprecated (e.g. damaged, or its volume deprecated).",
     )
+    copy_dep_p.set_defaults(func=cmd_copy)
     copy_dep_p.add_argument("volume_label",
                             help="Volume label (e.g. LCSAS_BD25_2026_0001).")
     copy_dep_p.add_argument("location",
@@ -403,6 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
         "destroy",
         help="Record a disc as destroyed, or with --lost as lost.",
     )
+    copy_des_p.set_defaults(func=cmd_copy)
     copy_des_p.add_argument("volume_label",
                             help="Volume label (e.g. LCSAS_BD25_2026_0001).")
     copy_des_p.add_argument("location",
@@ -418,6 +450,7 @@ def build_parser() -> argparse.ArgumentParser:
     volume_p = subparsers.add_parser(
         "volume", help="Per-volume catalog queries.",
     )
+    volume_p.set_defaults(func=_usage("Usage: lcsas volume {impact}"))
     volume_sub = volume_p.add_subparsers(dest="volume_command")
 
     vol_impact_p = volume_sub.add_parser(
@@ -425,6 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Blast radius: what becomes unrestorable if every disc of "
              "this volume fails? (FMA-08)",
     )
+    vol_impact_p.set_defaults(func=cmd_volume_impact)
     vol_impact_p.add_argument("volume_label",
                               help="Volume label (e.g. LCSAS_BD25_2026_0001).")
     vol_impact_p.add_argument(
@@ -436,9 +470,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- catalog ---
     cat_p = subparsers.add_parser("catalog", help="Catalog management.")
+    cat_p.set_defaults(func=_usage(
+        "Usage: lcsas catalog {import-receipts|validate|reconcile|rebuild}"
+    ))
     cat_sub = cat_p.add_subparsers(dest="catalog_command")
     cat_import_p = cat_sub.add_parser("import-receipts",
                                       help="Import burn receipts from remote burns.")
+    cat_import_p.set_defaults(func=cmd_catalog_import)
     cat_import_p.add_argument("receipt_files", nargs="+",
                               help="Receipt JSON files.")
     cat_import_p.add_argument(
@@ -463,6 +501,7 @@ def build_parser() -> argparse.ArgumentParser:
         "validate",
         help="Cross-check a mounted disc's data files against its disc catalog.",
     )
+    cat_validate_p.set_defaults(func=cmd_catalog_validate)
     cat_validate_p.add_argument(
         "disc",
         type=Path,
@@ -483,6 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
              "ghost volumes that were never burned, and durable volumes "
              "with no ACTIVE disc recorded.",
     )
+    cat_reconcile_p.set_defaults(func=cmd_catalog_reconcile)
     cat_reconcile_p.add_argument(
         "--fix", action="store_true", default=False,
         help="Delete ghost volumes (never-burned STAGING/BURNING volumes "
@@ -511,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
         "rebuild",
         help="Rebuild the master catalog by merging disc catalogs.",
     )
+    cat_rebuild_p.set_defaults(func=cmd_catalog_rebuild)
     cat_rebuild_p.add_argument(
         "disc_dirs",
         nargs="+",
@@ -526,9 +567,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- restore ---
     restore_p = subparsers.add_parser("restore", help="Plan or execute a restore.")
+    restore_p.set_defaults(func=_usage("Usage: lcsas restore {plan,exec,standalone}"))
     restore_sub = restore_p.add_subparsers(dest="restore_command")
 
     plan_p = restore_sub.add_parser("plan", help="Generate a restore pick list.")
+    plan_p.set_defaults(func=cmd_restore_plan)
     plan_p.add_argument("snapshot_id", help="Rustic snapshot ID to restore.")
     plan_p.add_argument("--repo", type=str, required=True,
                         help="Repository name containing the snapshot.")
@@ -543,6 +586,7 @@ def build_parser() -> argparse.ArgumentParser:
             "use: lcsas restore standalone"
         ),
     )
+    exec_p.set_defaults(func=cmd_restore_exec)
     exec_p.add_argument("snapshot_id", help="Rustic snapshot ID to restore.")
     exec_p.add_argument("target_path", type=Path, help="Target directory for restored files.")
     exec_p.add_argument("--repo", type=str, required=True,
@@ -574,6 +618,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Falls back to the tier-3 Python reader if rustic is not available."
         ),
     )
+    fromdisc_p.set_defaults(func=cmd_restore_from_disc)
     fromdisc_p.add_argument(
         "disc", type=Path,
         help="Path to a mounted or extracted LCSAS disc (must contain catalog.db).",
@@ -613,6 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- consolidate ---
     cons_p = subparsers.add_parser("consolidate", help="Merge volumes into a larger one.")
+    cons_p.set_defaults(func=cmd_consolidate)
     cons_p.add_argument("volume_ids", nargs="+", metavar="VOLUME",
                         type=_volume_ref,
                         help="Volume labels (or catalog volume IDs) to "
@@ -631,6 +677,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
+    verify_p.set_defaults(func=cmd_verify)
     verify_p.add_argument("volume_label", nargs="?", default=None,
                           help="Label of the volume to verify (omit with --all).")
     verify_p.add_argument("--iso", type=Path, default=None,
@@ -664,8 +711,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
+    session_p.set_defaults(func=_usage("Usage: lcsas session {list,abort}"))
     session_sub = session_p.add_subparsers(dest="session_command")
     sess_list_p = session_sub.add_parser("list", help="List all burn sessions.")
+    sess_list_p.set_defaults(func=cmd_session_list)
     sess_list_p.add_argument(
         "--status", type=str, default=None,
         help="Filter by status (STAGED, PARTIAL, COMPLETE, CLEANED). "
@@ -677,6 +726,7 @@ def build_parser() -> argparse.ArgumentParser:
              "their packs to the unarchived pool. Refused when a volume of "
              "it was burned but its disc is not recorded yet.",
     )
+    sess_abort_p.set_defaults(func=cmd_session_abort)
     sess_abort_p.add_argument(
         "ref", nargs="?", default="latest",
         help="Session ID or 'latest' (default).",
@@ -696,20 +746,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- config ---
     config_p = subparsers.add_parser("config", help="Configuration management.")
+    config_p.set_defaults(func=_usage("Usage: lcsas config {check}"))
     config_sub = config_p.add_subparsers(dest="config_command")
-    config_sub.add_parser("check", help="Validate TOML config file.")
+    config_check = config_sub.add_parser("check", help="Validate TOML config file.")
+    config_check.set_defaults(func=cmd_config_check)
 
     # --- meta ---
     meta_p = subparsers.add_parser(
         "meta",
         help="Build a self-contained meta disc (recovery tools + source).",
     )
+    meta_p.set_defaults(func=_usage("Usage: lcsas meta {build,verify}"))
     meta_sub = meta_p.add_subparsers(dest="meta_command")
 
     meta_build = meta_sub.add_parser(
         "build",
         help="Build a meta disc directory with all the recovery tools.",
     )
+    meta_build.set_defaults(func=cmd_meta_build)
     meta_build.add_argument(
         "--output", "-o", type=Path, required=True,
         help="Output directory for the meta disc.",
@@ -772,6 +826,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Exits 0 when the meta disc is intact, 1 on any issue."
         ),
     )
+    meta_verify.set_defaults(func=cmd_meta_verify)
     meta_verify.add_argument(
         "output", type=Path,
         help="The meta disc directory built by `lcsas meta build`.",
@@ -786,6 +841,7 @@ def build_parser() -> argparse.ArgumentParser:
         "recovery",
         help="Build / verify the C89 + POSIX-sh recovery toolchain.",
     )
+    recovery_p.set_defaults(func=cmd_recovery)
     recovery_sub = recovery_p.add_subparsers(dest="recovery_command")
 
     rb = recovery_sub.add_parser(
@@ -844,12 +900,14 @@ def build_parser() -> argparse.ArgumentParser:
         "key",
         help="Split a repository password into SLIP-0039 shares, or combine them.",
     )
+    key_p.set_defaults(func=_usage("Usage: lcsas key {split,unsplit,combine,verify,card}"))
     key_sub = key_p.add_subparsers(dest="key_command")
 
     key_split = key_sub.add_parser(
         "split",
         help="Split a repository password into K-of-N shares.",
     )
+    key_split.set_defaults(func=cmd_key_split)
     key_split.add_argument(
         "--repo", required=True,
         help="Repository name whose password to split.",
@@ -883,6 +941,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check that shares/a password actually unlock a repository "
              "(annual password drill).",
     )
+    key_verify.set_defaults(func=cmd_key_verify)
     key_verify.add_argument(
         "--repo", required=True,
         help="Repository name whose key files to test against.",
@@ -903,6 +962,7 @@ def build_parser() -> argparse.ArgumentParser:
         "combine",
         help="Reconstruct a repository password from K share mnemonics.",
     )
+    key_combine.set_defaults(func=cmd_key_combine)
     key_combine.add_argument(
         "--share-file", action="append", default=None, dest="share_files",
         type=Path,
@@ -926,6 +986,7 @@ def build_parser() -> argparse.ArgumentParser:
             "repository."
         ),
     )
+    key_unsplit.set_defaults(func=cmd_key_unsplit)
     key_unsplit.add_argument(
         "--repo", required=True,
         help="Repository whose recorded split to clear.",
@@ -940,6 +1001,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print a paper password card for the DEFAULT (unsplit) "
              "archive — for owners who do NOT split the password.",
     )
+    key_card.set_defaults(func=cmd_key_card)
     key_card.add_argument(
         "--repo", default=None,
         help="Repository name the card is for (uses its configured "
@@ -973,6 +1035,7 @@ def build_parser() -> argparse.ArgumentParser:
         "estate",
         help="Estate-planning artifacts (the whole-archive estate card).",
     )
+    estate_p.set_defaults(func=_usage("Usage: lcsas estate card"))
     estate_sub = estate_p.add_subparsers(dest="estate_command")
     estate_card = estate_sub.add_parser(
         "card",
@@ -980,6 +1043,7 @@ def build_parser() -> argparse.ArgumentParser:
              "repositories, disc inventory, whether the password is split, and the literal "
              "first command an heir runs.",
     )
+    estate_card.set_defaults(func=cmd_estate_card)
     estate_card.add_argument(
         "--output", "--out", dest="output", type=Path, default=None,
         help="Write the card here (default: stdout).",
@@ -7189,134 +7253,12 @@ def _report_missing_by_label(pick_list: Any, missing: list[str]) -> None:
 
 
 def dispatch(args: argparse.Namespace) -> int:
-    """Route parsed args to the appropriate command handler."""
-    if args.command == "init":
-        return cmd_init(args)
-    elif args.command == "repo":
-        if args.repo_command == "add":
-            return cmd_repo_add(args)
-        elif args.repo_command == "list":
-            return cmd_repo_list(args)
-        elif args.repo_command == "remove":
-            return cmd_repo_remove(args)
-        elif args.repo_command == "retire":
-            return cmd_repo_retire(args)
-        elif args.repo_command == "activate":
-            return cmd_repo_activate(args)
-        else:
-            logger.error("Usage: lcsas repo {add,list,remove,retire,activate}")
-            return 1
-    elif args.command == "scan":
-        return cmd_scan(args)
-    elif args.command == "pack":
-        if args.pack_command == "unprune":
-            return cmd_pack_unprune(args)
-        else:
-            logger.error("Usage: lcsas pack {unprune}")
-            return 1
-    elif args.command == "status":
-        return cmd_status(args)
-    elif args.command == "config":
-        if args.config_command == "check":
-            return cmd_config_check(args)
-        else:
-            logger.error("Usage: lcsas config {check}")
-            return 1
-    elif args.command == "stage":
-        return cmd_stage(args)
-    elif args.command == "burn":
-        return cmd_burn_session(args)
-    elif args.command == "burn-iso":
-        return cmd_burn_iso(args)
-    elif args.command == "staging":
-        if args.staging_command == "clean":
-            return cmd_staging_clean(args)
-        else:
-            logger.error("Usage: lcsas staging {clean}")
-            return 1
-    elif args.command == "location":
-        return cmd_location(args)
-    elif args.command == "copy":
-        if args.copy_command in ("deprecate", "destroy"):
-            return cmd_copy(args)
-        else:
-            logger.error("Usage: lcsas copy {deprecate,destroy}")
-            return 1
-    elif args.command == "volume":
-        if args.volume_command == "impact":
-            return cmd_volume_impact(args)
-        else:
-            logger.error("Usage: lcsas volume {impact}")
-            return 1
-    elif args.command == "catalog":
-        if args.catalog_command == "import-receipts":
-            return cmd_catalog_import(args)
-        elif args.catalog_command == "validate":
-            return cmd_catalog_validate(args)
-        elif args.catalog_command == "reconcile":
-            return cmd_catalog_reconcile(args)
-        elif args.catalog_command == "rebuild":
-            return cmd_catalog_rebuild(args)
-        else:
-            logger.error(
-                "Usage: lcsas catalog {import-receipts|validate|reconcile|rebuild}"
-            )
-            return 1
-    elif args.command == "session":
-        if args.session_command == "list":
-            return cmd_session_list(args)
-        elif args.session_command == "abort":
-            return cmd_session_abort(args)
-        else:
-            logger.error("Usage: lcsas session {list,abort}")
-            return 1
-    elif args.command == "restore":
-        if args.restore_command == "plan":
-            return cmd_restore_plan(args)
-        elif args.restore_command == "exec":
-            return cmd_restore_exec(args)
-        elif args.restore_command == "standalone":
-            return cmd_restore_from_disc(args)
-        else:
-            logger.error("Usage: lcsas restore {plan,exec,standalone}")
-            return 1
-    elif args.command == "meta":
-        if args.meta_command == "build":
-            return cmd_meta_build(args)
-        elif args.meta_command == "verify":
-            return cmd_meta_verify(args)
-        else:
-            logger.error("Usage: lcsas meta {build,verify}")
-            return 1
-    elif args.command == "recovery":
-        return cmd_recovery(args)
-    elif args.command == "verify":
-        return cmd_verify(args)
-    elif args.command == "consolidate":
-        return cmd_consolidate(args)
-    elif args.command == "key":
-        if args.key_command == "split":
-            return cmd_key_split(args)
-        elif args.key_command == "combine":
-            return cmd_key_combine(args)
-        elif args.key_command == "verify":
-            return cmd_key_verify(args)
-        elif args.key_command == "card":
-            return cmd_key_card(args)
-        elif args.key_command == "unsplit":
-            return cmd_key_unsplit(args)
-        else:
-            logger.error("Usage: lcsas key {split,unsplit,combine,verify,card}")
-            return 1
-    elif args.command == "estate":
-        if args.estate_command == "card":
-            return cmd_estate_card(args)
-        else:
-            logger.error("Usage: lcsas estate card")
-            return 1
-
-    logger.error(f"Command '{args.command}' not yet implemented.")
-    return 1
+    """Run the handler the parsed (sub)command set as ``args.func``."""
+    func: Callable[[argparse.Namespace], int] | None = getattr(args, "func", None)
+    if func is None:
+        logger.error(f"Command '{args.command}' not yet implemented.")
+        return 1
+    return func(args)
 
 
 def _write_private_file(path: Path, data: bytes) -> None:
