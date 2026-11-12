@@ -2051,6 +2051,8 @@ def _status_json(
     incomplete: list[str],
     incomplete_sessions: list[str],
     ghost_labels: list[str],
+    burned_unrecorded: list[str],
+    burn_unknown: list[str],
     partial_sessions: list[str],
     needs_reburn: list[tuple[str, str, bool]],
     single_disc_packs: int,
@@ -2063,6 +2065,12 @@ def _status_json(
     registered location (and per location a waiting volume was staged
     for): its disc count, the volumes waiting to be burned for it and the
     volumes that need a re-burn there.
+
+    ``ghosts`` lists only never-burned volumes whose ISO is gone (what
+    ``catalog reconcile --fix`` deletes).  ``burned_unrecorded`` (#751)
+    lists volumes that were burned but have no disc recorded, and
+    ``burn_unknown`` (#758) those a catalog rebuild left with no record
+    of whether they were burned; ``reconcile --fix`` deletes neither.
     """
     from lcsas.db.locations import list_locations
 
@@ -2118,6 +2126,8 @@ def _status_json(
         "waiting": [v.label for v in waiting],
         "incomplete": {"labels": incomplete, "sessions": incomplete_sessions},
         "ghosts": ghost_labels,
+        "burned_unrecorded": burned_unrecorded,
+        "burn_unknown": burn_unknown,
         "partial_sessions": partial_sessions,
         "needs_reburn": reburn,
         "single_disc_packs": single_disc_packs,
@@ -2155,6 +2165,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         staging_incomplete,
     )
     from lcsas.db.volume_copies import find_stale_copies
+    from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
     from lcsas.db.volumes import list_volumes
 
     db_path = _resolve_db_path(args)
@@ -2188,6 +2199,35 @@ def _cmd_status(args: argparse.Namespace) -> int:
         needs_reburn = _volumes_needing_reburn(conn)
         failed_labels = {label for label, _, _ in needs_reburn}
         unburned = get_ghost_volumes(conn, older_than_hours=0)
+        # #751: a volume with no disc record that was burned is not a
+        # ghost: BURNED/VERIFIED with no disc row at all (a catalog rebuilt
+        # from discs records the newest discs like this), or STAGING/
+        # BURNING with burn evidence (the check reconcile --fix uses).
+        burned_unrecorded: list[tuple[str, str]] = [
+            (str(r["label"]), f"{r['status']}, but no disc of it is recorded")
+            for r in conn.execute(
+                "SELECT v.label, v.status FROM volumes v "
+                "WHERE v.status IN ('BURNED', 'VERIFIED') AND NOT EXISTS "
+                "(SELECT 1 FROM volume_copies vc "
+                "WHERE vc.volume_id = v.volume_id) ORDER BY v.label"
+            )
+        ]
+        # #758: one a catalog rebuild left with no record of whether it
+        # was burned is not a ghost either: its disc may exist.
+        burn_unknown: list[str] = []
+        unread = []
+        staged_but_burned = False
+        for v in unburned:
+            why = burn_evidence(conn, v.volume_id)
+            if why is not None:
+                burned_unrecorded.append((v.label, f"{v.status}, but {why}"))
+                staged_but_burned = True
+            elif rebuild_burn_unknown(conn, v.volume_id):
+                burn_unknown.append(v.label)
+            else:
+                unread.append(v)
+        burned_unrecorded.sort()
+        unburned = unread
         # #665: a stage that did not finish (no ISO hash recorded) is
         # incomplete, whatever is in the staging area: never burn it.
         incomplete = [v.label for v in unburned
@@ -2224,6 +2264,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 incomplete=incomplete,
                 incomplete_sessions=incomplete_sessions,
                 ghost_labels=ghost_labels,
+                burned_unrecorded=[label for label, _ in burned_unrecorded],
+                burn_unknown=burn_unknown,
                 partial_sessions=[s.session_id for s in partial_sessions],
                 needs_reburn=needs_reburn,
                 single_disc_packs=len(single_disc_packs),
@@ -2280,7 +2322,31 @@ def _cmd_status(args: argparse.Namespace) -> int:
             "pool for the next 'lcsas stage'.",
             len(ghost_labels), ", ".join(ghost_labels),
         )
-    if summary["staged"] > 0 and not (with_iso or ghost_labels or incomplete):
+    if burned_unrecorded:
+        logger.warning(
+            "WARNING: %d volume(s) were burned, but no disc of them is "
+            "recorded: %s. For each disc you hold, put it in the drive and "
+            "run 'lcsas verify <label> --disc --location <where it is "
+            "kept>', or import its burn receipt with 'lcsas catalog "
+            "import-receipts'.",
+            len(burned_unrecorded),
+            "; ".join(f"{label} ({why})" for label, why in burned_unrecorded),
+        )
+    if burn_unknown:
+        logger.warning(
+            "WARNING: %d volume(s) come from a catalog rebuilt from discs, "
+            "and no disc it read shows whether they were burned: %s. For "
+            "each disc of them you hold, run 'lcsas verify <label> --disc "
+            "--location <where it is kept>', or import its burn receipt. If "
+            "you are sure one was never burned, 'lcsas session abort "
+            "--volume <label> --never-burned' deletes it and returns its "
+            "packs to the unarchived pool.",
+            len(burn_unknown), ", ".join(burn_unknown),
+        )
+    if summary["staged"] > 0 and not (
+        with_iso or ghost_labels or incomplete or burn_unknown
+        or staged_but_burned
+    ):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
             "burned. See 'lcsas catalog reconcile'.",
