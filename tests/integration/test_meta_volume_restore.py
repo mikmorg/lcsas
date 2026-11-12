@@ -203,8 +203,10 @@ class TestMetaVolumeRestore:
 
         # ── Build meta-volume ────────────────────────────────────
         meta_dir = tmp_path / "meta_volume"
+        # With the catalog, as a real meta disc is built: the disc then
+        # carries metadata/photos/ (keys, index, snapshots).
         meta_builder = MetaVolumeBuilder(
-            meta_dir, allow_no_dvdisaster_source=True
+            meta_dir, catalog_db_path=db_path, allow_no_dvdisaster_source=True
         )
         meta_builder.build()
 
@@ -271,7 +273,14 @@ class TestMetaVolumeRestore:
 
     def _run_restore_sh(self) -> subprocess.CompletedProcess:
         """Run the meta disc's restore.sh, the disc's one restore driver
-        (#689), against the data discs, with no questions.
+        (#689), against the data discs, with no questions."""
+        return self._run_on_discs(
+            [str(self.meta_dir / "restore.sh"), str(self.restore_target), "latest"],
+            LCSAS_REPO="photos",
+        )
+
+    def _run_on_discs(self, argv: list[str], **extra: str) -> subprocess.CompletedProcess:
+        """Run ``sh argv...`` against the data discs, with no questions.
 
         Each ISO is unpacked into its own folder, as if the discs were
         mounted side by side under LCSAS_MOUNT_DIRS.  restore.sh finds the
@@ -296,15 +305,14 @@ class TestMetaVolumeRestore:
             "HOME": str(self.tmp),
             "TMPDIR": str(self.tmp / "tmp"),
             "LCSAS_PWFILE": str(self.key_file),
-            "LCSAS_REPO": "photos",
             "LCSAS_MOUNT_DIRS": str(discs),
             "LCSAS_TOOLS_DIR": str(self.tmp / "tools"),
             "LCSAS_NEWEST_DISC_PROMPT": "0",
             "LCSAS_ANOTHER_SET": "0",
+            **extra,
         }
         return subprocess.run(
-            ["sh", str(self.meta_dir / "restore.sh"),
-             str(self.restore_target), "latest"],
+            ["sh", *argv],
             capture_output=True,
             text=True,
             env=env,
@@ -329,10 +337,25 @@ class TestMetaVolumeRestore:
         """Every file restored by restore.sh matches the original hash."""
         result = self._run_restore_sh()
         assert result.returncode == 0, result.stderr
+        self._assert_restored(self.restore_target)
 
+    def test_restore_auto_sh_restores_every_set(self):
+        """#689: recovery/scripts/restore_auto.sh, the disc's one automation
+        script, run as README_RESTORE says (RECOVERY = the disc's recovery/
+        folder), finds the set in the meta disc's metadata/ and restores it
+        into TARGET/<id> through restore.sh."""
+        result = self._run_on_discs([
+            str(self.meta_dir / "recovery" / "scripts" / "restore_auto.sh"),
+            str(self.meta_dir / "recovery"), str(self.restore_target),
+        ])
+        assert result.returncode == 0, result.stderr
+        assert "==> restoring photos" in result.stderr
+        self._assert_restored(self.restore_target / "photos")
+
+    def _assert_restored(self, target: Path) -> None:
         # Find all .bin files under the restore target
         found: dict[str, Path] = {}
-        for root, _dirs, files in os.walk(self.restore_target):
+        for root, _dirs, files in os.walk(target):
             for f in files:
                 if f.endswith(".bin"):
                     found[f] = Path(root) / f
