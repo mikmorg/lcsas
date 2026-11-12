@@ -87,8 +87,9 @@ packs will require, without touching any state.
    1. Validate every source volume exists; collect labels
       (`src/lcsas/consolidate/merger.py`).
    2. Pull active (non-pruned) packs from those volumes via
-      `get_packs_only_on_volumes` — a `DISTINCT` join across
-      `packs` ↔ `volume_packs` filtering `is_pruned = 0`
+      `get_packs_on_volumes` — a `DISTINCT` join across
+      `packs` ↔ `volume_packs` filtering `is_pruned = 0`.  The same
+      query with `pruned=True` lists the pruned packs left behind
       (`src/lcsas/consolidate/merger.py`,
       `src/lcsas/db/queries.py`).
    3. Sum `size_bytes`; call `estimate_volumes_needed` with target
@@ -119,7 +120,7 @@ packs will require, without touching any state.
   `src/lcsas/config/media.py`).  Bigger targets mean fewer
   output volumes; ECC overhead is media-specific.
 - **Multi-repository** — packs from several repositories can be in the
-  same plan; `get_packs_only_on_volumes` does not filter by `repo_id`
+  same plan; `get_packs_on_volumes` does not filter by `repo_id`
   (`src/lcsas/db/queries.py`).  Every repository's active packs
   flow through together.
 - **Optical-drive count** — irrelevant for the plan-only step
@@ -141,7 +142,7 @@ packs will require, without touching any state.
 - `cmd_consolidate` (plan path) in `src/lcsas/cli/main.py`
 - `src/lcsas/consolidate/merger.py` — `ConsolidationPlan`,
   `plan_consolidation`
-- `src/lcsas/db/queries.py` — `get_packs_only_on_volumes`
+- `src/lcsas/db/queries.py` — `get_packs_on_volumes`
 - `src/lcsas/binpack/algorithm.py` — `estimate_volumes_needed`
 
 ---
@@ -837,7 +838,7 @@ Python layer as `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`).
 
 Events are inserted by `add_event` (`src/lcsas/db/volume_events.py`)
 and `update_status` (`src/lcsas/db/volumes.py`).  Queries:
-`get_events_for_volume`, `get_latest_event`, `get_events_by_type`
+`get_events_for_volume`, `get_latest_event`, `get_event`
 (`src/lcsas/db/volume_events.py`).
 
 **Gaps:**

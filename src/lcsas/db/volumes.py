@@ -97,14 +97,6 @@ def get_volume_by_label(conn: sqlite3.Connection, label: str) -> Volume | None:
     return _row_to_volume(row) if row else None
 
 
-def get_volume_by_uuid(conn: sqlite3.Connection, uuid: str) -> Volume | None:
-    """Fetch a volume by its machine UUID."""
-    row = conn.execute(
-        "SELECT * FROM volumes WHERE uuid = ?", (uuid,)
-    ).fetchone()
-    return _row_to_volume(row) if row else None
-
-
 def update_status(
     conn: sqlite3.Connection,
     volume_id: int,

@@ -135,16 +135,3 @@ def get_latest_event(
     return _row_to_event(row) if row else None
 
 
-def get_events_by_type(
-    conn: sqlite3.Connection,
-    event_type: str,
-    limit: int = 100,
-) -> list[VolumeEvent]:
-    """Return recent events of a specific type across all volumes."""
-    rows = conn.execute(
-        """SELECT * FROM volume_events
-           WHERE event_type = ?
-           ORDER BY event_date DESC LIMIT ?""",
-        (event_type, limit),
-    ).fetchall()
-    return [_row_to_event(r) for r in rows]

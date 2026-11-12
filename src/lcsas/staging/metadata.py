@@ -27,6 +27,10 @@ from lcsas.staging.repo_marker import RepoMarker, write_repo_marker
 from lcsas.utils.fs import copy_file, copy_tree, ensure_dir
 from lcsas.utils.pack_layout import METADATA_SUBDIRS
 
+# restore.standalone_builder is a stdlib-only leaf that generates the tier-3 reader
+# copied onto every disc; staging depends on nothing else in restore/
+# (tests/unit/test_import_boundaries.py).
+
 _logger = logging.getLogger(__name__)
 
 # Repository subdirectories that make up the repository metadata
@@ -106,7 +110,7 @@ def _split_repo_list(view: SplitView, indent: str) -> list[str]:
     ]
 
 
-def _share_recovery_lines(
+def share_recovery_lines(
     config: LCSASConfig,
     escrow_override: tuple[int, int] | None = None,
     recorded: Mapping[str, tuple[int, int]] | None = None,
@@ -269,8 +273,8 @@ def render_volume_info_txt(
     """
     from lcsas import __version__
 
-    # Only stage() knows the volume's place in its burn session; prepare()
-    # stages one volume with no session, so the line is left out.
+    # stage() passes the volume's place in its burn session; without it
+    # (a direct call) the line is left out.
     place_line = ""
     if burn_session_position is not None:
         n, m = burn_session_position
@@ -1045,7 +1049,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         lines.append("")
 
         if view is not None:
-            lines.extend(_share_recovery_lines(config, escrow_override, recorded))
+            lines.extend(share_recovery_lines(config, escrow_override, recorded))
 
         path = self._root / "PASSWORD_INFO.txt"
         with open(path, "w", encoding="utf-8") as f:
@@ -1068,7 +1072,8 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             "===========================",
             "",
             f"Media type:      {config.default_media_type.name}",
-            f"ECC redundancy:  {config.default_ecc_redundancy_pct}%",
+            # Not default_ecc_redundancy_pct: that key is ignored (#699).
+            "ECC:             dvdisaster RS03, filling the disc",
             f"Label prefix:    {config.label_prefix}",
             "",
         ]

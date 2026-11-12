@@ -1,8 +1,8 @@
 """Burn orchestrator — the central pipeline for archiving packs to media.
 
-Supports two modes:
-  1. Legacy single-volume: prepare() → execute() (one volume at a time)
-  2. Burn session: stage() → burn_session() (multi-volume, multi-copy)
+A burn session: stage() masters every volume's ISO, then burn_session()
+burns them (multi-volume, multi-copy).  The single-volume
+prepare()/execute()/abort() path was removed in #699.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from lcsas.db.key_escrow import (
 )
 from lcsas.db.label_mark import label_seq, next_label_seq, raise_label_high_water
 from lcsas.db.locations import ensure_location
-from lcsas.db.models import Pack, SessionVolume, Volume
+from lcsas.db.models import Pack, SessionVolume
 from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
 from lcsas.db.repos import list_repos
 from lcsas.db.sessions import (
@@ -232,244 +232,6 @@ class BurnOrchestrator:
         # MIN_EFFECTIVE_REDUNDANCY_PCT (recorded as a volume event).
         self._allow_low_redundancy = allow_low_redundancy
 
-    def prepare(
-        self,
-        media_type: MediaType | None = None,
-        repo_ids: list[str] | None = None,
-    ) -> BurnManifest:
-        """Identify unarchived packs and prepare a staging directory.
-
-        Steps:
-          1. Query unarchived packs (all repositories or specific ones).
-          2. Bin-pack them to fit the target media.
-          3. Build staging directory with hardlinked packs.
-          4. Inject repository metadata.
-          5. Register volume in the catalog with STAGING status.
-
-        Returns:
-            BurnManifest describing the prepared burn.
-        """
-        mt = media_type or self._config.default_media_type
-
-        # 1. Gather unarchived packs
-        all_unarchived: list[Pack] = []
-        if repo_ids:
-            for rid in repo_ids:
-                all_unarchived.extend(get_unarchived_packs(self._conn, rid))
-        else:
-            all_unarchived = get_unarchived_packs(self._conn)
-
-        if not all_unarchived:
-            raise ValueError("No unarchived packs to burn.")
-
-        # 2. Bin-pack
-        items = [(p.sha256, p.size_bytes) for p in all_unarchived]
-        selected_items, remaining_items = first_fit_decreasing(
-            items,
-            capacity=mt.usable_bytes,
-            reserved=self._config.metadata_reserve_bytes,
-        )
-
-        # Detect packs that can never fit on any single volume of this media type.
-        usable = mt.usable_bytes - self._config.metadata_reserve_bytes
-        oversized = [
-            p for p in all_unarchived
-            if p.size_bytes > usable and any(sha == p.sha256 for sha, _ in remaining_items)
-        ]
-        if oversized:
-            details = ", ".join(
-                f"{p.sha256[:12]} ({p.size_bytes:,} bytes)" for p in oversized
-            )
-            raise ValueError(
-                f"{len(oversized)} pack(s) exceed {mt.name} usable capacity "
-                f"({usable:,} bytes) and can never be archived on this media type: "
-                f"{details}. Consider using a larger media type (e.g. BDXL100)."
-            )
-
-        if not selected_items:
-            raise ValueError(
-                f"No packs fit in {mt.name} "
-                f"(usable={mt.usable_bytes}, reserved={self._config.metadata_reserve_bytes})"
-            )
-
-        selected_hashes = {sha for sha, _size in selected_items}
-        selected_packs = [p for p in all_unarchived if p.sha256 in selected_hashes]
-        total_bytes = sum(s for _, s in selected_items)
-
-        # FMT-03: prove participating repositories decode with the pinned
-        # recovery readers before staging anything to disk or catalog.
-        self._format_preflight(
-            sorted({p.repo_id for p in selected_packs})
-        )
-
-        # 3. Generate volume identity
-        seq = next_label_seq(self._conn, self._config.label_prefix)  # #676
-        vol_label = generate_volume_label(
-            self._config.label_prefix, mt.label_name, seq
-        )
-        vol_uuid = generate_uuid()
-
-        # 4-7. Stage, register, inject metadata
-        staging_root = self._config.staging_path / vol_label
-        manifest = self._stage_single_volume(
-            selected_packs=selected_packs,
-            total_bytes=total_bytes,
-            media_type=mt,
-            vol_label=vol_label,
-            vol_uuid=vol_uuid,
-            staging_root=staging_root,
-        )
-
-        return manifest
-
-    def execute(
-        self,
-        manifest: BurnManifest,
-        iso_output: Path | None = None,
-        skip_burn: bool = False,
-    ) -> Volume:
-        """Execute the burn: create ISO, add ECC, burn to disc.
-
-        ECC is always applied to production media (any ``MediaType`` with
-        ``ecc_overhead_pct > 0``). Test media (``TEST_TINY``, 0% overhead) is
-        implicitly skipped because RS03 has a minimum image size that the
-        1 MB test ISO cannot meet — see ``MediaType.ecc_overhead_pct`` in
-        ``src/lcsas/config/media.py``.
-
-        Args:
-            manifest: A BurnManifest from prepare().
-            iso_output: Override path for the ISO file.
-            skip_burn: If True, create ISO but don't burn to physical media.
-
-        Returns:
-            The finalized Volume object.
-        """
-        apply_ecc = manifest.media_type.ecc_overhead_pct > 0
-
-        # Preflight: verify required binaries exist and meet minimum versions.
-        from lcsas.utils.subprocess import SubprocessRunnerBase, check_binary_version
-        if isinstance(self._xorriso, SubprocessRunnerBase):
-            # xorriso 1.4.0+ required for reliable ISO-9660 level 3 support.
-            check_binary_version(self._xorriso._binary, min_version=(1, 4, 0))
-        if apply_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
-            # dvdisaster 0.79+ required for RS03 augmentation mode.
-            check_binary_version(self._dvdisaster._binary, min_version=(0, 79, 0))
-
-        # Update status
-        update_status(self._conn, manifest.volume_id, "BURNING")
-
-        iso_path = iso_output or (self._config.staging_path / f"{manifest.volume_label}.iso")
-        ensure_dir(iso_path.parent)
-
-        # Pre-flight: verify the staging directory will fit in the media.
-        from lcsas.utils.fs import dir_size_bytes
-        estimated_bytes = dir_size_bytes(manifest.staging_path)
-        media_capacity = manifest.media_type.capacity_bytes
-        if estimated_bytes > media_capacity:
-            raise ValueError(
-                f"Staging directory for {manifest.volume_label} is too large: "
-                f"{estimated_bytes:,} bytes > {media_capacity:,} bytes capacity "
-                f"({manifest.media_type.name}). Reduce pack count or use larger media."
-            )
-
-        try:
-            # Create ISO
-            self._xorriso.create_iso(
-                manifest.staging_path,
-                iso_path,
-                manifest.volume_label,
-                expected_bytes=estimated_bytes,
-            )
-            manifest.iso_path = iso_path
-
-            # Add ECC
-            if apply_ecc:
-                self._dvdisaster.augment_iso(
-                    iso_path,
-                    self._config.default_ecc_redundancy_pct,
-                )
-
-            # Post-ECC size validation: the augmented ISO must fit on the media.
-            if iso_path.exists():
-                iso_size = iso_path.stat().st_size
-                if iso_size > manifest.media_type.capacity_bytes:
-                    raise ValueError(
-                        f"ISO {iso_path.name} is {iso_size:,} bytes after ECC, "
-                        f"exceeding {manifest.media_type.name} capacity of "
-                        f"{manifest.media_type.capacity_bytes:,} bytes. "
-                        "Increase metadata_reserve_bytes or use larger media."
-                    )
-
-            # Burn to disc
-            if not skip_burn:
-                device = self._config.optical_device
-                self._xorriso.burn_iso(iso_path, device)
-                # Post-burn verification [FMA-03]: readability smoke
-                # test, then disc identity (PVD Volume ID vs label),
-                # then exact-length device read-back hashed against the
-                # ISO just burned.  A readable disc that is not THIS
-                # image must never reach VERIFIED.
-                if not self._xorriso.verify_disc(device):
-                    raise ValueError(
-                        "Post-burn verification failed: "
-                        "-check_media read-back failed"
-                    )
-                disc_id = self._xorriso.read_disc_volume_id(device)
-                if disc_id != manifest.volume_label:
-                    raise ValueError(
-                        f"Disc in {device} identifies as '{disc_id}' — "
-                        f"expected '{manifest.volume_label}'. Wrong disc?"
-                    )
-                expected_hash = sha256_file(iso_path)
-                try:
-                    device_hash = self._device_reader(
-                        device, iso_path.stat().st_size,
-                    )
-                except OSError as exc:
-                    raise ValueError(
-                        f"Post-burn verification failed: "
-                        f"device read-back failed: {exc}"
-                    ) from exc
-                if device_hash != expected_hash:
-                    raise ValueError(
-                        f"Post-burn verification failed: device hash "
-                        f"mismatch (expected {expected_hash[:8]}.., "
-                        f"got {device_hash[:8]}..)"
-                    )
-
-            # Finalize (atomic: status + close)
-            update_status(self._conn, manifest.volume_id, "VERIFIED", commit=False)
-            mark_closed(self._conn, manifest.volume_id, commit=False)
-            self._conn.commit()
-
-        except Exception as original_exc:
-            try:
-                self._conn.rollback()
-                update_status(self._conn, manifest.volume_id, "STAGING")
-            except Exception as cleanup_exc:
-                _logger.error(
-                    "Error during exception cleanup: %s",
-                    cleanup_exc,
-                    exc_info=True,
-                )
-            raise original_exc
-
-        return get_volume_by_id(self._conn, manifest.volume_id)
-
-    def abort(self, manifest: BurnManifest) -> None:
-        """Clean up a failed or cancelled burn operation.
-
-        Removes staging directory and reverts catalog state.
-        """
-        # Remove volume_packs links and the volume itself
-        from lcsas.db.volumes import delete_volume
-        delete_volume(self._conn, manifest.volume_id)
-
-        # Clean up the staging directory
-        safe_remove_tree(manifest.staging_path)
-        if manifest.iso_path and manifest.iso_path.exists():
-            manifest.iso_path.unlink()
-
     def _stage_single_volume(
         self,
         selected_packs: list[Pack],
@@ -478,19 +240,18 @@ class BurnOrchestrator:
         vol_label: str,
         vol_uuid: str,
         staging_root: Path,
-        iso_output: Path | None = None,
-        session_id: str | None = None,
-        burn_session_position: tuple[int, int] | None = None,
+        iso_output: Path,
+        session_id: str,
+        burn_session_position: tuple[int, int],
         location: str | None = None,
     ) -> BurnManifest:
-        """Build staging dir, register volume, inject metadata, optionally create ISO.
+        """Build staging dir, register volume, inject metadata, create the ISO.
 
-        This is the shared core of :meth:`prepare` (iso_output=None) and
-        :meth:`stage` (iso_output set).  Returns a :class:`BurnManifest`
+        One volume of :meth:`stage`.  Returns a :class:`BurnManifest`
         describing the result.
 
-        ECC is applied automatically whenever ``iso_output`` is set and the
-        media type carries non-zero ECC overhead (i.e. all production media).
+        ECC is applied automatically whenever the media type carries
+        non-zero ECC overhead (i.e. all production media).
         Test media (``TEST_TINY``, 0% overhead) is implicitly skipped — see
         ``MediaType.ecc_overhead_pct`` in ``src/lcsas/config/media.py``.
 
@@ -501,14 +262,14 @@ class BurnOrchestrator:
             vol_label: Generated volume label.
             vol_uuid: Generated volume UUID.
             staging_root: Directory to stage files into.
-            iso_output: If set, create an ISO at this path (+ ECC for
-                production media).
-            session_id: If set, link the volume into session_volumes in
-                the SAME transaction that creates it, so no crash can
-                leave a volume row invisible to ``burn_session``.
-            burn_session_position: ``(N, M)`` when this is volume N of the
-                M volumes ``stage`` builds in one burn session; printed in
-                the disc's VOLUME_INFO.txt.  ``None`` from ``prepare``.
+            iso_output: Create the ISO at this path (+ ECC for production
+                media).
+            session_id: Link the volume into session_volumes in the SAME
+                transaction that creates it, so no crash can leave a
+                volume row invisible to ``burn_session``.
+            burn_session_position: ``(N, M)``: this is volume N of the M
+                volumes ``stage`` builds in one burn session; printed in
+                the disc's VOLUME_INFO.txt.
 
         Returns:
             BurnManifest describing the staged volume.
@@ -603,18 +364,17 @@ class BurnOrchestrator:
                 detail=f"KEY-08 split drift override: {drift_msg}",
                 commit=False,
             )
-        if session_id is not None and iso_output is not None:
-            # Same transaction as the volume row: a volume can never exist
-            # outside session_volumes (the ISO hash is filled in later via
-            # update_session_volume_iso once the ISO has been mastered).
-            add_session_volume(
-                self._conn,
-                session_id=session_id,
-                volume_id=volume.volume_id,
-                iso_path=str(iso_output),
-                iso_sha256="",
-                commit=False,
-            )
+        # Same transaction as the volume row: a volume can never exist
+        # outside session_volumes (the ISO hash is filled in later via
+        # update_session_volume_iso once the ISO has been mastered).
+        add_session_volume(
+            self._conn,
+            session_id=session_id,
+            volume_id=volume.volume_id,
+            iso_path=str(iso_output),
+            iso_sha256="",
+            commit=False,
+        )
         self._conn.commit()
 
         # Steps 4-7 run AFTER the volume + volume_packs commit.  Any failure
@@ -664,101 +424,94 @@ class BurnOrchestrator:
             injector.write_config_summary(self._config)
             injector.write_disc_care(self._config)
 
-            # 6. Optionally create ISO + ECC
-            iso_path: Path | None = None
-            iso_sha256 = ""
-            iso_size_bytes: int | None = None
-            if iso_output is not None:
-                # Pre-flight: verify staging dir fits in the target media.
-                from lcsas.utils.fs import dir_size_bytes
-                estimated_bytes = dir_size_bytes(staging_root)
-                # #674: the content must leave the medium's ECC share free.
-                # Packs are planned against usable_bytes minus the metadata
-                # reserve, so this trips when the disc metadata outgrew
-                # metadata_reserve_mb.  Checked before mastering.
-                if (estimated_bytes > media_type.usable_bytes
-                        and not self._allow_low_redundancy):
-                    raise LowRedundancyError(
-                        f"Staging directory for {vol_label} is "
-                        f"{estimated_bytes:,} bytes, more than the "
-                        f"{media_type.usable_bytes:,} usable bytes of "
-                        f"{media_type.name} (its capacity less the "
-                        f"{media_type.ecc_overhead_pct}% kept for error "
-                        f"correction). The disc metadata has probably "
-                        f"outgrown metadata_reserve_mb.",
-                        recovery_hint=(
-                            "Raise metadata_reserve_mb in lcsas.toml and "
-                            "stage again, or pass --allow-low-redundancy "
-                            "to stage it anyway (NOT recommended)."
-                        ),
-                    )
-                if estimated_bytes > media_type.capacity_bytes:
-                    raise ValueError(
-                        f"Staging directory for {vol_label} is too large: "
-                        f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
-                        f"capacity ({media_type.name}). Reduce pack count or use larger media."
-                    )
-                # #665: master and augment under a working name.  The ISO
-                # gets its final name <label>.iso only once ECC and the
-                # size check have passed and its hash is recorded, so a
-                # stage killed part-way (SIGTERM, power loss) never leaves
-                # a finished-looking ISO without RS03 data.
-                work_iso = unfinished_iso_path(iso_output)
-                self._xorriso.create_iso(
-                    staging_root, work_iso, vol_label,
-                    expected_bytes=estimated_bytes,
+            # 6. Create ISO + ECC
+            # Pre-flight: verify staging dir fits in the target media.
+            from lcsas.utils.fs import dir_size_bytes
+            estimated_bytes = dir_size_bytes(staging_root)
+            # #674: the content must leave the medium's ECC share free.
+            # Packs are planned against usable_bytes minus the metadata
+            # reserve, so this trips when the disc metadata outgrew
+            # metadata_reserve_mb.  Checked before mastering.
+            if (estimated_bytes > media_type.usable_bytes
+                    and not self._allow_low_redundancy):
+                raise LowRedundancyError(
+                    f"Staging directory for {vol_label} is "
+                    f"{estimated_bytes:,} bytes, more than the "
+                    f"{media_type.usable_bytes:,} usable bytes of "
+                    f"{media_type.name} (its capacity less the "
+                    f"{media_type.ecc_overhead_pct}% kept for error "
+                    f"correction). The disc metadata has probably "
+                    f"outgrown metadata_reserve_mb.",
+                    recovery_hint=(
+                        "Raise metadata_reserve_mb in lcsas.toml and "
+                        "stage again, or pass --allow-low-redundancy "
+                        "to stage it anyway (NOT recommended)."
+                    ),
+                )
+            if estimated_bytes > media_type.capacity_bytes:
+                raise ValueError(
+                    f"Staging directory for {vol_label} is too large: "
+                    f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
+                    f"capacity ({media_type.name}). Reduce pack count or use larger media."
+                )
+            # #665: master and augment under a working name.  The ISO
+            # gets its final name <label>.iso only once ECC and the
+            # size check have passed and its hash is recorded, so a
+            # stage killed part-way (SIGTERM, power loss) never leaves
+            # a finished-looking ISO without RS03 data.
+            work_iso = unfinished_iso_path(iso_output)
+            self._xorriso.create_iso(
+                staging_root, work_iso, vol_label,
+                expected_bytes=estimated_bytes,
+            )
+
+            if media_type.ecc_overhead_pct > 0:
+                self._check_redundancy(
+                    work_iso, vol_label, volume.volume_id,
+                )
+                self._dvdisaster.augment_iso(
+                    work_iso, self._config.default_ecc_redundancy_pct,
                 )
 
-                if media_type.ecc_overhead_pct > 0:
-                    self._check_redundancy(
-                        work_iso, vol_label, volume.volume_id,
-                    )
-                    self._dvdisaster.augment_iso(
-                        work_iso, self._config.default_ecc_redundancy_pct,
-                    )
+            # 7. Validate ISO size against media capacity  [O4]
+            if not work_iso.exists():
+                raise FileNotFoundError(
+                    f"ISO not created by xorriso: {work_iso}. "
+                    f"Check xorriso output for errors."
+                )
+            iso_size = work_iso.stat().st_size
+            if iso_size > media_type.capacity_bytes:
+                raise ValueError(
+                    f"ISO {iso_output.name} is {iso_size:,} bytes, exceeds "
+                    f"{media_type.name} capacity of "
+                    f"{media_type.capacity_bytes:,} bytes"
+                )
 
-                # 7. Validate ISO size against media capacity  [O4]
-                if not work_iso.exists():
-                    raise FileNotFoundError(
-                        f"ISO not created by xorriso: {work_iso}. "
-                        f"Check xorriso output for errors."
-                    )
-                iso_size = work_iso.stat().st_size
-                if iso_size > media_type.capacity_bytes:
-                    raise ValueError(
-                        f"ISO {iso_output.name} is {iso_size:,} bytes, exceeds "
-                        f"{media_type.name} capacity of "
-                        f"{media_type.capacity_bytes:,} bytes"
-                    )
-
-                # 8. Record the hash and length, THEN give the ISO its
-                # final name: a <label>.iso on disk always has its hash
-                # on record (an empty hash means staging never finished).
-                # The length is what device read-back verification hashes
-                # against once the ISO itself is cleaned up (BURN-04).
-                iso_sha256 = sha256_file(work_iso)
-                iso_size_bytes = iso_size
-                if session_id is not None:
-                    update_session_volume_iso(
-                        self._conn,
-                        session_id=session_id,
-                        volume_id=volume.volume_id,
-                        iso_path=str(iso_output),
-                        iso_sha256=iso_sha256,
-                        iso_size_bytes=iso_size_bytes,
-                    )
-                os.replace(work_iso, iso_output)
-                iso_path = iso_output
+            # 8. Record the hash and length, THEN give the ISO its
+            # final name: a <label>.iso on disk always has its hash
+            # on record (an empty hash means staging never finished).
+            # The length is what device read-back verification hashes
+            # against once the ISO itself is cleaned up (BURN-04).
+            iso_sha256 = sha256_file(work_iso)
+            iso_size_bytes = iso_size
+            update_session_volume_iso(
+                self._conn,
+                session_id=session_id,
+                volume_id=volume.volume_id,
+                iso_path=str(iso_output),
+                iso_sha256=iso_sha256,
+                iso_size_bytes=iso_size_bytes,
+            )
+            os.replace(work_iso, iso_output)
         except BaseException:
             self._conn.rollback()  # drop any uncommitted partial state
             # Removes volume_packs links and the session_volumes row too,
             # so the packs reappear in get_unarchived_packs().
             delete_volume(self._conn, volume.volume_id)
-            if iso_output is not None:
-                # The unfinished ISO is never burnable; free its space.
-                import contextlib
-                with contextlib.suppress(OSError):
-                    unfinished_iso_path(iso_output).unlink(missing_ok=True)
+            # The unfinished ISO is never burnable; free its space.
+            import contextlib
+            with contextlib.suppress(OSError):
+                unfinished_iso_path(iso_output).unlink(missing_ok=True)
             raise
 
         return BurnManifest(
@@ -769,7 +522,7 @@ class BurnOrchestrator:
             selected_packs=selected_packs,
             total_data_bytes=total_bytes,
             staging_path=staging_root,
-            iso_path=iso_path,
+            iso_path=iso_output,
             iso_sha256=iso_sha256,
             iso_size_bytes=iso_size_bytes,
         )
@@ -1373,7 +1126,7 @@ class BurnOrchestrator:
                         update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
                         mark_closed(self._conn, sv.volume_id, commit=False)
                     else:
-                        # Back to STAGING, as execute() does (#483).  A disc
+                        # Back to STAGING (#483).  A disc
                         # that failed verification is not recorded (BURN-05), and
                         # BURNED would count its packs as archived (FMA-01's
                         # DURABLE_VOLUME_STATUSES) with no verified disc behind
@@ -1646,11 +1399,12 @@ class BurnOrchestrator:
         expected_hash = sv.iso_sha256
         if not expected_hash:
             if iso_path.exists():
-                # A crash between the volume commit and
-                # update_session_volume_iso (#370) leaves a MODERN row with
-                # an empty hash even though the staged ISO is still on disk.
-                # Re-hash it now for a full read-back comparison instead of
-                # silently downgrading to readability-only.
+                # Only a re-burn reaches this: _burn_preflight refuses a
+                # never-burned volume with no hash (#665), so the #370
+                # crash case never burns.  A VERIFIED volume from a
+                # pre-Phase-13 session has no hash but may still have its
+                # ISO: re-hash it for a full read-back comparison instead
+                # of downgrading to readability-only (#699 kept this).
                 expected_hash = sha256_file(iso_path)
             else:
                 # Genuine pre-Phase-13 row (no hash ever recorded) AND the

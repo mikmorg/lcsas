@@ -369,7 +369,7 @@ class TestDiscOnlyRestore:
         work_repo: Path,
     ) -> list[Path]:
         """Burn all unarchived packs to ISOs.  Returns list of ISO paths."""
-        from lcsas.db.queries import get_unarchived_packs
+        from tests.e2e.fixture_lib import burn_to_isos
 
         mt = MediaType.TEST_TINY  # 2 MB — forces multi-volume
         repo_configs = {
@@ -399,20 +399,7 @@ class TestDiscOnlyRestore:
         dvdisaster = _NoOpDVDisaster()
         orchestrator = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
-        iso_files: list[Path] = []
-        while get_unarchived_packs(conn):
-            try:
-                manifest = orchestrator.prepare(media_type=mt)
-                iso_path = self.iso_out / f"{manifest.volume_label}.iso"
-                orchestrator.execute(
-                    manifest,
-                    iso_output=iso_path,
-                    skip_burn=True,
-                )
-                iso_files.append(iso_path)
-            except ValueError:
-                break
-        return iso_files
+        return burn_to_isos(orchestrator, self.iso_out, media_type=mt)
 
     # -----------------------------------------------------------------
     # Extraction helper

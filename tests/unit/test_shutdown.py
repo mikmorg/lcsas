@@ -46,20 +46,6 @@ class TestRegisterAndRunCleanups:
         mgr.run_cleanups()  # Should not raise
 
 
-class TestShuttingDownFlag:
-    def test_initially_false(self):
-        mgr = ShutdownManager()
-        assert mgr.shutting_down is False
-
-    def test_set_by_handler(self):
-        mgr = ShutdownManager()
-        with patch.object(mgr, "run_cleanups"), patch.object(mgr, "uninstall"), patch(
-            "signal.raise_signal"
-        ):
-            mgr._handler(signal.SIGTERM, None)
-        assert mgr.shutting_down is True
-
-
 class TestInstallUninstall:
     def test_install_replaces_sigterm_and_sigint(self):
         mgr = ShutdownManager()

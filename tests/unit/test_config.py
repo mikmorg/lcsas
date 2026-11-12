@@ -10,7 +10,6 @@ import pytest
 from lcsas.config.media import MediaType
 from lcsas.config.settings import (
     LCSASConfig,
-    default_config,
     load_config,
     validate_config,
 )
@@ -51,18 +50,12 @@ class TestMediaType:
         assert MediaType.TEST_TINY.label_name == "TEST_TINY"
 
 
-class TestDefaultConfig:
-    def test_creates_config(self, tmp_path):
-        cfg = default_config(
-            tmp_path / "mirror", tmp_path / "staging",
-            tmp_path / "db.db", MediaType.TEST_TINY,
-        )
-        assert isinstance(cfg, LCSASConfig)
-        assert cfg.default_media_type is MediaType.TEST_TINY
-
+class TestConfigDefaults:
     def test_default_metadata_reserve(self, tmp_path):
-        cfg = default_config(
-            tmp_path / "mirror", tmp_path / "staging", tmp_path / "db.db"
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
         )
         assert cfg.metadata_reserve_bytes == 104_857_600
 

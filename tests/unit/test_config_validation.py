@@ -97,28 +97,53 @@ class TestEccRedundancy:
         cfg = LCSASConfig(**{**cfg.__dict__, "default_ecc_redundancy_pct": 100})
         assert validate_config(cfg) == []
 
-    def test_ecc_non_default_warns_placebo(self, tmp_path, caplog):
-        """BURN-07: the knob is a placebo for RS03 augmented images.
+    def _toml(self, tmp_path, defaults: str) -> Path:
+        for sub in ("mirror", "staging"):
+            (tmp_path / sub).mkdir(exist_ok=True)
+        path = tmp_path / "lcsas.toml"
+        path.write_text(
+            "[paths]\n"
+            f'mirror_base = "{tmp_path}/mirror"\n'
+            f'staging = "{tmp_path}/staging"\n'
+            f'database = "{tmp_path}/archive.db"\n'
+            "[defaults]\n" + defaults
+        )
+        return path
 
-        A user configuring 30 for 'extra protection' must get a loud
-        warning at validation time, not silent placebo behavior — RS03
-        pads to the smallest fitting medium regardless.
+    def test_ecc_key_warns_ignored(self, tmp_path, caplog):
+        """BURN-07 / #699: the key does nothing for RS03 augmented images.
+
+        Any config that sets it, even to the old default 15, is told the
+        key is ignored; the config still loads (no error).
         """
         import logging
 
-        cfg = _base_config(tmp_path)
-        cfg = LCSASConfig(**{**cfg.__dict__, "default_ecc_redundancy_pct": 30})
-        with caplog.at_level(logging.WARNING, logger="lcsas"):
-            assert validate_config(cfg) == []  # warning, not error
-        assert "no effect on RS03 augmented images" in caplog.text
+        from lcsas.config.settings import load_config, unknown_toml_keys
 
-    def test_ecc_default_does_not_warn(self, tmp_path, caplog):
+        for value in (15, 30):
+            caplog.clear()
+            path = self._toml(tmp_path, f"ecc_redundancy_pct = {value}\n")
+            with caplog.at_level(logging.WARNING, logger="lcsas"):
+                load_config(path)
+            hits = [r for r in caplog.records
+                    if "ecc_redundancy_pct" in r.getMessage()]
+            assert len(hits) == 1, caplog.text
+            assert "is ignored" in hits[0].getMessage()
+
+        import tomllib
+        raw = tomllib.loads(path.read_text())
+        assert unknown_toml_keys(raw) == []  # still a known key
+
+    def test_ecc_key_absent_does_not_warn(self, tmp_path, caplog):
         import logging
 
-        cfg = _base_config(tmp_path)
+        from lcsas.config.settings import load_config
+
+        path = self._toml(tmp_path, 'media_type = "BD25"\n')
         with caplog.at_level(logging.WARNING, logger="lcsas"):
+            cfg = load_config(path)
             assert validate_config(cfg) == []
-        assert "RS03 augmented images" not in caplog.text
+        assert "ecc_redundancy_pct" not in caplog.text
 
 
 class TestMetadataReserve:

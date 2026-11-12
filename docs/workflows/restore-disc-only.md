@@ -610,7 +610,7 @@ integrity proven by MAC + SHA-256.
 
 **Source refs:**
 module docstring crypto-stack table, `_poly1305_mac()`,
-`_decrypt_authenticated()`, `_load_master_key()`, `_try_keys()`
+`_decrypt_authenticated()`, `_load_master_key()`, `try_keys()`
 (KDF + AE), `_decrypt_file()` / `_load_index()` / `_load_snapshots()`
 (file/index/snapshot decryption), `_read_blob()` (blob read + check) —
 all in `src/lcsas/restore/restic_fallback.py`;
@@ -744,7 +744,7 @@ This path deliberately trades capability for portability. It **cannot**:
   (module docstring, `src/lcsas/restore/restic_fallback.py`).
 - **Handle a repository where the password is wrong.** Wrong password
   raises `IntegrityError` from the MAC check
-  (`_decrypt_authenticated()` / `_try_keys()`); use
+  (`_decrypt_authenticated()` / `try_keys()`); use
   `--info`/`verify_key()` to test
   (`PurePythonRestorer.verify_key()`).
 - **Repair a damaged blob.** A MAC/SHA-256/zstd failure on a blob

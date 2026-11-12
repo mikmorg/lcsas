@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from lcsas.config.media import MediaType
 from lcsas.db.models import Pack
-from lcsas.db.queries import get_packs_only_on_volumes, get_pruned_packs_on_volumes
+from lcsas.db.queries import get_packs_on_volumes
 from lcsas.db.volumes import get_volume_by_id, update_status
 
 
@@ -94,12 +94,12 @@ class VolumeMerger:
             source_labels.append(vol.label)
 
         # Get active packs from source volumes
-        active_packs = get_packs_only_on_volumes(self._conn, source_volume_ids)
+        active_packs = get_packs_on_volumes(self._conn, source_volume_ids)
         total_bytes = sum(p.size_bytes for p in active_packs)
 
         # Pruned packs stay behind — list them rather than silently exclude.
-        pruned_left_behind = get_pruned_packs_on_volumes(
-            self._conn, source_volume_ids
+        pruned_left_behind = get_packs_on_volumes(
+            self._conn, source_volume_ids, pruned=True,
         )
 
         # Estimate volumes needed

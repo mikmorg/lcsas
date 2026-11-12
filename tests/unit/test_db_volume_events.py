@@ -8,7 +8,6 @@ from lcsas.db.volume_events import (
     VALID_EVENT_TYPES,
     add_event,
     get_event,
-    get_events_by_type,
     get_events_for_volume,
     get_latest_event,
 )
@@ -162,29 +161,3 @@ class TestGetLatestEvent:
         assert get_latest_event(memory_db, vol.volume_id) is None
 
 
-class TestGetEventsByType:
-    def test_across_volumes(self, memory_db):
-        v1 = create_volume(
-            memory_db, label="EV_V1", uuid=generate_uuid(),
-            media_type="BD25", capacity_bytes=25_000_000_000,
-        )
-        v2 = create_volume(
-            memory_db, label="EV_V2", uuid=generate_uuid(),
-            media_type="BD25", capacity_bytes=25_000_000_000,
-        )
-        add_event(memory_db, v1.volume_id, "VERIFY_FAIL", detail="bad sector")
-        add_event(memory_db, v2.volume_id, "VERIFY_FAIL", detail="CRC error")
-
-        events = get_events_by_type(memory_db, "VERIFY_FAIL")
-        assert len(events) == 2
-
-    def test_respects_limit(self, memory_db):
-        vol = create_volume(
-            memory_db, label="EV_LIM", uuid=generate_uuid(),
-            media_type="BD25", capacity_bytes=25_000_000_000,
-        )
-        for i in range(5):
-            add_event(memory_db, vol.volume_id, "NOTE", detail=f"n{i}")
-
-        events = get_events_by_type(memory_db, "NOTE", limit=3)
-        assert len(events) == 3

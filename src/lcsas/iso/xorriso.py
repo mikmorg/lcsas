@@ -11,6 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from lcsas.config.media import ISO_MAX_FILE_BYTES
 from lcsas.utils.subprocess import SubprocessRunnerBase
 
 _logger = logging.getLogger(__name__)
@@ -31,13 +32,6 @@ class MediaStatus(StrEnum):
     CLOSED = "closed"
     NO_MEDIA = "no_media"
     UNKNOWN = "unknown"
-
-# Max single-extent ISO 9660 file section: 4 GiB - 2 KiB.  A file larger than
-# this is stored as multiple extents under ISO 9660 Level 3, which Windows'
-# native CDFS driver (the Mount-DiskImage path behind restore.bat) does not
-# reassemble — the heir silently sees a truncated file.  We refuse to master
-# any tree containing such a file.
-_ISO_MAX_FILE_BYTES = 0xFFFF_F800
 
 
 class OversizeFileError(Exception):
@@ -140,7 +134,7 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         offenders = [
             (p, size)
             for p in source_dir.rglob("*")
-            if p.is_file() and (size := p.stat().st_size) > _ISO_MAX_FILE_BYTES
+            if p.is_file() and (size := p.stat().st_size) > ISO_MAX_FILE_BYTES
         ]
         if offenders:
             detail = "; ".join(

@@ -476,6 +476,16 @@ def test_no_folder_and_no_marker_when_nothing_is_copied(tmp_path: Path) -> None:
     assert not (staging / "metadata" / PHOTOS).exists()
 
 
+def _iso_writing_xorriso() -> MagicMock:
+    """A fake xorriso whose create_iso writes a small file, so stage()
+    can hash the ISO it masters."""
+    xorriso = MagicMock()
+    xorriso.create_iso.side_effect = (
+        lambda src, out, label, **kw: Path(out).write_bytes(b"fake-iso")
+    )
+    return xorriso
+
+
 def _seed_repo_packs(
     conn: sqlite3.Connection, repo_id: str, mirror: Path, base: int,
 ) -> None:
@@ -487,7 +497,7 @@ def _seed_repo_packs(
         (mirror / "data" / sha).write_bytes(content)
 
 
-def test_prepare_writes_a_marker_for_each_set_of_a_mixed_archive(
+def test_stage_writes_a_marker_for_each_set_of_a_mixed_archive(
     tmp_path: Path,
 ) -> None:
     """The drill's shape: UUID ids, one split set, one plain set.
@@ -506,9 +516,11 @@ def test_prepare_writes_a_marker_for_each_set_of_a_mixed_archive(
     _seed_repo_packs(conn, DOCUMENTS, mirror / "documents", 10)
 
     orch = BurnOrchestrator(
-        config, conn, MagicMock(), MagicMock(), prompt=NullOperatorPrompt(),
+        config, conn, _iso_writing_xorriso(), MagicMock(),
+        prompt=NullOperatorPrompt(),
     )
-    root = orch.prepare(media_type=MediaType.TEST_TINY).staging_path
+    (manifest,) = orch.stage(media_type=MediaType.TEST_TINY).manifests
+    root = manifest.staging_path
 
     photos = read_repo_marker(root / "metadata" / PHOTOS)
     documents = read_repo_marker(root / "metadata" / DOCUMENTS)
@@ -565,9 +577,11 @@ def test_prepare_marks_a_set_with_no_recorded_split_as_not_split(
     _seed_repo_packs(conn, DOCUMENTS, mirror / "documents", 10)
 
     orch = BurnOrchestrator(
-        config, conn, MagicMock(), MagicMock(), prompt=NullOperatorPrompt(),
+        config, conn, _iso_writing_xorriso(), MagicMock(),
+        prompt=NullOperatorPrompt(),
     )
-    root = orch.prepare(media_type=MediaType.TEST_TINY).staging_path
+    (manifest,) = orch.stage(media_type=MediaType.TEST_TINY).manifests
+    root = manifest.staging_path
 
     fields = read_repo_marker(root / "metadata" / videos)
     assert fields is not None

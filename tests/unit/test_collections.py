@@ -21,7 +21,7 @@ import pytest
 from lcsas.burn.orchestrator import BurnOrchestrator
 from lcsas.cli.main import main
 from lcsas.config.media import MediaType
-from lcsas.config.settings import default_config, load_config
+from lcsas.config.settings import LCSASConfig, load_config
 from lcsas.db.connection import get_connection, get_memory_connection
 from lcsas.db.locations import create_location
 from lcsas.db.models import Pack
@@ -424,7 +424,10 @@ class TestMinFill:
 
     def test_fill_is_measured_against_pack_space_not_capacity(self, tmp_path):
         """A BD25 volume packed full is 100%, though it is ~85% of the disc."""
-        config = default_config(tmp_path, tmp_path, tmp_path / "a.db")
+        config = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=tmp_path,
+            db_path=tmp_path / "a.db",
+        )
         conn = get_memory_connection()
         orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
         full = MediaType.BD25.usable_bytes - config.metadata_reserve_bytes

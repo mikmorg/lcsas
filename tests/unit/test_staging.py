@@ -510,6 +510,9 @@ class TestHolographicInjector:
         assert "CONFIGURATION SUMMARY" in txt
         assert "Media type:" in txt
         assert "Filesystem paths are omitted" in txt
+        # #699: the ignored redundancy knob is not shown as protection.
+        assert "ECC:             dvdisaster RS03" in txt
+        assert "ECC redundancy" not in txt
 
     def test_write_disc_care(self, tmp_path):
         """DISC_CARE.txt contains storage guidance."""
