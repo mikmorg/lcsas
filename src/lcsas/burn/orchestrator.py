@@ -1141,6 +1141,11 @@ class BurnOrchestrator:
                 # Burn
                 if not skip_burn:
                     self._xorriso.burn_iso(iso_path, device)
+                # #727: one burn date for this disc.  The disc record, the
+                # verify events and the burn receipt all carry it, so
+                # 'catalog import-receipts' of this receipt on this
+                # catalog sees it was already recorded.
+                burn_date = datetime.now(UTC).isoformat()
 
                 # Post-burn verification  [S1][BURN-04][FMA-03]
                 # Step 1: -check_media readability smoke test.
@@ -1156,6 +1161,7 @@ class BurnOrchestrator:
                 if not skip_burn:
                     verify_passed = self._verify_burned_disc(
                         sv, vol.label, device, location, iso_path,
+                        event_date=burn_date,
                     )
                     if verify_passed:
                         verified_at = datetime.now(UTC).isoformat()
@@ -1182,6 +1188,7 @@ class BurnOrchestrator:
                             self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
                             location=location,
                             detail="Post-burn read-back failed on re-burn attempt",
+                            event_date=burn_date,
                             commit=False,
                         )
 
@@ -1194,6 +1201,7 @@ class BurnOrchestrator:
                         self._conn,
                         volume_id=sv.volume_id,
                         location=location,
+                        burn_date=burn_date,
                         iso_sha256=sv.iso_sha256 or None,
                         iso_size_bytes=sv.iso_size_bytes,
                         last_verified_at=verified_at,
@@ -1226,7 +1234,7 @@ class BurnOrchestrator:
                     session_id=session_id,
                     location=location,
                     device=device,
-                    burn_date=datetime.now(UTC).isoformat(),
+                    burn_date=burn_date,
                     iso_sha256=sv.iso_sha256 or "",
                     verify_passed=verify_passed,
                     pack_count=len(pack_ids),
@@ -1396,6 +1404,7 @@ class BurnOrchestrator:
         device: str,
         location: str,
         iso_path: Path,
+        event_date: str | None = None,
     ) -> bool:
         """Three-step post-burn verification of the disc in *device*
         (BURN-04 + FMA-03).
@@ -1409,13 +1418,16 @@ class BurnOrchestrator:
         on record: any readable disc sitting in the tray would pass it.
 
         Records VERIFY_PASS/VERIFY_FAIL events with ``commit=False``
-        (the caller owns the transaction).  Returns True only when every
+        (the caller owns the transaction), dated *event_date* when given:
+        the burn passes the disc's burn date, the ``burn_date`` of its
+        receipt, so a replayed receipt is seen as imported (#727).  Returns True only when every
         applicable step passed.
         """
         if not self._xorriso.verify_disc(device):
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail="Post-burn read-back failed",
                 commit=False,
             )
@@ -1430,6 +1442,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail=(
                     f"Disc in {device} identifies as '{disc_id}' — "
                     f"expected '{label}'. Wrong disc?"
@@ -1455,6 +1468,7 @@ class BurnOrchestrator:
                 add_event(
                     self._conn, sv.volume_id, "VERIFY_PASS",
                     location=location,
+                    event_date=event_date,
                     detail="Post-burn read-back (no hash on record)",
                     commit=False,
                 )
@@ -1476,6 +1490,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail="device hash check impossible: no recorded ISO size "
                        "(pre-upgrade session); -check_media alone is "
                        "insufficient evidence",
@@ -1489,6 +1504,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail=f"device read-back failed: {exc}",
                 commit=False,
             )
@@ -1498,6 +1514,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail=(
                     f"device hash mismatch: expected {expected_hash[:8]}.., "
                     f"got {device_hash[:8]}.."
@@ -1509,6 +1526,7 @@ class BurnOrchestrator:
         add_event(
             self._conn, sv.volume_id, "VERIFY_PASS",
             location=location,
+            event_date=event_date,
             detail=("Post-burn read-back + device hash match "
                     f"({device_hash[:8]}..)"),
             commit=False,

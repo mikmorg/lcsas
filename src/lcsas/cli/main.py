@@ -3682,14 +3682,29 @@ def _receipt_already_imported(
     receipt_hash: str,
 ) -> bool:
     """True when a receipt with this location, burn date and ISO hash was
-    imported for the volume before (#666).
+    imported for the volume before (#666), or was written by a direct
+    ``lcsas burn`` on this catalog (#727).
 
     The BURN_RECEIPT_IMPORTED event records the burn date since #666; for
-    receipts imported earlier the disc record's burn date stands in.
+    receipts imported earlier the disc record's burn date stands in.  A
+    direct burn records the disc with the receipt's burn date, and dates
+    its verify events (pass or fail) with it, so its receipt matches the
+    disc record, or the verify event when the disc failed or a later
+    burn at the location replaced the record.  An import dates its own
+    events with the import time, so only the burn matches them.
     """
     from lcsas.db.volume_copies import get_copy_at_location
     from lcsas.db.volume_events import get_events_for_volume
 
+    for prior in get_events_for_volume(conn, volume_id):
+        if (
+            prior.event_type in ("VERIFY_PASS", "VERIFY_FAIL",
+                                 "VERIFY_FAIL_REBURN")
+            and prior.location == location
+            and burn_date
+            and prior.event_date == burn_date
+        ):
+            return True
     for prior in get_events_for_volume(conn, volume_id, "BURN_RECEIPT_IMPORTED"):
         if prior.location != location:
             continue
