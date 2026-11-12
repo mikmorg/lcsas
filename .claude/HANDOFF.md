@@ -16,23 +16,19 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 
 ## Where things stand
 
-- **Drill `v1.0.0-rc5`: tagged 2026-11-03 at `732dd2f` and announced
-  on tracker #478. Don't drill rc4** (owner, 2026-11-02). No drill had
-  run on rc4. rc5 adds, before any drill: a password split per
-  repository, so one archive can hold split and ordinary passwords side
-  by side (#587);
-  the meta disc is always labelled `LCSAS_META` (#588); the estate card
-  and the meta disc print the recorded split's K/N (#573); and a
-  restore.sh test-hook fix (#569). Don't drill rc4, rc3 or rc2. Record
-  the tag and commit of the rc you drilled in every drill result.
-- Before the tag the lab ran the full haiku blind sweep: 9 variants,
-  including the new mixed-split one, with split-key-docs run twice. All
-  10 runs scored 16/16 on the first try. The lab also built a clean meta
-  disc, which passed `lcsas meta verify --strict`. The results are in
-  the #478 announcement and the drill log.
+- **The current drill build is the newest `v1.0.0-rc*` tag**
+  (`git tag -l 'v1.0.0-rc*' --sort=-v:refname | head -1`). Tracker #478
+  announces each rc with its tag, commit and what changed. Drill only
+  that rc, never an older one, and record the tag and commit of the rc
+  you drilled in every drill result.
+- Before each rc tag the lab runs the full haiku blind sweep (every
+  runnable variant, split-key-docs twice) and builds a clean meta disc
+  that must pass `lcsas meta verify --strict`. The results are in that
+  rc's #478 announcement and the drill log.
 - **Found by the sweep, #602:** tier 3 has no pack cache, so on a
   multi-disc archive it asks for a disc about once per restored file.
-  The owner decides between an rc6 before final and a fix after final.
+  It is still open: the rcs shipped without a fix, which the
+  owner put after v1.0.0 final.
   The drills run tier 1, so they're not affected.
 - **v1.0.0 final waits on three human/hardware gates** (tracker #478):
   - #473: physical BD-R and M-DISC burn → damage → repair → restore
@@ -90,7 +86,7 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 
 ## Your work
 
-### Drills against the current rc (rc5)
+### Drills against the current rc
 
 - **Order** (owner, 2026-11-02): #476 first, then #474 last, because each
   re-run of #474 needs a fresh stand-in. #473 runs whenever you start: it
@@ -102,7 +98,7 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   a meta disc built from the drill config and catalog. The kit that
   builds it is `tests/e2e/drill_kit/` (#598): a fixed non-personal
   corpus, the drill config, and `verify_restore.py` to check a restore.
-  The lab builds it from the rc5 tag for #476 and #474; its README has
+  The lab builds it from the current rc tag for #476 and #474; its README has
   the steps.
 
 - **Drill discs hold test data only.** No real data is burned until
