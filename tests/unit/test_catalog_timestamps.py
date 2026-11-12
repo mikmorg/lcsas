@@ -1,6 +1,6 @@
 """#730: one text format for new catalog timestamps; readers accept both.
 
-New rows are written as UTC ISO-8601 (``datetime.now(UTC).isoformat()``).
+New rows are written as UTC ISO-8601 to the millisecond (``utc_now()``).
 Catalogs written before, and every disc catalog already burned, keep
 SQLite ``CURRENT_TIMESTAMP`` text (``2026-11-11 10:00:00``) and receipt
 dates with other offsets.  As text these sort wrongly (a space sorts
@@ -32,7 +32,7 @@ from lcsas.db.volume_events import add_event, get_events_for_volume
 from lcsas.db.volumes import create_volume
 from lcsas.utils.timestamps import parse_utc, same_instant, to_utc_iso
 
-UTC_ISO = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{6})?\+00:00")
+UTC_ISO = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3}|\.\d{6})?\+00:00")
 
 
 # ---------------------------------------------------------------------------
@@ -304,3 +304,20 @@ def test_rebuild_freshness_reads_the_newest_instant(tmp_path):
                                              "2026-11-11T01:00:00+00:00"])
     b = _catalog_with_events(tmp_path, "b", ["2026-11-11T12:00:00+00:00"])
     assert rebuild._source_freshness(a) > rebuild._source_freshness(b)
+
+
+def test_utc_now_is_not_newer_than_sqlite_now(conn):
+    """A row stamped now is never after SQLite's 'now' (ms precision).
+
+    With microseconds, a volume created in the same millisecond as the
+    query looked newer than julianday('now'), so a zero-hour ghost
+    cutoff missed it (CI flake in test_ghost_volumes_and_drift).
+    """
+    from lcsas.utils.timestamps import utc_now
+
+    for _ in range(200):
+        stamp = utc_now()
+        row = conn.execute(
+            "SELECT julianday(?) <= julianday('now')", (stamp,),
+        ).fetchone()
+        assert row[0] == 1, stamp

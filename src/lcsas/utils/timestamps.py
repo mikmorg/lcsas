@@ -1,9 +1,11 @@
 """Catalog timestamps: one text format for new rows, tolerant readers (#730).
 
-New rows are written as UTC ISO-8601 with an offset, as
-``datetime.now(UTC).isoformat()`` prints it
-(``2026-11-11T10:00:00.123456+00:00``).  That is what the Python
-writers already used for disc records, verify times and events.
+New rows are written as UTC ISO-8601 with an offset, to the
+millisecond (``2026-11-11T10:00:00.123+00:00``).  That is the format
+the Python writers already used for disc records, verify times and
+events, cut to SQLite's precision: ``julianday('now')`` has
+milliseconds, so a row stamped with microseconds could look newer than
+"now" for the rest of that millisecond.
 
 Catalogs written before #730, and every disc catalog already burned,
 also hold SQLite ``CURRENT_TIMESTAMP`` text (``2026-11-11 10:00:00``,
@@ -25,8 +27,8 @@ from datetime import UTC, datetime
 
 
 def utc_now() -> str:
-    """The current time as the catalog writes it: UTC ISO-8601."""
-    return datetime.now(UTC).isoformat()
+    """The current time as the catalog writes it: UTC ISO-8601, ms."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def parse_utc(value: object) -> datetime | None:
