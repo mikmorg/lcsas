@@ -1083,6 +1083,36 @@ class TestCmdSessionList:
         # The real session must NOT be listed because the filter excluded it.
         assert "sess-real-001" not in out
 
+    def test_session_list_prints_volume_labels(self, tmp_path, capsys):
+        """#748: the volumes line names each volume by its label (as the
+        owner and heir know it), not by its catalog volume id."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.sessions import add_session_volume, create_session
+        from lcsas.db.volumes import create_volume
+
+        cfg, db = _write_session_config(tmp_path)
+        conn = get_connection(db)
+        try:
+            create_session(conn, media_type="TEST_TINY",
+                           staging_dir="/tmp/labels",
+                           session_id="sess-labels-001")
+            for label in ("FAMILY_BD25_2026_0007", "FAMILY_BD25_2026_0008"):
+                vol = create_volume(conn, label=label, uuid=f"uuid-{label}",
+                                    media_type="TEST_TINY",
+                                    capacity_bytes=2_097_152)
+                add_session_volume(conn, "sess-labels-001", vol.volume_id,
+                                   f"/tmp/labels/{label}.iso")
+        finally:
+            conn.close()
+        capsys.readouterr()  # clear
+
+        assert main(["--config", cfg, "session", "list"]) == 0
+        out = capsys.readouterr().out
+        line = next(ln for ln in out.splitlines() if "volumes(2):" in ln)
+        assert line.split("volumes(2):")[1].strip() == (
+            "FAMILY_BD25_2026_0007, FAMILY_BD25_2026_0008"
+        )
+
 
 class TestCmdSessionAbort:
     """`lcsas session abort` — reclaim packs from a never-burned session.

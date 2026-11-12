@@ -266,7 +266,7 @@ one place that decides it
 7. Return `0`.
 
 **Expected outcome:**
-- A fixed-width header (`SESSION ID  STATUS  MEDIA  CREATED`), then one line per session, optionally followed by an indented list of `volume_id`s.
+- A fixed-width header (`SESSION ID  STATUS  MEDIA  CREATED`), then one line per session, followed by an indented list of its volumes' labels when it has any (#748).
 - Exit `0` even if there are zero sessions (just prints `No sessions found.`).
 
 **Variant axes that apply:**
@@ -277,11 +277,9 @@ one place that decides it
 - **Storage stage:** None; catalog-only.
 
 **Test coverage:**
-- Existing: `tests/unit/test_db_sessions.py::TestSessionCRUD` covers `list_sessions` (`tests/unit/test_db_sessions.py:80-94`), including the status filter, plus all neighbouring CRUD ops (`tests/unit/test_db_sessions.py:23-100`). Session-volume linkage is covered by `TestSessionVolumes` (`tests/unit/test_db_sessions.py:103-140`).
+- Existing: `tests/unit/test_cli_handlers.py::TestCmdSessionList::test_session_list_prints_volume_labels` (#748) checks the volumes line names labels, not ids. `tests/unit/test_db_sessions.py::TestSessionCRUD` covers `list_sessions` (`tests/unit/test_db_sessions.py:80-94`), including the status filter, plus all neighbouring CRUD ops (`tests/unit/test_db_sessions.py:23-100`). Session-volume linkage is covered by `TestSessionVolumes` (`tests/unit/test_db_sessions.py:103-140`).
 - Gaps:
-  - No CLI-level test for `cmd_session_list`.
   - No test for the `--config required` error path.
-  - The volume rendering stringifies `volume_id` rather than the human-readable `label` — owners looking for "which discs are in session X?" must cross-reference. Worth a bug-fix PR; flagged here as a UX gap.
 
 **Source refs:**
 - `build_parser()` (`session list` subparser), `cmd_session_list` (`src/lcsas/cli/main.py`)

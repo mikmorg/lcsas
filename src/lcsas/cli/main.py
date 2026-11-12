@@ -8370,9 +8370,17 @@ def cmd_session_list(args: argparse.Namespace) -> int:
         logger.info("%-36s  %-10s  %-10s  %s", "SESSION ID", "STATUS", "MEDIA", "CREATED")
         logger.info("-" * 80)
 
+        # #748: the owner and heir know volumes by label, not catalog id.
+        labels = {
+            int(r[0]): str(r[1])
+            for r in conn.execute("SELECT volume_id, label FROM volumes")
+        }
         for s in sessions:
             vols = get_session_volumes(conn, s.session_id)
-            vol_labels = ", ".join(sv.volume_id and str(sv.volume_id) or "?" for sv in vols)
+            vol_labels = ", ".join(
+                labels.get(sv.volume_id, f"volume {sv.volume_id}")
+                for sv in vols
+            )
             logger.info(
                 "%-36s  %-10s  %-10s  %s",
                 s.session_id, s.status, s.media_type,
