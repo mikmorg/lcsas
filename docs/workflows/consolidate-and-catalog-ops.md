@@ -211,7 +211,8 @@ called from `cmd_session_abort`).
   containing exactly the source set's active packs, staged for the
   chosen location.
 - The owner gets a printed next-step list ending in
-  `consolidate --deprecate <ids>`.
+  `lcsas consolidate --deprecate <labels>`, naming the source volumes and
+  the new volumes by label.
 - Source `volume_copies` rows are untouched (deprecation happens
   later).
 - Exit code 0 on success.  1 on a refused source, an unknown

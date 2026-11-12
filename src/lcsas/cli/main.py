@@ -4422,6 +4422,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
     from lcsas.consolidate.merger import VolumeMerger
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
+    from lcsas.db.volumes import get_volume_by_id
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
@@ -4476,11 +4477,15 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             logger.info("Marked %d source volume(s) as DEPRECATED", len(args.volume_ids))
             return 0
 
+        # The owner and the heir know volumes by label, not catalog ID.
+        source_labels = " ".join(
+            get_volume_by_id(conn, vid).label for vid in args.volume_ids
+        )
         if not args.execute:
             logger.info("")
             logger.info("To execute: add --execute to stage and burn.")
-            logger.info("Then verify the new volumes and run: consolidate --deprecate %s",
-                       " ".join(str(v) for v in args.volume_ids))
+            logger.info("Then verify the new volumes and run: lcsas "
+                        "consolidate --deprecate %s", source_labels)
             return 0
 
         if config is None:
@@ -4490,7 +4495,6 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         # #677: only VERIFIED volumes can become CONSOLIDATING.  Refuse
         # anything else now, before the prompt, not with an invalid-
         # transition error after the owner typed "yes".
-        from lcsas.db.volumes import get_volume_by_id
         not_ready = [get_volume_by_id(conn, vid) for vid in args.volume_ids]
         not_ready = [v for v in not_ready if v.status != "VERIFIED"]
         if not_ready:
@@ -4572,12 +4576,14 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         logger.info(
             "Consolidation staged.  Next steps:\n"
             "  1. burn session %s\n"
-            "  2. verify the new volumes\n"
-            "  3. then deprecate sources with: consolidate --deprecate %s\n"
+            "  2. verify the new volumes (%s)\n"
+            "  3. then deprecate sources with: lcsas consolidate "
+            "--deprecate %s\n"
             "To cancel instead: lcsas session abort %s (the sources return "
             "to VERIFIED)",
             session.session_id,
-            " ".join(str(v) for v in args.volume_ids),
+            " ".join(m.volume_label for m in session.manifests),
+            source_labels,
             session.session_id,
         )
 
