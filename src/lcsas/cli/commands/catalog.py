@@ -440,6 +440,18 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 "receipt_file": name,
                 "verify_passed": raw_verify,
             }
+            # #734: how the disc was checked.  `burn-iso` receipts carry
+            # the hash read back from the disc (#664, null when nothing
+            # was read) and whether the run only checked a disc burned
+            # earlier (#673).  Session-burn receipts carry neither; the
+            # keys are then left out.
+            if "device_sha256" in receipt:
+                dev_hash = receipt.get("device_sha256")
+                provenance["device_sha256"] = (
+                    str(dev_hash) if dev_hash is not None else None
+                )
+            if isinstance(receipt.get("verify_only"), bool):
+                provenance["verify_only"] = receipt["verify_only"]
 
             # #754: the disc in service at this location was burned after
             # this receipt's disc (a re-burn there), so the receipt is for
