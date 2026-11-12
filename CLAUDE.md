@@ -25,7 +25,7 @@ make lint-fix                     # ruff check --fix src/ tests/
 make typecheck                    # mypy src/ (strict mode)
 
 # The pre-push gate (also the default make target)
-make gate                         # lint + typecheck + test-all + shell-coverage
+make gate                         # lint + shellcheck + typecheck + test-all + shell-coverage
 ```
 
 Other gates to know about: `make audit-gate` (required before tier-1 C changes under `recovery/src/`; CI: `audit-gate.yml`), `make shell-coverage` (restore.sh line coverage), `make test-e2e` / `make test-recovery-hardening` (CI: `test.yml`), and `make meta-gate` (fetch-recovery + build-recovery; run by hand on the lab VM). `.github/workflows/weekly.yml` is the one scheduled workflow: every Monday it runs bin-parity, the ECC repair proof, the macOS and Windows journeys, the upstream and format canaries, the live-USB drill and `opt-in-gates.yml` (`LCSAS_FAULT_INJECT`, `LCSAS_DIFF`, `LCSAS_PETABYTE`, `make test-tier3-qemu`), and files an issue for each one that goes red. `make verify-burn-e2e` (`LCSAS_BURN_E2E=1`) needs CDEmu (the vhba kernel module and root), which GitHub runners lack, so no workflow runs it: it is a manual release-gate step, run on the lab VM before a release is tagged. See the Makefile for the full list.

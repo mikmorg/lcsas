@@ -314,7 +314,8 @@ build-recovery:
 # RST-05 release-prep gate: provision the full per-target binary set
 # (upstream rustic/python + tier-1 lcsas-restore + keyshare), build a
 # meta disc, and prove it satisfies the required-contents contract via
-# both the build gate (default --require-complete) and `meta verify`.
+# both the build gate (no --allow-incomplete, so complete is required)
+# and `meta verify`.
 # Fails if any required artifact is absent.  Requires the zig/qemu
 # toolchains + network for fetch-recovery.  CI wiring (tags/scheduled) is
 # owned by the GATE plans; this target is the reusable entry point.
