@@ -940,7 +940,8 @@ class MetaVolumeBuilder:
         """
         src = self._recovery_dir
         if not src.is_dir():
-            return  # not a fatal error: recovery toolchain is optional
+            # build() and _write_restore_script fail loud without it (#689).
+            return
 
         dst = self._output / "recovery"
         if dst.exists():
@@ -1616,7 +1617,13 @@ class MetaVolumeBuilder:
         stops here with a clear message instead of burning a disc that
         cannot restore.
         """
-        if self._bundle_recovery_toolchain and driver.is_file():
+        if not self._bundle_recovery_toolchain:
+            raise MetaBuildError(
+                "bundle_recovery_toolchain=False leaves the meta disc with no "
+                "restore driver: recovery/scripts/restore.sh comes from the "
+                "recovery/ tree (#689)."
+            )
+        if driver.is_file():
             return
         raise MetaBuildError(
             f"the restore driver {driver} is missing. A meta disc needs "
