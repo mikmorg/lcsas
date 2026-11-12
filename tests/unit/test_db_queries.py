@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from lcsas.db.packs import register_pack
 from lcsas.db.queries import (
     get_archive_status_summary,
     get_missing_packs,
@@ -13,6 +16,9 @@ from lcsas.db.queries import (
     get_unarchived_packs,
     get_volumes_for_pack,
 )
+from lcsas.db.repos import register_repo
+from lcsas.db.volumes import create_volume, update_status, update_used_bytes
+from lcsas.utils.labels import generate_uuid
 
 
 class TestUnarchived:
@@ -499,3 +505,50 @@ class TestLocationSummary:
         result = get_location_summary(memory_db)
         assert isinstance(result, list)
 
+
+class TestDbEdgeCases:
+    def test_update_status_invalid(self, memory_db):
+        """Invalid status is caught by transition enforcement."""
+        vol = create_volume(
+            memory_db, label="TEST_V", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+        )
+        with pytest.raises(ValueError):
+            update_status(memory_db, vol.volume_id, "INVALID_STATUS")
+
+    def test_update_used_bytes_exceeds_capacity(self, memory_db):
+        """DB doesn't prevent used_bytes > capacity_bytes (no constraint)."""
+        vol = create_volume(
+            memory_db, label="OVR", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=100,
+        )
+        # Should not raise — the DB doesn't enforce this
+        update_used_bytes(memory_db, vol.volume_id, 999)
+
+    def test_register_pack_zero_size(self, memory_db):
+        """Zero-byte pack is accepted."""
+        register_repo(memory_db, "r", "R", "/r")
+        p = register_pack(memory_db, sha256="zero_pack", size_bytes=0, repo_id="r")
+        assert p.size_bytes == 0
+
+    def test_pick_list_dedup_prefers_first_volume(self, populated_db):
+        """Packs on multiple volumes: pick_list groups by volume."""
+        needed = ["pack_0001_hash"]  # on vol1 and vol4
+        pick = get_pick_list(populated_db, needed)
+        # Should appear on at least one volume
+        all_packs = [p for packs in pick.values() for p in packs]
+        assert len(all_packs) == 1
+        assert all_packs[0].sha256 == "pack_0001_hash"
+
+    def test_redundancy_report_min_copies_zero(self, populated_db):
+        """With min_copies=0, no packs should appear (all have ≥0 copies)."""
+        under = get_redundancy_report(populated_db, min_copies=0)
+        assert len(under) == 0
+
+    def test_archive_status_summary_empty(self, memory_db):
+        """Summary on empty DB returns all zeros."""
+        summary = get_archive_status_summary(memory_db)
+        assert summary == {
+            "total": 0, "pruned": 0, "archived": 0, "staged": 0,
+            "unarchived": 0,
+        }

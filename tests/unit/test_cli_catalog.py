@@ -1,26 +1,4 @@
-"""Error-path tests for ``lcsas catalog import-receipts`` (issue #517).
-
-``docs/workflows/burn-iso-portable.md`` promises that a bad receipt is
-skipped with a warning and the rest of the batch still imports.  Nothing
-pinned that.  These tests cover:
-
-* malformed / unreadable receipt files (truncated, empty, garbage, missing,
-  a directory);
-* receipts missing ``volume_label`` / ``location``;
-* an orphan receipt (volume label not in the catalog);
-* mixed batches -- the bad receipt is skipped, the good one still imports,
-  whichever order they arrive in.
-
-They assert exit codes and, via a before/after dump of the catalog tables,
-that a skipped receipt writes nothing at all.  Since #669 every skipped or
-refused receipt makes the exit code non-zero, while the good receipts of
-the batch are still imported.  Nothing here depends on ``verify_passed``
-semantics: good receipts target an already-VERIFIED volume (the "re-burn to
-a new location" path), so only the copy row and the
-``BURN_RECEIPT_IMPORTED`` event are asserted.
-
-The #666 / #669 / #670 / #671 cases are at the end of the file.
-"""
+"""Tests for the ``lcsas catalog`` command (``lcsas.cli.commands.catalog``)."""
 
 from __future__ import annotations
 
@@ -36,10 +14,1005 @@ from lcsas.db.volume_copies import get_copies_for_volume
 from lcsas.db.volume_events import get_events_for_volume
 from lcsas.db.volumes import create_volume, get_volume_by_label
 
+
+def _build_fake_disc(
+    disc_path,
+    catalog_hashes,
+    disc_file_hashes,
+    *,
+    volume_label="VOL_001",
+    repo_name="family",
+):
+    """Build a minimal fake mounted-disc directory at *disc_path*.
+
+    Writes a holographic catalog (``catalog.db``) that registers *repo_name*
+    and one volume whose ``volume_packs`` rows reference every SHA in
+    *catalog_hashes*, plus ``data/<hash>`` files for every SHA in
+    *disc_file_hashes*.  The two sets need not match — that mismatch is
+    exactly what ``cmd_catalog_validate`` is meant to surface.
+    """
+    import sqlite3
+
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+    from lcsas.utils.labels import generate_uuid
+
+    disc_path.mkdir(parents=True, exist_ok=True)
+    catalog_db = disc_path / "catalog.db"
+
+    conn = sqlite3.connect(str(catalog_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        create_all(conn)
+        register_repo(conn, repo_name, repo_name, f"/mnt/mirror/{repo_name}", "")
+        if catalog_hashes:
+            packs = [register_pack(conn, sha, 1024, repo_name) for sha in catalog_hashes]
+            vol = create_volume(
+                conn,
+                volume_label,
+                generate_uuid(),
+                "TEST_TINY",
+                1_000_000,
+                "Home_Shelf",
+                "VERIFIED",
+            )
+            bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
+        conn.commit()
+    finally:
+        conn.close()
+
+    data_dir = disc_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for sha in disc_file_hashes:
+        (data_dir / sha).write_bytes(b"x")
+
+
+class TestCmdCatalogValidate:
+    def test_catalog_validate_happy_path(self, tmp_path, capsys):
+        """Disc with data files matching the embedded catalog exits 0."""
+        disc = tmp_path / "disc"
+        hashes = ["aa" * 32, "bb" * 32]
+        _build_fake_disc(disc, catalog_hashes=hashes, disc_file_hashes=hashes)
+
+        result = main(["catalog", "validate", str(disc)])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Catalog validation PASSED" in out
+        assert "Catalog packs  : 2" in out
+        assert "Disc packs     : 2" in out
+
+    def test_catalog_validate_orphan_packs(self, tmp_path, capsys):
+        """Disc with pack files NOT in the catalog is reported as orphaned."""
+        disc = tmp_path / "disc"
+        catalog_hashes = ["aa" * 32]
+        # Disc has an extra file the catalog doesn't reference.
+        disc_file_hashes = ["aa" * 32, "cc" * 32]
+        _build_fake_disc(
+            disc,
+            catalog_hashes=catalog_hashes,
+            disc_file_hashes=disc_file_hashes,
+        )
+
+        result = main(["catalog", "validate", str(disc)])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "ORPHAN" in out
+        assert "cc" * 32 in out
+        assert "Catalog validation FAILED" in out
+
+    def test_catalog_validate_missing_packs(self, tmp_path, capsys):
+        """Catalog references packs that are absent on disc -> reported missing."""
+        disc = tmp_path / "disc"
+        catalog_hashes = ["aa" * 32, "bb" * 32]
+        # Only one of the two cataloged packs is on the disc.
+        disc_file_hashes = ["aa" * 32]
+        _build_fake_disc(
+            disc,
+            catalog_hashes=catalog_hashes,
+            disc_file_hashes=disc_file_hashes,
+        )
+
+        result = main(["catalog", "validate", str(disc)])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "MISSING" in out
+        assert "bb" * 32 in out
+        assert "Catalog validation FAILED" in out
+
+    def test_catalog_validate_unknown_path_errors(self, tmp_path, capsys):
+        """`catalog validate /nonexistent` exits non-zero with a clear error."""
+        missing = tmp_path / "no-such-disc"
+        assert not missing.exists()
+
+        result = main(["catalog", "validate", str(missing)])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "does not exist" in out or "not a directory" in out
+        assert str(missing) in out
+
+
+def _build_fake_disc_for_rebuild(
+    disc_path,
+    *,
+    repo_id,
+    repo_name,
+    volume_label,
+    volume_uuid,
+    pack_hashes,
+):
+    """Build a minimal fake mounted-disc directory holding a holographic catalog.
+
+    Writes ``<disc_path>/catalog.db`` containing a single repository, a single
+    volume, and a row for each SHA in *pack_hashes* linked to that volume.
+    No on-disc ``data/`` files are required for catalog rebuild — rebuild
+    only consults ``catalog.db``.
+    """
+    import sqlite3
+
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+
+    disc_path.mkdir(parents=True, exist_ok=True)
+    catalog_db = disc_path / "catalog.db"
+
+    conn = sqlite3.connect(str(catalog_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        create_all(conn)
+        register_repo(conn, repo_id, repo_name, f"/mnt/mirror/{repo_name}", "")
+        packs = [register_pack(conn, sha, 1024, repo_id) for sha in pack_hashes]
+        vol = create_volume(
+            conn,
+            volume_label,
+            volume_uuid,
+            "TEST_TINY",
+            1_000_000,
+            "Home_Shelf",
+            "VERIFIED",
+        )
+        bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _master_catalog_counts(db_path):
+    """Return a dict of row counts for the key catalog tables."""
+    from lcsas.db.connection import get_connection
+
+    conn = get_connection(db_path)
+    try:
+        return {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "repositories",
+                "volumes",
+                "packs",
+                "volume_packs",
+            )
+        }
+    finally:
+        conn.close()
+
+
+class TestCmdCatalogRebuild:
+    def test_catalog_rebuild_happy_path(self, tmp_path, capsys):
+        """rebuild from two disc dirs produces a master catalog with the union."""
+        disc1 = tmp_path / "disc1"
+        disc2 = tmp_path / "disc2"
+
+        _build_fake_disc_for_rebuild(
+            disc1,
+            repo_id="family",
+            repo_name="family",
+            volume_label="VOL_001",
+            volume_uuid="uuid-volume-1",
+            pack_hashes=["aa" * 32, "bb" * 32],
+        )
+        _build_fake_disc_for_rebuild(
+            disc2,
+            repo_id="work",
+            repo_name="work",
+            volume_label="VOL_002",
+            volume_uuid="uuid-volume-2",
+            pack_hashes=["cc" * 32, "dd" * 32],
+        )
+
+        out_db = tmp_path / "master.db"
+        result = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(disc1), str(disc2),
+        ])
+        assert result == 0
+
+        out = capsys.readouterr().out
+        assert "Catalog rebuild complete" in out
+        assert str(out_db) in out
+        assert "Discs processed  : 2" in out
+
+        counts = _master_catalog_counts(str(out_db))
+        assert counts["repositories"] == 2  # family + work
+        assert counts["volumes"] == 2       # VOL_001 + VOL_002
+        assert counts["packs"] == 4         # 2 + 2 distinct shas
+        assert counts["volume_packs"] == 4  # 2 links per volume
+
+    def test_catalog_rebuild_idempotent(self, tmp_path, capsys):
+        """Running rebuild twice over the same discs is a no-op on the 2nd pass."""
+        disc1 = tmp_path / "disc1"
+        disc2 = tmp_path / "disc2"
+        _build_fake_disc_for_rebuild(
+            disc1,
+            repo_id="family",
+            repo_name="family",
+            volume_label="VOL_001",
+            volume_uuid="uuid-volume-1",
+            pack_hashes=["aa" * 32, "bb" * 32],
+        )
+        _build_fake_disc_for_rebuild(
+            disc2,
+            repo_id="work",
+            repo_name="work",
+            volume_label="VOL_002",
+            volume_uuid="uuid-volume-2",
+            pack_hashes=["cc" * 32, "dd" * 32],
+        )
+        out_db = tmp_path / "master.db"
+
+        # First pass
+        first = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(disc1), str(disc2),
+        ])
+        assert first == 0
+        first_counts = _master_catalog_counts(str(out_db))
+        capsys.readouterr()  # clear
+
+        # Second pass over the same inputs — natural-key conflicts hit
+        # INSERT OR IGNORE, so the master catalog should be unchanged.
+        second = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(disc1), str(disc2),
+        ])
+        assert second == 0
+        second_counts = _master_catalog_counts(str(out_db))
+
+        assert first_counts == second_counts
+        # Counts come from the happy-path expectation.
+        assert second_counts == {
+            "repositories": 2,
+            "volumes": 2,
+            "packs": 4,
+            "volume_packs": 4,
+        }
+
+        out = capsys.readouterr().out
+        # On the second pass nothing new should be merged.
+        assert "Repositories     : 0 new" in out
+        assert "Volumes          : 0 new" in out
+        assert "Packs            : 0 new" in out
+
+    def test_catalog_rebuild_unknown_dir_errors(self, tmp_path, capsys):
+        """A non-existent disc dir trips the sanity check and exits non-zero."""
+        missing = tmp_path / "no-such-disc"
+        assert not missing.exists()
+        out_db = tmp_path / "master.db"
+
+        result = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(missing),
+        ])
+        assert result != 0
+
+        out = capsys.readouterr().out
+        assert "Not a directory" in out
+        assert str(missing) in out
+        # The handler bails BEFORE creating the master DB.
+        assert not out_db.exists()
+
+    def test_catalog_rebuild_partial_failure(self, tmp_path, capsys):
+        """One valid disc + one disc missing catalog.db -> non-zero, but the
+        valid disc is still merged into the master catalog."""
+        good = tmp_path / "good_disc"
+        bad = tmp_path / "bad_disc"
+
+        _build_fake_disc_for_rebuild(
+            good,
+            repo_id="family",
+            repo_name="family",
+            volume_label="VOL_001",
+            volume_uuid="uuid-volume-1",
+            pack_hashes=["aa" * 32, "bb" * 32],
+        )
+        # `bad` exists as a directory (so it survives the is_dir() sanity
+        # check) but contains no catalog.db — rebuild_catalog records an
+        # error for it and continues.
+        bad.mkdir()
+
+        out_db = tmp_path / "master.db"
+        result = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(good), str(bad),
+        ])
+        # rebuild_catalog appends to result.errors -> handler returns 1.
+        assert result != 0
+
+        out = capsys.readouterr().out
+        # The good disc was still processed.
+        assert "Discs processed  : 1" in out
+        assert "Discs skipped    : 1" in out
+        # The error mentioning the bad disc is reported.
+        assert "No catalog.db" in out
+        assert str(bad) in out
+
+        # The good disc's contents made it into the master catalog.
+        counts = _master_catalog_counts(str(out_db))
+        assert counts["repositories"] == 1
+        assert counts["volumes"] == 1
+        assert counts["packs"] == 2
+        assert counts["volume_packs"] == 2
+
+
+def _seed_ghost_volume(db: str, *, label: str = "GHOST_VOL",
+                       age_hours: int = 48) -> None:
+    """Seed a stale never-burned STAGING volume with two linked packs."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+
+    conn = get_connection(db)
+    try:
+        register_repo(conn, "r1", "R1", "/mnt/r1")
+        p1 = register_pack(conn, sha256="a" * 64, size_bytes=100,
+                           repo_id="r1")
+        p2 = register_pack(conn, sha256="b" * 64, size_bytes=200,
+                           repo_id="r1")
+        vol = create_volume(
+            conn, label=label, uuid=f"uuid-{label}",
+            media_type="TEST_TINY", capacity_bytes=2_097_152,
+            status="STAGING",
+        )
+        bulk_link_packs(conn, vol.volume_id, [p1.pack_id, p2.pack_id])
+        conn.execute(
+            "UPDATE volumes SET created_at = datetime('now', ?) "
+            "WHERE volume_id = ?",
+            (f"-{int(age_hours)} hours", vol.volume_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_catalog_reconcile_reports_and_fixes_ghosts(tmp_path, capsys):
+    """`catalog reconcile` lists ghosts; --fix --yes deletes them and the
+    packs return to the unarchived pool; a second run reports clean.
+    [FMA-01]"""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.queries import get_unarchived_packs
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    capsys.readouterr()
+
+    # Report-only: ghost listed, nonzero exit (needs attention), no change.
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "GHOST_VOL" in out
+    assert "--fix" in out
+
+    # Fix: ghost volume deleted, packs reclaimed.
+    rc = main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 pack(s) returned to the unarchived pool" in out
+
+    conn = get_connection(str(db))
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+        assert {p.sha256 for p in get_unarchived_packs(conn)} == {
+            "a" * 64, "b" * 64,
+        }
+    finally:
+        conn.close()
+
+    # A second run reports clean.
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no ghost volumes" in out
+
+
+def test_catalog_reconcile_spares_fresh_and_burned_volumes(tmp_path, capsys):
+    """Mid-pipeline (fresh) STAGING volumes and volumes with copies are
+    never treated as ghosts.  [FMA-01]"""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.volume_copies import add_volume_copy
+    from lcsas.db.volumes import create_volume
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db), label="FRESH_STAGING", age_hours=0)
+    conn = get_connection(str(db))
+    try:
+        ensure_location(conn, "Home_Shelf")
+        vol = create_volume(
+            conn, label="OLD_WITH_COPY", uuid="uuid-old-copy",
+            media_type="TEST_TINY", capacity_bytes=2_097_152,
+            status="STAGING",
+        )
+        add_volume_copy(conn, volume_id=vol.volume_id,
+                        location="Home_Shelf")
+        conn.execute(
+            "UPDATE volumes SET created_at = datetime('now', '-48 hours') "
+            "WHERE volume_id = ?", (vol.volume_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no ghost volumes" in out
+
+
+def _give_staged_iso(db: str, tmp_path, label: str = "GHOST_VOL") -> object:
+    """Record a burn session for ``label`` whose ISO exists on disk."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.sessions import add_session_volume, create_session
+    from lcsas.db.volumes import get_volume_by_label
+
+    session_dir = tmp_path / "staging" / f"sess-{label}"
+    session_dir.mkdir(parents=True)
+    iso = session_dir / f"{label}.iso"
+    iso.write_bytes(b"\x00" * 64)
+    conn = get_connection(db)
+    try:
+        vol = get_volume_by_label(conn, label)
+        assert vol is not None
+        create_session(conn, media_type="TEST_TINY",
+                       staging_dir=str(session_dir), session_id=f"sess-{label}")
+        add_session_volume(conn, f"sess-{label}", vol.volume_id, str(iso),
+                           iso_sha256="c" * 64, iso_size_bytes=64)
+    finally:
+        conn.close()
+    return iso
+
+
+def test_catalog_reconcile_fix_spares_an_old_volume_whose_iso_exists(
+    tmp_path, capsys,
+):
+    """#647: a 48 h old STAGING volume whose ISO exists (burned elsewhere,
+    receipt not yet imported) survives a default --fix; --include-waiting
+    deletes it."""
+    from lcsas.db.connection import get_connection
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    _give_staged_iso(str(db), tmp_path)
+    capsys.readouterr()
+
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "waiting to be burned" in out and "GHOST_VOL" in out
+    assert "no ghost volumes" in out
+
+    assert main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes"]) == 0
+    conn = get_connection(str(db))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 1
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    rc = main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes",
+               "--include-waiting"])
+    assert rc == 0
+    assert "Deleting ghost volume GHOST_VOL" in capsys.readouterr().out
+    conn = get_connection(str(db))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_catalog_reconcile_confirmation_mentions_receipts(tmp_path, capsys,
+                                                          monkeypatch):
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    capsys.readouterr()
+    prompts: list[str] = []
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return "no"
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    assert main(["--db", str(db), "catalog", "reconcile", "--fix"]) == 1
+    assert len(prompts) == 1
+    assert "receipt" in prompts[0] and "can no longer be imported" in prompts[0]
+
+
+def _write_config(tmp_path: Path, extra: str = "") -> Path:
+    staging = tmp_path / "staging"
+    staging.mkdir(exist_ok=True)
+    mirror = tmp_path / "mirror"
+    mirror.mkdir(exist_ok=True)
+    db = tmp_path / "archive.db"
+    cfg = tmp_path / "lcsas.toml"
+    cfg.write_text(f"""
+[paths]
+mirror_base = "{mirror}"
+staging = "{staging}"
+database = "{db}"
+
+[defaults]
+media_type = "TEST_TINY"
+metadata_reserve_mb = 0
+{extra}
+""")
+    return cfg
+
+
+def _import_locations(conn) -> None:
+    """#669: a receipt must name a registered location."""
+    from lcsas.db.locations import ensure_location
+    for name in ("Home", "Offsite", "Vault", "Vault_A", "Vault_B"):
+        ensure_location(conn, name)
+
+
+class TestCmdCatalogImport:
+    def test_import_receipts_from_json(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_001", "uuid1", "TEST_TINY", 1000, "Home", "VERIFIED")
+        _import_locations(conn)
+        conn.close()
+
+        receipt = tmp_path / "receipt.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_001",
+            "volume_id": 1,
+            "session_id": "s1",
+            "location": "Offsite",
+            "pack_count": 5,
+            "verify_passed": True,
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                        str(receipt)])
+        assert result == 0
+
+    def test_import_transitions_staging_to_verified(self, tmp_path, capsys):
+        """Receipt with verify_passed=true promotes STAGING → VERIFIED and closes."""
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_100", "u1", "TEST_TINY", 1000, "Home", "STAGING")
+        _import_locations(conn)
+        # #669: VERIFIED needs the receipt's hash to match the staged ISO's.
+        from lcsas.db.sessions import add_session_volume, create_session
+        create_session(conn, "TEST_TINY", "/staging", session_id="s100")
+        add_session_volume(conn, "s100", 1, "/staging/VOL_100.iso",
+                           iso_sha256="e" * 64, iso_size_bytes=2048)
+        conn.close()
+
+        receipt = tmp_path / "r.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_100",
+            "location": "Home",
+            "verify_passed": True,
+            "burn_date": "2026-04-14T12:00:00+00:00",
+            "iso_sha256": "e" * 64,
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_100")
+        assert vol.status == "VERIFIED"
+        assert vol.closed_at is not None
+        from lcsas.db.volume_events import get_events_for_volume
+        events = get_events_for_volume(conn, vol.volume_id, "VERIFY_PASS")
+        assert len(events) == 1
+        conn.close()
+
+    def test_import_keeps_staging_on_verify_fail(self, tmp_path):
+        """Receipt with verify_passed=false leaves the volume STAGING (#483,
+        as burn_session does) and records the VERIFY_FAIL event."""
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_101", "u2", "TEST_TINY", 1000, "Home", "STAGING")
+        _import_locations(conn)
+        conn.close()
+
+        receipt = tmp_path / "r.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_101",
+            "location": "Home",
+            "verify_passed": False,
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_101")
+        assert vol.status == "STAGING"
+        assert vol.closed_at is None  # not closed on failure
+        from lcsas.db.volume_events import get_events_for_volume
+        events = get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")
+        assert len(events) == 1
+        conn.close()
+
+    @staticmethod
+    def _import(tmp_path, status, receipt):
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_514", "u514", "TEST_TINY", 1000, "Home", status)
+        _import_locations(conn)
+        conn.close()
+        r = tmp_path / "r.json"
+        r.write_text(json.dumps({"volume_label": "VOL_514", **receipt}))
+        rc = main(["--config", str(cfg), "catalog", "import-receipts", str(r)])
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+        conn = get_connection(db)
+        vol = get_volume_by_label(conn, "VOL_514")
+        copies = [c.location for c in get_copies_for_volume(conn, vol.volume_id)]
+        events = [e.event_type for e in get_events_for_volume(conn, vol.volume_id)]
+        conn.close()
+        return rc, vol, copies, events
+
+    def test_import_failed_first_burn_records_no_copy(self, tmp_path, capsys):
+        """#514 / BURN-05: a disc that failed verification is not a copy,
+        and (#483) the volume stays STAGING so its packs stay unarchived."""
+        rc, vol, copies, events = self._import(
+            tmp_path, "STAGING", {"location": "Home", "verify_passed": False})
+        assert rc == 0
+        assert vol.status == "STAGING"
+        assert copies == []
+        assert "VERIFY_FAIL" in events
+        out = capsys.readouterr()
+        assert "FAILED verification" in out.out + out.err
+
+    def test_import_failed_reburn_records_event_not_copy(self, tmp_path):
+        rc, vol, copies, events = self._import(
+            tmp_path, "VERIFIED", {"location": "Offsite", "verify_passed": False})
+        assert rc == 0
+        assert vol.status == "VERIFIED"
+        assert "Offsite" not in copies
+        assert "VERIFY_FAIL_REBURN" in events
+
+    def test_import_unverified_burn_is_burned_not_verified(self, tmp_path):
+        """#514: verify_passed null (burn-iso --no-verify) is recorded as a
+        copy but never promotes the volume to VERIFIED."""
+        rc, vol, copies, events = self._import(
+            tmp_path, "STAGING", {"location": "Home", "verify_passed": None})
+        assert rc == 0
+        assert vol.status == "BURNED"
+        assert vol.closed_at is None
+        assert copies == ["Home"]
+        assert "VERIFY_PASS" not in events and "VERIFY_FAIL" not in events
+
+    def test_import_reburn_only_adds_copy(self, tmp_path):
+        """Already-VERIFIED volume: no status change, just a new copy."""
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_102", "u3", "TEST_TINY", 1000, "Home", "VERIFIED")
+        _import_locations(conn)
+        conn.close()
+
+        receipt = tmp_path / "r.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_102",
+            "location": "Offsite",
+            "verify_passed": True,
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_102")
+        assert vol.status == "VERIFIED"
+        copies = get_copies_for_volume(conn, vol.volume_id)
+        assert any(c.location == "Offsite" for c in copies)
+        conn.close()
+
+    def test_import_persists_receipt_provenance(self, tmp_path):
+        """Issue #18: imported receipts must persist iso_sha256, session_id,
+        device, and pack_ids — currently silently dropped.
+        """
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_PROV", "uuid-prov", "TEST_TINY", 1000,
+                      "Vault_A", "STAGING")
+        _import_locations(conn)
+        conn.close()
+
+        iso_hash = "a" * 64
+        session_id = "sess-2026-04-14"
+        device = "/dev/sr2"
+        pack_ids = [11, 22, 33]
+
+        receipt = tmp_path / "prov.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_PROV",
+            "location": "Vault_A",
+            "session_id": session_id,
+            "device": device,
+            "burn_date": "2026-04-14T13:00:00+00:00",
+            "iso_sha256": iso_hash,
+            "verify_passed": True,
+            "pack_ids": pack_ids,
+        }))
+
+        # No staged ISO hash on record here (#669).
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       "--allow-unhashed", str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+
+        vol = get_volume_by_label(conn, "VOL_PROV")
+        events = get_events_for_volume(
+            conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
+        )
+        assert len(events) == 1, (
+            "expected exactly one BURN_RECEIPT_IMPORTED event row "
+            "carrying the receipt provenance"
+        )
+        ev = events[0]
+        # All four provenance fields must be recoverable from the event detail
+        detail = json.loads(ev.detail)
+        assert detail["iso_sha256"] == iso_hash
+        assert detail["session_id"] == session_id
+        assert detail["device"] == device
+        assert detail["pack_ids"] == pack_ids
+        conn.close()
+
+    def test_import_rejects_hash_mismatch(self, tmp_path):
+        """Issue #18: if a prior receipt persisted an iso_sha256 for a volume,
+        a second receipt with a different iso_sha256 for the same volume must
+        be rejected and must not write a spurious event row.
+        """
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_HASH", "uuid-hash", "TEST_TINY", 1000,
+                      "Vault_A", "STAGING")
+        _import_locations(conn)
+        conn.close()
+
+        good_hash = "b" * 64
+        bad_hash = "c" * 64
+
+        r1 = tmp_path / "r1.json"
+        r1.write_text(json.dumps({
+            "volume_label": "VOL_HASH",
+            "location": "Vault_A",
+            "session_id": "s1",
+            "device": "/dev/sr0",
+            "burn_date": "2026-04-14T14:00:00+00:00",
+            "iso_sha256": good_hash,
+            "verify_passed": True,
+            "pack_ids": [],
+        }))
+        # No staged ISO hash on record here (#669).
+        rc1 = main(["--config", str(cfg), "catalog", "import-receipts",
+                    "--allow-unhashed", str(r1)])
+        assert rc1 == 0
+
+        # Second receipt: same volume, *different* iso_sha256 — must reject.
+        r2 = tmp_path / "r2.json"
+        r2.write_text(json.dumps({
+            "volume_label": "VOL_HASH",
+            "location": "Vault_B",
+            "session_id": "s1",
+            "device": "/dev/sr1",
+            "burn_date": "2026-04-14T15:00:00+00:00",
+            "iso_sha256": bad_hash,
+            "verify_passed": True,
+            "pack_ids": [],
+        }))
+        rc2 = main(["--config", str(cfg), "catalog", "import-receipts",
+                    str(r2)])
+        assert rc2 != 0, "hash-mismatch receipt must cause non-zero exit"
+
+        # And no second BURN_RECEIPT_IMPORTED event should have been written
+        # for the rejected receipt.
+        conn = get_connection(db)
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_HASH")
+        events = get_events_for_volume(
+            conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
+        )
+        assert len(events) == 1, (
+            "rejected receipt must not have written a second event row"
+        )
+        # The surviving event must reflect the ORIGINAL good hash.
+        detail = json.loads(events[0].detail)
+        assert detail["iso_sha256"] == good_hash
+        conn.close()
+
+
+def test_import_receipts_from_durable_dir(tmp_path):
+    """`catalog import-receipts <db dir>/receipts/*.json` repopulates
+    copy/location rows on a fresh hot DB from the durable receipts the
+    burn pipeline wrote beside the catalog.  [BURN-08]"""
+    import json
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.db.connection import get_connection
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volumes import create_volume, get_volume_by_label
+    from tests.unit.test_session_pipeline import (
+        _make_config,
+        _seed_packs,
+        _wire_drive_identity,
+        _zeros_device_reader,
+    )
+
+    # 1. Real burn pipeline against a file-backed hot DB writes the
+    #    durable receipts into <db dir>/receipts/.
+    config = _make_config(tmp_path, num_repos=2)
+    conn = get_connection(config.db_path)
+    create_all(conn)
+    for name in config.repositories:
+        register_repo(conn, name, name.title(),
+                      str(config.repositories[name].mirror_path))
+    _seed_packs(conn, config, num_packs=5, pack_size=50)
+
+    xorriso = MagicMock()
+
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+        Path(output_iso).write_bytes(b"\x00" * 1024)
+        return Path(output_iso)
+
+    xorriso.create_iso.side_effect = _fake_create_iso
+    _wire_drive_identity(xorriso)
+    orch = BurnOrchestrator(config, conn, xorriso, MagicMock(),
+                            device_reader=_zeros_device_reader)
+    result = orch.stage()
+    orch.burn_session(result.session_id, "Offsite_Safe", skip_burn=True)
+    conn.close()
+
+    receipt_files = sorted(
+        (config.db_path.parent / "receipts").glob("*.json")
+    )
+    assert receipt_files, "burn must leave durable receipts beside the DB"
+    labels = [
+        json.loads(rf.read_text())["volume_label"] for rf in receipt_files
+    ]
+
+    # 2. Disaster: the hot DB is lost and rebuilt — the volumes are
+    #    known again (from the discs) but every copy/location is gone.
+    config.db_path.unlink()
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(config.db_path) + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
+    fresh = get_connection(config.db_path)
+    create_all(fresh)
+    for label in labels:
+        create_volume(fresh, label, f"uuid-{label}", "TEST_TINY",
+                      2_097_152, "Home_Shelf", "STAGING")
+    # #669: the receipt's location must be a registered one.
+    from lcsas.db.locations import ensure_location
+    ensure_location(fresh, "Offsite_Safe")
+    fresh.close()
+
+    # 3. Replay the durable receipt directory through the CLI.
+    cfg = tmp_path / "lcsas.toml"
+    cfg.write_text(
+        "[paths]\n"
+        f'mirror_base = "{config.mirror_base_path}"\n'
+        f'staging = "{config.staging_path}"\n'
+        f'database = "{config.db_path}"\n'
+        "\n"
+        "[defaults]\n"
+        'media_type = "TEST_TINY"\n'
+        "metadata_reserve_mb = 0\n"
+    )
+    # #669: the rebuilt catalog has no staged ISO hash for these volumes,
+    # and they were staged for Home_Shelf but burned for Offsite_Safe, so
+    # the owner vouches for both.
+    rc = main(["--config", str(cfg), "catalog", "import-receipts",
+               "--allow-unhashed", "--allow-other-location",
+               *[str(rf) for rf in receipt_files]])
+    assert rc == 0
+
+    # 4. Copy/location rows and statuses are back on the fresh DB.
+    check = get_connection(config.db_path)
+    try:
+        for label in labels:
+            vol = get_volume_by_label(check, label)
+            assert vol.status == "VERIFIED"
+            copies = get_copies_for_volume(check, vol.volume_id)
+            assert [c.location for c in copies] == ["Offsite_Safe"]
+    finally:
+        check.close()
+
+
+# ---------------------------------------------------------------------------
+# Error-path tests for ``lcsas catalog import-receipts`` (issue #517).
+#
+# ``docs/workflows/burn-iso-portable.md`` promises that a bad receipt is
+# skipped with a warning and the rest of the batch still imports.  Nothing
+# pinned that.  These tests cover:
+#
+# * malformed / unreadable receipt files (truncated, empty, garbage, missing,
+#   a directory);
+# * receipts missing ``volume_label`` / ``location``;
+# * an orphan receipt (volume label not in the catalog);
+# * mixed batches -- the bad receipt is skipped, the good one still imports,
+#   whichever order they arrive in.
+#
+# They assert exit codes and, via a before/after dump of the catalog tables,
+# that a skipped receipt writes nothing at all.  Since #669 every skipped or
+# refused receipt makes the exit code non-zero, while the good receipts of
+# the batch are still imported.  Nothing here depends on ``verify_passed``
+# semantics: good receipts target an already-VERIFIED volume (the "re-burn to
+# a new location" path), so only the copy row and the
+# ``BURN_RECEIPT_IMPORTED`` event are asserted.
+#
+# The #666 / #669 / #670 / #671 cases are at the end of the file.
+# ---------------------------------------------------------------------------
+
+
 _TABLES = ("volumes", "volume_copies", "volume_events", "locations")
 
 
-def _write_config(tmp_path: Path) -> Path:
+def _write_config_receipts(tmp_path: Path) -> Path:
     staging = tmp_path / "staging"
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
@@ -137,14 +1110,10 @@ def _assert_imported(db: Path, label: str, location: str, expected_events: int =
 @pytest.fixture
 def env(tmp_path):
     """Config + catalog holding one VERIFIED volume, VOL_GOOD."""
-    cfg = _write_config(tmp_path)
+    cfg = _write_config_receipts(tmp_path)
     db = _make_catalog(tmp_path, {"VOL_GOOD": "VERIFIED", "VOL_OTHER": "VERIFIED"})
     return tmp_path, cfg, db
 
-
-# ---------------------------------------------------------------------------
-# Single bad receipt: skipped, warned, nothing written
-# ---------------------------------------------------------------------------
 
 _MALFORMED = {
     "truncated": '{"volume_label": "VOL_GOOD", "location": "Off',
@@ -382,10 +1351,6 @@ class TestOrphanReceipt:
         assert _dump(db) == before
 
 
-# ---------------------------------------------------------------------------
-# Mixed batches
-# ---------------------------------------------------------------------------
-
 _BAD_FILES = {
     "malformed": lambda tp: _receipt(tp, "bad_malformed.json", '{"volume_label": '),
     "missing-keys": lambda tp: _receipt(tp, "bad_keys.json", {"volume_label": "VOL_OTHER"}),
@@ -479,11 +1444,6 @@ class TestMixedBatch:
             conn.close()
 
 
-# ---------------------------------------------------------------------------
-# #646: a verified receipt records the disc as verified
-# ---------------------------------------------------------------------------
-
-
 class TestReceiptLastVerified:
     def _last_verified(self, db: Path, label: str, location: str) -> str | None:
         conn = get_connection(db)
@@ -559,13 +1519,6 @@ class TestReceiptLastVerified:
         assert got is not None and before <= got <= datetime.now(UTC).isoformat()
 
 
-
-
-# ---------------------------------------------------------------------------
-# #644: the receipt must name the ISO that was staged
-# ---------------------------------------------------------------------------
-
-
 def _stage_record(db: Path, label: str, sha: str | None, size: int | None,
                   session_id: str = "sess-1") -> None:
     """Record a burn session for ``label`` as `lcsas stage` would."""
@@ -585,7 +1538,7 @@ def _stage_record(db: Path, label: str, sha: str | None, size: int | None,
 @pytest.fixture
 def staged_env(tmp_path):
     """One STAGING volume whose ISO was recorded as ("a"*64, 2048 bytes)."""
-    cfg = _write_config(tmp_path)
+    cfg = _write_config_receipts(tmp_path)
     db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"}, staged_for="Bank_Box")
     _stage_record(db, "VOL_NEW", "a" * 64, 2048)
     return tmp_path, cfg, db
@@ -696,7 +1649,7 @@ class TestStagedIsoCheck:
 
     def test_empty_staged_hash_counts_as_none(self, tmp_path, capsys):
         """session_volumes rows start with iso_sha256='' before the ISO exists."""
-        cfg = _write_config(tmp_path)
+        cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"}, staged_for="Bank_Box")
         _stage_record(db, "VOL_NEW", "", None)
         r = _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box"))
@@ -707,11 +1660,6 @@ class TestStagedIsoCheck:
         assert _run(cfg, r, flags=("--allow-unhashed",
                                    "--allow-incomplete-staging")) == 0
         assert "no ISO hash was recorded" in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# #666: an old receipt imported again changes nothing
-# ---------------------------------------------------------------------------
 
 
 def _copy(db: Path, label: str, location: str):
@@ -827,11 +1775,6 @@ class TestReimport:
         assert copy.burn_date == reburn["burn_date"]
 
 
-# ---------------------------------------------------------------------------
-# #669: bad receipts are refused, and the exit code says so
-# ---------------------------------------------------------------------------
-
-
 class TestStrictReceipt:
     @pytest.mark.parametrize("value", ["false", "true", "", 0, 1, [], {}])
     def test_non_boolean_verify_passed_is_refused(self, staged_env, capsys, value):
@@ -908,16 +1851,11 @@ class TestStrictReceipt:
 
     def test_volume_without_a_staged_for_location_is_not_checked(self, tmp_path, capsys):
         """Older volumes may have no volumes.location: nothing to compare."""
-        cfg = _write_config(tmp_path)
+        cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_OLD": "STAGING"}, staged_for="")
         _stage_record(db, "VOL_OLD", "a" * 64, 2048)
         assert _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_OLD", "Vault"))) == 0
         assert _status(db, "VOL_OLD") == "VERIFIED"
-
-
-# ---------------------------------------------------------------------------
-# #670: STAGING, BURNING and BURNED are treated alike
-# ---------------------------------------------------------------------------
 
 
 class TestFirstDiscStates:
@@ -928,7 +1866,7 @@ class TestFirstDiscStates:
         from lcsas.db.repos import register_repo
         from lcsas.db.volume_packs import bulk_link_packs
 
-        cfg = _write_config(tmp_path)
+        cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
         _stage_record(db, "VOL_NEW", "a" * 64, 2048)
         conn = get_connection(db)
@@ -957,7 +1895,7 @@ class TestFirstDiscStates:
     def test_failed_receipt_without_a_disc_returns_the_volume_to_staging(
         self, tmp_path, start,
     ):
-        cfg = _write_config(tmp_path)
+        cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
         _stage_record(db, "VOL_NEW", "a" * 64, 2048)
         body = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)
@@ -973,17 +1911,12 @@ class TestFirstDiscStates:
             conn.close()
 
     def test_unverified_receipt_for_a_burned_volume_keeps_it_burned(self, tmp_path):
-        cfg = _write_config(tmp_path)
+        cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": "BURNED"}, staged_for="Bank_Box")
         _stage_record(db, "VOL_NEW", "a" * 64, 2048)
         body = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=None)
         assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
         assert _status(db, "VOL_NEW") == "BURNED"
-
-
-# ---------------------------------------------------------------------------
-# #671: a failed burn shows under "needs re-burn"; one next step everywhere
-# ---------------------------------------------------------------------------
 
 
 class TestFailedBurnNextStep:
@@ -1104,7 +2037,7 @@ class TestIncompleteStaging:
     def staged(self, tmp_path):
         from lcsas.db.sessions import add_session_volume, create_session
 
-        cfg = _write_config(tmp_path)
+        cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_S": "STAGING"}, staged_for="Offsite")
         conn = get_connection(db)
         try:

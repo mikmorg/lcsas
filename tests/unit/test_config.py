@@ -313,3 +313,30 @@ class TestNegativeConfig:
         with caplog.at_level(logging.WARNING, logger="lcsas"):
             load_config(config_file)
         assert "not set" not in caplog.text
+
+
+class TestConfigEdgeCases:
+    def test_load_nonexistent_file(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_config(tmp_path / "nonexistent.toml")
+
+    def test_load_malformed_toml(self, tmp_path):
+        import tomllib
+
+        bad = tmp_path / "bad.toml"
+        bad.write_text("[[[[invalid toml")
+        with pytest.raises(tomllib.TOMLDecodeError):
+            load_config(bad)
+
+    def test_load_invalid_media_type(self, tmp_path):
+        cfg = tmp_path / "cfg.toml"
+        cfg.write_text('[defaults]\nmedia_type = "NONEXISTENT"\n')
+        with pytest.raises(ValueError, match="Unknown media type"):
+            load_config(cfg)
+
+    def test_media_type_enum_properties(self):
+        """Verify all media type properties are consistent."""
+        for mt in MediaType:
+            assert mt.usable_bytes <= mt.capacity_bytes
+            assert mt.ecc_overhead_pct >= 0
+            assert mt.usable_bytes >= 0

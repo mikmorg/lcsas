@@ -830,7 +830,7 @@ class TestBundleUpstreamBinaries:
         must not crash the build.  Completeness is enforced one level up,
         by the RST-05 build gate in ``cmd_meta_build`` (default ON,
         escape hatch ``--allow-incomplete``) — see
-        ``test_cli_comprehensive.TestCmdMetaBuildGate``."""
+        ``test_cli_meta.TestCmdMetaBuildGate``."""
         from lcsas.meta.builder import MetaVolumeBuilder
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "nonexistent"))
         b = MetaVolumeBuilder(tmp_path / "meta")

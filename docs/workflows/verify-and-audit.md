@@ -277,7 +277,7 @@ one place that decides it
 - **Storage stage:** None; catalog-only.
 
 **Test coverage:**
-- Existing: `tests/unit/test_cli_handlers.py::TestCmdSessionList::test_session_list_prints_volume_labels` (#748) checks the volumes line names labels, not ids. `tests/unit/test_db_sessions.py::TestSessionCRUD` covers `list_sessions` (`tests/unit/test_db_sessions.py:80-94`), including the status filter, plus all neighbouring CRUD ops (`tests/unit/test_db_sessions.py:23-100`). Session-volume linkage is covered by `TestSessionVolumes` (`tests/unit/test_db_sessions.py:103-140`).
+- Existing: `tests/unit/test_cli_session.py::TestCmdSessionList::test_session_list_prints_volume_labels` (#748) checks the volumes line names labels, not ids. `tests/unit/test_db_sessions.py::TestSessionCRUD` covers `list_sessions` (`tests/unit/test_db_sessions.py:80-94`), including the status filter, plus all neighbouring CRUD ops (`tests/unit/test_db_sessions.py:23-100`). Session-volume linkage is covered by `TestSessionVolumes` (`tests/unit/test_db_sessions.py:103-140`).
 - Gaps:
   - No test for the `--config required` error path.
 
@@ -400,7 +400,7 @@ For whoever holds the archive after the owner. Every disc carries this schedule 
 - **Storage stage:** These schedules cover the discs only; the mirror is checked continuously by Rustic itself.
 
 **Test coverage:**
-- The schedule text is pinned by `tests/unit/test_reverify_schedules.py` (the long-term bullets in this doc and in DISC_CARE.txt must match, neither may pair a re-burn with a time interval, and the 'After ANY read error' re-burn bullet must stay) and `tests/unit/test_disc_care_media_guidance.py` (MEDIA LONGEVITY: re-burn onto fresh discs after any read error, but never just because a disc is old). The monthly list (`status --stale-copies`, including `--older-than-days 0`) is tested in `tests/unit/test_cli_handlers.py`, and `tests/recovery_hardening/test_last_verified_writer_exists.py` pins that `verify --disc` writes the stamp it reads.
+- The schedule text is pinned by `tests/unit/test_reverify_schedules.py` (the long-term bullets in this doc and in DISC_CARE.txt must match, neither may pair a re-burn with a time interval, and the 'After ANY read error' re-burn bullet must stay) and `tests/unit/test_disc_care_media_guidance.py` (MEDIA LONGEVITY: re-burn onto fresh discs after any read error, but never just because a disc is old). The monthly list (`status --stale-copies`, including `--older-than-days 0`) is tested in `tests/unit/test_cli_status.py`, and `tests/recovery_hardening/test_last_verified_writer_exists.py` pins that `verify --disc` writes the stamp it reads.
 - Gaps:
   - There is no scheduled-task / hook integration; the owner runs the schedule by hand.
   - `lcsas status --stale-copies` does not list meta discs, so their yearly read is not tracked.

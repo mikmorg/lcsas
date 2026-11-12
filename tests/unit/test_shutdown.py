@@ -116,3 +116,25 @@ class TestReentrancyGuard:
         assert cleanup_ran[0] is True
         mock_uninstall.assert_called_once()
         mock_raise.assert_called_once_with(signal.SIGTERM)
+
+
+class TestShutdownManager:
+    def test_callbacks_run_in_reverse_order(self):
+        from lcsas.utils.shutdown import ShutdownManager
+
+        order: list[int] = []
+        mgr = ShutdownManager()
+        mgr.register(lambda: order.append(1))
+        mgr.register(lambda: order.append(2))
+        mgr.register(lambda: order.append(3))
+        mgr.run_cleanups()
+        assert order == [3, 2, 1]
+
+    def test_callback_error_is_swallowed(self):
+        from lcsas.utils.shutdown import ShutdownManager
+
+        mgr = ShutdownManager()
+        mgr.register(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        mgr.register(lambda: None)
+        # Should not raise
+        mgr.run_cleanups()

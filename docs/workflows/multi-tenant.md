@@ -67,7 +67,7 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
 - Existing:
   - `tests/unit/test_cli.py::TestRepoCommands::test_repo_add` —
     dispatch smoke test.
-  - `tests/unit/test_cli_comprehensive.py::TestCmdRepoAddEdges::test_duplicate_repo_name_errors`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoAddEdges::test_duplicate_repo_name_errors`
     and `tests/unit/test_repo_resolution_and_key_records.py` — a duplicate
     name or mirror path is refused (#685).
   - `tests/unit/test_multi_tenant.py::test_repos_registered_independently`
@@ -119,7 +119,7 @@ cases.
 
 - Existing:
   - `tests/unit/test_cli.py::TestRepoCommands::test_repo_list`
-  - `tests/unit/test_cli_comprehensive.py::TestCmdRepoListEdges::test_many_repos`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoListEdges::test_many_repos`
   - `tests/unit/test_multi_tenant.py::test_repo_retrieval_by_id`
 - Gaps:
   - No assertion of stable / locale-independent sort order.
@@ -260,9 +260,9 @@ lives on `volumes` (managed by `consolidate --deprecate`).
 **Test coverage:**
 
 - Existing:
-  - `tests/unit/test_cli_comprehensive.py::TestCmdRepoRemove::test_remove_nonexistent_repo`
-  - `tests/unit/test_cli_comprehensive.py::TestCmdRepoRemove::test_remove_empty_repo`
-  - `tests/unit/test_cli_comprehensive.py::TestCmdRepoRemove::test_remove_with_packs_needs_force`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoRemoveEdges::test_remove_nonexistent_repo`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoRemove::test_repo_remove_happy_path`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoRemoveEdges::test_remove_with_packs_needs_force`
   - `tests/unit/test_multi_tenant.py::test_deleting_repo_does_not_affect_others`
 - Gaps:
   - `--force` interactive confirmation path untested (needs
