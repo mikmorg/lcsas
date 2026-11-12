@@ -37,13 +37,13 @@ can reference it via foreign key.
 **Prerequisites:**
 - `--config` pointing at a valid LCSAS config (the command refuses to run
   without it — the config check at the top of `cmd_location()`,
-  `src/lcsas/cli/main.py`).
+  `src/lcsas/cli/commands/location.py`).
 - Writable catalog at `config.db_path` (or `--db` override).
 
 **Steps:**
 1. Argparse defines the `location add <name> [--description …]` subcommand
    (the `location` subparser block in `build_parser()`,
-   `src/lcsas/cli/main.py`).
+   `src/lcsas/cli/parser.py`).
 2. `cmd_location()` dispatches to the `"add"` branch.
 3. The name is sanitized with `sanitize_name(..., "location name")`
    (in the `"add"` branch of `cmd_location()`) to strip path-unsafe
@@ -77,7 +77,7 @@ in `src/lcsas/db/schema.py`).
 
 **Source refs:**
 - `build_parser()` (`location` subparser) and the `"add"` branch of
-  `cmd_location()` in `src/lcsas/cli/main.py`
+  `cmd_location()` in `src/lcsas/cli/commands/location.py` and `src/lcsas/cli/parser.py`
 - `create_location()` in `src/lcsas/db/locations.py`
 - the `locations` table DDL in `src/lcsas/db/schema.py`
 
@@ -95,7 +95,7 @@ summary (volume count, pack count, packs behind the whole archive).
 1. Parser registers the bare `location list` subcommand
    (the `location` subparser block in `build_parser()`).
 2. `cmd_location()` enters the `"list"` branch
-   (`src/lcsas/cli/main.py`).
+   (`src/lcsas/cli/commands/location.py`).
 3. `list_locations(conn)` returns all rows ordered by name
    (`src/lcsas/db/locations.py`).
 4. If the table is empty, logs `No locations registered.` and returns 0
@@ -131,7 +131,7 @@ summary (volume count, pack count, packs behind the whole archive).
 
 **Source refs:**
 - the `location` subparser in `build_parser()` and the `"list"` branch of
-  `cmd_location()` in `src/lcsas/cli/main.py`
+  `cmd_location()` in `src/lcsas/cli/commands/location.py` and `src/lcsas/cli/parser.py`
 - `list_locations()` in `src/lcsas/db/locations.py`
 - `get_location_summary()` in `src/lcsas/db/queries.py`
 
@@ -151,7 +151,7 @@ which packs are present there, which ones are missing, grouped by repository.
 1. Parser registers `location status <name>`
    (the `location` subparser block in `build_parser()`).
 2. `cmd_location()` enters the `"status"` branch
-   (`src/lcsas/cli/main.py`).
+   (`src/lcsas/cli/commands/location.py`).
 3. `get_packs_at_location(conn, name)` returns the set of `pack_id` row ids
    of packs held at this location: not pruned, and linked to a durable
    volume with an `ACTIVE` disc there (`_HELD_AT_LOCATION`,
@@ -189,7 +189,7 @@ Location: Offsite_Safe
 
 **Source refs:**
 - the `location` subparser in `build_parser()` and the `"status"` branch
-  of `cmd_location()` in `src/lcsas/cli/main.py`
+  of `cmd_location()` in `src/lcsas/cli/commands/location.py` and `src/lcsas/cli/parser.py`
 - `get_packs_at_location()` and `get_packs_missing_at_location()` in
   `src/lcsas/db/queries.py`
 
@@ -215,7 +215,7 @@ registered locations (e.g. quarterly rotation from `Home_Safe` to
 1. Parser registers `location move <volume_label> --from <a> --to <b>`
    (the `location` subparser block in `build_parser()`).
 2. `cmd_location()` enters the `"move"` branch
-   (`src/lcsas/cli/main.py`).
+   (`src/lcsas/cli/commands/location.py`).
 3. `get_volume_by_label(conn, args.volume_label)` resolves the label to
    a `Volume` row; missing labels log an error and return 1
    (the `"move"` branch of `cmd_location()`).
@@ -256,7 +256,7 @@ created; the disc retains its `burn_date`, `iso_sha256`, and
 
 **Source refs:**
 - the `location` subparser in `build_parser()` and the `"move"` branch of
-  `cmd_location()` in `src/lcsas/cli/main.py`
+  `cmd_location()` in `src/lcsas/cli/commands/location.py` and `src/lcsas/cli/parser.py`
 - `move_volume_copy()` in `src/lcsas/db/volume_copies.py`
 - the `UNIQUE(volume_id, location)` constraint in the `volume_copies`
   DDL, `src/lcsas/db/schema.py`
@@ -331,7 +331,7 @@ guard stop counting it, and its packs re-enter the next `lcsas stage`.
 
 **Source refs:**
 - `build_parser()` (`copy` subparser), `cmd_copy`,
-  `_print_lost_volume_packs` (`src/lcsas/cli/main.py`)
+  `_print_lost_volume_packs` (`src/lcsas/cli/commands/copy.py` and `src/lcsas/cli/parser.py`)
 - `src/lcsas/db/volume_copies.py` (`deprecate_copy`, `destroy_copy`)
 
 ---
@@ -356,7 +356,7 @@ by staging and burning *only* the packs that location is missing.
 
 1. **Entry point:** `lcsas stage --for-location <name>` — explicit flag
    (the `--for-location` option on the `stage` subparser in
-   `build_parser()`, `src/lcsas/cli/main.py`). `cmd_stage()` passes
+   `build_parser()`, `src/lcsas/cli/parser.py`). `cmd_stage()` passes
    `for_location=args.for_location` into `BurnOrchestrator.stage()`.
    Burn the resulting session with
    `lcsas burn --session <id> --location <name>` to tag the burned discs
@@ -433,7 +433,7 @@ discs already at the target.
 
 **Source refs:**
 - the `--for-location` flag in `build_parser()` and `cmd_stage()` in
-  `src/lcsas/cli/main.py`
+  `src/lcsas/cli/commands/stage.py` and `src/lcsas/cli/parser.py`
 - `BurnOrchestrator.stage()`, `burn_session()`, and
   `_gather_packs_for_staging()` in `src/lcsas/burn/orchestrator.py`
 - `get_unarchived_or_missing_at_location()` in `src/lcsas/db/queries.py`
@@ -531,7 +531,7 @@ operating LCSAS in a multi-location production setup:
 
 3. **`location status` doesn't check that the location exists.**
    The `"status"` branch of `cmd_location()` passes an arbitrary name
-   straight to queries (`src/lcsas/cli/main.py`); an unknown location
+   straight to queries (`src/lcsas/cli/commands/location.py`); an unknown location
    yields `0 archived / 0 missing` rather than an error.
 
 4. **`location move` cannot swap two discs at once.**
@@ -582,7 +582,7 @@ operating LCSAS in a multi-location production setup:
    The catalog layer's `deprecate_copy` / `destroy_copy`
    (`src/lcsas/db/volume_copies.py`) are wired into the CLI as
    `lcsas copy deprecate` and `lcsas copy destroy` (`cmd_copy` in
-   `src/lcsas/cli/main.py`). Marking a damaged, destroyed or lost disc
+   `src/lcsas/cli/commands/copy.py`). Marking a damaged, destroyed or lost disc
    (`copy destroy --lost`) no longer requires a Python REPL or direct
    SQL — see the [`lcsas copy`](#lcsas-copy-deprecate--lcsas-copy-destroy)
    section. `location move` never takes a disc out of service, so only

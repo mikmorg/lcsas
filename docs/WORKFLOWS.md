@@ -105,7 +105,7 @@ Each detail file ends with a "Test coverage" table using these tokens:
 
 Every step in every detail file carries a source reference pointing at the
 code that implements it — by symbol name, e.g. `` `cmd_restore_plan()` in
-`src/lcsas/cli/main.py` `` (symbol names survive the refactors that rot line
+`src/lcsas/cli/commands/restore.py` `` (symbol names survive the refactors that rot line
 numbers; a few older detail files still carry legacy `file.py:LINE` refs
 pending migration). Paths are repo-relative (rooted at the LCSAS checkout)
 so they remain stable across worktrees and forks.

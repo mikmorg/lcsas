@@ -11,6 +11,44 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 from lcsas import __version__
+from lcsas.cli.commands.burn import cmd_burn_iso, cmd_burn_session
+from lcsas.cli.commands.catalog import (
+    cmd_catalog_import,
+    cmd_catalog_rebuild,
+    cmd_catalog_reconcile,
+    cmd_catalog_validate,
+)
+from lcsas.cli.commands.config import cmd_config_check
+from lcsas.cli.commands.consolidate import cmd_consolidate
+from lcsas.cli.commands.copy import cmd_copy
+from lcsas.cli.commands.estate import cmd_estate_card
+from lcsas.cli.commands.init import cmd_init
+from lcsas.cli.commands.key import (
+    cmd_key_card,
+    cmd_key_combine,
+    cmd_key_split,
+    cmd_key_unsplit,
+    cmd_key_verify,
+)
+from lcsas.cli.commands.location import cmd_location
+from lcsas.cli.commands.meta import cmd_meta_build, cmd_meta_verify
+from lcsas.cli.commands.pack import cmd_pack_unprune
+from lcsas.cli.commands.recovery import cmd_recovery
+from lcsas.cli.commands.repo import (
+    cmd_repo_activate,
+    cmd_repo_add,
+    cmd_repo_list,
+    cmd_repo_remove,
+    cmd_repo_retire,
+)
+from lcsas.cli.commands.restore import cmd_restore_exec, cmd_restore_from_disc, cmd_restore_plan
+from lcsas.cli.commands.scan import cmd_scan
+from lcsas.cli.commands.session import cmd_session_abort, cmd_session_list
+from lcsas.cli.commands.stage import cmd_stage
+from lcsas.cli.commands.staging import cmd_staging_clean
+from lcsas.cli.commands.status import cmd_status
+from lcsas.cli.commands.verify import cmd_verify
+from lcsas.cli.commands.volume import cmd_volume_impact
 from lcsas.log import get_logger
 
 if TYPE_CHECKING:
@@ -66,46 +104,6 @@ def build_parser() -> argparse.ArgumentParser:
     Each (sub)parser names its handler with ``set_defaults(func=...)``;
     :func:`dispatch` calls it.
     """
-    from lcsas.cli.main import (
-        cmd_burn_iso,
-        cmd_burn_session,
-        cmd_catalog_import,
-        cmd_catalog_rebuild,
-        cmd_catalog_reconcile,
-        cmd_catalog_validate,
-        cmd_config_check,
-        cmd_consolidate,
-        cmd_copy,
-        cmd_estate_card,
-        cmd_init,
-        cmd_key_card,
-        cmd_key_combine,
-        cmd_key_split,
-        cmd_key_unsplit,
-        cmd_key_verify,
-        cmd_location,
-        cmd_meta_build,
-        cmd_meta_verify,
-        cmd_pack_unprune,
-        cmd_recovery,
-        cmd_repo_activate,
-        cmd_repo_add,
-        cmd_repo_list,
-        cmd_repo_remove,
-        cmd_repo_retire,
-        cmd_restore_exec,
-        cmd_restore_from_disc,
-        cmd_restore_plan,
-        cmd_scan,
-        cmd_session_abort,
-        cmd_session_list,
-        cmd_stage,
-        cmd_staging_clean,
-        cmd_status,
-        cmd_verify,
-        cmd_volume_impact,
-    )
-
     parser = _LcsasArgumentParser(
         prog="lcsas",
         description="Linux Cold Storage Archival Suite — "

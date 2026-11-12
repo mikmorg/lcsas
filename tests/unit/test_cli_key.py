@@ -1019,7 +1019,7 @@ class TestSplitVerifiesAtWrite:
         self, tmp_path: Path, capsys, monkeypatch
     ) -> None:
         """A corrupted written card is caught by the post-write recombine."""
-        import lcsas.cli.main as cli
+        import lcsas.cli.commands.key as cli
         from lcsas.keyshare import is_mnemonic_line
 
         real_write = cli._write_private_file

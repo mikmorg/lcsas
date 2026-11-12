@@ -249,7 +249,7 @@ labels (`<prefix>_<media_label>_<seq>`) generated via
   during `stage` (only the burn-time integration tests use real binaries).
 
 **Source refs:** `build_parser()` (`stage` subparser) and `cmd_stage` in
-`src/lcsas/cli/main.py`; `BurnOrchestrator.stage` and
+`src/lcsas/cli/commands/stage.py` and `src/lcsas/cli/parser.py`; `BurnOrchestrator.stage` and
 `BurnOrchestrator._stage_single_volume` in `src/lcsas/burn/orchestrator.py`;
 `first_fit_decreasing` in `src/lcsas/binpack/algorithm.py`;
 `StagingBuilder` in `src/lcsas/staging/builder.py`;
@@ -353,7 +353,7 @@ volume backward (`BurnOrchestrator.burn_session`).
   instances).
 
 **Source refs:** `build_parser()` (`burn` subparser) and `cmd_burn_session`
-in `src/lcsas/cli/main.py`; `BurnOrchestrator.burn_session` in
+in `src/lcsas/cli/commands/burn.py` and `src/lcsas/cli/parser.py`; `BurnOrchestrator.burn_session` in
 `src/lcsas/burn/orchestrator.py`; `resolve_session_id` /
 `get_session_volumes` in `src/lcsas/db/sessions.py` (the `burn_sessions` and
 `session_volumes` tables); `add_volume_copy` in
@@ -398,7 +398,7 @@ use `lcsas stage --dry-run` instead (next section).
 - Gaps: no end-to-end CLI test asserts the exact dry-run log lines.
 
 **Source refs:** `cmd_burn_session` (dry-run branch) in
-`src/lcsas/cli/main.py`.
+`src/lcsas/cli/commands/burn.py`.
 
 ---
 
@@ -428,7 +428,7 @@ location filter (`--for-location`). No ISO is produced.
 **Test coverage:** `tests/unit/test_session_pipeline.py` exercises the
 `stage(dry_run=True)` branch; argparse tested in `tests/unit/test_cli.py`.
 
-**Source refs:** `cmd_stage` (dry-run branch) in `src/lcsas/cli/main.py`;
+**Source refs:** `cmd_stage` (dry-run branch) in `src/lcsas/cli/commands/stage.py`;
 `BurnOrchestrator.stage` in `src/lcsas/burn/orchestrator.py`.
 
 ---
@@ -502,7 +502,7 @@ transparently (re-burning a `VERIFIED` volume only adds a new
   in the same session.
 
 **Source refs:** `cmd_stage` (`--for-location`) and `cmd_burn_session`
-(`--location`) in `src/lcsas/cli/main.py`; `BurnOrchestrator.stage` and
+(`--location`) in `src/lcsas/cli/commands/burn.py` and `src/lcsas/cli/commands/stage.py`; `BurnOrchestrator.stage` and
 `BurnOrchestrator._gather_packs_for_staging` in
 `src/lcsas/burn/orchestrator.py`; `get_unarchived_or_missing_at_location`
 in `src/lcsas/db/queries.py`.
@@ -775,12 +775,12 @@ Refs are by symbol name (line numbers drift); grep the file for the symbol.
 
 | Concern | File | Symbol |
 |---------|------|--------|
-| Argparse: `stage` / `burn` / `session list` subparsers | `src/lcsas/cli/main.py` | `build_parser()` |
-| Handler: `cmd_stage` | `src/lcsas/cli/main.py` | `cmd_stage` |
-| Handler: `cmd_burn_session` | `src/lcsas/cli/main.py` | `cmd_burn_session` |
-| Handler: `cmd_burn_iso` | `src/lcsas/cli/main.py` | `cmd_burn_iso` |
-| Handler: `session list` / `session abort` | `src/lcsas/cli/main.py` | `cmd_session_list` / `cmd_session_abort` |
-| Dispatch: `burn` → `cmd_burn_session` | `src/lcsas/cli/main.py` | `args.command == "burn"` branch |
+| Argparse: `stage` / `burn` / `session list` subparsers | `src/lcsas/cli/parser.py` | `build_parser()` |
+| Handler: `cmd_stage` | `src/lcsas/cli/commands/stage.py` | `cmd_stage` |
+| Handler: `cmd_burn_session` | `src/lcsas/cli/commands/burn.py` | `cmd_burn_session` |
+| Handler: `cmd_burn_iso` | `src/lcsas/cli/commands/burn.py` | `cmd_burn_iso` |
+| Handler: `session list` / `session abort` | `src/lcsas/cli/commands/session.py` | `cmd_session_list` / `cmd_session_abort` |
+| Dispatch: `burn` → `cmd_burn_session` | `src/lcsas/cli/commands/burn.py` | `args.command == "burn"` branch |
 | `BurnOrchestrator._stage_single_volume` | `src/lcsas/burn/orchestrator.py` | `_stage_single_volume` |
 | `BurnOrchestrator.stage` | `src/lcsas/burn/orchestrator.py` | `stage` |
 | `BurnOrchestrator.burn_session` | `src/lcsas/burn/orchestrator.py` | `burn_session` |

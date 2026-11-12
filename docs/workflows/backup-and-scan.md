@@ -36,7 +36,7 @@ call `RusticRunner.backup` in `src/lcsas/rustic/wrapper.py`.)
 
 **Prerequisites:**
 - A registered repository in the catalog (`lcsas repo add <name> <mirror_path>`)
-  (`cmd_repo_add` in `src/lcsas/cli/main.py`).
+  (`cmd_repo_add` in `src/lcsas/cli/commands/repo.py`).
 - An initialized Rustic repository at `mirror_path` with a `data/`,
   `index/`, `keys/`, `snapshots/`, and `config` layout.
   `SubprocessRusticRunner.init_repo` can do this programmatically
@@ -44,10 +44,10 @@ call `RusticRunner.backup` in `src/lcsas/rustic/wrapper.py`.)
 - A `password_file` setting naming the file that holds the repository's
   password
   (referenced by `scan` for snapshot listing — see the snapshot block in
-  `cmd_scan`, `src/lcsas/cli/main.py`).
+  `cmd_scan`, `src/lcsas/cli/commands/scan.py`).
 - `rustic >= 0.9.0` on PATH (enforced at scan time by
   `check_binary_version("rustic", min_version=(0, 9, 0))` in `cmd_scan`,
-  `src/lcsas/cli/main.py`).
+  `src/lcsas/cli/commands/scan.py`).
 
 **Steps:**
 1. `rustic -r <mirror_path> --password-file <pwfile> init` — one-time, only
@@ -120,7 +120,7 @@ catalogued yet?" command.
 **Steps:**
 1. `lcsas --config <conf.toml> [--db <path>] scan` — argparse entry
    (`scan_p` in `build_parser()`), dispatched to `cmd_scan`
-   (`src/lcsas/cli/main.py`).
+   (`src/lcsas/cli/commands/scan.py` and `src/lcsas/cli/parser.py`).
 2. For each repository in `config.repositories` (`cmd_scan`):
    a. Walk `mirror_path/data/` via `scan_mirror_packs`, which returns a
       `MirrorScanResult` with `.packs` and `.errors`
@@ -207,7 +207,7 @@ Other axes: N/A.
 
 **Source refs:**
 - CLI: `scan_p` in `build_parser()` (parser) · `cmd_scan` (handler), both
-  in `src/lcsas/cli/main.py`.
+  in `src/lcsas/cli/commands/scan.py` and `src/lcsas/cli/parser.py`.
 - Scanner: `scan_mirror_packs` in `src/lcsas/packs/scanner.py`.
 - Delta: `DeltaAnalyzer` in `src/lcsas/packs/delta.py`.
 - Catalog: `bulk_register` · `bulk_mark_pruned`, both in

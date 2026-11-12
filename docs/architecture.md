@@ -665,7 +665,7 @@ interpreter, even without rustic, restic, or the meta disc.
 The `lcsas` entry point (`src/lcsas/cli/main.py`) exposes **22 top-level
 subcommands and 33 nested subcommands**. The selection below is
 representative, not exhaustive — run `lcsas --help` (or read
-`cli/main.py`) for the authoritative, current command surface.
+`cli/parser.py`) for the authoritative, current command surface.
 
 ```
 lcsas init          [--db-path PATH]              Initialize the catalog

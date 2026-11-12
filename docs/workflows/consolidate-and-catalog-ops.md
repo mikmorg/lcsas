@@ -139,7 +139,7 @@ packs will require, without touching any state.
   — confirms `is_pruned=1` packs are dropped from the plan.
 
 **Source refs:**
-- `cmd_consolidate` (plan path) in `src/lcsas/cli/main.py`
+- `cmd_consolidate` (plan path) in `src/lcsas/cli/commands/consolidate.py`
 - `src/lcsas/consolidate/merger.py` — `ConsolidationPlan`,
   `plan_consolidation`
 - `src/lcsas/db/queries.py` — `get_packs_on_volumes`
@@ -246,7 +246,7 @@ called from `cmd_session_abort`).
   sources to `VERIFIED`.
 
 **Source refs:**
-- `cmd_consolidate` in `src/lcsas/cli/main.py`
+- `cmd_consolidate` in `src/lcsas/cli/commands/consolidate.py`
 - `src/lcsas/consolidate/merger.py` — state-transition helpers
 - `src/lcsas/burn/orchestrator.py` — `stage()`
 
@@ -345,7 +345,7 @@ two-phase consolidation.
   those via `lcsas copy deprecate`/`destroy`.
 
 **Source refs:**
-- `cmd_consolidate` (`--deprecate` branch) in `src/lcsas/cli/main.py`
+- `cmd_consolidate` (`--deprecate` branch) in `src/lcsas/cli/commands/consolidate.py`
 - `src/lcsas/consolidate/merger.py` — `deprecate_sources`
 - `src/lcsas/db/volumes.py` (status update with audit + safety;
   `check_deprecation_safe`)
@@ -432,8 +432,8 @@ content no longer hashes to its filename (CORRUPT).
   must couple this with `lcsas verify --mark-verified|--mark-failed`.
 
 **Source refs:**
-- `build_parser()` (argparse) in `src/lcsas/cli/main.py`
-- `cmd_catalog_validate` in `src/lcsas/cli/main.py`
+- `build_parser()` (argparse) in `src/lcsas/cli/parser.py`
+- `cmd_catalog_validate` in `src/lcsas/cli/commands/catalog.py`
 - `validate_disc` in `src/lcsas/db/verify.py`
 
 ---
@@ -521,8 +521,8 @@ catalog and physical reality (FMA-01).  Two independent checks:
 - **Storage stage** — none (master catalog only).
 
 **Source refs:**
-- `build_parser()` (argparse) in `src/lcsas/cli/main.py`
-- `cmd_catalog_reconcile` in `src/lcsas/cli/main.py`
+- `build_parser()` (argparse) in `src/lcsas/cli/parser.py`
+- `cmd_catalog_reconcile` in `src/lcsas/cli/commands/catalog.py`
 - `get_ghost_volumes`, `get_durable_volumes_without_active_copies`,
   `get_volume_pack_stats_by_repo` in `src/lcsas/db/queries.py`
 - `staged_iso_present` in `src/lcsas/db/sessions.py`
@@ -694,8 +694,8 @@ rebuilds the master.
   `_merge_one_disc` API).
 
 **Source refs:**
-- `build_parser()` (argparse) in `src/lcsas/cli/main.py`
-- `cmd_catalog_rebuild` in `src/lcsas/cli/main.py`
+- `build_parser()` (argparse) in `src/lcsas/cli/parser.py`
+- `cmd_catalog_rebuild` in `src/lcsas/cli/commands/catalog.py`
 - `rebuild_catalog` / `_merge_one_disc` in `src/lcsas/db/rebuild.py`
 - `ensure_schema` in `src/lcsas/db/schema.py`
 
@@ -757,8 +757,8 @@ service or destroying them.
   read when `--snapshots` is requested.
 
 **Source refs:**
-- `build_parser()` (argparse) in `src/lcsas/cli/main.py`
-- `cmd_volume_impact` in `src/lcsas/cli/main.py`
+- `build_parser()` (argparse) in `src/lcsas/cli/parser.py`
+- `cmd_volume_impact` in `src/lcsas/cli/commands/volume.py`
 - `get_at_risk_packs_for_volume` in `src/lcsas/db/queries.py`
 
 See also `lcsas status --redundancy` for fleet-wide blast-radius
@@ -795,7 +795,7 @@ status was added by the v4→v5 migration in the same module.
 | `STAGING`/`BURNING`/`BURNED → VERIFIED` | `catalog import-receipts` w/ `verify_passed=true` and a hash matching the staged ISO (offline-burn receipt; #669, #670) | `cmd_catalog_import`   |
 | `STAGING`/`BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=null` (`burn-iso --no-verify`) | `cmd_catalog_import`   |
 | `BURNING`/`BURNED → STAGING`, or stays `STAGING` | `catalog import-receipts` w/ `verify_passed=false`, volume with no disc (#483, #670) | `cmd_catalog_import`                     |
-| `BURNED → VERIFIED`            | `lcsas verify --mark-verified`                     | `cmd_verify` in `src/lcsas/cli/main.py`         |
+| `BURNED → VERIFIED`            | `lcsas verify --mark-verified`                     | `cmd_verify` in `src/lcsas/cli/commands/verify.py`         |
 | `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just after staging succeeds) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → VERIFIED`     | `lcsas session abort` of the consolidation's burn session | `cmd_session_abort`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → DEPRECATED`   | `lcsas consolidate --deprecate` (post-verification) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |

@@ -90,7 +90,7 @@ subcommand. `--output` / `-o` is required.
 **Steps:**
 
 1. CLI parses `lcsas meta build` and dispatches to `cmd_meta_build`
-   (`src/lcsas/cli/main.py`), which resolves `--output`, optional
+   (`src/lcsas/cli/commands/meta.py`), which resolves `--output`, optional
    `--config`, and the catalog, then constructs `MetaVolumeBuilder`.
 2. `MetaVolumeBuilder.build` checks that `recovery/scripts/restore.sh`
    exists (else a `MetaBuildError`, #689), creates the output directory, drops a
@@ -221,7 +221,7 @@ The directory is ready to feed to `xorriso` for ISO mastering.
 - Gap: no test that builds with `--db` populated and asserts
   `metadata/<repo_id>/keys` is present.
 
-**Source refs:** `cmd_meta_build` (`src/lcsas/cli/main.py`);
+**Source refs:** `cmd_meta_build` (`src/lcsas/cli/commands/meta.py`);
 `MetaVolumeBuilder` + `build()` + `missing_required_contents()`
 (`src/lcsas/meta/builder.py`); `required_meta_paths` / `APPROVED_TARGETS`
 (`src/lcsas/meta/required_contents.py`).
@@ -334,7 +334,7 @@ lcsas meta verify <output-dir> [--strict]
 
 **Steps:**
 
-1. CLI dispatches to `cmd_meta_verify` (`src/lcsas/cli/main.py`).
+1. CLI dispatches to `cmd_meta_verify` (`src/lcsas/cli/commands/meta.py`).
 2. It reads `<output>/recovery/MANIFEST.sha256` and recomputes the
    SHA-256 of every listed file, reporting `MISSING` and `MISMATCH`.
 3. With `--strict`, files present under `recovery/` but *absent* from the
@@ -358,7 +358,7 @@ catching bit-rot on a meta disc tree before mastering, or periodic
 disc-health checks on a mounted meta disc. See
 [`verify-and-audit.md`](verify-and-audit.md) for the full integrity story.
 
-**Source refs:** `cmd_meta_verify` (`src/lcsas/cli/main.py`);
+**Source refs:** `cmd_meta_verify` (`src/lcsas/cli/commands/meta.py`);
 `required_meta_paths` / `VINTAGE_NOTE` (`src/lcsas/meta/required_contents.py`).
 
 ---
@@ -516,7 +516,7 @@ just reached by different routes, so both answer to the same valve:
 
 **Source refs:** `_bundle_metadata`, `_read_retired_repos`,
 `_read_packs_on_discs`, `RepoMetadataResult` (`src/lcsas/meta/builder.py`);
-the exit-code decision in `cmd_meta_build` (`src/lcsas/cli/main.py`).
+the exit-code decision in `cmd_meta_build` (`src/lcsas/cli/commands/meta.py`).
 
 **Test coverage:** `tests/unit/test_cli_comprehensive.py::TestCmdMetaBuildKeyGate`;
 `tests/unit/test_meta_builder.py::TestBundleMetadata`;
@@ -628,7 +628,7 @@ catalog policy (no `catalog.db`).
 - Gap: no idempotency / overwrite test on re-running `build()` over an
   existing output directory.
 
-**Source refs:** `cmd_meta_build` (`src/lcsas/cli/main.py`);
+**Source refs:** `cmd_meta_build` (`src/lcsas/cli/commands/meta.py`);
 `MetaVolumeBuilder.build` + `_bundle_source` (`src/lcsas/meta/builder.py`).
 
 ---

@@ -21,8 +21,8 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 - Optional TOML config — when `--config` is set, `paths.database` from the config is used as the catalog path.
 
 **Steps:**
-1. `lcsas [--config FILE] init [--db-path PATH]` — create the SQLite file and run `ensure_schema()` (which calls `create_all()` on a fresh catalog). (`cmd_init`, `src/lcsas/cli/main.py`)
-   - Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/main.py`).
+1. `lcsas [--config FILE] init [--db-path PATH]` — create the SQLite file and run `ensure_schema()` (which calls `create_all()` on a fresh catalog). (`cmd_init`, `src/lcsas/cli/commands/init.py`)
+   - Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/parser.py`).
    - Catalog path resolution order: explicit `--db-path` > global `--db` > `--config`'s `paths.database` > `archive.db` in cwd.
 2. `create_all()` issues `CREATE TABLE IF NOT EXISTS` for every table and inserts a row into `schema_version` if empty. (`src/lcsas/db/schema.py`)
 
@@ -51,8 +51,8 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
   - No CLI-level assertion that `init` itself leaves `schema_version == CURRENT_SCHEMA_VERSION` (intentional: `cmd_init` is a thin wrapper over `ensure_schema()`, and the stamp and migration are pinned one layer down by the tests above).
 
 **Source refs:**
-- Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/main.py`)
-- Handler: `cmd_init` (`src/lcsas/cli/main.py`)
+- Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/parser.py`)
+- Handler: `cmd_init` (`src/lcsas/cli/commands/init.py`)
 - Schema DDL + `create_all` / `ensure_schema`: `src/lcsas/db/schema.py`
 - Schema version constant: `CURRENT_SCHEMA_VERSION` (`src/lcsas/db/schema.py`)
 - Catalog overview: `docs/architecture.md`
@@ -64,12 +64,12 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 **Purpose:** Load a TOML config and report every validation error in a single pass.
 
 **Prerequisites:**
-- A TOML file at the path passed via the global `--config` flag (lives on the top-level parser, not the `config check` subparser — `--config` in `build_parser()`, `src/lcsas/cli/main.py`).
+- A TOML file at the path passed via the global `--config` flag (lives on the top-level parser, not the `config check` subparser — `--config` in `build_parser()`, `src/lcsas/cli/parser.py`).
 - Paths referenced in the TOML must exist and be the correct type for a clean run.
 
 **Steps:**
-1. `lcsas --config PATH config check` — load and validate. (`cmd_config_check`, `src/lcsas/cli/main.py`)
-   - Parser: `config` subparser in `build_parser()` (`src/lcsas/cli/main.py`).
+1. `lcsas --config PATH config check` — load and validate. (`cmd_config_check`, `src/lcsas/cli/commands/config.py`)
+   - Parser: `config` subparser in `build_parser()` (`src/lcsas/cli/parser.py`).
    - Missing `--config` logs `--config is required for config check.` and returns 1.
 2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py`) It stops with an error naming the key, for every command, when (#682):
    - a known key has the wrong TOML type: strings must be quoted, numbers and `true`/`false` must not be (`key_split = "false"`, `key_threshold = "3"`, `metadata_reserve_mb = "100"`, `media_type = 25`, `label_prefix = 7` are all errors);
@@ -85,7 +85,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
    - `label_prefix` non-empty, matches `[A-Z0-9_]+`, short enough for a 32-char ISO 9660 label with the configured `media_type`'s token (CD700, BDXL100 and MDISC100 allow one character less than BD25); a prefix that fits the configured media type but not another production media type logs a WARNING, since `stage --media` can pick it.
    - Per-repository `mirror_path` exists and is a directory; `password_file` exists if set.
    - `staging_path` does not overlap a repository mirror (cleanup would destroy it): it is not identical to `mirror_base_path`, does not contain it, and is not identical to, inside, or a parent of any repository's `mirror_path`.  A staging area inside `mirror_base_path` beside the repositories (`<base>/<repo>` and `<base>/staging`) is allowed, which keeps it on the mirrors' filesystem so packs are hardlinked (#645); with no repositories configured, `mirror_base_path` is itself the fallback mirror and a staging area inside it is rejected.
-4. With `[collections.<name>]` tables, `config check` also checks each collection (`_config_check_collections`, `src/lcsas/cli/main.py`): every repository in it has a readable `password_file` (unless `allow_unverified_repo_format` is set), and, when the catalog exists, its location is registered (`lcsas location add`) and every repository is registered and active (`lcsas repo add`). Without a catalog it says these were not checked and does not create one.
+4. With `[collections.<name>]` tables, `config check` also checks each collection (`_config_check_collections`, `src/lcsas/cli/commands/config.py`): every repository in it has a readable `password_file` (unless `allow_unverified_repo_format` is set), and, when the catalog exists, its location is registered (`lcsas location add`) and every repository is registered and active (`lcsas repo add`). Without a catalog it says these were not checked and does not create one.
 
 **Expected outcome:**
 - Valid: one `Configuration is valid.` log line, exit 0.
@@ -121,7 +121,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
   - `optical_device` is not validated (intentional: `config check` runs on hosts that need not have the burner attached, and `load_config()` deliberately does no I/O (#427); the device is checked at burn time by `cmd_burn_session`, which refuses a missing node, and `BurnOrchestrator._assert_blank_media`).
 
 **Source refs:**
-- Parser / dispatch / handler: `config` subparser + `cmd_config_check` (`src/lcsas/cli/main.py`).
+- Parser / dispatch / handler: `config` subparser + `cmd_config_check` (`src/lcsas/cli/commands/config.py` and `src/lcsas/cli/parser.py`).
 - Loader / validator / default-config factory: `load_config` / `validate_config` (`src/lcsas/config/settings.py`).
 - Unknown-key warning whitelist: `_validate_toml_keys` in `src/lcsas/config/settings.py`.
 
@@ -133,8 +133,8 @@ Observations from reading the source; **not** fixes.
 
 - **Every disc carries a disc catalog.** The complete SQLite catalog is copied onto every burned disc by `staging/metadata.py::HolographicInjector`, so any single disc is self-describing. There is no separate JSON-export step. (intentional: design note, not a defect.)
 - **True backup = copy the `.sqlite` file.** There is no `db import` and no `db export` command; an owner wanting an off-disc copy of the master catalog should copy the raw SQLite file. The catalog runs in WAL mode (`get_connection` in `src/lcsas/db/connection.py`), so copy it while no `lcsas` command is running (a copy taken mid-command can miss the `-wal` sidecar), or take a consistent copy with `sqlite3 archive.db ".backup copy.db"`. (intentional: the disc catalog on every disc is the designed backup; no export command is planned.)
-- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 and pinned by `tests/unit/test_cli.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/main.py`). Resolved; kept as a behaviour note.
+- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 and pinned by `tests/unit/test_cli.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/commands/init.py`). Resolved; kept as a behaviour note.
 - **`init` migrates if needed.** On an existing catalog `ensure_schema()` calls `migrate()` to bring an older catalog up to `CURRENT_SCHEMA_VERSION`; on a fresh catalog `create_all()` stamps the current version directly (`src/lcsas/db/schema.py`). Pinned by `tests/unit/test_db_schema.py` (`TestSchema`, `TestMigrateV3ToV4`). Resolved; kept as a behaviour note.
 - **`config check` does not validate `optical_device`** — typos surface only at burn time. (intentional: see the Gaps bullet under `lcsas config check`.)
-- **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse (`lcsas: error: unrecognized arguments: --config foo.toml`); correct form is `lcsas --config foo.toml config check`. The error now adds `--config: top-level option(s); put them before the subcommand, ...` (the same for `--db`, `--lock-timeout` and `--verbose`); the exit is still argparse's status 2 with nothing run (`_LcsasArgumentParser` in `src/lcsas/cli/main.py`; `tests/unit/test_cli_config_placement.py`, #517).
+- **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse (`lcsas: error: unrecognized arguments: --config foo.toml`); correct form is `lcsas --config foo.toml config check`. The error now adds `--config: top-level option(s); put them before the subcommand, ...` (the same for `--db`, `--lock-timeout` and `--verbose`); the exit is still argparse's status 2 with nothing run (`_LcsasArgumentParser` in `src/lcsas/cli/parser.py`; `tests/unit/test_cli_config_placement.py`, #517).
 - **Unknown TOML keys are warnings everywhere except `config check`.** (Resolved for `config check` by #515.) `unknown_toml_keys` (`src/lcsas/config/settings.py`) lists unknown sections and keys; `load_config()` only logs each as `Unknown ... (typo?)`, so no command is blocked by a typo, but `config check` now adds an error and exits 1 instead of printing `Configuration is valid.` (`tests/unit/test_cli_comprehensive.py::TestCmdConfigCheck::test_section_typo_fails_the_check` and `::test_repo_key_typo_fails_the_check`). A `[repos.<name>]` block without `mirror_path` is now reported by name (`::test_missing_mirror_path_is_named`) instead of a bare `Unexpected error: 'mirror_path'`. Other commands such as `scan` still only warn, so a typo'd `passwrd_file` is still dropped silently there (the repository is scanned with no password file, so snapshot listing is skipped).
