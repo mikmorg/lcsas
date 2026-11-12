@@ -432,7 +432,12 @@ the command exits non-zero (#669).
    3. Look up the volume by label; refuse the receipt if it is unknown.
    4. Already imported (#666): if a receipt with the same location,
       burn date and ISO hash was imported for this volume before, say
-      "already imported" and change nothing. This is not an error. If
+      "already imported" and change nothing. This is not an error. The
+      same goes for a receipt that `lcsas burn` wrote on this catalog
+      (#727): the burn records the disc, and dates its verify events,
+      with the receipt's burn date, so the receipt matches them, also
+      when the disc failed verification or a later disc at that location
+      replaced the record. If
       that disc has since been recorded lost, destroyed or deprecated,
       the message says so, and the disc stays that way.
    5. Location (#669): refuse a location that is not registered, as
@@ -576,6 +581,11 @@ behaviour.
   recorded in the event); after `copy destroy --lost` the old receipt
   leaves the disc DESTROYED with a warning, another receipt not newer than
   the loss is refused, and a later re-burn puts the disc back in service.
+- `tests/unit/test_receipt_replay_direct_burn.py` (#727) — a receipt
+  written by a direct `lcsas burn` (verified, `skip_burn`, failed verify,
+  or the first of two discs burned at one location) replayed on the same
+  catalog is "already imported" and changes no volume, disc or event row;
+  on a catalog rebuilt from the disc it still imports.
 - `tests/unit/test_import_receipts_errors.py::TestStrictReceipt` (#669) — a
   non-boolean or missing `verify_passed` is refused; an unknown location is
   refused and the known ones are listed; a refused receipt exits 1 while

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from lcsas.db.models import VolumeCopy
+
+_logger = logging.getLogger(__name__)
 
 
 def _row_to_copy(row: sqlite3.Row) -> VolumeCopy:
@@ -52,6 +55,7 @@ def add_volume_copy(
     iso_size_bytes: int | None = None,
     last_verified_at: str | None = None,
     media_serial: str = "",
+    verified: bool | None = None,
     commit: bool = True,
 ) -> VolumeCopy:
     """Record a disc of a volume at a location.
@@ -67,6 +71,12 @@ def add_volume_copy(
     what the portable SHA-256 verify fallback depends on.  Provided
     (non-NULL / non-empty) values still replace, because they describe
     the new disc.
+
+    A lost volume (DEPRECATED because its last in-service disc went)
+    that gets a disc recorded here is back in service (#726): VERIFIED
+    when the disc was verified, else BURNED (:func:`_revive_lost_volume`).
+    *verified* says whether it was; None reads it from *last_verified_at*.
+    A volume deprecated by consolidation stays DEPRECATED.
     """
     if burn_date is None:
         burn_date = datetime.now(UTC).isoformat()
@@ -89,6 +99,11 @@ def add_volume_copy(
                                        ELSE volume_copies.media_serial END""",
         (volume_id, location, burn_date, notes, iso_sha256,
          iso_size_bytes, last_verified_at, media_serial),
+    )
+    _revive_lost_volume(
+        conn, volume_id, location,
+        verified=(last_verified_at is not None if verified is None
+                  else verified),
     )
     if commit:
         conn.commit()
@@ -362,6 +377,64 @@ def _demote_volume_if_last_copy_lost(
         commit=False,
     )
     return True
+
+
+def _revive_lost_volume(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+    *,
+    verified: bool,
+) -> str | None:
+    """Put a lost volume back in service when a disc of it is recorded (#726).
+
+    The reverse of :func:`_demote_volume_if_last_copy_lost`: a volume
+    DEPRECATED because its last in-service disc went (lost, ADR 0003)
+    that now has an ACTIVE disc again becomes VERIFIED when that disc
+    was verified, else BURNED, as a first disc would.  Then the stage
+    pool, the redundancy report and the deprecation guard count it again.
+    A volume deprecated by consolidation is left alone
+    (``lcsas.db.queries.deprecated_by_loss``).
+
+    Direct UPDATE rather than ``update_status``: DEPRECATED → VERIFIED is
+    not a general transition, only this one.  The NOTE says why.  Shares
+    the caller's transaction; no commit.  Returns the new status, or None
+    when nothing changed.
+    """
+    from lcsas.db.queries import deprecated_by_loss
+
+    if not deprecated_by_loss(conn, volume_id):
+        return None
+    status = "VERIFIED" if verified else "BURNED"
+    now = datetime.now(UTC).isoformat()
+    if verified:
+        conn.execute(
+            "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",
+            (status, now, volume_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE volumes SET status = ? WHERE volume_id = ?",
+            (status, volume_id),
+        )
+    from lcsas.db.volume_events import add_event
+    add_event(
+        conn, volume_id, "NOTE",
+        location=location,
+        detail=(
+            f"Status changed: DEPRECATED → {status}; this lost volume has "
+            f"a disc in service again at {location}"
+        ),
+        commit=False,
+    )
+    label = conn.execute(
+        "SELECT label FROM volumes WHERE volume_id = ?", (volume_id,),
+    ).fetchone()[0]
+    _logger.info(
+        "%s was a lost volume; with its disc at %s it is in service "
+        "again (%s).", label, location, status,
+    )
+    return status
 
 
 def _record_disc_fate(

@@ -1045,6 +1045,24 @@ class TestEscrowDrift:
         notes = [e for e in events if e.event_type == "NOTE"]
         assert any("KEY-08 split drift override" in e.detail for e in notes)
 
+    def test_refusal_leaves_no_session_behind(self, orch_env):
+        """#747: a real stage refused for drift creates no burn session
+        row and nothing in the staging area (the check ran only per
+        volume, after the session and its directory existed)."""
+        from lcsas.db.key_escrow import EscrowDriftError
+
+        staging = orch_env["config"].staging_path
+        staging.mkdir(parents=True, exist_ok=True)
+        before = sorted(staging.iterdir())
+        orch = self._split_orch(orch_env, key_split=True)
+        with pytest.raises(EscrowDriftError):
+            orch.stage()
+        conn = orch_env["conn"]
+        assert conn.execute(
+            "SELECT COUNT(*) FROM burn_sessions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+        assert sorted(staging.iterdir()) == before
+
 
 @pytest.fixture
 def uuid_orch_env(tmp_path):

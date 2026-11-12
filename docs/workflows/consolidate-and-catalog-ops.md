@@ -454,6 +454,12 @@ catalog and physical reality (FMA-01).  Two independent checks:
    its receipt still to be imported, which a deleted volume could no
    longer take.  It is listed separately and `--fix` leaves it alone
    unless `--include-waiting` is given (#647).
+   A volume whose events show a good disc of it was burned (the check
+   `session abort` and `stage --clean` use, `burn_evidence()` in
+   `src/lcsas/db/volume_events.py`, #737) is not a ghost either: its
+   disc is just not recorded yet. It is listed with the reason and the
+   way to record the disc, and `--fix` never deletes it, even with
+   `--include-waiting` (#746).
 2. **Durable volumes without an ACTIVE disc** — status says a disc
    exists but no disc record backs it (status/`volume_copies` drift).
    Report-only; never auto-fixed.
@@ -471,8 +477,9 @@ catalog and physical reality (FMA-01).  Two independent checks:
    (`cmd_catalog_reconcile`).
 3. Query `get_durable_volumes_without_active_copies` and warn for each
    drifted volume (report-only) (`src/lcsas/db/queries.py`).
-4. Query `get_ghost_volumes(conn, older_than_hours)` and set aside (and
-   list) those whose staged ISO still exists (`staged_iso_present`,
+4. Query `get_ghost_volumes(conn, older_than_hours)`, set aside (and
+   list) those with burn evidence (`burn_evidence`, always), then those
+   whose staged ISO still exists (`staged_iso_present`,
    `src/lcsas/db/sessions.py`) unless `--include-waiting`; if no ghost
    is left, log the all-clear and return 0 (`src/lcsas/db/queries.py`).
 5. For each ghost, tally per-repository pack/byte stats via

@@ -59,30 +59,57 @@ _HELD_AT_LOCATION = f"""(p.is_pruned = 0 AND EXISTS (
 #   (a) its recorded status still claims a disc (BURNED/VERIFIED/
 #       CONSOLIDATING: a catalog from before BURN-10, or status/disc
 #       drift), or
-#   (b) it is DEPRECATED because its last in-service disc went: the
-#       auto-deprecation NOTE written by lcsas.db.volume_copies.
-# A volume deprecated by consolidation gets a "Status changed: ... →
-# DEPRECATED" note from update_status() instead, so it stays DEPRECATED
-# even after its discs are later recorded deprecated or destroyed.
+#   (b) it is DEPRECATED because its last in-service disc went
+#       (_DEPRECATED_BY_LOSS_SQL).
 # Zero disc records is a legacy volume that counts by status alone, so
 # it is never lost; nor is a DESTROYED or never-burned STAGING/BURNING one.
+#
+# Deprecated by loss = the newest NOTE that deprecated the volume is the
+# auto-deprecation note written by lcsas.db.volume_copies when its last
+# in-service disc went.  A volume deprecated by consolidation gets a
+# "Status changed: ... → DEPRECATED" note from update_status() instead,
+# so it stays DEPRECATED even after its discs are later recorded
+# deprecated or destroyed.  The NEWEST one decides (#726): a lost volume
+# that got a disc back is VERIFIED or BURNED again, and if it is later
+# consolidated its "Status changed" note is newer than the old
+# auto-deprecation note.
+_DEPRECATED_BY_LOSS_SQL = f"""(
+    v.status = 'DEPRECATED' AND (
+        SELECT substr(le.detail, 1, {len(AUTO_DEPRECATED_NOTE_PREFIX)})
+               = '{AUTO_DEPRECATED_NOTE_PREFIX}'
+        FROM volume_events le
+        WHERE le.volume_id = v.volume_id
+          AND le.event_type = 'NOTE'
+          AND (substr(le.detail, 1, {len(AUTO_DEPRECATED_NOTE_PREFIX)})
+                   = '{AUTO_DEPRECATED_NOTE_PREFIX}'
+               OR le.detail LIKE 'Status changed: % → DEPRECATED')
+        ORDER BY le.event_date DESC, le.event_id DESC
+        LIMIT 1
+    ) = 1
+)"""
+
 _LOST_VOLUME_SQL = f"""(
     EXISTS (SELECT 1 FROM volume_copies lc
             WHERE lc.volume_id = v.volume_id)
     AND NOT EXISTS (SELECT 1 FROM volume_copies lc
                     WHERE lc.volume_id = v.volume_id
                       AND lc.status = 'ACTIVE')
-    AND (
-        v.status IN {_DURABLE_SQL}
-        OR (v.status = 'DEPRECATED' AND EXISTS (
-            SELECT 1 FROM volume_events le
-            WHERE le.volume_id = v.volume_id
-              AND le.event_type = 'NOTE'
-              AND substr(le.detail, 1, {len(AUTO_DEPRECATED_NOTE_PREFIX)})
-                  = '{AUTO_DEPRECATED_NOTE_PREFIX}'
-        ))
-    )
+    AND (v.status IN {_DURABLE_SQL} OR {_DEPRECATED_BY_LOSS_SQL})
 )"""
+
+
+def deprecated_by_loss(conn: sqlite3.Connection, volume_id: int) -> bool:
+    """True when the volume is DEPRECATED because its last in-service disc
+    went (lost), not because consolidation superseded it (ADR 0003).
+
+    Only such a volume comes back into service when a disc of it is
+    recorded again (#726)."""
+    row = conn.execute(
+        f"SELECT 1 FROM volumes v WHERE v.volume_id = ? "
+        f"AND {_DEPRECATED_BY_LOSS_SQL}",
+        (volume_id,),
+    ).fetchone()
+    return row is not None
 
 
 def get_lost_volume_ids(conn: sqlite3.Connection) -> frozenset[int]:

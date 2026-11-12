@@ -487,8 +487,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--fix", action="store_true", default=False,
         help="Delete ghost volumes (never-burned STAGING/BURNING volumes "
              "with zero copies whose staged ISO is gone), returning their "
-             "packs to the unarchived pool. Asks for confirmation unless "
-             "--yes is given.",
+             "packs to the unarchived pool. A volume whose events show a "
+             "disc of it was burned is never deleted. Asks for "
+             "confirmation unless --yes is given.",
     )
     cat_reconcile_p.add_argument(
         "--include-waiting", action="store_true", default=False,
@@ -3381,8 +3382,10 @@ def cmd_copy(args: argparse.Namespace) -> int:
             logger.error(f"Volume '{args.volume_label}' not found.")
             return 1
         # Warn on the change to lost, not only on auto-deprecation: a lost
-        # volume that regained a disc stays DEPRECATED, so losing that disc
-        # again demotes nothing but makes the volume lost once more.
+        # volume that regained a disc before #726 stayed DEPRECATED, so
+        # losing that disc again demotes nothing but makes the volume lost
+        # once more.  Since #726 a regained disc puts the volume back in
+        # service, and losing it again demotes it.
         was_lost = vol.volume_id in get_lost_volume_ids(conn)
         try:
             if args.copy_command == "deprecate":
@@ -3680,14 +3683,29 @@ def _receipt_already_imported(
     receipt_hash: str,
 ) -> bool:
     """True when a receipt with this location, burn date and ISO hash was
-    imported for the volume before (#666).
+    imported for the volume before (#666), or was written by a direct
+    ``lcsas burn`` on this catalog (#727).
 
     The BURN_RECEIPT_IMPORTED event records the burn date since #666; for
-    receipts imported earlier the disc record's burn date stands in.
+    receipts imported earlier the disc record's burn date stands in.  A
+    direct burn records the disc with the receipt's burn date, and dates
+    its verify events (pass or fail) with it, so its receipt matches the
+    disc record, or the verify event when the disc failed or a later
+    burn at the location replaced the record.  An import dates its own
+    events with the import time, so only the burn matches them.
     """
     from lcsas.db.volume_copies import get_copy_at_location
     from lcsas.db.volume_events import get_events_for_volume
 
+    for prior in get_events_for_volume(conn, volume_id):
+        if (
+            prior.event_type in ("VERIFY_PASS", "VERIFY_FAIL",
+                                 "VERIFY_FAIL_REBURN")
+            and prior.location == location
+            and burn_date
+            and prior.event_date == burn_date
+        ):
+            return True
     for prior in get_events_for_volume(conn, volume_id, "BURN_RECEIPT_IMPORTED"):
         if prior.location != location:
             continue
@@ -4209,6 +4227,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
        but no disc record backs it.  Report-only.
     """
     from lcsas.db.connection import locked_connection
+    from lcsas.db.models import Volume
     from lcsas.db.queries import (
         get_durable_volumes_without_active_copies,
         get_ghost_volumes,
@@ -4218,6 +4237,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     )
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import staged_iso_present
+    from lcsas.db.volume_events import burn_evidence
     from lcsas.db.volumes import delete_volume
 
     config = _load_config_opt(args)
@@ -4227,11 +4247,39 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
+        candidates = get_ghost_volumes(conn, args.older_than_hours)
+        # #746: a volume with no disc record whose events show a good disc
+        # of it was burned (the #737 check session abort and stage --clean
+        # use) is a burned volume, not a ghost.  Never deleted, even with
+        # --include-waiting; its disc just needs recording.
+        burned_unrecorded: list[tuple[Volume, str]] = []
+        for v in candidates:
+            evidence = burn_evidence(conn, v.volume_id)
+            if evidence is not None:
+                burned_unrecorded.append((v, evidence))
+        if burned_unrecorded:
+            kept_ids = {v.volume_id for v, _why in burned_unrecorded}
+            candidates = [v for v in candidates
+                          if v.volume_id not in kept_ids]
+            logger.warning(
+                "%d volume(s) have no disc recorded, but a disc of each was "
+                "burned; they are not ghosts and --fix never deletes them:",
+                len(burned_unrecorded),
+            )
+            for v, why in burned_unrecorded:
+                logger.warning("  %s  (status=%s, but %s)", v.label, v.status,
+                               why)
+            logger.warning(
+                "  For each disc you hold, put it in the drive and run "
+                "'lcsas verify <label> --disc --location <where it is "
+                "kept>', or import its burn receipt with 'lcsas catalog "
+                "import-receipts'."
+            )
+
         # #647: a never-burned volume whose staged ISO still exists is
         # waiting to be burned (possibly on another machine, with its
         # receipt still to come), not a ghost.  --fix leaves it alone
         # unless --include-waiting.
-        candidates = get_ghost_volumes(conn, args.older_than_hours)
         waiting = [v for v in candidates if staged_iso_present(conn, v.volume_id)]
         if waiting:
             logger.info(
@@ -8322,9 +8370,17 @@ def cmd_session_list(args: argparse.Namespace) -> int:
         logger.info("%-36s  %-10s  %-10s  %s", "SESSION ID", "STATUS", "MEDIA", "CREATED")
         logger.info("-" * 80)
 
+        # #748: the owner and heir know volumes by label, not catalog id.
+        labels = {
+            int(r[0]): str(r[1])
+            for r in conn.execute("SELECT volume_id, label FROM volumes")
+        }
         for s in sessions:
             vols = get_session_volumes(conn, s.session_id)
-            vol_labels = ", ".join(sv.volume_id and str(sv.volume_id) or "?" for sv in vols)
+            vol_labels = ", ".join(
+                labels.get(sv.volume_id, f"volume {sv.volume_id}")
+                for sv in vols
+            )
             logger.info(
                 "%-36s  %-10s  %-10s  %s",
                 s.session_id, s.status, s.media_type,

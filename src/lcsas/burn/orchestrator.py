@@ -36,7 +36,11 @@ from lcsas.db.key_escrow import (
 from lcsas.db.label_mark import label_seq, next_label_seq, raise_label_high_water
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume
-from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
+from lcsas.db.queries import (
+    deprecated_by_loss,
+    get_unarchived_or_missing_at_location,
+    get_unarchived_packs,
+)
 from lcsas.db.repos import list_repos
 from lcsas.db.sessions import (
     add_session_volume,
@@ -47,7 +51,7 @@ from lcsas.db.sessions import (
     update_session_volume_iso,
 )
 from lcsas.db.volume_copies import add_volume_copy
-from lcsas.db.volume_events import add_event
+from lcsas.db.volume_events import add_event, burn_evidence
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import (
     create_volume,
@@ -851,14 +855,20 @@ class BurnOrchestrator:
                 underfilled.describe(mt.name),
             )
 
+        participating_repos = {p.repo_id for _packs, _b in volume_plans
+                               for p in _packs}
+
+        # KEY-08: refuse password split drift for every repository of the
+        # plan BEFORE any side effect, so a refused stage leaves no burn
+        # session, staging directory or half-built session behind (#747).
+        # With --allow-escrow-drift a real stage warns in
+        # _stage_single_volume, which also records the override NOTE on
+        # each volume; a dry run warns here.
+        if dry_run or not self._allow_escrow_drift:
+            self._escrow_preflight(sorted(participating_repos))
+
         # --- Dry-run: report the plan without side effects ---
         if dry_run:
-            # The real run checks each volume's repositories for password
-            # split drift in _stage_single_volume; a dry run must refuse
-            # (or, with --allow-escrow-drift, warn) the same way.
-            self._escrow_preflight(sorted(
-                {p.repo_id for _packs, _b in volume_plans for p in _packs}
-            ))
             total_bytes = sum(b for _, b in volume_plans)
             logger.info(f"[DRY RUN] {len(volume_plans)} volume(s) planned "
                         f"on {mt.name}")
@@ -882,8 +892,6 @@ class BurnOrchestrator:
         # recovery readers BEFORE any burn-session/staging/ISO side effect.  A
         # repository whose live rustic has outrun the readers (e.g. a v3
         # format) is refused here, never burned.
-        participating_repos = {p.repo_id for _packs, _b in volume_plans
-                               for p in _packs}
         self._format_preflight(sorted(participating_repos))
 
         # #657: only snapshots whose packs are all on discs (durable
@@ -1120,7 +1128,13 @@ class BurnOrchestrator:
 
             # For multi-location re-burns, skip status transitions if
             # the volume is already VERIFIED (just add another disc).
-            is_reburn = vol.status == "VERIFIED"
+            # A lost volume (DEPRECATED because its last disc went) is
+            # burned again the same way; recording its disc puts it back
+            # in service (#726).  A failed verify leaves it lost.
+            is_reburn = vol.status == "VERIFIED" or (
+                vol.status == "DEPRECATED"
+                and deprecated_by_loss(self._conn, sv.volume_id)
+            )
 
             if not is_reburn:
                 # Update status
@@ -1131,6 +1145,11 @@ class BurnOrchestrator:
                 # Burn
                 if not skip_burn:
                     self._xorriso.burn_iso(iso_path, device)
+                # #727: one burn date for this disc.  The disc record, the
+                # verify events and the burn receipt all carry it, so
+                # 'catalog import-receipts' of this receipt on this
+                # catalog sees it was already recorded.
+                burn_date = datetime.now(UTC).isoformat()
 
                 # Post-burn verification  [S1][BURN-04][FMA-03]
                 # Step 1: -check_media readability smoke test.
@@ -1146,6 +1165,7 @@ class BurnOrchestrator:
                 if not skip_burn:
                     verify_passed = self._verify_burned_disc(
                         sv, vol.label, device, location, iso_path,
+                        event_date=burn_date,
                     )
                     if verify_passed:
                         verified_at = datetime.now(UTC).isoformat()
@@ -1164,13 +1184,15 @@ class BurnOrchestrator:
                         # the VERIFY_FAIL event keeps the attempt.
                         update_status(self._conn, sv.volume_id, "STAGING", commit=False)
                 else:
-                    # Re-burn case: volume stays VERIFIED (it passed before)
+                    # Re-burn case: volume stays VERIFIED (it passed before),
+                    # or a lost one stays lost until a disc passes.
                     # Record the verify failure for this location's disc
                     if not verify_passed:
                         add_event(
                             self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
                             location=location,
                             detail="Post-burn read-back failed on re-burn attempt",
+                            event_date=burn_date,
                             commit=False,
                         )
 
@@ -1183,9 +1205,11 @@ class BurnOrchestrator:
                         self._conn,
                         volume_id=sv.volume_id,
                         location=location,
+                        burn_date=burn_date,
                         iso_sha256=sv.iso_sha256 or None,
                         iso_size_bytes=sv.iso_size_bytes,
                         last_verified_at=verified_at,
+                        verified=True,
                         commit=False,
                     )
                 else:
@@ -1214,7 +1238,7 @@ class BurnOrchestrator:
                     session_id=session_id,
                     location=location,
                     device=device,
-                    burn_date=datetime.now(UTC).isoformat(),
+                    burn_date=burn_date,
                     iso_sha256=sv.iso_sha256 or "",
                     verify_passed=verify_passed,
                     pack_count=len(pack_ids),
@@ -1384,6 +1408,7 @@ class BurnOrchestrator:
         device: str,
         location: str,
         iso_path: Path,
+        event_date: str | None = None,
     ) -> bool:
         """Three-step post-burn verification of the disc in *device*
         (BURN-04 + FMA-03).
@@ -1397,13 +1422,16 @@ class BurnOrchestrator:
         on record: any readable disc sitting in the tray would pass it.
 
         Records VERIFY_PASS/VERIFY_FAIL events with ``commit=False``
-        (the caller owns the transaction).  Returns True only when every
+        (the caller owns the transaction), dated *event_date* when given:
+        the burn passes the disc's burn date, the ``burn_date`` of its
+        receipt, so a replayed receipt is seen as imported (#727).  Returns True only when every
         applicable step passed.
         """
         if not self._xorriso.verify_disc(device):
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail="Post-burn read-back failed",
                 commit=False,
             )
@@ -1418,6 +1446,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail=(
                     f"Disc in {device} identifies as '{disc_id}' — "
                     f"expected '{label}'. Wrong disc?"
@@ -1443,6 +1472,7 @@ class BurnOrchestrator:
                 add_event(
                     self._conn, sv.volume_id, "VERIFY_PASS",
                     location=location,
+                    event_date=event_date,
                     detail="Post-burn read-back (no hash on record)",
                     commit=False,
                 )
@@ -1464,6 +1494,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail="device hash check impossible: no recorded ISO size "
                        "(pre-upgrade session); -check_media alone is "
                        "insufficient evidence",
@@ -1477,6 +1508,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail=f"device read-back failed: {exc}",
                 commit=False,
             )
@@ -1486,6 +1518,7 @@ class BurnOrchestrator:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
+                event_date=event_date,
                 detail=(
                     f"device hash mismatch: expected {expected_hash[:8]}.., "
                     f"got {device_hash[:8]}.."
@@ -1497,6 +1530,7 @@ class BurnOrchestrator:
         add_event(
             self._conn, sv.volume_id, "VERIFY_PASS",
             location=location,
+            event_date=event_date,
             detail=("Post-burn read-back + device hash match "
                     f"({device_hash[:8]}..)"),
             commit=False,
@@ -1723,50 +1757,10 @@ class BurnOrchestrator:
                 for row in rows]
 
     def _burn_evidence(self, volume_id: int) -> str | None:
-        """Why the volume's events say a good disc of it was burned, or None.
-
-        Only events that a never-burned volume, or one whose only disc
-        failed verification (#483), cannot carry count:
-
-        - ``VERIFY_PASS`` at a location: a disc was read back at that
-          location.  An ISO verify records no location, so it does not
-          count.  ``lcsas verify <label> --disc`` without ``--location``
-          records none either; its default detail "Disc verify" counts.
-        - ``BURN_RECEIPT_IMPORTED``, unless its receipt says the disc
-          failed verification (``verify_passed`` false).
-        - ``LOCATION_MOVE``: a recorded disc was moved.
-        - ``VERIFY_FAIL_REBURN``: written only when an earlier disc of
-          the volume was recorded.
-
-        ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
-        to STAGING and is re-staged or aborted (BURN-05, #483).
-        """
-        rows = self._conn.execute(
-            """SELECT event_type, location, detail FROM volume_events
-               WHERE volume_id = ?
-                 AND event_type IN ('VERIFY_PASS', 'BURN_RECEIPT_IMPORTED',
-                                    'LOCATION_MOVE', 'VERIFY_FAIL_REBURN')
-               ORDER BY event_date, event_id""",
-            (volume_id,),
-        ).fetchall()
-        for event_type, location, detail in rows:
-            where = f" at {location}" if location else ""
-            if event_type == "VERIFY_PASS":
-                if location or detail == "Disc verify":
-                    return f"a disc of it passed verification{where}"
-            elif event_type == "BURN_RECEIPT_IMPORTED":
-                try:
-                    receipt = json.loads(detail or "{}")
-                except ValueError:
-                    receipt = {}
-                if not (isinstance(receipt, dict)
-                        and receipt.get("verify_passed") is False):
-                    return f"a burn receipt of it was imported{where}"
-            elif event_type == "LOCATION_MOVE":
-                return f"a disc of it was moved{where}"
-            else:
-                return f"a disc of it was burned again{where}"
-        return None
+        """Why the volume's events say a good disc of it was burned, or
+        None (:func:`lcsas.db.volume_events.burn_evidence`, which
+        ``catalog reconcile --fix`` shares, #746)."""
+        return burn_evidence(self._conn, volume_id)
 
     def _reclaim_summary(self, volume_ids: list[int]) -> AbortSummary:
         """Count the distinct packs/bytes linked to the given volumes."""

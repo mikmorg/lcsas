@@ -146,7 +146,8 @@ class TestLostPredicate:
 
     def test_regained_disc_is_not_lost(self, cat):
         """A disc recorded again in service (re-burn at the location) ends
-        the lost state, even though the volume stays DEPRECATED."""
+        the lost state; the volume is back in service too (#726, see
+        test_lost_volume_reburn.py)."""
         vol = _vol(cat, "V")
         add_volume_copy(cat, vol.volume_id, "Home_Shelf")
         destroy_copy(cat, vol.volume_id, "Home_Shelf", lost=True)
@@ -560,8 +561,10 @@ class TestDisplays:
 
 class TestRegainedThenLostAgain:
     def test_losing_a_regained_disc_warns_again(self, tmp_path, capsys):
-        """A lost volume that regained a disc stays DEPRECATED, so losing
-        that disc demotes nothing; the warning must still print."""
+        """Losing a disc that a lost volume regained warns again.  (Before
+        #726 such a volume stayed DEPRECATED and losing it demoted nothing;
+        now the regained disc puts it back in service and losing it again
+        demotes it.)"""
         db = tmp_path / "test.db"
         vols = _cli_catalog(db)
         conn = get_connection(str(db))

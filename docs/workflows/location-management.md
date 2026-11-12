@@ -480,7 +480,11 @@ Key behaviours derived from the schema (the `locations` and
   ([ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)). A `VERIFIED` volume re-burned
   to a new location stays `VERIFIED`; only the new disc starts fresh
   (the `is_reburn` path in `BurnOrchestrator.burn_session()`,
-  `src/lcsas/burn/orchestrator.py`).
+  `src/lcsas/burn/orchestrator.py`). A lost volume burned again the same
+  way, or given a disc by an imported receipt or `lcsas verify <label>
+  --disc --location <where>`, is back in service: `VERIFIED` when the
+  disc was verified, else `BURNED` (#726). A volume deprecated by
+  consolidation stays `DEPRECATED`.
 - `volume_events` (table DDL in `src/lcsas/db/schema.py`) keeps an audit
   trail including a `LOCATION_MOVE` event type, and `move_volume_copy()`
   emits one atomically with the disc row's update (issue #16) — from/to are
