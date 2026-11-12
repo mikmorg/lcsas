@@ -639,7 +639,7 @@ EOF
 # or LCSAS_NO_RELOCATE=1 (tests/dev), skip relocation entirely.
 if [ -z "${LCSAS_RELOCATED:-}" ] && [ "${LCSAS_NO_RELOCATE:-0}" != "1" ]; then
     relocate_needed=0
-    # Strongest signal: the caller (lcsas-init or a test harness)
+    # Strongest signal: the caller (a test harness, or by hand)
     # explicitly named the meta disc and we are running inside it.
     if [ -n "${LCSAS_META_DISC:-}" ]; then
         case "$SCRIPT_DIR" in
@@ -670,8 +670,8 @@ if [ -z "${LCSAS_RELOCATED:-}" ] && [ "${LCSAS_NO_RELOCATE:-0}" != "1" ]; then
         esac
     fi
     if [ "$relocate_needed" = "1" ]; then
-        # Trust an explicit override from the caller (lcsas-init sets
-        # LCSAS_META_DISC=/mnt under the initramfs).  Otherwise probe.
+        # Trust an explicit override from the caller (LCSAS_META_DISC,
+        # set by hand or by a test harness).  Otherwise probe.
         if [ -n "${LCSAS_META_DISC:-}" ]; then
             meta_mount="$LCSAS_META_DISC"
         else
@@ -685,7 +685,7 @@ fi
 
 # Record the meta disc mount so we can pass it on to lcsas-restore.
 # Prefer the post-relocation sentinel; fall back to an explicit env
-# var (e.g. set by lcsas-init); otherwise leave empty.
+# var (set by hand or by a test harness); otherwise leave empty.
 META_DISC="${LCSAS_RELOCATED:-${LCSAS_META_DISC:-}}"
 
 # When invoked as $RECOVERY/scripts/restore.sh, RECOVERY is parent dir.
