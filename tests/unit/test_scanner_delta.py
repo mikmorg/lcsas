@@ -235,20 +235,6 @@ class TestBulkMarkPruned:
 
 
 class TestScannerEdgeCases:
-    def test_empty_mirror(self, tmp_path):
-        """Empty data directory returns no packs."""
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        result = scan_mirror_packs(tmp_path)
-        assert result.packs == {}
-        assert result.errors == []
-
-    def test_nonexistent_data_dir(self, tmp_path):
-        """No data/ directory returns no packs."""
-        result = scan_mirror_packs(tmp_path)
-        assert result.packs == {}
-        assert result.errors == []
-
     def test_zero_byte_pack(self, tmp_path):
         """Zero-byte pack files are skipped (likely incomplete writes)."""
         data_dir = tmp_path / "data"

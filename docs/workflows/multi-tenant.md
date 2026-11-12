@@ -65,7 +65,7 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
 **Test coverage:**
 
 - Existing:
-  - `tests/unit/test_cli.py::TestRepoCommands::test_repo_add` —
+  - `tests/unit/test_cli.py::TestCLIParsing::test_repo_add` —
     dispatch smoke test.
   - `tests/unit/test_cli_repo.py::TestCmdRepoAddEdges::test_duplicate_repo_name_errors`
     and `tests/unit/test_repo_resolution_and_key_records.py` — a duplicate
@@ -118,7 +118,7 @@ cases.
 **Test coverage:**
 
 - Existing:
-  - `tests/unit/test_cli.py::TestRepoCommands::test_repo_list`
+  - `tests/unit/test_cli.py::TestCLIParsing::test_repo_list`
   - `tests/unit/test_cli_repo.py::TestCmdRepoListEdges::test_many_repos`
   - `tests/unit/test_multi_tenant.py::test_repo_retrieval_by_id`
 - Gaps:

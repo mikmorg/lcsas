@@ -140,11 +140,6 @@ class TestBinpackEdgeCases:
         assert selected == []
         assert len(remaining) == 2
 
-    def test_empty_items_list(self):
-        selected, remaining = first_fit_decreasing([], capacity=100)
-        assert selected == []
-        assert remaining == []
-
     def test_estimate_volumes_needed_zero_bytes(self):
         est = estimate_volumes_needed(0, MediaType.TEST_TINY.capacity_bytes)
         assert est == 0

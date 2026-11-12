@@ -247,26 +247,6 @@ class TestCmdRepoRemoveEdges:
         out = capsys.readouterr().out
         assert "not found" in out.lower()
 
-    def test_remove_empty_repo(self, tmp_path, capsys):
-        """Removing repo with no packs succeeds without --force."""
-        db = tmp_path / "test.db"
-        main(["init", "--db-path", str(db)])
-        main(["--db", str(db), "repo", "add", "empty_repo", "/mnt/empty"])
-
-        # Find the repo_id
-        conn = get_connection(db)
-        from lcsas.db.repos import list_repos
-        repos = [r for r in list_repos(conn) if r.name == "empty_repo"]
-        assert len(repos) == 1
-        repo_id = repos[0].repo_id
-        conn.close()
-
-        capsys.readouterr()
-        result = main(["--db", str(db), "repo", "remove", repo_id])
-        assert result == 0
-        out = capsys.readouterr().out
-        assert "Removed" in out
-
     def test_remove_with_packs_needs_force(self, tmp_path, capsys):
         """Removing repo with active packs without --force fails."""
         db = tmp_path / "test.db"

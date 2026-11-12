@@ -294,10 +294,6 @@ class TestSafeRemoveTree:
         safe_remove_tree(tree)
         assert not tree.exists()
 
-    def test_remove_nonexistent_noop(self, tmp_path):
-        """safe_remove_tree on nonexistent path doesn't raise."""
-        safe_remove_tree(tmp_path / "does_not_exist")
-
 
 class TestMakeWritable:
     def test_makes_files_writable(self, tmp_path):

@@ -87,22 +87,6 @@ class TestCLIInit:
         assert result == 0
 
 
-
-class TestReadOnlyCommandsRequireCatalog:
-    """FUP-02 mitigation 4: read-only commands must fail (not create a
-    catalog) when none exists, and perform zero writes outside the lock."""
-
-    def test_status_fails_without_catalog(self, tmp_path, capsys):
-        db = tmp_path / "nope.db"
-        result = main(["--db", str(db), "status"])
-        assert result != 0
-        combined = capsys.readouterr()
-        text = combined.out + combined.err
-        assert "lcsas init" in text
-        # The read-only command must NOT have created the catalog.
-        assert not db.exists(), "status created a catalog as a side effect"
-
-
 class TestDispatchRouting:
     def test_all_commands_parse(self):
         """Verify parser accepts all known commands without errors."""

@@ -41,8 +41,8 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 
 **Test coverage:**
 - Existing:
-  - `tests/unit/test_cli.py::TestCLIInit::test_init_creates_db` — catalog file created.
-  - `tests/unit/test_cli.py::TestCLIInit::test_init_honors_config_flag` — `--config` is honored (regression test for issue #17).
+  - `tests/unit/test_cli_init.py::TestCLIInit::test_init_creates_db` — catalog file created.
+  - `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` — `--config` is honored (regression test for issue #17).
   - `tests/unit/test_cli.py::TestCLIParsing::test_init_command` — argparse wiring.
   - `tests/unit/test_cli_init.py::TestCmdInit::test_reinit_on_existing_db` — idempotent re-init.
   - `tests/unit/test_cli_init.py::TestCmdInit::test_init_creates_nested_parent_dirs` — the `mkdir(parents=True)` branch (`--db-path` under several missing directories, issue #40).
@@ -133,7 +133,7 @@ Observations from reading the source; **not** fixes.
 
 - **Every disc carries a disc catalog.** The complete SQLite catalog is copied onto every burned disc by `staging/metadata.py::HolographicInjector`, so any single disc is self-describing. There is no separate JSON-export step. (intentional: design note, not a defect.)
 - **True backup = copy the `.sqlite` file.** There is no `db import` and no `db export` command; an owner wanting an off-disc copy of the master catalog should copy the raw SQLite file. The catalog runs in WAL mode (`get_connection` in `src/lcsas/db/connection.py`), so copy it while no `lcsas` command is running (a copy taken mid-command can miss the `-wal` sidecar), or take a consistent copy with `sqlite3 archive.db ".backup copy.db"`. (intentional: the disc catalog on every disc is the designed backup; no export command is planned.)
-- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 and pinned by `tests/unit/test_cli.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/commands/init.py`). Resolved; kept as a behaviour note.
+- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 and pinned by `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/commands/init.py`). Resolved; kept as a behaviour note.
 - **`init` migrates if needed.** On an existing catalog `ensure_schema()` calls `migrate()` to bring an older catalog up to `CURRENT_SCHEMA_VERSION`; on a fresh catalog `create_all()` stamps the current version directly (`src/lcsas/db/schema.py`). Pinned by `tests/unit/test_db_schema.py` (`TestSchema`, `TestMigrateV3ToV4`). Resolved; kept as a behaviour note.
 - **`config check` does not validate `optical_device`** — typos surface only at burn time. (intentional: see the Gaps bullet under `lcsas config check`.)
 - **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse (`lcsas: error: unrecognized arguments: --config foo.toml`); correct form is `lcsas --config foo.toml config check`. The error now adds `--config: top-level option(s); put them before the subcommand, ...` (the same for `--db`, `--lock-timeout` and `--verbose`); the exit is still argparse's status 2 with nothing run (`_LcsasArgumentParser` in `src/lcsas/cli/parser.py`; `tests/unit/test_cli_config_placement.py`, #517).

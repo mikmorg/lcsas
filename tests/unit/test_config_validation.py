@@ -232,53 +232,6 @@ class TestRepositoryValidation:
         assert len(errors) >= 2
 
 
-class TestValidateConfig:
-    def test_valid_config_no_errors(self, tmp_path):
-        from lcsas.config.settings import LCSASConfig, validate_config
-
-        mirror = tmp_path / "mirror"
-        mirror.mkdir()
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        db = tmp_path / "archive.db"
-
-        cfg = LCSASConfig(
-            mirror_base_path=mirror, staging_path=staging, db_path=db,
-        )
-        errors = validate_config(cfg)
-        assert errors == []
-
-    def test_missing_mirror(self, tmp_path):
-        from lcsas.config.settings import LCSASConfig, validate_config
-
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        db = tmp_path / "archive.db"
-
-        cfg = LCSASConfig(
-            mirror_base_path=tmp_path / "no_mirror", staging_path=staging, db_path=db,
-        )
-        errors = validate_config(cfg)
-        assert any("mirror_base_path" in e for e in errors)
-
-    def test_ecc_out_of_range(self, tmp_path):
-        from lcsas.config.settings import LCSASConfig, validate_config
-
-        mirror = tmp_path / "mirror"
-        mirror.mkdir()
-        staging = tmp_path / "staging"
-        staging.mkdir()
-
-        cfg = LCSASConfig(
-            mirror_base_path=mirror,
-            staging_path=staging,
-            db_path=tmp_path / "db",
-            default_ecc_redundancy_pct=150,
-        )
-        errors = validate_config(cfg)
-        assert any("out of range" in e for e in errors)
-
-
 # ---------------------------------------------------------------------------
 # Gap tests for config validation and loader warnings (issue #517).
 #

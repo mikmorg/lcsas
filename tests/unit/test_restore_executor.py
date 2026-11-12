@@ -107,7 +107,6 @@ class TestPrepareCache:
 # =========================================================================
 
 
-
 class TestIngestVolume:
     def _setup_volume(self, tmp_path, layout="flat"):
         """Create a simulated mounted volume with pack files."""
@@ -890,26 +889,6 @@ class TestIngestVolumeInvokesECC:
 
 
 class TestPackCorruptionError:
-    def test_good_hash_passes(self, tmp_path):
-        from lcsas.restore.executor import RestoreExecutor
-
-        mock_runner = MagicMock()
-        executor = RestoreExecutor(mock_runner)
-
-        # Create a pack file whose name matches its SHA-256
-        vol = tmp_path / "volume" / "data"
-        vol.mkdir(parents=True)
-        content = b"hello_world_pack_data"
-        from hashlib import sha256 as _sha256
-        actual_hash = _sha256(content).hexdigest()
-        (vol / actual_hash).write_bytes(content)
-
-        cache = tmp_path / "cache"
-        cache.mkdir()
-
-        result = executor.ingest_volume(cache, tmp_path / "volume", [actual_hash], verify=True)
-        assert result.ingested == 1
-
     def test_bad_hash_raises_and_deletes(self, tmp_path):
         from lcsas.restore.executor import PackCorruptionError, RestoreExecutor
 

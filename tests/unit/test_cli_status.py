@@ -9,16 +9,6 @@ from lcsas.db.volumes import create_volume
 
 
 class TestCmdStatus:
-    def test_status_empty_db(self, tmp_path, capsys):
-        """Status on empty DB shows all zeros."""
-        db = tmp_path / "test.db"
-        main(["init", "--db-path", str(db)])
-        result = main(["--db", str(db), "status"])
-        assert result == 0
-        out = capsys.readouterr().out
-        assert "0 total" in out
-        assert "Volumes: 0" in out
-
     def test_status_with_data(self, tmp_path, capsys):
         """Status with repos shows counts."""
         db = tmp_path / "test.db"

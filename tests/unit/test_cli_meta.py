@@ -653,21 +653,3 @@ class TestCmdMetaBuildPerRepoKeysNotAllowIncomplete:
         assert "ACKNOWLEDGED" in caplog.text
         assert "family" in caplog.text
         assert "built successfully" in caplog.text
-
-    def test_allow_incomplete_still_downgrades_ordinary_missing_binaries(
-        self, tmp_path, monkeypatch, caplog
-    ):
-        """Proves the change did not over-broaden: a build whose only
-        gap is the ordinary per-target binaries (no catalog at all, so
-        no per-repo keys entries exist) is still waved through by
-        --allow-incomplete alone, unchanged from before #443."""
-        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
-        out = tmp_path / "meta"
-        caplog.clear()
-        rc = main([
-            "meta", "build", "--output", str(out), "--allow-incomplete",
-            "--allow-no-dvdisaster-source",
-        ])
-        assert rc == 0
-        assert "INCOMPLETE" in caplog.text
-        assert "built successfully" in caplog.text

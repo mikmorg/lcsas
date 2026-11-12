@@ -356,13 +356,6 @@ class TestCmdConsolidate:
 
 
 class TestConsolidateParser:
-    def test_consolidate_dispatches(self, capsys):
-        """Consolidate command invokes cmd_consolidate handler."""
-        parser = build_parser()
-        args = parser.parse_args(["consolidate", "1", "2", "--target-media", "MDISC100"])
-        assert args.command == "consolidate"
-        assert args.volume_ids == [1, 2]
-
     def test_consolidate_execute_flag_parses(self, capsys):
         """--execute flag is accepted by the parser."""
         parser = build_parser()

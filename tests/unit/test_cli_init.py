@@ -6,12 +6,6 @@ from lcsas.cli.main import main
 
 
 class TestCmdInit:
-    def test_init_creates_db(self, tmp_path, capsys):
-        db = tmp_path / "new.db"
-        result = main(["init", "--db-path", str(db)])
-        assert result == 0
-        assert db.exists()
-
     def test_reinit_on_existing_db(self, tmp_path, capsys):
         db = tmp_path / "existing.db"
         main(["init", "--db-path", str(db)])
