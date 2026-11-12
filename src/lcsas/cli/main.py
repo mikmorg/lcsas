@@ -4966,7 +4966,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             # host without dvdisaster still spends the burned parity.  If
             # NEITHER ECC tool is present, fall back to a portable SHA-256
             # compare against the hash recorded at burn time (detect-only).
-            # See docs/CROSS_PLATFORM_META_RFC.md §6 Q2 for the rationale.
+            # See docs/history/CROSS_PLATFORM_META_RFC.md §6 Q2 for the rationale.
             from lcsas.db.volume_copies import get_iso_sha256_for_label
             from lcsas.ecc.dvdisaster import select_ecc_runner
             from lcsas.restore.executor import verify_iso_sha256
