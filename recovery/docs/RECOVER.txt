@@ -945,10 +945,21 @@ done this for every listed volume, do not run 'lcsas session abort'
 on that burn session: while a listed volume has no disc record, abort
 refuses and changes nothing.
 
-Take care with abort at any time after a rebuild: a volume of the
-newest burn session whose disc you did not give the rebuild looks
-never burned, and 'lcsas session abort' deletes it, even though its
-disc may exist.  Give the rebuild every disc of that session you hold.
+A volume of the newest burn session whose disc you did not give the
+rebuild has an unknown burn state: its disc may exist.  The rebuild
+marks it, and the status report lists it:
+
+    lcsas status
+
+Abort, stage --clean and reconcile --fix all refuse to delete it.  If
+you find its disc, record it with the verify command above.  Only if
+you are sure no disc of it was ever burned, delete it with:
+
+    lcsas session abort --volume <label> --never-burned
+
+A catalog rebuilt by an LCSAS older than v1.0.0-rc8 has no such mark:
+rebuild it again from the same discs into a new file to get it.
+Give the rebuild every disc of the newest burn session you hold.
 Older burn sessions are unaffected — their burn records were
 captured on later discs and are merged back in (volume_events,
 burn_sessions, and session_volumes all survive the rebuild).
