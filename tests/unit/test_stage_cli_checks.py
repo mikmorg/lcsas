@@ -131,3 +131,50 @@ def test_registered_for_location_stages(tmp_path, caplog):
             "SELECT location FROM volumes")] == ["Home"]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------
+# A dry run checks password split drift like the real run
+# ---------------------------------------------------------------------
+
+
+def test_dry_run_refuses_on_escrow_drift_like_the_real_run(tmp_path, caplog):
+    cfg, db = _setup(tmp_path, key_split=True)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="lcsas"):
+        rc = main(["--config", str(cfg), "stage", "--dry-run"])
+    assert rc == 1
+    assert "password split drift for repository 'fam'" in caplog.text
+    assert "Pass --allow-escrow-drift to override" in caplog.text
+    assert "volume(s) planned" not in caplog.text
+    assert _counts(db) == (0, 0)
+
+    caplog.clear()
+    with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.create_iso",
+               _fake_create_iso):
+        assert main(["--config", str(cfg), "stage"]) == 1
+    assert "password split drift for repository 'fam'" in caplog.text
+    assert _counts(db)[0] == 0
+
+
+def test_dry_run_with_allow_escrow_drift_warns_and_plans(tmp_path, caplog):
+    cfg, db = _setup(tmp_path, key_split=True)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="lcsas"):
+        rc = main(["--config", str(cfg), "stage", "--dry-run",
+                   "--allow-escrow-drift"])
+    assert rc == 0, caplog.text
+    assert "password split drift for repository 'fam'" in caplog.text
+    assert "proceeding: --allow-escrow-drift" in caplog.text
+    assert "[DRY RUN] 1 volume(s) planned" in caplog.text
+    assert _counts(db) == (0, 0)
+
+
+def test_dry_run_without_drift_plans(tmp_path, caplog):
+    cfg, db = _setup(tmp_path)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="lcsas"):
+        rc = main(["--config", str(cfg), "stage", "--dry-run"])
+    assert rc == 0, caplog.text
+    assert "drift" not in caplog.text
+    assert "[DRY RUN] 1 volume(s) planned" in caplog.text

@@ -853,6 +853,12 @@ class BurnOrchestrator:
 
         # --- Dry-run: report the plan without side effects ---
         if dry_run:
+            # The real run checks each volume's repositories for password
+            # split drift in _stage_single_volume; a dry run must refuse
+            # (or, with --allow-escrow-drift, warn) the same way.
+            self._escrow_preflight(sorted(
+                {p.repo_id for _packs, _b in volume_plans for p in _packs}
+            ))
             total_bytes = sum(b for _, b in volume_plans)
             logger.info(f"[DRY RUN] {len(volume_plans)} volume(s) planned "
                         f"on {mt.name}")

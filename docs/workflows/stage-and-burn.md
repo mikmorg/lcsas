@@ -193,7 +193,9 @@ machines, or when staging in advance for an unattended burn.
    (`BurnOrchestrator._trim_underfilled`).
 5. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
    without touching the staging area, the catalog, or the disc
-   (`BurnOrchestrator.stage`).
+   (`BurnOrchestrator.stage`). It checks for password split drift like a
+   real run: on drift it refuses with exit code 1, unless
+   `--allow-escrow-drift`.
 6. `--allow-escrow-drift` — proceed even when `lcsas.toml`'s `key_split`/K/N
    disagrees with the recorded split (KEY-08); the override is logged
    as a volume event. Without it, an `EscrowDriftError` aborts the stage so a
@@ -413,8 +415,10 @@ committing to a full stage.
    skipping the result-logging block.
 
 **Expected outcome:** Per-volume plan printed, no session created, no
-staging directories, no catalog mutation. An unregistered
-`--for-location` is refused (exit 1) as in a real run.
+staging directories, no catalog mutation. A dry run refuses (exit 1) where
+the real run would refuse for password split drift or an unregistered
+`--for-location`. When nothing needs staging it prints the same "No packs
+need staging." as the real run and exits 1 like it.
 
 **Variant axes that apply:** Media type (all), repository filter (`--repo`),
 location filter (`--for-location`). No ISO is produced.
