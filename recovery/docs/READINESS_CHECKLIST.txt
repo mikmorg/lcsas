@@ -272,25 +272,39 @@ show /15.)
 
   DATE        VARIANT              MODEL   SCORE   COST   FIXTURE BUILT FROM
   ──────────  ───────────────────  ──────  ──────  ─────  ──────────────────
-  2026-11-05  single-key           haiku   16/16   $0.22  master f4b1822
-  2026-11-05  split-2of5           haiku   16/16   $0.20  master f4b1822
-  2026-11-05  split-key-docs       haiku   16/16   $0.27  master f4b1822
-  2026-11-05  tier1-missing        haiku   16/16   $0.67  master f4b1822
-  2026-11-05  tier1-tier2-missing  haiku   16/16   $0.66  master f4b1822
-  2026-11-05  single-tenant        haiku   16/16   $0.15  master f4b1822
-  2026-11-05  5-tenant             haiku   16/16   $0.26  master f4b1822
-  2026-11-05  no-catalog           haiku   16/16   $0.18  master f4b1822
-  2026-11-05  mixed-split          haiku   16/16   $0.28  master f4b1822
-  2026-11-05  split-key-docs (2)   haiku   16/16   $0.19  master f4b1822
+  2026-11-12  single-key           haiku   16/16   $0.16  master c08a83e
+  2026-11-12  split-2of5           haiku   16/16   $0.20  master c08a83e
+  2026-11-12  split-key-docs       haiku   16/16   $0.29  master c08a83e
+  2026-11-12  tier1-missing        haiku   16/16   $0.46  master c08a83e
+  2026-11-12  tier1-tier2-missing  haiku   16/16   $0.35  master c08a83e
+  2026-11-12  single-tenant        haiku   16/16   $0.14  master c08a83e
+  2026-11-12  5-tenant             haiku   16/16   $0.28  master c08a83e
+  2026-11-12  no-catalog           haiku   16/16   $0.16  master c08a83e
+  2026-11-12  mixed-split          haiku   16/16   $0.25  master c08a83e
+  2026-11-12  split-key-docs (2)   haiku   16/16   $0.29  master c08a83e
   (not built) windows              haiku   --/16   --     retires once #476 passes
                                                           (#479)
+
+  The 2026-11-12 rows are the v1.0.0-rc8 sweep (#478), run the same
+  way, on master c08a83e with every rc8 restore-path change in.  Every
+  variant reached 16/16.  Two agent-behaviour checks
+  failed on some runs, never a restore check:
+    - split-key-docs scored 14/16 on its first run (the agent wrote a
+      disc-swap loop script), then 16/16 three times in a row; the
+      rows above are the first two of those.
+    - mixed-split scored 15/16 and then 14/16: once the agent read the
+      resume.sh that restore.sh writes, once it wrote a disc-swap loop
+      script.  Its third run scored 16/16.  Both are the compliance
+      flakes in VARIANT_FLAKE_NOTES.md; every file was restored each
+      time.
+  All 14 runs together cost $3.72.
 
   The 2026-11-05 rows are the v1.0.0-rc6 sweep (#478): one run per
   variant via `run_variant.sh <variant>` (split-2of5 is the
   split-key-2of5 variant), each building its own fixture meta disc
   from the tree named above.  COST is the agent's reported API spend.
   Seven variants scored 16/16 on their first run.  Three needed a
-  re-run, and each re-run scored 16/16 (rows above):
+  re-run, and each re-run scored 16/16 (rows since replaced by rc8's):
     - tier1-tier2-missing hit the sweep's 1080 s limit, set to share
       the host, while other jobs held the load near 44.  Its agent had
       skipped the newest-data-disc step, so tier 3 had no catalog and
