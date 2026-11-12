@@ -9,7 +9,7 @@ set -euo pipefail
 MANIFEST="${ROBOT_MANIFEST:-/var/lib/disc-vault/manifest.json}"
 LOG="${DISC_LOG:-/var/log/disc-loader.log}"
 CDEMU_DRIVE="${CDEMU_DRIVE_SH:-/usr/local/libexec/cdemu_drive.sh}"
-CDEMU_USER="${CDEMU_USER:-mikmorg}"
+CDEMU_USER="${CDEMU_USER:-@CDEMU_USER@}"  # filled in by setup.py
 CDEMU_UID="$(id -u "$CDEMU_USER")"
 
 run_cdemu() {

@@ -20,7 +20,7 @@ for mp in $(findmnt -rno TARGET -S /dev/sr0 2>/dev/null || true); do
     umount "$mp" >/dev/null 2>&1 || true
 done
 
-bash /home/mikmorg/git/lcsas/scripts/cdemu_drive.sh unload >/dev/null 2>&1 || true
+bash "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/cdemu_drive.sh" unload >/dev/null 2>&1 || true
 
 # Stop the agent before unmounting its home: a process whose cwd is in ~
 # keeps the bind mount busy.

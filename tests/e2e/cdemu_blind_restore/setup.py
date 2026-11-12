@@ -156,8 +156,21 @@ def sh(cmd: list[str] | str, **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, **kw)
 
 
+def _operator() -> str:
+    """The user who runs the harness and owns the cdemu session.
+
+    CDEMU_USER wins; otherwise the user who ran sudo.  No built-in
+    default: this repository is public and names no real account.
+    """
+    user = os.environ.get("CDEMU_USER") or os.environ.get("SUDO_USER")
+    if not user or user == "root":
+        sys.exit("setup.py: set CDEMU_USER (or run it through sudo as the "
+                 "user who owns the cdemu session)")
+    return user
+
+
 def _cdemu_gid() -> int:
-    return pwd.getpwnam(os.environ.get("CDEMU_USER", "mikmorg")).pw_gid
+    return pwd.getpwnam(_operator()).pw_gid
 
 
 def _empty_dir(path: Path) -> None:
@@ -689,7 +702,13 @@ def _install_disc_loader() -> None:
     os.chown(CDEMU_WRAPPER_INSTALL, 0, 0)
 
     ROBOT_LIBEXEC.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(HERE / "cdr-robotctl", ROBOT_LIBEXEC)
+    # The robot backend runs from the setuid disc-loader with a scrubbed
+    # environment, so the cdemu user is written into it at install time.
+    ROBOT_LIBEXEC.write_text(
+        (HERE / "cdr-robotctl").read_text().replace(
+            "@CDEMU_USER@", _operator(),
+        )
+    )
     os.chmod(ROBOT_LIBEXEC, 0o700)
     os.chown(ROBOT_LIBEXEC, 0, 0)
     os.chmod(ROBOT_LIBEXEC.parent, 0o700)
@@ -722,13 +741,13 @@ def _install_disc_loader() -> None:
 
 
 def _start_cdemu() -> None:
-    cdemu_user = os.environ.get("CDEMU_USER", "mikmorg")
+    cdemu_user = _operator()
     cdemu_uid = pwd.getpwnam(cdemu_user).pw_uid
     env = {
         "XDG_RUNTIME_DIR": f"/run/user/{cdemu_uid}",
         "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{cdemu_uid}/bus",
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "HOME": f"/home/{cdemu_user}",
+        "HOME": pwd.getpwnam(cdemu_user).pw_dir,
     }
     base = ["sudo", "-u", cdemu_user, "env"] + [f"{k}={v}" for k, v in env.items()]
     sh(base + ["bash", str(CDEMU_WRAPPER_SRC), "start"], stdout=subprocess.DEVNULL)
@@ -882,7 +901,7 @@ def _create_agent_user(labels: list[str]) -> None:
     dst_top.write_text("{}")
     os.chmod(dst_top, 0o600)
     os.chown(dst_top, uid, gid)
-    src_creds = Path("/home/mikmorg/.claude/.credentials.json")
+    src_creds = Path(pwd.getpwnam(_operator()).pw_dir) / ".claude" / ".credentials.json"
     if src_creds.is_file():
         dst_creds = cfg_dir / ".credentials.json"
         shutil.copy2(src_creds, dst_creds)
@@ -929,7 +948,7 @@ def _lock_fixture_dir() -> None:
     # (running as root via sudo) can still read it. Also lock the
     # parent /scratch/lcsas-data tree so leftover smoke/test data
     # from prior runs doesn't leak the production restore.sh.
-    cdemu_user = os.environ.get("CDEMU_USER", "mikmorg")
+    cdemu_user = _operator()
     cdemu_uid = pwd.getpwnam(cdemu_user).pw_uid
     cdemu_gid = pwd.getpwnam(cdemu_user).pw_gid
     os.chown(FIXTURE, 0, cdemu_gid)

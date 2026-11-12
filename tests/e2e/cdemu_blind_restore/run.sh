@@ -45,7 +45,12 @@ cp "$PROMPT_SRC" "$RUN_DIR/prompt.txt"
 # /home/lcsas-blind/{mnt,restored}; leftover state from a prior run
 # (especially a half-built rustic cache or extracted meta tree) misleads
 # the next agent into "discovering" data it didn't actually restore.
-sudo bash -c '
+# The operator's Claude login is copied for the agent.  The operator is
+# CDEMU_USER, else whoever ran sudo (run_variant.sh runs us as root),
+# else the current user.
+OPERATOR="${CDEMU_USER:-${SUDO_USER:-$(id -un)}}"
+OPERATOR_HOME="$(getent passwd "$OPERATOR" | cut -d: -f6)"
+sudo env OPERATOR_HOME="$OPERATOR_HOME" bash -c '
     # Kill any stale lcsas-blind processes from a prior run so they
     # do not race on disc-loader and pollute the log.
     pkill -u lcsas-blind 2>/dev/null || true
@@ -77,8 +82,8 @@ sudo bash -c '
     mkdir -p /scratch/lcsas-blind-claude-cfg
     printf '{}' > /scratch/lcsas-blind-claude-cfg/.claude.json
     chmod 600 /scratch/lcsas-blind-claude-cfg/.claude.json
-    if [ -f /home/mikmorg/.claude/.credentials.json ]; then
-        cp /home/mikmorg/.claude/.credentials.json /scratch/lcsas-blind-claude-cfg/.credentials.json
+    if [ -f "$OPERATOR_HOME/.claude/.credentials.json" ]; then
+        cp "$OPERATOR_HOME/.claude/.credentials.json" /scratch/lcsas-blind-claude-cfg/.credentials.json
         chmod 600 /scratch/lcsas-blind-claude-cfg/.credentials.json
     fi
     chown -R lcsas-blind:lcsas-blind /scratch/lcsas-blind-claude-cfg
