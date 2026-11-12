@@ -434,13 +434,14 @@ carries it on with no meta disc.
 - `tests/unit/test_meta_builder.py::TestMovedRestoreScripts` (one
   restore driver; `restore_auto.sh` finds the sets on the meta disc).
 - `tests/integration/test_meta_volume_restore.py` runs the meta disc's
-  `restore.sh` end-to-end against unpacked data discs. The interactive
-  single-drive prompt loop is
-  simulated by `tests/integration/test_interactive_restore.py`, which
-  drives the production `restore.sh` through a pseudoterminal and swaps
-  discs by re-attaching ISOs to a loop device (needs root, `rustic` and
-  `xorriso`; self-skips without them). Tier 1's own swap prompt is covered
-  by `recovery/tests/test_multidisc.py::case_interactive_swap`.
+  `restore.sh` end-to-end against unpacked data discs. Tier 1's own
+  swap prompt is covered by
+  `recovery/tests/test_multidisc.py::case_interactive_swap`.
+- Not working yet: `tests/integration/test_interactive_restore.py` (a
+  pseudoterminal plus loop-device disc swaps, root only) and
+  `scripts/smoke_single_drive.py` still pass flags the current
+  `restore.sh` rejects (`--drive`, `--work-dir`), so they would fail at
+  once. They self-skip without root, so CI does not notice (#756).
 
 **Source refs:** `recovery/scripts/restore.sh` and `_write_restore_script`
 (`src/lcsas/meta/builder.py`).
@@ -651,9 +652,9 @@ catalog policy (no `catalog.db`).
 |---|---|---|---|
 | `lcsas meta build` | `tests/unit/test_meta_builder.py::TestMetaVolumeBuilder`, `::TestBundleUpstreamBinaries` | `tests/integration/test_meta_volume_restore.py` | No `--db`-populated `metadata/` assertion. |
 | `lcsas meta verify` | `tests/unit/test_meta_builder.py` (manifest + required-contents) | — | None significant. |
-| Meta disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `test_single_drive_helper_bundled`, `TestMovedRestoreScripts` (the two scripts under `recovery/scripts/` run from there, manifest rows), `TestMetaVolumeInfoTxt` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
+| Meta disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `TestMovedRestoreScripts` (the two scripts under `recovery/scripts/` run from there, manifest rows), `TestMetaVolumeInfoTxt` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
 | Cross-platform bundling | `TestBundleUpstreamBinaries` (5 tests), `test_restore_sh_dispatcher.py` | — | Per-target restore exercised in recovery-toolchain CI. |
-| Single-drive bootstrap | `test_single_drive_helper_bundled`, `test_restore_script_single_drive_default`, `TestSingleDriveBitsStandalone` | `TestMetaVolumeRestore` (directory mode); `test_interactive_restore.py` (PTY + loop-device disc swaps, root-gated) | None significant. |
+| Single-drive bootstrap | `test_restore_sh_journey.py` (the newest-disc step), `recovery/tests/test_multidisc.py::case_interactive_swap` (tier 1's swap prompt) | `TestMetaVolumeRestore` (directory mode) | No working test swaps discs in one drive through `restore.sh`: `test_interactive_restore.py` uses retired flags (#756). |
 | Catalog policy | Code inspection | `TestMetaVolumeRestore` exercises the disc catalog implicitly | No direct `--reseed` precedence test. |
 | Source refresh | `test_no_pycache_in_source`, `test_no_incomplete_marker_after_build` | — | No idempotency / re-run test. |
 | Docs-vs-reality | `tests/unit/test_doc_command_contract.py` (`test_meta_build_flags_in_docs_exist`) | — | — |
