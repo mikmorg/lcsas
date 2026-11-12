@@ -460,6 +460,12 @@ catalog and physical reality (FMA-01).  Two independent checks:
    disc is just not recorded yet. It is listed with the reason and the
    way to record the disc, and `--fix` never deletes it, even with
    `--include-waiting` (#746).
+   A volume a catalog rebuild left with no record of whether it was
+   burned (`rebuild_burn_unknown()`, see `lcsas catalog rebuild`
+   below, #758) is not a ghost either. It is listed with the way to
+   record its disc, and `--fix` never deletes it. If no disc of it was
+   ever burned, `lcsas session abort --volume <label> --never-burned`
+   deletes it.
 2. **Durable volumes without an ACTIVE disc** — status says a disc
    exists but no disc record backs it (status/`volume_copies` drift).
    Report-only; never auto-fixed.
@@ -479,7 +485,8 @@ catalog and physical reality (FMA-01).  Two independent checks:
    drifted volume (report-only) (`src/lcsas/db/queries.py`).
 4. Query `get_ghost_volumes(conn, older_than_hours)`, set aside (and
    list) those with burn evidence (`burn_evidence`, always), then those
-   whose staged ISO still exists (`staged_iso_present`,
+   a rebuild left with an unknown burn state (`rebuild_burn_unknown`,
+   always), then those whose staged ISO still exists (`staged_iso_present`,
    `src/lcsas/db/sessions.py`) unless `--include-waiting`; if no ghost
    is left, log the all-clear and return 0 (`src/lcsas/db/queries.py`).
 5. For each ghost, tally per-repository pack/byte stats via
@@ -599,14 +606,25 @@ rebuilds the master.
       the merge becomes `BURNED`, so the next `lcsas stage` does not
       select its packs again.  It is listed in
       `RebuildResult.needs_verify`.  A volume with a `VERIFY_FAIL` event
-      is left as it is, with a warning.  Then return a `RebuildResult`
-      (`src/lcsas/db/rebuild.py`).
+      is left as it is, with a warning.
+   5. A volume the output catalog did not have before the rebuild that
+      is still `STAGING`/`BURNING` with no disc record and no burn
+      evidence gets a `NOTE` starting "Catalog rebuild: burn state
+      unknown" and is listed in `RebuildResult.burn_unknown` (#758).
+      A disc catalog lists the volumes staged before its disc, so such
+      a volume's own disc may exist; it was just not read.  Then return
+      a `RebuildResult` (`src/lcsas/db/rebuild.py`).
 4. Log a per-table summary (discs processed/skipped; repositories,
    volumes, packs, snapshots merged) and any `RebuildResult.warnings`
    (`cmd_catalog_rebuild`).  List the volumes in `needs_verify`, with
    `lcsas verify <label> --disc --location <where it is kept>` for
    each.  That command checks the disc in the drive, records it at that
    location (an ACTIVE disc record) and marks the volume `VERIFIED`.
+   List the volumes in `burn_unknown` with the same command.
+   `session abort`, `stage --clean` and `catalog reconcile --fix`
+   never delete them; `lcsas session abort --volume <label>
+   --never-burned` does, once the owner is sure no disc of it was
+   burned.
 5. Log each error if any occurred; return 1 in that case, 0
    otherwise (`cmd_catalog_rebuild`).
 

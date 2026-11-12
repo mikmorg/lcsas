@@ -231,6 +231,8 @@ output of plain `lcsas status` is unchanged.
   "waiting": ["LCSAS_MD100_2026_0007"],
   "incomplete": {"labels": [], "sessions": []},
   "ghosts": [],
+  "burned_unrecorded": [],
+  "burn_unknown": [],
   "partial_sessions": [],
   "needs_reburn": [],
   "single_disc_packs": 0,
@@ -247,7 +249,19 @@ output of plain `lcsas status` is unchanged.
   warning: never burned, staging finished, ISO still in the staging
   area, and no failed verify.
 - `incomplete`, `ghosts`, `partial_sessions` and `needs_reburn` match
-  the other warnings of the text output.
+  the other warnings of the text output. `ghosts` lists only volumes
+  that were never burned and whose ISO is gone: the ones `lcsas catalog
+  reconcile --fix` deletes.
+- `burned_unrecorded` lists volumes that were burned but have no disc
+  recorded: `BURNED` or `VERIFIED` with no disc (a catalog rebuilt from
+  discs records the newest discs like this), or `STAGING` with an event
+  that records a good disc (#751). Record each disc with `lcsas verify
+  <label> --disc --location <where it is kept>` or by importing its burn
+  receipt.
+- `burn_unknown` lists volumes a catalog rebuild brought in with no
+  record of whether they were burned (#758). Record each disc you hold
+  the same way; `lcsas session abort --volume <label> --never-burned`
+  deletes one that was never burned.
 - `format` is 1. It changes only when a field changes meaning or is
   removed. New fields can appear without a change.
 

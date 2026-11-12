@@ -686,6 +686,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Abort a single stranded STAGING volume by label instead of "
              "a whole session (for volumes with no session).",
     )
+    sess_abort_p.add_argument(
+        "--never-burned", action="store_true", default=False,
+        help="Confirm that no disc was ever burned of the volumes a catalog "
+             "rebuild left with no record of whether they were burned, so "
+             "they are deleted too. Never deletes a volume that was "
+             "burned but has no disc recorded.",
+    )
 
     # --- config ---
     config_p = subparsers.add_parser("config", help="Configuration management.")
@@ -2044,6 +2051,8 @@ def _status_json(
     incomplete: list[str],
     incomplete_sessions: list[str],
     ghost_labels: list[str],
+    burned_unrecorded: list[str],
+    burn_unknown: list[str],
     partial_sessions: list[str],
     needs_reburn: list[tuple[str, str, bool]],
     single_disc_packs: int,
@@ -2056,6 +2065,12 @@ def _status_json(
     registered location (and per location a waiting volume was staged
     for): its disc count, the volumes waiting to be burned for it and the
     volumes that need a re-burn there.
+
+    ``ghosts`` lists only never-burned volumes whose ISO is gone (what
+    ``catalog reconcile --fix`` deletes).  ``burned_unrecorded`` (#751)
+    lists volumes that were burned but have no disc recorded, and
+    ``burn_unknown`` (#758) those a catalog rebuild left with no record
+    of whether they were burned; ``reconcile --fix`` deletes neither.
     """
     from lcsas.db.locations import list_locations
 
@@ -2111,6 +2126,8 @@ def _status_json(
         "waiting": [v.label for v in waiting],
         "incomplete": {"labels": incomplete, "sessions": incomplete_sessions},
         "ghosts": ghost_labels,
+        "burned_unrecorded": burned_unrecorded,
+        "burn_unknown": burn_unknown,
         "partial_sessions": partial_sessions,
         "needs_reburn": reburn,
         "single_disc_packs": single_disc_packs,
@@ -2148,6 +2165,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         staging_incomplete,
     )
     from lcsas.db.volume_copies import find_stale_copies
+    from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
     from lcsas.db.volumes import list_volumes
 
     db_path = _resolve_db_path(args)
@@ -2181,6 +2199,35 @@ def _cmd_status(args: argparse.Namespace) -> int:
         needs_reburn = _volumes_needing_reburn(conn)
         failed_labels = {label for label, _, _ in needs_reburn}
         unburned = get_ghost_volumes(conn, older_than_hours=0)
+        # #751: a volume with no disc record that was burned is not a
+        # ghost: BURNED/VERIFIED with no disc row at all (a catalog rebuilt
+        # from discs records the newest discs like this), or STAGING/
+        # BURNING with burn evidence (the check reconcile --fix uses).
+        burned_unrecorded: list[tuple[str, str]] = [
+            (str(r["label"]), f"{r['status']}, but no disc of it is recorded")
+            for r in conn.execute(
+                "SELECT v.label, v.status FROM volumes v "
+                "WHERE v.status IN ('BURNED', 'VERIFIED') AND NOT EXISTS "
+                "(SELECT 1 FROM volume_copies vc "
+                "WHERE vc.volume_id = v.volume_id) ORDER BY v.label"
+            )
+        ]
+        # #758: one a catalog rebuild left with no record of whether it
+        # was burned is not a ghost either: its disc may exist.
+        burn_unknown: list[str] = []
+        unread = []
+        staged_but_burned = False
+        for v in unburned:
+            why = burn_evidence(conn, v.volume_id)
+            if why is not None:
+                burned_unrecorded.append((v.label, f"{v.status}, but {why}"))
+                staged_but_burned = True
+            elif rebuild_burn_unknown(conn, v.volume_id):
+                burn_unknown.append(v.label)
+            else:
+                unread.append(v)
+        burned_unrecorded.sort()
+        unburned = unread
         # #665: a stage that did not finish (no ISO hash recorded) is
         # incomplete, whatever is in the staging area: never burn it.
         incomplete = [v.label for v in unburned
@@ -2217,6 +2264,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 incomplete=incomplete,
                 incomplete_sessions=incomplete_sessions,
                 ghost_labels=ghost_labels,
+                burned_unrecorded=[label for label, _ in burned_unrecorded],
+                burn_unknown=burn_unknown,
                 partial_sessions=[s.session_id for s in partial_sessions],
                 needs_reburn=needs_reburn,
                 single_disc_packs=len(single_disc_packs),
@@ -2273,7 +2322,31 @@ def _cmd_status(args: argparse.Namespace) -> int:
             "pool for the next 'lcsas stage'.",
             len(ghost_labels), ", ".join(ghost_labels),
         )
-    if summary["staged"] > 0 and not (with_iso or ghost_labels or incomplete):
+    if burned_unrecorded:
+        logger.warning(
+            "WARNING: %d volume(s) were burned, but no disc of them is "
+            "recorded: %s. For each disc you hold, put it in the drive and "
+            "run 'lcsas verify <label> --disc --location <where it is "
+            "kept>', or import its burn receipt with 'lcsas catalog "
+            "import-receipts'.",
+            len(burned_unrecorded),
+            "; ".join(f"{label} ({why})" for label, why in burned_unrecorded),
+        )
+    if burn_unknown:
+        logger.warning(
+            "WARNING: %d volume(s) come from a catalog rebuilt from discs, "
+            "and no disc it read shows whether they were burned: %s. For "
+            "each disc of them you hold, run 'lcsas verify <label> --disc "
+            "--location <where it is kept>', or import its burn receipt. If "
+            "you are sure one was never burned, 'lcsas session abort "
+            "--volume <label> --never-burned' deletes it and returns its "
+            "packs to the unarchived pool.",
+            len(burn_unknown), ", ".join(burn_unknown),
+        )
+    if summary["staged"] > 0 and not (
+        with_iso or ghost_labels or incomplete or burn_unknown
+        or staged_but_burned
+    ):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
             "burned. See 'lcsas catalog reconcile'.",
@@ -3782,6 +3855,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     refused = 0
     already = 0
     imported = 0
+    superseded = 0
     with locked_connection(
         _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
@@ -4046,6 +4120,73 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     refused += 1
                     continue
 
+            # Issue #18: persist receipt provenance (iso_sha256, session_id,
+            # device, pack_ids) on the master catalog as a
+            # BURN_RECEIPT_IMPORTED audit event, so later "which device
+            # burned this?" and "does the disc hash match the recorded one?"
+            # queries can be answered from the catalog alone.  burn_date
+            # lets a later import see that the receipt was imported (#666).
+            provenance = {
+                "iso_sha256": receipt_hash,
+                "burn_date": burn_date,
+                "session_id": receipt.get("session_id") or "",
+                "device": receipt.get("device") or "",
+                # pack_ids is emitted by the session-based burn path but NOT
+                # by standalone `burn-iso` (documented limitation — see
+                # docs/workflows/burn-iso-portable.md). Persist verbatim so
+                # whichever path produced the receipt is preserved.
+                "pack_ids": list(receipt.get("pack_ids") or []),
+                "receipt_file": name,
+                "verify_passed": raw_verify,
+            }
+
+            # #754: the disc in service at this location was burned after
+            # this receipt's disc (a re-burn there), so the receipt is for
+            # a disc it replaced.  The disc record keeps its newer burn
+            # date and verify time; a passing receipt only fills in an ISO
+            # hash or size the record lacks (a disc recorded by 'verify
+            # --disc --location' after a rebuild has none).  A failing one
+            # records no VERIFY_FAIL_REBURN: the newer disc is what is
+            # there.  The import event makes a re-run "already imported".
+            if old_copy is not None and old_copy.status == "ACTIVE":
+                recorded_ts = _receipt_timestamp(old_copy.burn_date)
+                burn_ts = _receipt_timestamp(burn_date)
+                if (recorded_ts is not None and burn_ts is not None
+                        and burn_ts < recorded_ts):
+                    filled = ""
+                    if not verify_failed and (
+                        (receipt_hash and not old_copy.iso_sha256)
+                        or (receipt_size is not None
+                            and old_copy.iso_size_bytes is None)
+                    ):
+                        conn.execute(
+                            "UPDATE volume_copies SET "
+                            "iso_sha256 = CASE WHEN COALESCE(iso_sha256, '') "
+                            "= '' THEN ? ELSE iso_sha256 END, "
+                            "iso_size_bytes = COALESCE(iso_size_bytes, ?) "
+                            "WHERE volume_id = ? AND location = ?",
+                            (receipt_hash or None, receipt_size,
+                             vol.volume_id, location),
+                        )
+                        filled = (" Its ISO hash and size were added to the "
+                                  "disc record, which lacked them.")
+                    logger.warning(
+                        f"Receipt '{receipt_file}': the disc of '{label}' "
+                        f"at {location} on record was burned "
+                        f"{old_copy.burn_date}, after this receipt's disc "
+                        f"({burn_date}).  The newer disc record is kept."
+                        f"{filled}"
+                    )
+                    add_event(
+                        conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
+                        location=location,
+                        detail=json.dumps(provenance),
+                        commit=False,
+                    )
+                    conn.commit()
+                    superseded += 1
+                    continue
+
             event_detail = f"Offline burn receipt: {name}"
             if verify_failed:
                 if first_disc and not get_copies_for_volume(conn, vol.volume_id):
@@ -4115,25 +4256,6 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     commit=False,
                 )
 
-            # Issue #18: persist receipt provenance (iso_sha256, session_id,
-            # device, pack_ids) on the master catalog as a
-            # BURN_RECEIPT_IMPORTED audit event, so later "which device
-            # burned this?" and "does the disc hash match the recorded one?"
-            # queries can be answered from the catalog alone.  burn_date
-            # lets a later import see that the receipt was imported (#666).
-            provenance = {
-                "iso_sha256": receipt_hash,
-                "burn_date": burn_date,
-                "session_id": receipt.get("session_id") or "",
-                "device": receipt.get("device") or "",
-                # pack_ids is emitted by the session-based burn path but NOT
-                # by standalone `burn-iso` (documented limitation — see
-                # docs/workflows/burn-iso-portable.md). Persist verbatim so
-                # whichever path produced the receipt is preserved.
-                "pack_ids": list(receipt.get("pack_ids") or []),
-                "receipt_file": name,
-                "verify_passed": raw_verify,
-            }
             add_event(
                 conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
                 location=location,
@@ -4146,6 +4268,11 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     logger.info(f"Imported {imported} receipt(s).")
     if already:
         logger.info(f"Skipped {already} receipt(s) that were already imported.")
+    if superseded:
+        logger.info(
+            f"Kept the newer disc record for {superseded} receipt(s) of a "
+            "disc that was burned again at the same location since."
+        )
     if refused:
         logger.error(
             f"Rejected {refused} receipt(s); see the messages above.  The "
@@ -4237,7 +4364,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     )
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import staged_iso_present
-    from lcsas.db.volume_events import burn_evidence
+    from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
     from lcsas.db.volumes import delete_volume
 
     config = _load_config_opt(args)
@@ -4274,6 +4401,32 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
                 "'lcsas verify <label> --disc --location <where it is "
                 "kept>', or import its burn receipt with 'lcsas catalog "
                 "import-receipts'."
+            )
+
+        # #758: a volume a catalog rebuild brought in with no record of
+        # whether it was burned may have a disc.  Never deleted here, even
+        # with --include-waiting; 'session abort --never-burned' is the
+        # owner's way to say it never was.
+        unknown = [v for v in candidates
+                   if rebuild_burn_unknown(conn, v.volume_id)]
+        if unknown:
+            unknown_ids = {v.volume_id for v in unknown}
+            candidates = [v for v in candidates
+                          if v.volume_id not in unknown_ids]
+            logger.warning(
+                "%d volume(s) come from a catalog rebuilt from discs, and no "
+                "disc it read shows whether they were burned; they are not "
+                "ghosts and --fix never deletes them:", len(unknown),
+            )
+            for v in unknown:
+                logger.warning("  %s  (status=%s)", v.label, v.status)
+            logger.warning(
+                "  For each disc you hold, put it in the drive and run "
+                "'lcsas verify <label> --disc --location <where it is "
+                "kept>', or import its burn receipt with 'lcsas catalog "
+                "import-receipts'. If you are sure a volume was never "
+                "burned, 'lcsas session abort --volume <label> "
+                "--never-burned' deletes it."
             )
 
         # #647: a never-burned volume whose staged ISO still exists is
@@ -4444,6 +4597,23 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
             "That records the disc at its location and marks the volume "
             "VERIFIED. Until then, 'lcsas session abort' and 'lcsas stage "
             "--clean' refuse their burn session, so it keeps its ISOs."
+        )
+
+    # #758: volumes staged before a disc that was read, whose own disc
+    # was not read: nothing shows whether they were burned.
+    if result.burn_unknown:
+        logger.warning(
+            "%d volume(s) are STAGING with no disc recorded, and no disc "
+            "that was read shows whether they were burned: %s",
+            len(result.burn_unknown), ", ".join(result.burn_unknown),
+        )
+        logger.warning(
+            "For each disc of them you hold, run 'lcsas verify <label> "
+            "--disc --location <where it is kept>' (or import its burn "
+            "receipt). 'lcsas session abort', 'lcsas stage --clean' and "
+            "'lcsas catalog reconcile --fix' never delete them; if you are "
+            "sure one was never burned, 'lcsas session abort --volume "
+            "<label> --never-burned' deletes it."
         )
 
     if result.errors:
@@ -8417,15 +8587,16 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
             SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
         try:
+            never_burned = getattr(args, "never_burned", False)
             if args.volume:
-                orch.abort_volume(args.volume)
+                orch.abort_volume(args.volume, never_burned=never_burned)
             else:
                 from lcsas.consolidate.merger import (
                     release_consolidation_sources,
                 )
                 from lcsas.db.sessions import resolve_session_id
                 session_id = resolve_session_id(conn, args.ref)
-                orch.abort_session(session_id)
+                orch.abort_session(session_id, never_burned=never_burned)
                 # #677: a consolidation session's sources go back to
                 # VERIFIED; nothing is left to finish them.
                 released = release_consolidation_sources(conn, session_id)

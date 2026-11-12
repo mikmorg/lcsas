@@ -223,7 +223,7 @@ one place that decides it
 3. `cmd_status` opens an existing catalog via `_open_existing_catalog` (read-only; errors if uninitialized).
 4. If `--stale-copies`, delegate to `_print_stale_copies` (FMA-05) and return. If `--redundancy`, delegate to `_print_redundancy_report` (FMA-08) and return.
 5. Otherwise: query `get_archive_status_summary`, `list_volumes`, the lost volumes (`get_lost_volume_ids`), partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), the "needs re-burn" locations (`_volumes_needing_reburn`: per volume and location, the newest of `VERIFY_PASS`, `VERIFY_FAIL` and `VERIFY_FAIL_REBURN` is a failure; other events do not count, #671; once the volume's packs were staged again for that location, or are on another disc there, it is no longer listed unless a disc of it is still recorded there), and `find_stale_copies`.
-6. Print the pack-stats line, the per-volume table, and any **WARNING** lines: staged-never-burned packs, PARTIAL sessions, volumes needing re-burn (with the next step: `lcsas stage --for-location <location>`, as the import message says; a volume listed there is not also listed as waiting to be burned), single-disc packs (→ `status --redundancy`), and stale discs (→ `status --stale-copies` / `verify --all --disc`).
+6. Print the pack-stats line, the per-volume table, and any **WARNING** lines: staged-never-burned packs (ghosts are only volumes never burned whose ISO is gone; a volume burned but with no disc recorded, by `burn_evidence` or as `BURNED`/`VERIFIED` with no disc, is listed separately with how to record its disc, #751, and so is one a catalog rebuild left with no record of whether it was burned, #758), PARTIAL sessions, volumes needing re-burn (with the next step: `lcsas stage --for-location <location>`, as the import message says; a volume listed there is not also listed as waiting to be burned), single-disc packs (→ `status --redundancy`), and stale discs (→ `status --stale-copies` / `verify --all --disc`).
 7. Return `0`.
 
 **Expected outcome:**
@@ -300,11 +300,13 @@ lcsas --config lcsas.toml session abort [REF] [--volume LABEL]
 
 - `REF` — session ID or `latest` (default `latest`).
 - `--volume LABEL` — abort one stranded STAGING volume by label instead of a whole session.
+- `--never-burned` — the owner confirms that no disc was ever burned of the volumes a catalog rebuild left with no record of whether they were burned (#758), so they are deleted too.
 
 **Prerequisites:**
 - `--config` is **required** (the handler errors without it).
 - The session/volume must be in a never-burned state (the orchestrator refuses to abort a session that produced burned discs).
-- A volume that was burned but has no disc recorded blocks the abort: a `BURNED` volume with no disc (a catalog rebuilt from discs records the newest discs like this), or a `STAGING` one whose events record a good disc. Nothing is deleted. Record each disc with `lcsas verify <label> --disc --location <where it is kept>` (or import its burn receipt), then abort again.
+- A volume that was burned but has no disc recorded blocks the abort: a `BURNED` volume with no disc (a catalog rebuilt from discs records the newest discs like this), or a `STAGING` one whose events record a good disc. Nothing is deleted. Record each disc with `lcsas verify <label> --disc --location <where it is kept>` (or import its burn receipt), then abort again. `--never-burned` does not change this.
+- A `STAGING` volume that a catalog rebuild brought in with no record of whether it was burned also blocks the abort (#758): a disc of it may exist. Record its disc the same way, or, if you are sure none was burned, abort again with `--never-burned`.
 
 **Steps:**
 1. Argparse: `session abort` with positional `ref` (default `latest`) and `--volume` (`build_parser()`, `src/lcsas/cli/main.py`).

@@ -134,6 +134,12 @@ class RebuildResult:
     # where those discs are kept; ``lcsas verify <label> --disc
     # --location <where>`` records it.
     needs_verify: list[str] = field(default_factory=list)
+    # Labels of volumes this rebuild brought in as STAGING/BURNING with no
+    # disc record and no burn evidence (#758): no disc that was read shows
+    # whether they were burned.  Each got a NOTE (REBUILD_UNKNOWN_NOTE_
+    # PREFIX), so session abort, stage --clean and reconcile --fix refuse
+    # to delete them unless the owner confirms they were never burned.
+    burn_unknown: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -565,6 +571,61 @@ def _promote_read_discs(
     result.needs_verify.sort()
 
 
+def _mark_burn_unknown(
+    conn: sqlite3.Connection,
+    known_uuids: set[str],
+    result: RebuildResult,
+) -> None:
+    """Mark the volumes whose burn state no disc that was read shows (#758).
+
+    A disc catalog lists every volume staged before its disc as it was
+    then, so a volume of a newer burn session whose own disc was not read
+    comes back STAGING with no disc record and no events, which is how a
+    never-burned volume looks.  Each volume this rebuild brought in (not
+    in the output catalog before it) that is STAGING/BURNING with no disc
+    record and no burn evidence gets a NOTE starting with
+    ``REBUILD_UNKNOWN_NOTE_PREFIX`` and is listed in
+    ``result.burn_unknown``.  A volume that already has the note (a disc
+    staged from a rebuilt catalog carries it) is listed, not noted again;
+    one the output catalog already had is neither.
+
+    The note is dated with the volume's ``created_at``, never "now": the
+    catalog's newest timestamp is its freshness (``_row_freshness``), and
+    a note newer than every disc would stop a later rebuild into this
+    catalog from taking a fresher disc's view of any volume.
+    """
+    from lcsas.db.volume_events import (
+        REBUILD_UNKNOWN_NOTE_PREFIX,
+        add_event,
+        burn_evidence,
+        rebuild_burn_unknown,
+    )
+
+    rows = conn.execute(
+        """SELECT v.volume_id, v.label, v.uuid, v.created_at FROM volumes v
+           WHERE v.status IN ('STAGING', 'BURNING')
+             AND NOT EXISTS (SELECT 1 FROM volume_copies vc
+                             WHERE vc.volume_id = v.volume_id)
+           ORDER BY v.label"""
+    ).fetchall()
+    for volume_id, label, uuid_, created_at in rows:
+        if uuid_ in known_uuids or burn_evidence(conn, volume_id) is not None:
+            continue
+        if not rebuild_burn_unknown(conn, volume_id):
+            add_event(
+                conn, volume_id, "NOTE",
+                detail=(
+                    f"{REBUILD_UNKNOWN_NOTE_PREFIX}: this catalog was "
+                    f"rebuilt from discs, and none of them shows whether "
+                    f"{label} was burned"
+                ),
+                event_date=created_at,
+                commit=False,
+            )
+        result.burn_unknown.append(label)
+    conn.commit()
+
+
 def rebuild_catalog(
     disc_paths: list[Path],
     output_db: Path,
@@ -594,6 +655,10 @@ def rebuild_catalog(
       disc's ``volume_info.json``) and is still STAGING/BURNING after the
       merge becomes BURNED and is listed in
       :attr:`RebuildResult.needs_verify` (#678).
+    - A volume the rebuild brought in that is still STAGING/BURNING with
+      no disc record and no burn evidence gets a NOTE saying its burn
+      state is unknown and is listed in
+      :attr:`RebuildResult.burn_unknown` (#758).
 
     Args:
         disc_paths: List of mounted disc root directories.
@@ -619,6 +684,9 @@ def rebuild_catalog(
     # can still update a stale pre-existing master.
     status_freshness: dict[str, Freshness] = {}
     escrow_freshness: dict[str, Freshness] = {}
+    # #758: volumes the output catalog already had are not the rebuild's
+    # to mark as of unknown burn state.
+    known_uuids = {row[0] for row in conn.execute("SELECT uuid FROM volumes")}
     baseline_rows = _row_freshness(conn)
     if baseline_rows != float("-inf"):
         # No mtime for the output catalog: it wins a tie with a disc
@@ -710,6 +778,7 @@ def rebuild_catalog(
         )
 
     _promote_read_discs(conn, own_uuids, result)
+    _mark_burn_unknown(conn, known_uuids, result)
 
     # #676: never reissue a label number that any disc carries.
     from lcsas.db.label_mark import merge_label_high_water

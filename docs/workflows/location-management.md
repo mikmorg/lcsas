@@ -483,7 +483,10 @@ Key behaviours derived from the schema (the `locations` and
   `src/lcsas/burn/orchestrator.py`). A lost volume burned again the same
   way, or given a disc by an imported receipt or `lcsas verify <label>
   --disc --location <where>`, is back in service: `VERIFIED` when the
-  disc was verified, else `BURNED` (#726). A volume deprecated by
+  disc was verified, else `BURNED` (#726). A catalog from before that
+  fix may show such a volume as `DEPRECATED` with a disc in service:
+  `lcsas verify <label> --disc` (with that disc in the drive) puts it
+  back in service as `VERIFIED` (#752). A volume deprecated by
   consolidation stays `DEPRECATED`.
 - `volume_events` (table DDL in `src/lcsas/db/schema.py`) keeps an audit
   trail including a `LOCATION_MOVE` event type, and `move_volume_copy()`

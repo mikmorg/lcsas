@@ -475,7 +475,15 @@ the command exits non-zero (#669).
       DESTROYED or DEPRECATED, refuse a receipt whose burn date is not
       later than the time that was recorded. A receipt for a disc burned
       after it (a real re-burn) puts the disc back in service.
-   10. Status (#670): a volume with no verified disc yet (STAGING,
+   10. Older disc (#754): if the disc in service at this location was
+      burned after the receipt's disc (it was burned again there), the
+      disc record keeps its burn date and verify time. A passing receipt
+      only adds an ISO hash and size the record lacks (a disc recorded
+      by `lcsas verify --disc --location` after a rebuild has none). A
+      failing one records no `VERIFY_FAIL_REBURN`. Only the
+      `BURN_RECEIPT_IMPORTED` event is written, so a re-run says
+      "already imported". This is not an error.
+   11. Status (#670): a volume with no verified disc yet (STAGING,
       BURNING or BURNED) is handled the same way whatever its status:
       - `verify_passed: true` → `VERIFIED` + `mark_closed` +
         `VERIFY_PASS` event.
@@ -489,7 +497,7 @@ the command exits non-zero (#669).
       An already-`VERIFIED` volume keeps its status. Every passing
       receipt writes a `VERIFY_PASS` event, as the direct burn does, so
       `lcsas status` sees the newest verify result at each location.
-   11. Unless the verify failed, add a `volume_copies` row for this
+   12. Unless the verify failed, add a `volume_copies` row for this
       `(volume_id, location)` pair, stamping the burn date, `iso_sha256`,
       and `iso_size_bytes` from the receipt.  For a receipt with
       `verify_passed: true` it also sets `last_verified_at` to the
@@ -502,13 +510,13 @@ the command exits non-zero (#669).
       Discs imported before #646 keep a NULL `last_verified_at` and are
       listed by `lcsas status --stale-copies` until `lcsas verify <label>
       --disc` is run on them.
-   12. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a
+   13. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a
       JSON blob of the receipt provenance (`iso_sha256`, `burn_date`,
       `session_id`, `device`, `pack_ids`, receipt filename,
       `verify_passed`).
-   13. Commit per receipt.
-4. Log how many receipts were imported, already imported, and
-   rejected; exit non-zero if any was rejected (`cmd_catalog_import`).
+   14. Commit per receipt.
+4. Log how many receipts were imported, already imported, kept out by
+   a newer disc, and rejected; exit non-zero if any was rejected (`cmd_catalog_import`).
 
 **Expected outcome:**
 
@@ -522,7 +530,8 @@ the command exits non-zero (#669).
   new location" path)
   (`cmd_catalog_import`;
   asserted by `TestCmdCatalogImport::test_import_reburn_only_adds_copy`).
-- Exit `0` when every receipt was imported or already imported.
+- Exit `0` when every receipt was imported, already imported, or older
+  than the disc recorded at its location.
   Exit `1` when any receipt was refused — malformed, unknown volume or
   location, wrong location, missing hash, a lost disc, or an ISO hash or
   size that differs from the staged ISO (#644) or from a prior receipt
@@ -586,6 +595,11 @@ behaviour.
   or the first of two discs burned at one location) replayed on the same
   catalog is "already imported" and changes no volume, disc or event row;
   on a catalog rebuilt from the disc it still imports.
+- `tests/unit/test_import_receipt_order.py` (#754) — two receipts of
+  discs burned at one location, imported in either order into a rebuilt
+  catalog, leave the newer disc's burn date, verify time and hash; a
+  failed older receipt asks for no re-burn; an older receipt adds the
+  hash to a disc recorded by `verify --disc --location`.
 - `tests/unit/test_import_receipts_errors.py::TestStrictReceipt` (#669) — a
   non-boolean or missing `verify_passed` is refused; an unknown location is
   refused and the known ones are listed; a refused receipt exits 1 while
