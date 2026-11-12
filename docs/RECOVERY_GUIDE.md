@@ -4,6 +4,15 @@
 > files back.  Start here; this guide routes you to the right
 > step-by-step walkthrough for your OS and situation.
 
+> **The heir's step-by-step procedure is not repeated here.** It lives in one
+> place: `recovery/docs/RECOVER.txt` (Linux and macOS) and
+> `recovery/docs/RECOVER_WINDOWS.txt` (Windows). Both are on the meta disc.
+> In the repository they are
+> [recovery/docs/RECOVER.txt](../recovery/docs/RECOVER.txt) and
+> [recovery/docs/RECOVER_WINDOWS.txt](../recovery/docs/RECOVER_WINDOWS.txt).
+> This guide covers which walkthrough fits your situation, troubleshooting,
+> and disc-layout reference.
+
 ---
 
 ## Before You Start
@@ -56,33 +65,16 @@ If none of those fit your situation, see
 
 ---
 
-## The 30-second version (Linux + META disc)
+## The short version
 
-For the most common case, the entire restore is:
+Mount the newest meta disc and run `restore.sh` from it. It asks which
+repository to restore and for its password, then tells you which data disc
+to insert. The exact commands, the questions it asks, and how to resume a
+stopped restore are in `recovery/docs/RECOVER.txt` (Linux and macOS) and
+`recovery/docs/RECOVER_WINDOWS.txt` (Windows). Follow those.
 
-```sh
-sudo mount /dev/sr0 /mnt                       # insert the newest META disc, mount
-sh /mnt/restore.sh ~/restored/ latest          # start restore
-# when asked, eject META, insert the data disc with the newest label
-#   (see below), press Enter
-# choose the repository (number or name), then type its password
-# when prompted, eject + insert the named data disc, press Enter
-# repeat for each data disc the script asks for
-```
-
-**Which discs to start with.**  If you have more than one META disc,
-use the newest; if its tools fail, use the one burned closest in date
-to your data discs.  For the first data disc, pick the one with the
-newest label: the latest year in the label, then the highest number.
-That disc's catalog is the fullest, so you swap discs less often.  Any
-data disc still works.
-
-When you see `[lcsas-restore] restore complete`, your files are in
-`~/restored/`.  If you stop part-way (`q` at a disc prompt, or
-Ctrl-C), carry on later with `sh ~/lcsas-restore-tools/resume.sh`;
-no META disc is needed.
-[recovery-runbook.md](guides/recovery-runbook.md) has the long form with
-troubleshooting and guidance for archives with several repositories.
+[recovery-runbook.md](guides/recovery-runbook.md) adds owner-side context
+for Linux restores.
 
 ---
 
@@ -134,7 +126,7 @@ records where each disc is).
 ### The bundled binary won't run on this system
 
 The META disc ships per-target binaries
-(see [`docs/CROSS_PLATFORM_META_RFC.md`](CROSS_PLATFORM_META_RFC.md)
+(see the original design RFC (historical) [`docs/history/CROSS_PLATFORM_META_RFC.md`](history/CROSS_PLATFORM_META_RFC.md)
 for the supported matrix).  If none works on your CPU/OS, the
 script automatically falls back to tier 3, the Python reader
 (`standalone_restorer.py`), which needs only Python 3.10+.
@@ -220,7 +212,7 @@ LCSAS_META.iso
 
 The META disc ships binaries for six platforms (Linux
 x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows
-x86_64).  See [`docs/CROSS_PLATFORM_META_RFC.md`](CROSS_PLATFORM_META_RFC.md).
+x86_64).  See the original design RFC (historical): [`docs/history/CROSS_PLATFORM_META_RFC.md`](history/CROSS_PLATFORM_META_RFC.md).
 
 ---
 

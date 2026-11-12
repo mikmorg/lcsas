@@ -1,5 +1,7 @@
 # Restore from a Running macOS Host
 
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the macOS-specific context, variant axes, and the tests that validate this path. If it differs from RECOVER.txt, RECOVER.txt wins.
+
 > **Storage stage:** the discs — exercises the repository metadata +
 > packs on optical discs from a macOS host.
 
@@ -145,7 +147,7 @@ hdiutil detach /Volumes/LCSAS_BD25_2026_0001
 
 DVDisaster isn't bundled for the Darwin targets (cross-compiling it is
 high effort and the restore path doesn't strictly need it — see
-[`CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q2).
+[`CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6 Q2).
 On macOS, the verification fallback is a SHA-256 compare against the
 hash recorded at burn time:
 
@@ -201,7 +203,7 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   tier 3 (bundled Python).  The durability story (long-lived C89
   binary as the primary path) holds on macOS, not just on the build
   host (see
-  [`CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6).
+  [`CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6 Q6).
   This is no longer a gap: `.github/workflows/macos-tier1.yml` executes
   the committed Mach-O binaries on `macos-15` (Apple Silicon) and
   `macos-15-intel` (Intel) via

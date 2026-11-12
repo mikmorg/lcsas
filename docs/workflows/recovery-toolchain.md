@@ -128,7 +128,7 @@ disc's required-contents contract demands a tier-1 binary for
 (`src/lcsas/meta/required_contents.py`): the three Linux musl targets
 (`x86_64`, `aarch64`, `armv7`), the two macOS targets, and
 `x86_64-pc-windows-gnu`.  No other target is built.  See
-[`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6.
+[`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6 Q6.
 
 Source refs: `RecoveryBuilder.SUPPORTED_ARCHES`,
 `RecoveryBuilder._DEFAULT_CC`, `RecoveryBuilder.cross_build`
@@ -532,5 +532,5 @@ the full `(OS, machine)` matrix and explicit rejections.
 - `src/lcsas/restore/restic_fallback.py` /
   `src/lcsas/restore/standalone_builder.py` — Tier 3, the Python reader.
 - [`docs/architecture.md`](../architecture.md) — system overview;
-  [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6
+  [`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6
   Q6 — cross-platform tier-1 rationale.

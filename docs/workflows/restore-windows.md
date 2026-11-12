@@ -1,5 +1,7 @@
 # Windows Restore Workflows
 
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file is the maintainer companion: variant axes, expected outcomes, and the tests that validate the Windows path. If it differs from RECOVER_WINDOWS.txt, RECOVER_WINDOWS.txt wins.
+
 This document covers restoring LCSAS-backed data on a Windows host. The
 intended audience is the **non-technical heir** scenario: an heir
 (anyone who is handed the discs with no preparation) who owns a Windows

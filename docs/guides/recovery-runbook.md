@@ -1,5 +1,7 @@
 # LCSAS — Linux End-to-End Restore Runbook
 
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file is a longer owner-side walkthrough for Linux with the meta disc, with extra context and troubleshooting. If it differs from RECOVER.txt, RECOVER.txt wins.
+
 > **New here?** Start at [RECOVERY_GUIDE.md](../RECOVERY_GUIDE.md) — the
 > short entry-point that routes you to the right walkthrough for your OS
 > and situation. This runbook is the **detailed Linux + META disc**

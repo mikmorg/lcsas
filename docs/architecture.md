@@ -639,7 +639,7 @@ required), `lcsas-keyshare` (SLIP-0039 share recombination), plus
 > approved targets (Linux x86_64/aarch64/armv7 musl, Windows x86_64-gnu,
 > macOS Intel + Apple Silicon), so the durable path is available on every
 > supported host rather than x86_64/glibc only. See the cross-platform meta
-> RFC ([docs/CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)).
+> RFC ([docs/history/CROSS_PLATFORM_META_RFC.md](history/CROSS_PLATFORM_META_RFC.md)).
 
 ### JSON Compatibility
 

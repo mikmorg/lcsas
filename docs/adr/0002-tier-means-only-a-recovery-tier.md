@@ -56,7 +56,7 @@ to a recovery tier.
   without a second meaning.
 - Writers have to name the storage stage in full ("the mirror", "the
   staging area"), which is a little longer than "Tier 0".
-- Point-in-time reports such as `docs/READINESS_ASSESSMENT_2026-06.md`
+- Point-in-time reports such as `docs/history/READINESS_ASSESSMENT_2026-06.md`
   are preserved as written and may still say "hot tier"; they are
   history, not guidance.
 - New text is reviewed against [`CONTEXT.md`](../../CONTEXT.md), which

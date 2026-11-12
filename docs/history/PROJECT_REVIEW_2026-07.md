@@ -7,7 +7,7 @@ cascade, cryptography + key handling, test/CI gating, docs + human factors), eac
 reading actual code — followed by manual verification of every high-severity claim
 before inclusion. File:line references were checked against `f181f11`.
 
-This complements `docs/READINESS_ASSESSMENT_2026-06.md` (adversarial readiness
+This complements `READINESS_ASSESSMENT_2026-06.md` (same folder) (adversarial readiness
 review, concerns C1–C10); §6 below refreshes that assessment's status.
 
 ---
