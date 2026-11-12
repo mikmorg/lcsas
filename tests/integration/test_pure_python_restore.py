@@ -320,7 +320,7 @@ class TestPurePythonFallbackRestore:
         self, conn: sqlite3.Connection,
         family_repo: Path, work_repo: Path,
     ) -> list[Path]:
-        from lcsas.db.queries import get_unarchived_packs
+        from tests.e2e.fixture_lib import burn_to_isos
 
         mt = MediaType.TEST_TINY
         config = LCSASConfig(
@@ -345,17 +345,7 @@ class TestPurePythonFallbackRestore:
         orchestrator = BurnOrchestrator(
             config, conn, _TestXorrisoRunner(), _NoOpDVDisaster()
         )
-        iso_files: list[Path] = []
-        while get_unarchived_packs(conn):
-            try:
-                manifest = orchestrator.prepare(media_type=mt)
-                iso = self.iso_out / f"{manifest.volume_label}.iso"
-                orchestrator.execute(manifest, iso_output=iso,
-                                     skip_burn=True)
-                iso_files.append(iso)
-            except ValueError:
-                break
-        return iso_files
+        return burn_to_isos(orchestrator, self.iso_out, media_type=mt)
 
     # ── ISO extraction ───────────────────────────────────────────
 

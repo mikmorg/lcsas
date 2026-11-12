@@ -503,8 +503,8 @@ class TestKeyDerivation:
         )
         _make_key_file(mk, PASSWORD, tmp_path)
 
-        from lcsas.restore.restic_fallback import _try_keys
-        recovered = _try_keys(tmp_path / "keys", PASSWORD)
+        from lcsas.restore.restic_fallback import try_keys
+        recovered = try_keys(tmp_path / "keys", PASSWORD)
 
         assert recovered.encrypt == mk.encrypt
         assert recovered.mac_k == mk.mac_k
@@ -519,9 +519,9 @@ class TestKeyDerivation:
         )
         _make_key_file(mk, PASSWORD, tmp_path)
 
-        from lcsas.restore.restic_fallback import _try_keys
+        from lcsas.restore.restic_fallback import try_keys
         with pytest.raises(IntegrityError, match="wrong password"):
-            _try_keys(tmp_path / "keys", b"wrong-password")
+            try_keys(tmp_path / "keys", b"wrong-password")
 
 
 class TestScryptParameterLimits:
@@ -550,7 +550,7 @@ class TestScryptParameterLimits:
     def test_out_of_range_is_refused_fast(self, tmp_path, n, r, p):
         import time
 
-        from lcsas.restore.restic_fallback import _load_master_key, _try_keys
+        from lcsas.restore.restic_fallback import _load_master_key, try_keys
         mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
         key_file = _make_key_file(mk, PASSWORD, tmp_path)
         doc = json.loads(key_file.read_text())
@@ -562,7 +562,7 @@ class TestScryptParameterLimits:
             _load_master_key(key_file, PASSWORD)
         assert str(key_file) in str(exc.value)
         with pytest.raises(IntegrityError, match=r"corrupt key file\?"):
-            _try_keys(tmp_path / "keys", PASSWORD)
+            try_keys(tmp_path / "keys", PASSWORD)
         assert time.monotonic() - start < 5, "refused, but only after running"
 
     @pytest.mark.parametrize(
@@ -1594,28 +1594,28 @@ class TestZstdFallbackRestore:
         assert restorer.failures == 0
 
 
-# ── _try_keys Error Path Tests ───────────────────────────────────
+# ── try_keys Error Path Tests ───────────────────────────────────
 
 class TestTryKeysErrorPaths:
-    """Cover _try_keys edge cases (lines 281, 286)."""
+    """Cover try_keys edge cases (lines 281, 286)."""
 
     def test_empty_keys_dir_raises(self, tmp_path):
         """Line 281: IntegrityError raised when keys directory is empty."""
-        from lcsas.restore.restic_fallback import _try_keys
+        from lcsas.restore.restic_fallback import try_keys
         keys_dir = tmp_path / "keys"
         keys_dir.mkdir()
         with pytest.raises(IntegrityError, match="No key files found"):
-            _try_keys(keys_dir, b"any-password")
+            try_keys(keys_dir, b"any-password")
 
     def test_keys_dir_with_only_subdir_raises(self, tmp_path):
         """Line 286: non-file entries are skipped, then IntegrityError raised."""
-        from lcsas.restore.restic_fallback import _try_keys
+        from lcsas.restore.restic_fallback import try_keys
         keys_dir = tmp_path / "keys"
         keys_dir.mkdir()
         # Create a subdirectory — not a file — so the loop skips it
         (keys_dir / "subdir").mkdir()
         with pytest.raises(IntegrityError, match="wrong password"):
-            _try_keys(keys_dir, b"any-password")
+            try_keys(keys_dir, b"any-password")
 
 
 # ── Corrupt key files (#481) ─────────────────────────────────────
@@ -1659,20 +1659,20 @@ def _key_file_around(master_json: bytes, password: bytes, path: Path) -> None:
 
 class TestCorruptKeyFiles:
     """#481: a damaged key file is skipped, never mistaken for a wrong
-    password and never allowed to escape _try_keys.  Tier-1 already
+    password and never allowed to escape try_keys.  Tier-1 already
     skips one (repo.c); a bit-rotted file that sorts first must not hide
     the good key behind it."""
 
     @pytest.mark.parametrize("kind", CORRUPT_KINDS)
     def test_corrupt_file_sorting_first_is_skipped(self, tmp_path, kind):
-        from lcsas.restore.restic_fallback import _try_keys
+        from lcsas.restore.restic_fallback import try_keys
         mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
         good = _make_key_file(mk, PASSWORD, tmp_path)
         bad = good.parent / "0000-corrupt"
         bad.write_bytes(_corrupt_key_bytes(kind))
         assert sorted(good.parent.iterdir())[0] == bad
 
-        recovered = _try_keys(good.parent, PASSWORD)
+        recovered = try_keys(good.parent, PASSWORD)
         assert recovered == mk
 
     @pytest.mark.parametrize("kind", CORRUPT_KINDS)
@@ -1681,7 +1681,7 @@ class TestCorruptKeyFiles:
             KeyFileCorruptError,
             NoKeyUnlockedError,
             _load_master_key,
-            _try_keys,
+            try_keys,
         )
         keys = tmp_path / "keys"
         keys.mkdir()
@@ -1693,7 +1693,7 @@ class TestCorruptKeyFiles:
         assert str(bad) in str(one.value)
 
         with pytest.raises(NoKeyUnlockedError) as exc:
-            _try_keys(keys, PASSWORD)
+            try_keys(keys, PASSWORD)
         assert isinstance(exc.value, IntegrityError)
         assert exc.value.rejected == []
         assert [p for p, _ in exc.value.corrupt] == [bad]
@@ -1703,14 +1703,14 @@ class TestCorruptKeyFiles:
     def test_unreadable_file_is_skipped(self, tmp_path):
         if os.geteuid() == 0:
             pytest.skip("root reads a mode-000 file anyway")
-        from lcsas.restore.restic_fallback import _try_keys
+        from lcsas.restore.restic_fallback import try_keys
         mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
         good = _make_key_file(mk, PASSWORD, tmp_path)
         bad = good.parent / "0000-unreadable"
         bad.write_text(good.read_text())
         bad.chmod(0)
         try:
-            assert _try_keys(good.parent, PASSWORD) == mk
+            assert try_keys(good.parent, PASSWORD) == mk
         finally:
             bad.chmod(0o600)
 
@@ -1732,14 +1732,14 @@ class TestCorruptKeyFiles:
         assert not isinstance(exc.value, KeyFileCorruptError)
 
     def test_wrong_password_with_a_corrupt_file_names_both(self, tmp_path):
-        from lcsas.restore.restic_fallback import NoKeyUnlockedError, _try_keys
+        from lcsas.restore.restic_fallback import NoKeyUnlockedError, try_keys
         mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
         good = _make_key_file(mk, PASSWORD, tmp_path)
         bad = good.parent / "0000-corrupt"
         bad.write_bytes(_corrupt_key_bytes("bad-b64-salt"))
 
         with pytest.raises(NoKeyUnlockedError, match="wrong password") as exc:
-            _try_keys(good.parent, b"wrong-password")
+            try_keys(good.parent, b"wrong-password")
         assert exc.value.rejected == [good]
         assert [p for p, _ in exc.value.corrupt] == [bad]
         assert "1 more could not be read" in str(exc.value)

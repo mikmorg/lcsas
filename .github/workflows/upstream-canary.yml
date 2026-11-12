@@ -10,11 +10,11 @@ name: upstream-canary
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file
 # after 60 quiet days, PR trigger and all, and the 2026-08-05 -> 10-15 quiet
-# spell did.  The weekly run lives in upstream-canary-weekly.yml, which
-# calls this file, so a quiet spell can now only switch off that.
+# spell did.  The weekly run lives in weekly.yml, which calls this file,
+# so a quiet spell can now only switch off that.
 on:
   workflow_dispatch: {}
-  # The weekly run (upstream-canary-weekly.yml).
+  # The weekly run (weekly.yml).
   workflow_call: {}
   pull_request:
     paths:

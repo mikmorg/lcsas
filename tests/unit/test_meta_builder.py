@@ -2092,7 +2092,7 @@ def _add_untracked(rec: Path) -> None:
     """
     from lcsas.meta.required_contents import required_meta_paths
 
-    for rel in (*_JUNK, "notes.txt", "bin/x86_64/lcsas-init"):
+    for rel in (*_JUNK, "notes.txt", "bin/x86_64/untracked-helper"):
         (rec / rel).parent.mkdir(parents=True, exist_ok=True)
         (rec / rel).write_bytes(b"untracked\n")
     for rel in required_meta_paths():
@@ -2150,7 +2150,7 @@ class TestRecoveryBundleTrackedOnly:
         assert os.access(bundled / "scripts" / "restore.sh", os.X_OK)
         # bin/ goes on as it stands, untracked files included.
         assert (bundled / "bin" / "x86_64" / "lcsas-restore").is_file()
-        assert (bundled / "bin" / "x86_64" / "lcsas-init").is_file()
+        assert (bundled / "bin" / "x86_64" / "untracked-helper").is_file()
 
         assert b.unlisted_recovery_files() == []
         _stub_root_contents(out)
@@ -2459,7 +2459,7 @@ class TestBundleMetadata:
         from lcsas.db.packs import register_pack
         from lcsas.db.repos import register_repo, set_repo_status
         from lcsas.db.schema import create_all
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
         from lcsas.db.volumes import create_volume
 
         db = tmp_path / "gate.db"
@@ -2474,7 +2474,7 @@ class TestBundleMetadata:
             capacity_bytes=25_000_000_000, status=volume_status,
         )
         if link:
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         if retired:
             set_repo_status(conn, "family", "retired")
         conn.commit()

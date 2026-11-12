@@ -1,5 +1,7 @@
 # Windows Restore Workflows
 
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file is the maintainer companion: variant axes, expected outcomes, and the tests that validate the Windows path. If it differs from RECOVER_WINDOWS.txt, RECOVER_WINDOWS.txt wins.
+
 This document covers restoring LCSAS-backed data on a Windows host. The
 intended audience is the **non-technical heir** scenario: an heir
 (anyone who is handed the discs with no preparation) who owns a Windows
@@ -19,8 +21,8 @@ Sibling docs:
 
 - [`restore-host-linux.md`](restore-host-linux.md) – Linux host with the
   binaries on hand.
-- [`restore-bare-metal.md`](restore-bare-metal.md) – a wiped machine
-  (its boot path is not built today; no LCSAS disc is bootable).
+- [`restore-live-usb.md`](restore-live-usb.md) – a wiped machine:
+  boot a live-Linux USB (no LCSAS disc is bootable).
 - [`restore-disc-only.md`](restore-disc-only.md) – disc-only walkthrough
   ignoring host preinstall.
 
@@ -667,7 +669,7 @@ LEFT"):
 **Existing automated coverage:**
 
 - `.github/workflows/windows-e2e.yml` (run weekly through
-  `windows-e2e-weekly.yml`, by hand with `gh workflow run windows-e2e.yml
+  `weekly.yml`, by hand with `gh workflow run windows-e2e.yml
   --ref <branch>`, and on any PR touching `recovery/scripts/**`,
   `src/lcsas/meta/**`, `src/lcsas/staging/metadata.py`,
   `recovery/bin/x86_64-windows/**`, `tests/e2e/fixture_lib.py`,

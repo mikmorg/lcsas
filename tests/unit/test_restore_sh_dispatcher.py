@@ -2,7 +2,7 @@
 
 The dispatcher is a POSIX-sh `case` block that maps (uname -s, uname -m)
 to one of the six approved cross-platform targets (see
-docs/CROSS_PLATFORM_META_RFC.md §3).  These tests exercise it by
+docs/history/CROSS_PLATFORM_META_RFC.md §3).  These tests exercise it by
 extracting the snippet from the live script and re-running it with
 synthetic `uname` output.
 """

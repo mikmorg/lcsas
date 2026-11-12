@@ -32,14 +32,14 @@ How the bytes on a disc are laid out, encrypted, and protected:
 
 Task-oriented walkthroughs for running an archive and restoring from it:
 
-- [guides/recovery-runbook.md](guides/recovery-runbook.md) — step-by-step
-  restore runbook.
+- [guides/recovery-runbook.md](guides/recovery-runbook.md) — owner-side Linux
+  restore context. The heir's steps are `recovery/docs/RECOVER.txt`.
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — diagnosing and
   fixing common failures.
 - [guides/survivability.md](guides/survivability.md) — durability rationale:
   why the cascade and disc-integrity layers survive decades.
 - [RECOVERY_GUIDE.md](RECOVERY_GUIDE.md) — emergency router to the OS-specific
-  restore path (Linux, macOS, Windows, bare-metal, disc-only fallback).
+  restore path (Linux, macOS, Windows, live USB, disc-only fallback).
 - [ESTATE_PLANNING.md](ESTATE_PLANNING.md) — handing the archive to an heir.
 - [PASSWORD_CARD.txt](PASSWORD_CARD.txt) — printable fill-in-the-blanks
   password-card template for one repository's password (never kept with
@@ -57,8 +57,6 @@ Task-oriented walkthroughs for running an archive and restoring from it:
 
 - [development/roadmap.md](development/roadmap.md) — phased development plan and
   roadmap.
-- [CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)
-  — RFC for cross-platform meta disc / tier-1 recovery-binary coverage.
 - [adr/](adr/) — architecture decision records:
   - [0001](adr/0001-audit-gate-exemptions-reconciliation.md) — audit-gate
     exemptions reconciliation.
@@ -67,14 +65,17 @@ Task-oriented walkthroughs for running an archive and restoring from it:
   - [0003](adr/0003-lost-volumes-are-not-a-schema-state.md) — lost volumes
     are recorded as DEPRECATED and shown as LOST; no schema change.
 
-## Point-in-time reports
+## History
 
-Historical reports, preserved as written (not living documents):
+Dated records, kept as written. They are not current descriptions. See
+[history/README.md](history/README.md).
 
-- [PROJECT_REVIEW_2026-07.md](PROJECT_REVIEW_2026-07.md) — full-project
+- [history/PROJECT_REVIEW_2026-07.md](history/PROJECT_REVIEW_2026-07.md) — full-project
   review at `f181f11` (2026-07-01) that seeded the #361–#415 remediation.
-- [READINESS_ASSESSMENT_2026-06.md](READINESS_ASSESSMENT_2026-06.md) —
+- [history/READINESS_ASSESSMENT_2026-06.md](history/READINESS_ASSESSMENT_2026-06.md) —
   "is it ready?" assessment against the decades-long survivability bar.
+- [history/CROSS_PLATFORM_META_RFC.md](history/CROSS_PLATFORM_META_RFC.md) — the
+  design RFC for the cross-platform meta disc (implemented 2026-05).
 
 ## On-disc recovery manuals
 

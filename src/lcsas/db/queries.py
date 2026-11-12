@@ -8,9 +8,8 @@ from collections.abc import Collection
 from typing import Any, NamedTuple
 
 from lcsas.constants import AUTO_DEPRECATED_NOTE_PREFIX, DISPLAY_STATUS_LOST
-from lcsas.db.models import Pack, Snapshot, Volume
+from lcsas.db.models import Pack, Volume
 from lcsas.db.packs import _row_to_pack
-from lcsas.db.snapshots import _row_to_snapshot
 from lcsas.db.volumes import _row_to_volume
 
 _logger = logging.getLogger(__name__)
@@ -520,14 +519,19 @@ def get_deprecated_only_packs(
     return result
 
 
-def get_packs_only_on_volumes(
+def get_packs_on_volumes(
     conn: sqlite3.Connection,
     volume_ids: list[int],
+    *,
+    pruned: bool = False,
 ) -> list[Pack]:
-    """Return active (non-pruned) packs that exist on the given volumes.
+    """Return the packs present on any of the given volumes, by SHA-256.
 
-    Used during consolidation to identify which packs from source volumes
-    should be migrated to a new target volume.
+    ``pruned=False`` (default) returns the active packs: consolidation
+    migrates these to the new volume(s).  ``pruned=True`` returns the
+    pruned packs instead: consolidation leaves them behind, and lists
+    them in the plan report so a mis-pruned pack is caught (and
+    unpruned) before its only discs are deprecated (BURN-09).
     """
     if not volume_ids:
         return []
@@ -541,40 +545,9 @@ def get_packs_only_on_volumes(
             f"""SELECT DISTINCT p.* FROM packs p
                 JOIN volume_packs vp ON p.pack_id = vp.pack_id
                 WHERE vp.volume_id IN ({placeholders})
-                  AND p.is_pruned = 0
+                  AND p.is_pruned = ?
                 ORDER BY p.sha256""",
-            batch,
-        ).fetchall()
-        for r in rows:
-            p = _row_to_pack(r)
-            pack_map[p.pack_id] = p
-    return sorted(pack_map.values(), key=lambda p: p.sha256)
-
-
-def get_pruned_packs_on_volumes(
-    conn: sqlite3.Connection,
-    volume_ids: list[int],
-) -> list[Pack]:
-    """Return pruned packs present on the given volumes.
-
-    Consolidation intentionally leaves these behind; surfacing them in
-    the plan report makes the exclusion visible so a mis-pruned pack is
-    caught (and unpruned) before its only discs are deprecated (BURN-09).
-    """
-    if not volume_ids:
-        return []
-
-    pack_map: dict[int, Pack] = {}
-    for batch_start in range(0, len(volume_ids), _SQLITE_BATCH):
-        batch = volume_ids[batch_start : batch_start + _SQLITE_BATCH]
-        placeholders = ",".join("?" for _ in batch)
-        rows = conn.execute(
-            f"""SELECT DISTINCT p.* FROM packs p
-                JOIN volume_packs vp ON p.pack_id = vp.pack_id
-                WHERE vp.volume_id IN ({placeholders})
-                  AND p.is_pruned = 1
-                ORDER BY p.sha256""",
-            batch,
+            [*batch, 1 if pruned else 0],
         ).fetchall()
         for r in rows:
             p = _row_to_pack(r)
@@ -695,42 +668,6 @@ def get_at_risk_packs_for_volume(
              )
            ORDER BY p.repo_id, p.sha256""",
         (volume_id, volume_id),
-    ).fetchall()
-    return [_row_to_pack(r) for r in rows]
-
-
-def get_packs_stranded_on_unburned_volumes(
-    conn: sqlite3.Connection,
-    older_than_hours: int = 24,
-) -> list[Pack]:
-    """Return packs whose ONLY volume claims are stale never-burned volumes.
-
-    Since FMA-01 such packs DO reappear in the ``lcsas stage`` pool
-    (STAGING/BURNING links are no longer "archived"), but the dead claims
-    still clutter the catalog and mislead restore pick lists.  This
-    surfaces those packs so the owner can run ``lcsas session abort``,
-    ``lcsas stage --clean --force`` or ``lcsas catalog reconcile --fix``.
-
-    The age cutoff (default 24 h) avoids flagging volumes that are simply
-    mid-pipeline: a pack is returned only when every volume holding it is
-    STAGING/BURNING *and* older than the cutoff.
-    """
-    modifier = f"-{int(older_than_hours)} hours"
-    rows = conn.execute(
-        """SELECT p.* FROM packs p
-           WHERE p.is_pruned = 0
-             AND EXISTS (
-                 SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM volume_packs vp
-                 JOIN volumes v ON v.volume_id = vp.volume_id
-                 WHERE vp.pack_id = p.pack_id
-                   AND (v.status NOT IN ('STAGING', 'BURNING')
-                        OR v.created_at > datetime('now', ?))
-             )
-           ORDER BY p.created_at""",
-        (modifier,),
     ).fetchall()
     return [_row_to_pack(r) for r in rows]
 
@@ -1023,74 +960,6 @@ def get_location_summary(
 # ---------------------------------------------------------------------------
 # Snapshot JSON helpers  (requires SQLite 3.9+ for json_each)
 # ---------------------------------------------------------------------------
-
-
-def get_snapshots_by_path(
-    conn: sqlite3.Connection,
-    path_pattern: str,
-    repo_id: str | None = None,
-) -> list[Snapshot]:
-    """Return snapshots containing a path matching *path_pattern*.
-
-    Uses SQLite ``json_each()`` to search the JSON array stored in
-    ``snapshots.paths``.  The *path_pattern* supports SQL LIKE wildcards
-    (``%`` and ``_``).
-    """
-    if repo_id:
-        rows = conn.execute(
-            """SELECT s.* FROM snapshots s
-               WHERE s.repo_id = ?
-                 AND EXISTS (
-                     SELECT 1 FROM json_each(s.paths)
-                     WHERE value LIKE ?
-                 )
-               ORDER BY s.timestamp DESC""",
-            (repo_id, path_pattern),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """SELECT s.* FROM snapshots s
-               WHERE EXISTS (
-                   SELECT 1 FROM json_each(s.paths)
-                   WHERE value LIKE ?
-               )
-               ORDER BY s.timestamp DESC""",
-            (path_pattern,),
-        ).fetchall()
-    return [_row_to_snapshot(r) for r in rows]
-
-
-def get_snapshots_by_tag(
-    conn: sqlite3.Connection,
-    tag: str,
-    repo_id: str | None = None,
-) -> list[Snapshot]:
-    """Return snapshots that contain the exact *tag*.
-
-    Uses SQLite ``json_each()`` on the ``snapshots.tags`` JSON array.
-    """
-    if repo_id:
-        rows = conn.execute(
-            """SELECT s.* FROM snapshots s
-               WHERE s.repo_id = ?
-                 AND EXISTS (
-                     SELECT 1 FROM json_each(s.tags)
-                     WHERE value = ?
-                 )
-               ORDER BY s.timestamp DESC""",
-            (repo_id, tag),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """SELECT s.* FROM snapshots s
-               WHERE EXISTS (
-                   SELECT 1 FROM json_each(s.tags)
-                   WHERE value = ?
-               )
-               ORDER BY s.timestamp DESC""",
-            (tag,),
-        ).fetchall()
-    return [_row_to_snapshot(r) for r in rows]
 
 
 def get_archived_pack_ids(conn: sqlite3.Connection, repo_id: str) -> set[str]:

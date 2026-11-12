@@ -37,7 +37,7 @@ Do these steps in order.  Don't skip any; don't reorder.
 ### Step 1 — Sync + survey
 
 ```sh
-cd /home/mikmorg/git/lcsas
+cd "$(git rev-parse --show-toplevel)"   # the lcsas checkout
 git fetch --all --prune
 git checkout master && git pull --ff-only github master
 gh issue list --label severity:high --state open --json number,title,body,labels \

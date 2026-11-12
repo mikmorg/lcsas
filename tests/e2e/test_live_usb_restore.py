@@ -246,14 +246,13 @@ def _build_archive(work: Path) -> _Archive:
     from lcsas.config.media import MediaType
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.connection import get_connection
-    from lcsas.db.queries import get_unarchived_packs
     from lcsas.db.schema import create_all
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.meta.builder import MetaVolumeBuilder
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
     from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
-    from tests.e2e.fixture_lib import add_repo
+    from tests.e2e.fixture_lib import add_repo, burn_to_isos
 
     sources = work / "sources" / TENANT
     sources.mkdir(parents=True)
@@ -299,6 +298,8 @@ def _build_archive(work: Path) -> _Archive:
     delta.register_new_packs()
     conn.commit()
 
+    # stage() checks the staging area's free space first, so it must exist.
+    (work / "staging").mkdir(exist_ok=True)
     config = LCSASConfig(
         mirror_base_path=work / "mirror",
         staging_path=work / "staging",
@@ -329,12 +330,10 @@ def _build_archive(work: Path) -> _Archive:
     iso_out.mkdir()
     data_isos: list[Path] = []
     labels: list[str] = []
-    while get_unarchived_packs(conn):
-        manifest = orchestrator.prepare(media_type=MediaType.TEST_TINY)
-        iso_path = iso_out / f"{manifest.volume_label}.iso"
-        orchestrator.execute(manifest, iso_output=iso_path, skip_burn=True)
-        data_isos.append(iso_path)
-        labels.append(manifest.volume_label)
+    data_isos.extend(
+        burn_to_isos(orchestrator, iso_out, media_type=MediaType.TEST_TINY)
+    )
+    labels.extend(iso.stem for iso in data_isos)
     conn.close()
     assert len(data_isos) == 1, (
         f"fixture split across {len(data_isos)} data volumes; the unattended "

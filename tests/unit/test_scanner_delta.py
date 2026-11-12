@@ -162,12 +162,6 @@ class TestDeltaAnalyzer:
         delta = DeltaAnalyzer(memory_db, {})
         assert delta.get_total_unarchived_bytes() == 400
 
-    def test_needs_burn(self, memory_db):
-        register_pack(memory_db, sha256="x1", size_bytes=600_000, repo_id="_test")
-        delta = DeltaAnalyzer(memory_db, {})
-        assert delta.needs_burn(1_000_000) is False
-        assert delta.needs_burn(500_000) is True
-
     def test_with_repo_filter(self, memory_db):
         register_repo(memory_db, "rfam", "Family", "/fam")
         register_repo(memory_db, "rwrk", "Work", "/wrk")

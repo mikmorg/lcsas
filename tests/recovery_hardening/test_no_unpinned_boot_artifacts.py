@@ -132,7 +132,7 @@ def test_no_unpinned_boot_artifacts(meta_tree: Path) -> None:
         "artifacts with no row in recovery/MANIFEST.sha256 or "
         "recovery/UPSTREAM.sha256 and no documented exemption: "
         f"{offenders}.  Every shipped runtime artifact must be pinned "
-        "(see plans/audit-2026-06/BOOT-07-remove-alpine-live-stack.md)."
+        "(see plan BOOT-07 at tag archive/pre-1.0-history)."
     )
 
 

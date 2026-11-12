@@ -555,7 +555,7 @@ lcsas/
 > implements the SLIP-0039 K-of-N password split whose ledger is the
 > `key_escrow` table (see §3). The in-tree C89 recovery tools live
 > separately under the repo-root `recovery/src/` tree (`lcsas-restore`,
-> `lcsas-ecc`, `lcsas-keyshare`, `lcsas-iso9660`, `lcsas-init`).
+> `lcsas-ecc`, `lcsas-keyshare`, `lcsas-iso9660`).
 
 ### Key Design Patterns
 
@@ -633,13 +633,13 @@ silently restored.
 The companion in-house C89 tools complete the bare-metal toolchain:
 `lcsas-ecc` (FMT-01 — our own RS03 read/repair, no dvdisaster binary
 required), `lcsas-keyshare` (SLIP-0039 share recombination), plus
-`lcsas-iso9660` and `lcsas-init`. All live under `recovery/src/`.
+`lcsas-iso9660`. All live under `recovery/src/`.
 
 > **Platform note:** tier-1 `lcsas-restore` is cross-built for all six
 > approved targets (Linux x86_64/aarch64/armv7 musl, Windows x86_64-gnu,
 > macOS Intel + Apple Silicon), so the durable path is available on every
 > supported host rather than x86_64/glibc only. See the cross-platform meta
-> RFC ([docs/CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)).
+> RFC ([docs/history/CROSS_PLATFORM_META_RFC.md](history/CROSS_PLATFORM_META_RFC.md)).
 
 ### JSON Compatibility
 

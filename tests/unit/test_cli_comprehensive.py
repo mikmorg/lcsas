@@ -1799,7 +1799,7 @@ class TestCmdMetaBuildKeyGate:
         """A real (schema-current) catalog with one repo named 'family'."""
         from lcsas.db.packs import register_pack
         from lcsas.db.repos import register_repo as _register
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
 
         mirror = tmp_path / "mirror" / "family"
         if mirror_exists:
@@ -1819,7 +1819,7 @@ class TestCmdMetaBuildKeyGate:
                 media_type="BD25", capacity_bytes=25_000_000_000,
                 status=volume_status,
             )
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         if retired:
             from lcsas.db.repos import set_repo_status
             set_repo_status(conn, "family", "retired")
@@ -2271,7 +2271,7 @@ class TestDispatchRouting:
 
 class TestValidateConfig:
     def test_valid_config_no_errors(self, tmp_path):
-        from lcsas.config.settings import default_config, validate_config
+        from lcsas.config.settings import LCSASConfig, validate_config
 
         mirror = tmp_path / "mirror"
         mirror.mkdir()
@@ -2279,18 +2279,22 @@ class TestValidateConfig:
         staging.mkdir()
         db = tmp_path / "archive.db"
 
-        cfg = default_config(mirror, staging, db)
+        cfg = LCSASConfig(
+            mirror_base_path=mirror, staging_path=staging, db_path=db,
+        )
         errors = validate_config(cfg)
         assert errors == []
 
     def test_missing_mirror(self, tmp_path):
-        from lcsas.config.settings import default_config, validate_config
+        from lcsas.config.settings import LCSASConfig, validate_config
 
         staging = tmp_path / "staging"
         staging.mkdir()
         db = tmp_path / "archive.db"
 
-        cfg = default_config(tmp_path / "no_mirror", staging, db)
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path / "no_mirror", staging_path=staging, db_path=db,
+        )
         errors = validate_config(cfg)
         assert any("mirror_base_path" in e for e in errors)
 
@@ -2443,24 +2447,28 @@ class TestMaskPasswordPath:
 
 class TestOrphanedStagingCleanup:
     def test_detect_no_orphans(self, tmp_path):
-        from lcsas.config.settings import default_config
+        from lcsas.config.settings import LCSASConfig
         from lcsas.staging.cleanup import detect_orphaned_staging
 
         staging = tmp_path / "staging"
         staging.mkdir()
-        cfg = default_config(tmp_path, staging, tmp_path / "db")
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=tmp_path / "db",
+        )
         conn = _mem_conn()
         result = detect_orphaned_staging(cfg, conn)
         assert result == []
 
     def test_detect_orphan_dir(self, tmp_path):
-        from lcsas.config.settings import default_config
+        from lcsas.config.settings import LCSASConfig
         from lcsas.staging.cleanup import detect_orphaned_staging
 
         staging = tmp_path / "staging"
         staging.mkdir()
         (staging / "2025-01-01T00-00-00.000000+00-00-deadbeef").mkdir()
-        cfg = default_config(tmp_path, staging, tmp_path / "db")
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=tmp_path / "db",
+        )
         conn = _mem_conn()
 
         result = detect_orphaned_staging(cfg, conn)
@@ -2468,14 +2476,16 @@ class TestOrphanedStagingCleanup:
         assert result[0].name == "2025-01-01T00-00-00.000000+00-00-deadbeef"
 
     def test_active_session_not_detected(self, tmp_path):
-        from lcsas.config.settings import default_config
+        from lcsas.config.settings import LCSASConfig
         from lcsas.staging.cleanup import detect_orphaned_staging
 
         staging = tmp_path / "staging"
         staging.mkdir()
         active_dir = staging / "active"
         active_dir.mkdir()
-        cfg = default_config(tmp_path, staging, tmp_path / "db")
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=tmp_path / "db",
+        )
         conn = _mem_conn()
 
         # Add an active session pointing to this dir
@@ -2492,7 +2502,7 @@ class TestOrphanedStagingCleanup:
     def test_unmanaged_entries_are_reported(self, tmp_path):
         """#486: stray ISOs, legacy single-volume dirs and leftover ECC temp
         files inside a tracked session are listed; session dirs aren't."""
-        from lcsas.config.settings import default_config
+        from lcsas.config.settings import LCSASConfig
         from lcsas.staging.cleanup import detect_unmanaged_staging
 
         staging = tmp_path / "staging"
@@ -2506,7 +2516,9 @@ class TestOrphanedStagingCleanup:
         (active / "sub").mkdir(parents=True)
         (active / "V1.iso").write_bytes(b"iso")
         (active / "sub" / "V2.iso.ecc.tmp").write_bytes(b"killed augment")
-        cfg = default_config(tmp_path, staging, staging / "archive.db")
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=staging / "archive.db",
+        )
         (staging / "archive.db").write_bytes(b"")          # catalog lives here
         conn = _mem_conn()
         conn.execute(

@@ -72,8 +72,6 @@ class Target:
 
 # The committed-artifact matrix.  Mirrors the cross-build recipes in the
 # Makefile (bin/<arch>/lcsas-restore, keyshare-arches, macos, windows).
-# lcsas-init is gitignored (bin/*/lcsas-init in recovery/.gitignore) and so
-# is intentionally absent here -- the gate only covers tracked artifacts.
 TARGETS: list[Target] = [
     # ── Linux musl (byte-reproducible) ──
     Target("x86_64", "lcsas-restore", "x86_64-linux-musl", static=True),

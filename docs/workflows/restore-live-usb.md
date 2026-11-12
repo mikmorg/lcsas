@@ -1,5 +1,7 @@
 # Live-USB Restore (No Working Operating System)
 
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the no-OS journey and the tests that validate it. The steps themselves are in BOOT.txt and RECOVER.txt.
+
 > The *no-OS* restore journey: the heir (or the owner) has the LCSAS
 > discs but no computer with a working operating system. **LCSAS discs
 > are NOT bootable** — the route is any other working computer, or a
@@ -9,9 +11,10 @@
 
 Historical note: earlier docs routed this scenario to "boot the meta
 disc directly". No disc any build ever produced was bootable — the boot
-scaffolding was never built, and was dropped in 2026-06 and quarantined
-to `experimental/boot/` (see `experimental/boot/README.md` for the
-decision record and the revival precondition in BOOT-08).
+scaffolding was never built. It was dropped in 2026-06 and deleted in
+2026-11 (#688). The repository tag `archive/pre-1.0-history` still holds it;
+`experimental/boot/README.md` at that tag has the decision record and
+the revival precondition (BOOT-08).
 
 Sibling docs for gentler scenarios:
 
@@ -109,4 +112,7 @@ of this replacement path is BOOT-04's deliverable.)
   `tests/recovery_hardening/test_no_boot_deadend_routing.py`
 - Docs-vs-CLI contract gate:
   `tests/recovery_hardening/test_boot_docs_reality.py`
-- Dropped boot scaffolding: `experimental/boot/README.md`
+- Dropped boot scaffolding: `experimental/boot/README.md` at the
+  repository tag `archive/pre-1.0-history`
+- Boot tripwire test:
+  `tests/recovery_hardening/test_boot_path_quarantined.py`

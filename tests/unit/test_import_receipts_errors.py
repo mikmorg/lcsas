@@ -926,7 +926,7 @@ class TestFirstDiscStates:
         from lcsas.db.packs import register_pack
         from lcsas.db.queries import get_unarchived_packs
         from lcsas.db.repos import register_repo
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
 
         cfg = _write_config(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
@@ -936,7 +936,7 @@ class TestFirstDiscStates:
             register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
             pack = register_pack(conn, "f" * 64, 100, "repo1")
             vol = get_volume_by_label(conn, "VOL_NEW")
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         finally:
             conn.close()
 
@@ -991,7 +991,7 @@ class TestFailedBurnNextStep:
         from lcsas.db.packs import register_pack
         from lcsas.db.queries import get_unarchived_or_missing_at_location
         from lcsas.db.repos import register_repo
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
 
         tmp_path, cfg, db = staged_env
         # The staged ISO is still in the staging area.
@@ -1003,7 +1003,7 @@ class TestFailedBurnNextStep:
             register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
             pack = register_pack(conn, "f" * 64, 100, "repo1")
             vol = get_volume_by_label(conn, "VOL_NEW")
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
             conn.commit()
         finally:
             conn.close()
@@ -1048,7 +1048,7 @@ class TestFailedBurnNextStep:
         failed one is no longer listed: the location needs nothing from it."""
         from lcsas.db.packs import register_pack
         from lcsas.db.repos import register_repo
-        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volume_packs import bulk_link_packs
 
         tmp_path, cfg, db = staged_env
         conn = get_connection(db)
@@ -1056,7 +1056,7 @@ class TestFailedBurnNextStep:
             register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
             pack = register_pack(conn, "f" * 64, 100, "repo1")
             vol = get_volume_by_label(conn, "VOL_NEW")
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
         finally:
             conn.close()
         failed = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)
@@ -1071,7 +1071,7 @@ class TestFailedBurnNextStep:
         try:
             new = create_volume(conn, "VOL_NEXT", "uuid-next", "TEST_TINY", 1000,
                                 "Bank_Box", "STAGING")
-            link_pack_to_volume(conn, new.volume_id, pack.pack_id)
+            bulk_link_packs(conn, new.volume_id, [pack.pack_id])
         finally:
             conn.close()
 

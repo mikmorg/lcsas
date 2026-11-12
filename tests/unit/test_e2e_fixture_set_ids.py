@@ -23,7 +23,7 @@ from lcsas.db.connection import get_connection
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
-from lcsas.db.volume_packs import link_pack_to_volume
+from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -145,7 +145,7 @@ def test_expected_alpha_volumes_are_found_by_name(
         for owner in owners:
             n += 1
             pack = register_pack(conn, f"{n:064x}", 1000, ids[owner])
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
     conn.close()
     monkeypatch.setattr(_setup, "DB_PATH", db)
     monkeypatch.setattr(_setup, "FIXTURE", tmp_path)
@@ -334,10 +334,13 @@ def test_blind_setup_checks_every_disc_before_mastering_it() -> None:
     after the variant edits and before its ISO is mastered."""
     import inspect
 
+    # stage() injects the catalog and masters the ISO in one call, so the
+    # data-disc hook wraps xorriso's create_iso (#699).
     burn = inspect.getsource(_setup._run_burn_pipeline)
-    check = burn.index("_check_set_markers(manifest.staging_path, require_all=False)")
+    check = burn.index("_check_set_markers(Path(source_dir), require_all=False)")
     assert burn.index("_apply_data_disc_variant_mutations(") < check
-    assert check < burn.index("orchestrator.execute(")
+    assert check < burn.index("return self._inner.create_iso(")
+    assert "VariantXorriso(SubprocessXorrisoRunner())" in burn
     meta = inspect.getsource(_setup._build_meta_iso)
     check = meta.index("_check_set_markers(META_STAGE, require_all=True)")
     assert meta.index("_apply_variant_mutations(META_STAGE)") < check

@@ -5,7 +5,7 @@ Durable, offline-first cold archival for Linux — built so data stays restorabl
 > **🚨 In an emergency and need to restore data?**
 > Start at **[docs/RECOVERY_GUIDE.md](docs/RECOVERY_GUIDE.md)** — it
 > routes you to the right OS-specific walkthrough (Linux, macOS,
-> Windows, bare-metal, or disc-only Python reader) in one click.
+> Windows, live USB, or disc-only Python reader) in one click.
 
 ## Key Capabilities
 
@@ -164,9 +164,6 @@ database    = "/var/lib/lcsas/archive.db"
 
 [defaults]
 media_type         = "MDISC100"
-# Deprecated/ignored: RS03 augmented images pad to the smallest fitting
-# medium; the padding is the effective redundancy (non-15 values warn).
-ecc_redundancy_pct = 15
 location           = "Home_Shelf"
 optical_device     = "/dev/sr0"
 label_prefix       = "ARCHIVE"
@@ -517,7 +514,7 @@ The **meta disc** solves this by bundling *everything* needed for a restore onto
 
 | Path | Contents |
 |------|----------|
-| `recovery/bin/<triple>/` | Per-platform tier-1 (`lcsas-restore`), share combiner (`lcsas-keyshare`), disc repair (`lcsas-ecc`) and tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
+| `recovery/bin/<triple>/` | Per-platform tier-1 (`lcsas-restore`), share combiner (`lcsas-keyshare`), disc repair (`lcsas-ecc`) and tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md). |
 | `metadata/<id>/` | Every backup set's keys, index and snapshots as of the meta disc's build, with its `LCSAS_REPO.txt` (the set's name).  The newest data disc carries newer copies. |
 | `tools/` | Portable Linux x86_64 tools (rustic, Python 3) and shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
@@ -555,71 +552,23 @@ on the meta disc.
 
 #### Physical Disc Swap (the normal path)
 
-Insert the meta disc, mount it, and run `restore.sh` directly.  The script
-prompts you interactively and pauses whenever it needs the next data disc.
+Insert the meta disc, mount it, and run `restore.sh` from it. The script
+asks which backup set to restore and for its password, and pauses whenever it
+needs the next data disc.
 
-```bash
-# 1. Mount the meta disc
-sudo mount /dev/sr0 /mnt
-
-# 2. Start the restore.  It copies its tools to ~/lcsas-restore-tools,
-#    so the meta disc can come out, then asks its questions
-sh /mnt/restore.sh ~/restored/ latest
-
-# First it asks for your NEWEST data disc (the latest year in the
-# label, then the highest number): eject the meta disc, insert that
-# disc, mount it if needed, press Enter.
-#
-# With multiple repositories on the archive the script prints a numbered menu:
-#   Choose a repository (number or name): <pick one and press Enter>
-# (single-repository archives skip the prompt), then:
-#   Password:   <type your password and press Enter>
-# (or the words of its share cards, when its password is split)
-#
-# When a data disc is needed it prints a swap prompt:
-#   Insert the right disc and press ENTER to retry.
-#
-# Eject the current disc and insert the requested data disc.  Once it
-# is mounted the restore carries on by itself (Linux/macOS; press Enter
-# if it doesn't, or on Windows).  Repeat until it prints
-# "restore complete".  To stop, type q at a swap prompt; carry on
-# later with:  sh ~/lcsas-restore-tools/resume.sh
-```
-
-See [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) for the
-complete restore guide, including the disc swap steps and all
+The heir's step-by-step procedure is not repeated here. It lives in one
+place: [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) (Linux and
+macOS) and [`recovery/docs/RECOVER_WINDOWS.txt`](recovery/docs/RECOVER_WINDOWS.txt)
+(Windows), both on the meta disc. They cover the exact commands, the
+questions the script asks, the disc swap steps, resuming a stopped restore,
+restoring from ISO images when you have no optical drive, and all
 environment variables.
-
-#### Restoring from ISO Images (no optical drive)
-
-If you have ISO images on disk rather than physical discs, you can
-loop-mount each one as needed.  The workflow is identical to the physical
-path — `restore.sh` uses `/dev/sr0` (or whatever device you mount the
-ISO on), so mount each ISO in turn when the swap prompt appears:
-
-```bash
-# Mount the meta ISO
-sudo mount -o loop lcsas_meta.iso /mnt
-sh /mnt/restore.sh ~/restored/ latest
-
-# When it asks for your newest data disc, mount the newest data ISO
-# in place of the meta ISO (in another terminal), then press Enter:
-sudo umount /mnt
-sudo mount -o loop lcsas_data_0002.iso /mnt
-
-# When a swap prompt appears, mount the next data ISO:
-sudo umount /mnt
-sudo mount -o loop lcsas_data_0001.iso /mnt
-# press Enter at the swap prompt
-
-# Repeat for each data ISO as prompted.
-```
 
 ### Supported recovery platforms
 
 The meta disc can carry prebuilt recovery binaries for six target
 platforms.  The supported matrix (cross-platform meta disc work
-landed across Phase 21.1–21.12 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
+landed across Phase 21.1–21.12 — see the original design RFC (historical) [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md)):
 
 | Target | OS | Notes |
 |---|---|---|
@@ -720,14 +669,13 @@ durability layer.
 ### Decisions about coverage gaps
 
 Targets **not** currently bundled, and the rationale (full discussion
-in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
+in the original design RFC (historical) [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md) §6 Q1):
 
 - **RISC-V** — upstream rustic (tier 2) does not yet ship a release
   artifact for `riscv64gc-unknown-linux-gnu`, and we don't cross-compile
-  rustic ourselves; will be added when upstream ships. (The tier-1
-  `lcsas-restore` CLI can already cross-build for `riscv64` —
-  `lcsas recovery build --arch riscv64` — but riscv64 is not one of the
-  six approved bundled targets.)
+  rustic ourselves; will be added when upstream ships. `lcsas recovery
+  build` builds tier 1 only for the six approved targets, so riscv64
+  has no tier-1 build target either.
 - **i686** (32-bit x86) — upstream ships it but the number of heirs
   restoring on 32-bit x86 in 2026+ is vanishingly small.
 - **FreeBSD / OpenBSD** — no upstream rustic.  The heir must install
@@ -771,7 +719,7 @@ LCSAS shells out to three external binaries: **rustic**, **xorriso**, and **dvdi
 
 | Tool        | Version pinned in CI | Notes |
 |-------------|----------------------|-------|
-| rustic      | **v0.11.2**          | matches `.github/workflows/test.yml` |
+| rustic      | **v0.11.2**          | matches `.github/actions/install-rustic/action.yml` |
 | xorriso     | distro-provided      | any recent version is fine |
 | dvdisaster  | distro-provided      | RS03 encoder must be present |
 | cdemu       | distro-provided      | optional, only for the e2e blind-restore suite |
@@ -901,9 +849,15 @@ backports on the host if containers fail in unexplained ways.
 2. `apt-get install`s xorriso + dvdisaster
 3. `make dev` → `make -C recovery all test` (C smoke: build every recovery
    binary + run the C unit tests) → `make test-unit` →
-   `make test-integration` → e2e pipeline test → `make typecheck` →
+   `make test-integration` → `make test-e2e` → `make typecheck` →
    `make lint`
 4. A second `recovery-hardening` job runs the recovery-hardening suite,
    including `make shell-coverage`
+
+`.github/workflows/weekly.yml` is the only scheduled workflow. Every
+Monday it calls the slow canaries (bin-parity, the ECC repair proof, the
+macOS and Windows restore journeys, the upstream and format canaries, the
+live-USB drill and the opt-in hardening gates in `opt-in-gates.yml`) and
+files an issue for each one that goes red.
 
 The e2e blind-restore suite is intentionally excluded from CI (cdemu/vhba unavailable on GitHub runners). Run it locally before cutting a release.

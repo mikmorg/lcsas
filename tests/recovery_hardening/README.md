@@ -48,9 +48,9 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_blind_harness_leak_dirs.py` | The blind harness hides leftover directories by ACL, not chown/chmod. |
 | `test_blind_run_lock.py` | The blind harness's run lock works across users and leaves no file (#559). |
 | `test_blind_variant_xfail_ledger.py` | Hardening test (GATE-06): the blind-restore XFAIL ledger must stay |
-| `test_boot_config_paths.py` | BOOT-03: boot menu entry paths must equal the staged-tree paths. |
 | `test_boot_docs_reality.py` | test_boot_docs_reality.py -- docs-vs-reality contract gate for `lcsas ...` |
-| `test_boot_path_quarantined.py` | Boot-path quarantine tripwire (BOOT-08) + BOOT-06 record-keeping. |
+| `test_boot_path_quarantined.py` | Boot-path tripwire (BOOT-01/BOOT-07/BOOT-08, #688). |
+| `test_ci_gate_inventory.py` | Hardening: every documented opt-in gate is run by something (#694, #693). |
 | `test_ci_workflow_parity.py` | Hardening: CI workflow ↔ `make gate` suite parity (GATE-02). |
 | `test_coverage_fault_inject_cleanup.py` | Hardening test: the coverage fault sweep leaves no test fixtures behind. |
 | `test_cross_build_deps.py` | Guard the recovery cross-build source dependencies. |
@@ -63,7 +63,6 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_format_canary.py` | FMT-03 format canary: round-trip LATEST rustic through the pinned readers. |
 | `test_format_txt_path_safety.py` | Hardening test: FORMAT.txt PATH SAFETY must match binary behaviour. |
 | `test_heir_doc_reality.py` | Static guard: heir manuals give commands that work as typed (#605, #609, #618, #619). |
-| `test_initramfs_manifest_sources.py` | BOOT-02: build_initramfs.sh must hard-fail on missing sources. |
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
 | `test_keyshare_windows_wine.py` | rc6: the committed Windows ``lcsas-keyshare.exe`` under wine. |
 | `test_last_verified_writer_exists.py` | Hardening test: volume_copies.last_verified_at must have a writer. |

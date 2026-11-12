@@ -787,9 +787,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(
             "host",
             # Linux musl targets (Phase 21.10.b + 21.11).
-            "x86_64", "aarch64", "armv7", "riscv64",
-            # Windows-gnu targets via `zig cc` (Phase 21.10.b).
-            "x86_64-windows", "aarch64-windows",
+            "x86_64", "aarch64", "armv7",
+            # Windows-gnu target via `zig cc` (Phase 21.10.b).
+            "x86_64-windows",
             # macOS targets via `zig cc -target X-macos` (Phase 21.12).
             "x86_64-macos", "aarch64-macos",
         ),
@@ -2611,7 +2611,6 @@ def cmd_stage(args: argparse.Namespace) -> int:
     from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
-    from lcsas.utils.shutdown import ShutdownManager
 
     config = _load_config_opt(args)
     if config is None:
@@ -2625,114 +2624,110 @@ def cmd_stage(args: argparse.Namespace) -> int:
         logger.error("%s", e)
         return 1
 
-    shutdown = ShutdownManager()
-    shutdown.install()
+    # No signal handler here: Ctrl-C raises KeyboardInterrupt, which
+    # stage() already catches to delete a half-built volume (#699).
+    with locked_connection(
+        _resolve_db_path(args, config),
+        timeout=_resolve_lock_timeout(args),
+    ) as conn:
+        ensure_schema(conn)
 
-    try:
-        with locked_connection(
-            _resolve_db_path(args, config),
-            timeout=_resolve_lock_timeout(args),
-        ) as conn:
-            ensure_schema(conn)
+        orch = BurnOrchestrator(
+            config, conn,
+            SubprocessXorrisoRunner(tmpdir=config.staging_path),
+            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
+            allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
+            allow_low_redundancy=getattr(
+                args, "allow_low_redundancy", False,
+            ),
+        )
 
-            orch = BurnOrchestrator(
-                config, conn,
-                SubprocessXorrisoRunner(tmpdir=config.staging_path),
-                SubprocessDVDisasterRunner(tmpdir=config.staging_path),
-                allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
-                allow_low_redundancy=getattr(
-                    args, "allow_low_redundancy", False,
-                ),
-            )
-
-            if args.clean:
-                session_ref = args.session or "latest"
-                try:
-                    orch.clean_session(session_ref, force=args.force)
-                except ValueError as e:
-                    logger.error("%s", e)
-                    return 1
-                logger.info(f"Cleaned session: {session_ref}")
-                return 0
-
-            media_type = None
-            if args.media:
-                try:
-                    media_type = MediaType[args.media]
-                except KeyError:
-                    valid = ", ".join(m.name for m in MediaType)
-                    logger.error(f"Unknown media type '{args.media}'. "
-                                 f"Valid types: {valid}")
-                    return 1
-
-            for_location = args.for_location
-            repo_ids: list[str] | None
-            if collection is not None:
-                # #701: the collection sets the location, the media type
-                # and the repositories; each must exist in the catalog.
-                repo_ids, problems = _collection_catalog_check(
-                    conn, config, collection,
-                )
-                if problems:
-                    for problem in problems:
-                        logger.error("%s", problem)
-                    return 1
-                for_location = collection.location
-                media_type = collection.media_type
-            else:
-                try:
-                    repo_ids = _resolve_repo_names_to_ids(
-                        conn, args.repo, config,
-                    )
-                except ValueError as e:
-                    logger.error(str(e))
-                    return 1
-
-            # #656: a disc carries each mirror's snapshots as they are now,
-            # so the catalog must know every pack file in the mirrors first.
-            if not _sync_mirrors_before_stage(
-                conn, repo_ids, dry_run=getattr(args, "dry_run", False),
-            ):
-                return 1
-
-            from lcsas.db.key_escrow import EscrowDriftError
+        if args.clean:
+            session_ref = args.session or "latest"
             try:
-                result = orch.stage(
-                    media_type=media_type,
-                    for_location=for_location,
-                    repo_ids=repo_ids,
-                    dry_run=getattr(args, "dry_run", False),
-                    min_fill_pct=min_fill,
-                    partial=getattr(args, "partial", False),
-                )
-            except EscrowDriftError as e:
+                orch.clean_session(session_ref, force=args.force)
+            except ValueError as e:
                 logger.error("%s", e)
-                logger.error(
-                    "Refusing to stage. Pass --allow-escrow-drift to override "
-                    "(discs may print wrong share instructions)."
-                )
+                return 1
+            logger.info(f"Cleaned session: {session_ref}")
+            return 0
+
+        media_type = None
+        if args.media:
+            try:
+                media_type = MediaType[args.media]
+            except KeyError:
+                valid = ", ".join(m.name for m in MediaType)
+                logger.error(f"Unknown media type '{args.media}'. "
+                             f"Valid types: {valid}")
                 return 1
 
-            if getattr(args, "dry_run", False):
-                return 0
-            if result.session_id == "":
-                # #701: the only volume was below the minimum fill; stage()
-                # said so.  Not an error: the packs wait for more data.
-                return 0
-
-            logger.info(f"Session: {result.session_id}")
-            logger.info(f"Staged {len(result.manifests)} volume(s):")
-            for m in result.manifests:
-                iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
-                logger.info(
-                    "  %s  (%.1f GB, %d packs)",
-                    m.iso_path, iso_size / 1e9, len(m.selected_packs),
+        for_location = args.for_location
+        repo_ids: list[str] | None
+        if collection is not None:
+            # #701: the collection sets the location, the media type
+            # and the repositories; each must exist in the catalog.
+            repo_ids, problems = _collection_catalog_check(
+                conn, config, collection,
+            )
+            if problems:
+                for problem in problems:
+                    logger.error("%s", problem)
+                return 1
+            for_location = collection.location
+            media_type = collection.media_type
+        else:
+            try:
+                repo_ids = _resolve_repo_names_to_ids(
+                    conn, args.repo, config,
                 )
-            logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
-            _report_snapshot_coverage(result)
-        return 0
-    finally:
-        shutdown.uninstall()
+            except ValueError as e:
+                logger.error(str(e))
+                return 1
+
+        # #656: a disc carries each mirror's snapshots as they are now,
+        # so the catalog must know every pack file in the mirrors first.
+        if not _sync_mirrors_before_stage(
+            conn, repo_ids, dry_run=getattr(args, "dry_run", False),
+        ):
+            return 1
+
+        from lcsas.db.key_escrow import EscrowDriftError
+        try:
+            result = orch.stage(
+                media_type=media_type,
+                for_location=for_location,
+                repo_ids=repo_ids,
+                dry_run=getattr(args, "dry_run", False),
+                min_fill_pct=min_fill,
+                partial=getattr(args, "partial", False),
+            )
+        except EscrowDriftError as e:
+            logger.error("%s", e)
+            logger.error(
+                "Refusing to stage. Pass --allow-escrow-drift to override "
+                "(discs may print wrong share instructions)."
+            )
+            return 1
+
+        if getattr(args, "dry_run", False):
+            return 0
+        if result.session_id == "":
+            # #701: the only volume was below the minimum fill; stage()
+            # said so.  Not an error: the packs wait for more data.
+            return 0
+
+        logger.info(f"Session: {result.session_id}")
+        logger.info(f"Staged {len(result.manifests)} volume(s):")
+        for m in result.manifests:
+            iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
+            logger.info(
+                "  %s  (%.1f GB, %d packs)",
+                m.iso_path, iso_size / 1e9, len(m.selected_packs),
+            )
+        logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
+        _report_snapshot_coverage(result)
+    return 0
 
 
 def _report_snapshot_coverage(result: Any) -> None:
@@ -4508,10 +4503,6 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         from lcsas.burn.orchestrator import BurnOrchestrator
         from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
         from lcsas.iso.xorriso import SubprocessXorrisoRunner
-        from lcsas.utils.shutdown import ShutdownManager
-
-        shutdown = ShutdownManager()
-        shutdown.install()
 
         orch = BurnOrchestrator(
             config, conn,
@@ -5217,8 +5208,6 @@ def cmd_recovery(args: argparse.Namespace) -> int:
         print(f"built {a.arch}: {a.lcsas_restore}")
         if a.lcsas_iso9660:
             print(f"  + {a.lcsas_iso9660}")
-        if a.lcsas_init:
-            print(f"  + {a.lcsas_init}")
         return 0
 
     if sub == "test":
@@ -7012,7 +7001,7 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_restore_plan(args)
         elif args.restore_command == "exec":
             return cmd_restore_exec(args)
-        elif args.restore_command in ("standalone", "from-disc"):
+        elif args.restore_command == "standalone":
             return cmd_restore_from_disc(args)
         else:
             logger.error("Usage: lcsas restore {plan,exec,standalone}")
@@ -7513,7 +7502,7 @@ def _verify_password_unlocks_repo(
     from lcsas.restore.restic_fallback import (
         IntegrityError,
         NoKeyUnlockedError,
-        _try_keys,
+        try_keys,
     )
 
     if not keys_dir.is_dir():
@@ -7530,7 +7519,7 @@ def _verify_password_unlocks_repo(
             "Pass --no-verify-repo to skip (dangerous)."
         )
     try:
-        _try_keys(keys_dir, password)
+        try_keys(keys_dir, password)
     except NoKeyUnlockedError as e:
         damaged = "; ".join(why for _, why in e.corrupt)
         if not e.rejected:
@@ -7574,14 +7563,14 @@ def _recombine_roundtrip_error(
     from itertools import combinations
 
     from lcsas.keyshare import KeyShareError, decode_master_secret, recover_secret
-    from lcsas.keyshare.slip39 import _Share
+    from lcsas.keyshare.slip39 import Share
 
     # Read K from share metadata.  A corrupted/short mnemonic here is itself a
     # verification failure (its checksum won't parse).
     threshold: int | None = None
     for i, mn in enumerate(mnemonics):
         try:
-            threshold = _Share.from_mnemonic(mn).member_threshold
+            threshold = Share.from_mnemonic(mn).member_threshold
             break
         except KeyShareError as e:
             return f"share {i + 1} is not a valid SLIP-0039 share: {e}"

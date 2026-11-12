@@ -33,7 +33,7 @@ BINARY = Path(os.environ["LCSAS_RESTORE_BIN"]) if os.environ.get(
 sys.path.insert(0, str(RECOVERY_DIR / "tests"))
 import test_e2e  # noqa: E402  (sibling fixture builder)
 
-from lcsas.restore.restic_fallback import _try_keys  # noqa: E402
+from lcsas.restore.restic_fallback import try_keys  # noqa: E402
 
 PASSWORD = "walk-bounds"
 FILES = {"a.txt": b"tier-1 index walk\n", "b.bin": os.urandom(4096)}
@@ -59,7 +59,7 @@ def test_odd_index_elements_are_ignored(tmp_path: Path, extra_index: dict) -> No
     _require_binary()
     repo = tmp_path / "repo"
     test_e2e.build_repo(repo, PASSWORD, FILES)
-    mk = _try_keys(repo / "keys", PASSWORD.encode())
+    mk = try_keys(repo / "keys", PASSWORD.encode())
     enc = test_e2e.aead_encrypt(
         mk.encrypt, mk.mac_k, mk.mac_r, json.dumps(extra_index).encode())
     (repo / "index" / hashlib.sha256(enc).hexdigest()).write_bytes(enc)

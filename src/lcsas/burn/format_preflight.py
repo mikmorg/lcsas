@@ -29,6 +29,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+# The tier-3 reader on purpose (see above).  restic_fallback is a leaf: it
+# imports nothing from LCSAS but its pure-Python helpers, so burn depends on
+# nothing else in restore/ (tests/unit/test_import_boundaries.py).
 from lcsas.restore.restic_fallback import IntegrityError, PurePythonRestorer
 
 _logger = logging.getLogger(__name__)

@@ -28,7 +28,9 @@ import time
 from pathlib import Path
 
 CRASH_RCS = {-11, 139, -6, 134, -7, -8, -9}  # SEGV / ABORT / KILL / BUS / FPE
-TIMEOUT_SEC = 30
+# Per-run limit.  test_ecc alone takes ~19 s on a GitHub runner, and a
+# clean count run there passed 30 s (2026-11-11), so allow more.
+TIMEOUT_SEC = int(os.environ.get("LCSAS_FAULT_INJECT_TIMEOUT", "120"))
 
 
 def find_repo_root() -> Path:

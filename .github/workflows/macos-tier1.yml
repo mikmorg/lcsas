@@ -21,8 +21,8 @@ name: macos-tier1
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file
 # after 60 quiet days, push and PR triggers and all, and the 2026-08-05 ->
-# 10-15 quiet spell did.  The weekly run lives in macos-tier1-weekly.yml,
-# which calls this file, so a quiet spell can now only switch off that.
+# 10-15 quiet spell did.  The weekly run lives in weekly.yml, which calls
+# this file, so a quiet spell can now only switch off that.
 
 on:
   push:
@@ -42,7 +42,7 @@ on:
       - 'tests/recovery_hardening/test_tier1_macos_native.py'
       - '.github/workflows/macos-tier1.yml'
   workflow_dispatch: {}
-  # The weekly run (macos-tier1-weekly.yml).
+  # The weekly run (weekly.yml).
   workflow_call: {}
 
 permissions:

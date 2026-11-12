@@ -269,3 +269,76 @@ def test_verify_disc_unknown_location_records_nothing(discs, tmp_path, caplog):
         ).fetchone() is None
     finally:
         conn.close()
+
+
+def test_receipts_import_after_rebuild_with_allow_unhashed(
+    discs, tmp_path, caplog,
+):
+    """RECOVER.txt's OWNER HABIT: after a rebuild, the newest session's
+    receipts are imported with --allow-unhashed (the rebuilt catalog has
+    no ISO hash for the newest discs) and the volumes become VERIFIED at
+    the receipt's location."""
+    import json
+
+    trees, labels_b, _config_obj = discs
+    out = tmp_path / "rebuilt.db"
+    assert main(["catalog", "rebuild", *[str(t) for t in trees],
+                 "--output", str(out)]) == 0
+
+    conn = get_connection(out)
+    try:
+        staged_for = {
+            label: get_volume_by_label(conn, label).location
+            for label in labels_b
+        }
+    finally:
+        conn.close()
+    # The receipts carry the hash of the ISO that was burned: the one
+    # recorded at staging in the (since lost) original catalog.
+    orig = get_connection(_config_obj.db_path)
+    try:
+        iso_hash = {
+            r["label"]: r["iso_sha256"] for r in orig.execute(
+                "SELECT v.label, sv.iso_sha256 FROM session_volumes sv "
+                "JOIN volumes v USING (volume_id)")
+        }
+    finally:
+        orig.close()
+    receipts = []
+    for label in labels_b:
+        loc = staged_for[label] or "Home"
+        r = tmp_path / f"{label}.json"
+        r.write_text(json.dumps({
+            "volume_label": label, "location": loc, "session_id": "s",
+            "device": "/dev/sr0", "burn_date": "2026-11-11T00:00:00+00:00",
+            "iso_sha256": iso_hash[label],
+            "verify_passed": True,
+        }))
+        receipts.append(str(r))
+
+    cfg = tmp_path / "rebuilt.toml"
+    cfg.write_text(
+        f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
+        f'staging = "{tmp_path / "staging"}"\n'
+        f'database = "{out}"\n'
+        '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
+    )
+    # The discs' location must be registered (RECOVER.txt: 'location add').
+    for loc in {v or "Home" for v in staged_for.values()}:
+        main(["--config", str(cfg), "location", "add", loc])
+    # Without --allow-unhashed the receipts are refused (no staged hash).
+    caplog.clear()
+    assert main(["--config", str(cfg), "catalog", "import-receipts",
+                 *receipts]) == 1
+    rc = main(["--config", str(cfg), "catalog", "import-receipts",
+               "--allow-unhashed", *receipts])
+    assert rc == 0, caplog.text
+    conn = get_connection(out)
+    try:
+        for label in labels_b:
+            vol = get_volume_by_label(conn, label)
+            assert vol.status == "VERIFIED"
+            copies = get_copies_for_volume(conn, vol.volume_id)
+            assert [c.location for c in copies] == [staged_for[label] or "Home"]
+    finally:
+        conn.close()

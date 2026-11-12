@@ -8,7 +8,6 @@ from lcsas.utils.fs import (
     dir_size_bytes,
     ensure_dir,
     hardlink_or_copy,
-    list_files_recursive,
     read_repo_key_ids,
     safe_remove_tree,
 )
@@ -69,19 +68,6 @@ class TestFilesystem:
 
     def test_dir_size_empty(self, tmp_path):
         assert dir_size_bytes(tmp_path) == 0
-
-    def test_list_files_recursive(self, tmp_path):
-        (tmp_path / "a.txt").write_text("a")
-        sub = tmp_path / "sub"
-        sub.mkdir()
-        (sub / "b.txt").write_text("b")
-        files = list_files_recursive(tmp_path)
-        names = {f.name for f in files}
-        assert names == {"a.txt", "b.txt"}
-
-    def test_list_files_nonexistent(self, tmp_path):
-        files = list_files_recursive(tmp_path / "nope")
-        assert files == []
 
     def test_copy_tree(self, tmp_path):
         src = tmp_path / "src_tree"

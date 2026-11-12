@@ -32,7 +32,8 @@ class LCSASConfig:
     default_media_type: MediaType = MediaType.BD25
     # Deprecated: ignored by RS03 augmented images (BURN-07) — dvdisaster
     # pads to the smallest fitting medium and the padding IS the redundancy.
-    # Kept so existing TOMLs keep parsing; validate_config warns if non-15.
+    # Kept so existing TOMLs keep parsing; load_config warns when a config
+    # sets it (#699).
     default_ecc_redundancy_pct: int = 15
     default_location: str = "Home_Shelf"
 
@@ -341,7 +342,6 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
 
         [defaults]
         media_type = "BD25"
-        ecc_redundancy_pct = 15
         location = "Home_Shelf"
         optical_device = "/dev/sr0"
         label_prefix = "LCSAS"
@@ -471,6 +471,17 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         _logger.warning(
             "Config: 'paths.staging' not set in '%s'; "
             "defaulting to /mnt/staging — set this explicitly to avoid surprises.",
+            config_path,
+        )
+    if "ecc_redundancy_pct" in defaults:
+        # Kept as a known key so old configs still load (#699), but it
+        # does nothing: RS03 augmented images cannot take a redundancy
+        # setting (man dvdisaster); the padding to the medium size IS the
+        # redundancy.
+        _logger.warning(
+            "Config: '[defaults] ecc_redundancy_pct' in '%s' is ignored: "
+            "the error-correction data fills the free space up to the disc "
+            "size. Remove the line to silence this warning.",
             config_path,
         )
 
@@ -636,21 +647,6 @@ def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
     return errors
 
 
-def default_config(
-    mirror_base: Path,
-    staging: Path,
-    db_path: Path,
-    media_type: MediaType = MediaType.BD25,
-) -> LCSASConfig:
-    """Create a minimal config without a TOML file (useful for testing)."""
-    return LCSASConfig(
-        mirror_base_path=mirror_base,
-        staging_path=staging,
-        db_path=db_path,
-        default_media_type=media_type,
-    )
-
-
 def validate_config(config: LCSASConfig) -> list[str]:
     """Validate an ``LCSASConfig`` and return a list of error strings.
 
@@ -698,17 +694,6 @@ def validate_config(config: LCSASConfig) -> list[str]:
         errors.append(
             f"default_ecc_redundancy_pct out of range (0-100): "
             f"{config.default_ecc_redundancy_pct}"
-        )
-    elif config.default_ecc_redundancy_pct != 15:
-        # Deprecated knob, kept so existing TOMLs parse.  RS03 augmented
-        # images cannot take a redundancy setting (man dvdisaster), so a
-        # non-default value must not silently masquerade as extra (or
-        # reduced) protection.
-        _logger.warning(
-            "default_ecc_redundancy_pct (%d) has no effect on RS03 augmented "
-            "images; effective redundancy is the padding of the smallest "
-            "fitting medium",
-            config.default_ecc_redundancy_pct,
         )
 
     # metadata_reserve_bytes (must be non-negative; zero is allowed but risky)

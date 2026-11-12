@@ -238,7 +238,7 @@ absolute path under the restore target.
 
 Issue #213 added `bash -x`-based line coverage for
 `recovery/scripts/restore.sh` (894 lines / ~393 executable at the
-time; the script has since grown to ~1900 lines — `make
+time; the script has since grown several times over — `make
 shell-coverage` output is the authoritative current count).
 Pipeline:
 
@@ -252,10 +252,11 @@ Pipeline:
    trace lines and cross-references against the script's
    executable-line set (excludes blank/comment/structural lines
    and heredoc bodies).
-4. `make shell-coverage` chains all of the above and gates at 60%.
+4. `make shell-coverage` chains all of the above and gates at the
+   `--threshold` in the root `Makefile` (89% today).
 
-**Baseline at #213: 61.1% (240/393 lines)**; the gate holds at 60%
-as the script grows.  Tier-2 / tier-3 fallback branches dominated
+**Baseline at #213: 61.1% (240/393 lines)**; the gate started at 60%
+and has since been raised to 89%.  Tier-2 / tier-3 fallback branches dominated
 the original uncov set — the #214 adversarial blind-restore variants
 were the natural way to push that higher.
 

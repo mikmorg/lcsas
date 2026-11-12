@@ -70,14 +70,6 @@ class Snapshot:
 
 
 @dataclass(frozen=True)
-class VolumePack:
-    """Association between a volume and a pack (many-to-many)."""
-
-    volume_id: int
-    pack_id: int
-
-
-@dataclass(frozen=True)
 class Location:
     """A named place where discs are kept (e.g. Home_Shelf, Offsite_Safe)."""
 

@@ -41,11 +41,9 @@ EQUIVALENCE: dict[str, str] = {
     # single-file invocation — e.g. the meta-bundling smoke in the `test`
     # job — does NOT satisfy this; only running the entire suite counts.
     "test-recovery-hardening": r"pytest\s+tests/recovery_hardening/\s",
-    # GATE-10 runs the e2e pipeline test directly (with LCSAS_E2E_BASE +
-    # a grep-for-`1 passed` guard) rather than `make test-e2e`, so the CI
-    # step proves it RAN instead of going green-by-skip.  Match that pinned
-    # invocation of the canonical pipeline test.
-    "test-e2e": r"pytest\s+tests/e2e/test_scripts\.py::test_e2e_pipeline",
+    # test-e2e needs no entry: since #694 test.yml runs `make test-e2e`
+    # itself (the whole of tests/e2e, as `make gate` does), with a grep
+    # proving the GATE-10 pipeline test PASSED rather than skipped.
 }
 
 

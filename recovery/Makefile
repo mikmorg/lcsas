@@ -88,7 +88,7 @@ TEST_BINS = \
 # Binary extension is overridden by the Windows cross-build target.
 BIN_EXT ?=
 
-all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-init$(BIN_EXT) $(BUILD)/lcsas-keyshare$(BIN_EXT) $(BUILD)/lcsas-ecc$(BIN_EXT)
+all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-keyshare$(BIN_EXT) $(BUILD)/lcsas-ecc$(BIN_EXT)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -107,10 +107,6 @@ $(BUILD)/iso9660.o: src/lcsas-iso9660/iso9660.c src/lcsas-iso9660/iso9660.h $(BU
 
 $(BUILD)/iso9660_main.o: src/lcsas-iso9660/main.c src/lcsas-iso9660/iso9660.h $(BUILD)
 	$(CC) $(CFLAGS) -c src/lcsas-iso9660/main.c -o $@
-
-$(BUILD)/lcsas-init$(BIN_EXT): $(BUILD) src/lcsas-init/init.c
-	$(CC) $(CFLAGS) -c src/lcsas-init/init.c -o $(BUILD)/init.o
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/init.o -o $@
 
 $(BUILD)/main.o: $(SRCDIR)/main.c $(SRCDIR)/repo.h $(SRCDIR)/tree.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/main.c -o $@
@@ -356,7 +352,6 @@ test-windows: bin/x86_64-windows/lcsas-restore.exe
 # Keep in sync with scripts/bin_parity.py + src/lcsas/recovery/build.py.
 bin/x86_64/lcsas-restore: ARCH=x86_64
 bin/aarch64/lcsas-restore: ARCH=aarch64
-bin/riscv64/lcsas-restore: ARCH=riscv64
 
 bin/x86_64/lcsas-restore:
 	$(MAKE) clean
@@ -364,7 +359,6 @@ bin/x86_64/lcsas-restore:
 	mkdir -p bin/x86_64
 	cp build/x86_64/lcsas-restore bin/x86_64/
 	cp build/x86_64/lcsas-iso9660 bin/x86_64/
-	cp build/x86_64/lcsas-init    bin/x86_64/
 
 bin/aarch64/lcsas-restore:
 	$(MAKE) clean
@@ -374,30 +368,18 @@ bin/aarch64/lcsas-restore:
 	mkdir -p bin/aarch64
 	cp build/aarch64/lcsas-restore bin/aarch64/
 	cp build/aarch64/lcsas-iso9660 bin/aarch64/
-	cp build/aarch64/lcsas-init    bin/aarch64/
-
-bin/riscv64/lcsas-restore:
-	$(MAKE) clean
-	$(MAKE) BUILD=build/riscv64 \
-	        CC=$${CC_RISCV64:-riscv64-linux-musl-gcc} \
-	        LDFLAGS="-static -Wl,--strip-debug"
-	mkdir -p bin/riscv64
-	cp build/riscv64/lcsas-restore bin/riscv64/
-	cp build/riscv64/lcsas-iso9660 bin/riscv64/
-	cp build/riscv64/lcsas-init    bin/riscv64/
 
 # Source deps so a tier-1 source edit forces a cross rebuild (see
 # ecc-arches).  The all-arches / windows / macos recipes build restore +
-# iso9660 + init into each per-arch tree, so all three tools' sources (plus
-# the vendored sqlite/zstd they link) gate these bin targets.
+# iso9660 into each per-arch tree, so both tools' sources (plus the
+# vendored sqlite/zstd they link) gate these bin targets.
 ARCH_SRCS := $(wildcard $(SRCDIR)/*.c $(SRCDIR)/*.h) \
              $(wildcard src/lcsas-iso9660/*.c src/lcsas-iso9660/*.h) \
-             $(wildcard src/lcsas-init/*.c src/lcsas-init/*.h) \
              $(wildcard $(VENDOR)/sqlite/*.c $(VENDOR)/sqlite/*.h) \
              $(wildcard $(VENDOR)/zstd/*.c $(VENDOR)/zstd/*.h)
-bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas-restore bin/x86_64-windows/lcsas-restore.exe bin/aarch64-windows/lcsas-restore.exe bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore: $(ARCH_SRCS)
+bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/x86_64-windows/lcsas-restore.exe bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore: $(ARCH_SRCS)
 
-all-arches: bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas-restore
+all-arches: bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore
 
 # Cross-compile for Windows via zig cc (ships its own MinGW headers).
 # Produces a PE32+ binary that runs on Windows 7+ without Visual C++
@@ -437,17 +419,6 @@ bin/x86_64-windows/lcsas-restore.exe:
 	mkdir -p bin/x86_64-windows
 	cp build/x86_64-windows/lcsas-restore.exe bin/x86_64-windows/
 
-bin/aarch64-windows/lcsas-restore.exe:
-	rm -rf build/aarch64-windows
-	$(MAKE) BUILD=build/aarch64-windows \
-	        CC="$(ZIG_CC) -target aarch64-windows-gnu" \
-	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
-	        LDFLAGS=-Wl,--strip-debug \
-	        BIN_EXT=.exe \
-	        build/aarch64-windows/lcsas-restore.exe
-	mkdir -p bin/aarch64-windows
-	cp build/aarch64-windows/lcsas-restore.exe bin/aarch64-windows/
-
 windows: bin/x86_64-windows/lcsas-restore.exe
 
 # Cross-compile for macOS via zig cc.  Zig bundles enough libSystem
@@ -459,9 +430,8 @@ windows: bin/x86_64-windows/lcsas-restore.exe
 #   * macOS does NOT support fully static binaries (no -static); the
 #     binary dynamically links against /usr/lib/libSystem.dylib which
 #     is guaranteed present on every Mac.
-#   * lcsas-iso9660 (ISO mastering helper) and lcsas-init (Linux PID 1)
-#     are not produced for macOS — they're either redundant on Darwin
-#     (the kernel handles ISO mounts natively) or Linux-only.
+#   * lcsas-iso9660 (ISO mastering helper) is not produced for macOS —
+#     it is redundant on Darwin (the kernel handles ISO mounts natively).
 #   * Notarization / codesigning is the owner's responsibility if
 #     they want Gatekeeper to bless the binary.  Unsigned binaries
 #     still run if the heir opens them once via Finder + "Open
@@ -584,17 +554,6 @@ zig-aarch64:
 	mkdir -p bin/aarch64
 	cp build/aarch64-zig/lcsas-restore bin/aarch64/
 	cp build/aarch64-zig/lcsas-iso9660 bin/aarch64/
-	cp build/aarch64-zig/lcsas-init    bin/aarch64/
-
-zig-riscv64:
-	$(MAKE) clean
-	$(MAKE) CC="zig cc -target riscv64-linux-musl" \
-	        LDFLAGS="-static -Wl,--strip-debug" \
-	        BUILD=build/riscv64-zig
-	mkdir -p bin/riscv64
-	cp build/riscv64-zig/lcsas-restore bin/riscv64/
-	cp build/riscv64-zig/lcsas-iso9660 bin/riscv64/
-	cp build/riscv64-zig/lcsas-init    bin/riscv64/
 
 # ── Reproducible-build verification ───────────────────────────────
 #
@@ -713,8 +672,7 @@ coverage-c-run:
 	        ../tests/recovery_hardening/test_tier1_auto_mount.py \
 	        ../tests/recovery_hardening/test_tier1_volume_label.py \
 	        ../tests/recovery_hardening/test_tier1_fault_handling.py \
-	        ../tests/recovery_hardening/test_tier1_unreadable_snapshot.py \
-	    || true
+	        ../tests/recovery_hardening/test_tier1_unreadable_snapshot.py
 	# Step 3b: exercise the LCSAS_STRESS_LOOKUPS diagnostic block in
 	# main.c (Linux-only) so coverage-c reports it.  ~1 s.  Uses the
 	# already-committed test fixture; no fixture regeneration needed.
@@ -776,7 +734,7 @@ coverage-c-run:
 	# repo.c / scrypt.c / catalog.c.
 	@cc -shared -fPIC -O0 -g -D_GNU_SOURCE \
 	    scripts/malloc_inject.c -o $(BUILD)/malloc_inject.so -ldl 2>/dev/null
-	@sh scripts/run_coverage_fault_inject.sh 100 || true
+	@sh scripts/run_coverage_fault_inject.sh 100
 	# Step 4: invoke gcovr (soft-skip if not installed)
 	@command -v gcovr >/dev/null 2>&1 || { echo "[coverage-c] gcovr not installed; run: pip install gcovr"; exit 0; }
 	# Step 5: generate reports narrowed to lcsas-restore sources only
@@ -1283,4 +1241,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 keyshare-arches ecc-arches coverage-c coverage-c-run decontaminate sanitize sanitize-run fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 keyshare-arches ecc-arches coverage-c coverage-c-run decontaminate sanitize sanitize-run fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject

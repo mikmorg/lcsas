@@ -39,8 +39,7 @@ Python, no third-party shared library.  The `recovery/` tree gives us:
    rather than restoring it.
 2. A small family of companion C89 binaries built by the same
    `recovery/Makefile`: `lcsas-restore` (the reader), `lcsas-iso9660`
-   (a Linux ISO mounter for hosts without a loopback mount),
-   `lcsas-init` (a Linux PID-1 for the no-OS path), `lcsas-keyshare`
+   (a Linux ISO mounter for hosts without a loopback mount), `lcsas-keyshare`
    (SLIP-0039 share combiner), and **`lcsas-ecc`** — the in-house
    RS03 ECC verify/repair tool (FMT-01) that lets the disc-integrity
    layer repair bit-rot with *nothing* installed (no dvdisaster, no
@@ -85,7 +84,7 @@ recovery/
 ├── UPSTREAM.sha256                # pinned hashes of upstream rustic + CPython
 ├── VERSION  TOOLCHAIN             # pinned toolchain provenance
 ├── src/                           # C89 source: lcsas-restore, lcsas-iso9660,
-│   │                              #   lcsas-init, lcsas-keyshare, lcsas-ecc/
+│   │                              #   lcsas-keyshare, lcsas-ecc/
 │   └── lcsas-ecc/                 # in-house RS03 verify/repair (FMT-01)
 ├── vendored/                      # sqlite + zstd C source we compile ourselves
 ├── bin/                           # cross-built static binaries, one dir per arch
@@ -111,8 +110,8 @@ The Python orchestrator lives at `src/lcsas/recovery/build.py`
 
 ## Supported target arches
 
-The `--arch` choices are `host` plus the eight
-`RecoveryBuilder.SUPPORTED_ARCHES` cross targets — nine in all:
+The `--arch` choices are `host` plus the six
+`RecoveryBuilder.SUPPORTED_ARCHES` cross targets — seven in all:
 
 | `--arch` value   | Toolchain | Notes |
 |------------------|-----------|-------|
@@ -120,19 +119,16 @@ The `--arch` choices are `host` plus the eight
 | `x86_64`         | `x86_64-linux-musl-gcc` or `zig cc` | Linux x86_64, static |
 | `aarch64`        | `aarch64-linux-musl-gcc` or `zig cc` | Linux ARM64, static |
 | `armv7`          | `armv7-linux-musleabihf-gcc` or `zig cc` | Linux 32-bit ARM hardfloat |
-| `riscv64`        | `riscv64-linux-musl-gcc` or `zig cc` | Linux RISC-V, static |
-| `x86_64-windows` | `zig cc -target x86_64-windows-gnu` | `.exe`; no `lcsas-init` |
-| `aarch64-windows`| `zig cc -target aarch64-windows-gnu` | `.exe`; no `lcsas-init` |
-| `x86_64-macos`   | `zig cc -target x86_64-macos` | Mach-O; no `-static`; no `lcsas-iso9660`/`lcsas-init` |
-| `aarch64-macos`  | `zig cc -target aarch64-macos` | Mach-O; no `-static`; no `lcsas-iso9660`/`lcsas-init` |
+| `x86_64-windows` | `zig cc -target x86_64-windows-gnu` | `.exe`; no `lcsas-iso9660` |
+| `x86_64-macos`   | `zig cc -target x86_64-macos` | Mach-O; no `-static`; no `lcsas-iso9660` |
+| `aarch64-macos`  | `zig cc -target aarch64-macos` | Mach-O; no `-static`; no `lcsas-iso9660` |
 
-Of these, **six are the APPROVED_TARGETS** the meta disc's
-required-contents contract demands a tier-1 binary for
+The six cross targets are exactly the **APPROVED_TARGETS** the meta
+disc's required-contents contract demands a tier-1 binary for
 (`src/lcsas/meta/required_contents.py`): the three Linux musl targets
 (`x86_64`, `aarch64`, `armv7`), the two macOS targets, and
-`x86_64-pc-windows-gnu`.  `riscv64` and `aarch64-windows` build but
-are not (yet) part of the required-contents contract.  See
-[`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6.
+`x86_64-pc-windows-gnu`.  No other target is built.  See
+[`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6 Q6.
 
 Source refs: `RecoveryBuilder.SUPPORTED_ARCHES`,
 `RecoveryBuilder._DEFAULT_CC`, `RecoveryBuilder.cross_build`
@@ -170,7 +166,7 @@ lcsas recovery build [--arch ARCH] [--cc CC] [--verbose]
 - `make` + a host `cc` for `--arch host`.
 - For Linux cross targets: the matching musl-cross-make prefix
   (`x86_64-linux-musl-gcc`, `aarch64-linux-musl-gcc`,
-  `armv7-linux-musleabihf-gcc`, `riscv64-linux-musl-gcc`) **or**
+  `armv7-linux-musleabihf-gcc`) **or**
   `zig cc` passed via `--cc`.
 - For Windows / macOS targets: `zig cc` (the Makefile's dedicated
   per-target rules invoke `zig cc -target ...`; no mingw or Apple SDK
@@ -189,19 +185,18 @@ lcsas recovery build [--arch ARCH] [--cc CC] [--verbose]
    - exports a pinned `SOURCE_DATE_EPOCH` (default `1735689600`) for
      reproducibility;
    - **Linux** targets: `make ... all CC=<cc> BUILD=build/<arch>
-     LDFLAGS=-static`, then copies `lcsas-restore`, `lcsas-iso9660`,
-     `lcsas-init` into `bin/<arch>/`;
+     LDFLAGS=-static`, then copies `lcsas-restore` and `lcsas-iso9660`
+     into `bin/<arch>/`;
    - **Windows / macOS** targets: invoke the Makefile's dedicated
      `bin/<arch>/lcsas-restore[.exe]` rule (which encodes the
-     `zig cc -target ...` call); Windows binaries get `.exe` and no
-     `lcsas-init`; macOS binaries are Mach-O, non-`-static`, with no
-     `lcsas-iso9660`/`lcsas-init`.
-4. The handler prints the produced `lcsas-restore` path plus any
-   `lcsas-iso9660` / `lcsas-init` that the target produced, and
+     `zig cc -target ...` call); Windows binaries get `.exe`; neither
+     Windows nor macOS (Mach-O, non-`-static`) gets `lcsas-iso9660`.
+4. The handler prints the produced `lcsas-restore` path plus the
+   `lcsas-iso9660` if the target produced one, and
    returns 0.
 
 The `recovery/Makefile` `all:` target builds the full family per arch:
-`lcsas-restore`, `lcsas-iso9660`, `lcsas-init`, `lcsas-keyshare`, and
+`lcsas-restore`, `lcsas-iso9660`, `lcsas-keyshare`, and
 `lcsas-ecc` (the in-house RS03 verify/repair tool, FMT-01).
 
 **Expected outcome:** Fresh binaries under `recovery/bin/<arch>/`
@@ -468,7 +463,6 @@ standalone equivalent used by tests and tooling.
    - `Linux x86_64` → `x86_64`
    - `Linux aarch64` / `arm64` → `aarch64`
    - `Linux armv7l` → `armv7`
-   - `Linux riscv64` → `riscv64`
    - `Darwin arm64` → `aarch64-macos`; `Darwin x86_64` → `x86_64-macos`
    - Windows (`restore.bat`) → `x86_64-windows`
 3. Override with `$LCSAS_TARGET=<arch>` if auto-detection misfires
@@ -524,7 +518,7 @@ the full `(OS, machine)` matrix and explicit rejections.
   `cross_build`, `run_tests`, `write_manifest`, `SUPPORTED_ARCHES`,
   `_DEFAULT_CC`.
 - `recovery/Makefile` — `all:` (per-arch `lcsas-restore` /
-  `lcsas-iso9660` / `lcsas-init` / `lcsas-keyshare` / `lcsas-ecc`),
+  `lcsas-iso9660` / `lcsas-keyshare` / `lcsas-ecc`),
   `test:`, `test-bare-path:`, `repro-check:`, and per-arch
   `bin/<arch>/lcsas-*` rules.
 - `recovery/MANIFEST.sha256` — source/script hashes (manifest output).
@@ -538,5 +532,5 @@ the full `(OS, machine)` matrix and explicit rejections.
 - `src/lcsas/restore/restic_fallback.py` /
   `src/lcsas/restore/standalone_builder.py` — Tier 3, the Python reader.
 - [`docs/architecture.md`](../architecture.md) — system overview;
-  [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6
+  [`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFORM_META_RFC.md) §6
   Q6 — cross-platform tier-1 rationale.

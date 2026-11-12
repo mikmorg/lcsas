@@ -109,10 +109,6 @@ class DeltaAnalyzer:
         """Return total bytes of unarchived packs."""
         return get_total_unarchived_bytes(self._conn, self._repo_id)
 
-    def needs_burn(self, usable_capacity: int) -> bool:
-        """Whether unarchived data exceeds the given media capacity."""
-        return self.get_total_unarchived_bytes() >= usable_capacity
-
     def detect_pruned(self) -> list[Pack]:
         """Find packs in the catalog that are no longer present on the mirror.
 

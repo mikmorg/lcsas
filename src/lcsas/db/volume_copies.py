@@ -104,16 +104,6 @@ def add_volume_copy(
     return _row_to_copy(row)
 
 
-def get_volume_copy(conn: sqlite3.Connection, copy_id: int) -> VolumeCopy:
-    """Get a disc record by its ID."""
-    row = conn.execute(
-        "SELECT * FROM volume_copies WHERE id = ?", (copy_id,)
-    ).fetchone()
-    if row is None:
-        raise ValueError(f"Disc record {copy_id} not found")
-    return _row_to_copy(row)
-
-
 def get_copy_at_location(
     conn: sqlite3.Connection,
     volume_id: int,
@@ -212,25 +202,6 @@ def get_iso_sha256_for_label(
     if row and row["iso_sha256"]:
         return str(row["iso_sha256"])
     return None
-
-
-def get_copies_at_location(
-    conn: sqlite3.Connection,
-    location: str,
-    active_only: bool = True,
-) -> list[VolumeCopy]:
-    """Get all discs recorded at a specific location."""
-    if active_only:
-        rows = conn.execute(
-            "SELECT * FROM volume_copies WHERE location = ? AND status = 'ACTIVE'",
-            (location,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM volume_copies WHERE location = ?",
-            (location,),
-        ).fetchall()
-    return [_row_to_copy(r) for r in rows]
 
 
 def move_volume_copy(

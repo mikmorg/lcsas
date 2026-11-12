@@ -12,7 +12,8 @@ watchdogs had nothing to see.
 The structural fix is a split.  The gate lives in a file with no schedule
 (``pull_request`` / ``push`` / ``workflow_call``), and a separate wrapper
 holds the schedule and calls it, so a quiet spell can only switch off a
-schedule.  These tests keep it that way:
+schedule.  Since #693 that wrapper is ONE file, weekly.yml, which calls
+every weekly canary.  These tests keep it that way:
 
 1. A file with ``schedule:`` has no trigger but ``workflow_dispatch``
    beside it.
@@ -94,8 +95,8 @@ def test_scheduled_workflow_has_only_a_schedule(workflow: Path) -> None:
         "with it -- in 2026-10 that silently took the required "
         "bin-parity-required check offline and BLOCKED every PR (#462).  "
         "Keep the gate in a file with no schedule (add `workflow_call:` "
-        "to it) and move the schedule into a wrapper whose only job is "
-        "`uses: ./.github/workflows/<gate>.yml` (see bin-parity-weekly.yml)."
+        "to it) and call it from weekly.yml with a "
+        "`uses: ./.github/workflows/<gate>.yml` job."
     )
 
 
@@ -140,4 +141,19 @@ def test_test_workflow_checks_for_switched_off_workflows() -> None:
     assert re.search(r"^\s+actions:\s*read\s*$", code, re.M), (
         "test.yml's workflow-state check needs `actions: read`; with a "
         "restricted default token the API call 403s."
+    )
+
+
+def test_one_scheduled_workflow() -> None:
+    """All weekly canaries share ONE scheduled file, weekly.yml (#693).
+
+    One file means one watchdog, one place to read the schedule, and one
+    file for test.yml's workflow-state check to name when a quiet spell
+    switches the schedule off.  A new weekly gate is a `uses:` job there.
+    """
+    scheduled = [p.name for p in _scheduled_workflows()]
+    assert scheduled == ["weekly.yml"], (
+        f"scheduled workflows: {scheduled}.  Add a weekly gate as a "
+        "`uses: ./.github/workflows/<gate>.yml` job in weekly.yml (and a "
+        "title in its canary-watchdog), not as a second schedule."
     )
