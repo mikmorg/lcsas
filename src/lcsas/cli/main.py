@@ -6283,8 +6283,15 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
         repo_name = repo_row["name"]
 
-        # Locate metadata on the disc (written as metadata/<repo_name>/).
-        disc_meta = disc_path / "metadata" / repo_name
+        # Locate metadata on the disc.  The injector writes it as
+        # metadata/<repo_id>/ (#743); a repository added with `repo add`
+        # has a UUID id, so the name alone does not find it.  The name
+        # is still tried for a repository whose id equals its name.
+        disc_meta = disc_path / "metadata" / repo_row["repo_id"]
+        if not disc_meta.is_dir():
+            by_name = disc_path / "metadata" / repo_name
+            if by_name.is_dir():
+                disc_meta = by_name
         if not disc_meta.is_dir():
             logger.error(
                 "Metadata for repository '%s' not found on disc.\n"

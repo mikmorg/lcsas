@@ -274,6 +274,36 @@ class TestFromDiscValidation:
         result = cmd_restore_from_disc(args)
         assert result == 1
 
+    def test_metadata_found_by_repo_id_not_name(self, tmp_path):
+        """#743: discs hold metadata/<repo_id>/; a UUID id must be found."""
+        disc = tmp_path / "disc"
+        disc.mkdir()
+        repo_id = "3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f"
+        conn = sqlite3.connect(str(disc / "catalog.db"))
+        conn.row_factory = sqlite3.Row
+        create_all(conn)
+        register_repo(conn, repo_id, "family", "/mnt/mirror/family", "")
+        conn.commit()
+        conn.close()
+        meta = disc / "metadata" / repo_id
+        meta.mkdir(parents=True)
+        pw = tmp_path / "pw"
+        pw.write_text("x")
+
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.side_effect = FileNotFoundError("rustic not found")
+        mock_executor = MagicMock()
+        mock_executor.prepare_cache.return_value = None
+
+        args = _make_disc_args(disc=disc, password_file=pw)
+        with (
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            patch("lcsas.restore.executor.RestoreExecutor", return_value=mock_executor),
+        ):
+            cmd_restore_from_disc(args)
+        mock_executor.prepare_cache.assert_called_once()
+        assert mock_executor.prepare_cache.call_args.args[1] == meta
+
     def test_rustic_not_found_returns_1(self, tmp_path):
         """FileNotFoundError from restore_dry_run returns exit code 1."""
         disc = tmp_path / "disc"
