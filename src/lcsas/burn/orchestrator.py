@@ -95,6 +95,30 @@ def _describe_waiting(held: dict[str, list[str]]) -> str:
     )
 
 
+def _unrecorded_burn_refusal(
+    what: str, volumes: list[tuple[str, str]],
+) -> str:
+    """The clean/abort refusal for burned volumes with no disc record.
+
+    *volumes* is (label, why) per volume, as from
+    ``BurnOrchestrator._unrecorded_burned_session_volumes``.
+    """
+    listed = "; ".join(f"{label} is {why}" for label, why in volumes)
+    one = len(volumes) == 1
+    label = volumes[0][0] if one else "<label>"
+    return (
+        f"Refusing to clean or abort {what}: {listed}. A disc of "
+        f"{'it' if one else 'each'} may exist (a catalog rebuilt from "
+        f"discs records the newest discs like this), so "
+        f"{'it is' if one else 'they are'} never deleted, even with "
+        f"--force. Nothing was deleted. For each disc you hold, put it "
+        f"in the drive and run 'lcsas verify {label} --disc --location "
+        f"<where it is kept>', or import its burn receipt with 'lcsas "
+        f"catalog import-receipts'. That records the disc; then run this "
+        f"command again."
+    )
+
+
 def unfinished_iso_path(iso_path: Path) -> Path:
     """Working name of an ISO that is still being mastered or augmented (#665).
 
@@ -1487,6 +1511,12 @@ class BurnOrchestrator:
         With ``force=True`` those volumes are deleted first, returning their
         packs to the unarchived pool, then cleaning proceeds.
 
+        A volume that was burned but has no disc record (BURNED with no
+        ``volume_copies`` row, as a catalog rebuilt from discs records the
+        newest burn session, or STAGING/BURNING with an event that records
+        a good disc) is never deleted: the whole clean is refused, with or
+        without ``force``, before anything is removed.
+
         The burn receipts inside the staging tree die here too — that is
         fine: they are duplicates of the durable files under
         ``<db dir>/receipts/`` (:meth:`_write_durable_receipts`), which
@@ -1494,6 +1524,15 @@ class BurnOrchestrator:
         """
         session_id = resolve_session_id(self._conn, session_ref)
         session_vols = get_session_volumes(self._conn, session_id)
+
+        # A volume that was burned but whose disc is not recorded yet
+        # (a catalog rebuilt from discs) is never deleted, --force or
+        # not.  Checked first: nothing is deleted when any is found.
+        unrecorded = self._unrecorded_burned_session_volumes(session_id)
+        if unrecorded:
+            raise ValueError(
+                _unrecorded_burn_refusal(f"session {session_id}", unrecorded)
+            )
 
         strandable = self._strandable_session_volumes(session_id)
         if strandable and not force:
@@ -1541,6 +1580,9 @@ class BurnOrchestrator:
         Deletes the burn session's STAGING/BURNING volumes (returning their packs
         to the unarchived pool so the next `lcsas stage` picks them up),
         removes the ISOs and staging tree, and marks the burn session CLEANED.
+        Refused, before anything is deleted, when the burn session has a
+        volume that was burned but has no disc record (see
+        :meth:`clean_session`).
         """
         from lcsas.log import get_logger
         logger = get_logger()
@@ -1590,6 +1632,11 @@ class BurnOrchestrator:
                 f"Volume {label} has a recorded disc — a burned disc "
                 f"exists, refusing to abort it."
             )
+        evidence = self._burn_evidence(vol.volume_id)
+        if evidence is not None:
+            raise ValueError(_unrecorded_burn_refusal(
+                f"volume {label}", [(label, f"{vol.status}, but {evidence}")],
+            ))
 
         summary = self._reclaim_summary([vol.volume_id])
         summary.labels = [label]
@@ -1605,20 +1652,57 @@ class BurnOrchestrator:
     def _strandable_session_volumes(
         self, session_id: str
     ) -> list[tuple[int, str]]:
-        """Return (volume_id, label) for a burn session's volumes that have NO
-        recorded disc — cleaning them would strand their packs as
-        falsely 'archived'.
+        """Return (volume_id, label) for a burn session's never-burned
+        volumes — cleaning them would strand their packs as falsely
+        'archived', so clean refuses them and abort deletes them.
 
-        That is any STAGING/BURNING volume (never burned, or burned but
-        failed its post-burn verification, #483) OR a BURNED volume with
-        zero ``volume_copies`` rows: a catalog from before #483, when a
-        failed verify left the volume BURNED with no disc row, so no durable
-        disc exists (#369).  A volume with any ``volume_copies`` row
-        corresponds to a disc (however stale its status) and is never deleted
-        by clean/abort (FMA-01).
+        That is a STAGING/BURNING volume (never burned, or burned but
+        failed its post-burn verification, #483) with no ``volume_copies``
+        row and no event that records a good disc (:meth:`_burn_evidence`).
+        A volume with any ``volume_copies`` row corresponds to a disc
+        (however stale its status) and is never deleted by clean/abort
+        (FMA-01); nor is a BURNED volume with no disc row, or a
+        STAGING/BURNING one with burn evidence: those are
+        :meth:`_unrecorded_burned_session_volumes`.
         """
+        return [
+            (vid, label)
+            for vid, label, status in self._session_volumes_without_disc(
+                session_id)
+            if status != "BURNED" and self._burn_evidence(vid) is None
+        ]
+
+    def _unrecorded_burned_session_volumes(
+        self, session_id: str
+    ) -> list[tuple[str, str]]:
+        """Return (label, why) for a burn session's volumes that were burned
+        but have no ``volume_copies`` row, which clean/abort never delete.
+
+        A catalog rebuilt from discs records the newest burn session's
+        volumes like this: BURNED, with no disc row (#678).  A BURNED
+        volume with no disc row from before #483 (a failed post-burn
+        verification) looks the same, so it is kept too.  A STAGING/BURNING
+        volume counts when an event records a good disc of it
+        (:meth:`_burn_evidence`).
+        """
+        found: list[tuple[str, str]] = []
+        for vid, label, status in self._session_volumes_without_disc(
+                session_id):
+            if status == "BURNED":
+                found.append((label, "BURNED, but no disc of it is recorded"))
+                continue
+            evidence = self._burn_evidence(vid)
+            if evidence is not None:
+                found.append((label, f"{status}, but {evidence}"))
+        return found
+
+    def _session_volumes_without_disc(
+        self, session_id: str
+    ) -> list[tuple[int, str, str]]:
+        """(volume_id, label, status) of a burn session's STAGING, BURNING
+        and BURNED volumes that have no ``volume_copies`` row."""
         rows = self._conn.execute(
-            """SELECT v.volume_id, v.label FROM volumes v
+            """SELECT v.volume_id, v.label, v.status FROM volumes v
                JOIN session_volumes sv ON sv.volume_id = v.volume_id
                WHERE sv.session_id = ?
                  AND v.status IN ('STAGING', 'BURNING', 'BURNED')
@@ -1629,7 +1713,53 @@ class BurnOrchestrator:
                ORDER BY v.label""",
             (session_id,),
         ).fetchall()
-        return [(row["volume_id"], row["label"]) for row in rows]
+        return [(row["volume_id"], row["label"], row["status"])
+                for row in rows]
+
+    def _burn_evidence(self, volume_id: int) -> str | None:
+        """Why the volume's events say a good disc of it was burned, or None.
+
+        Only events that a never-burned volume, or one whose only disc
+        failed verification (#483), cannot carry count:
+
+        - ``VERIFY_PASS`` at a location: a disc was read back at that
+          location.  An ISO verify records no location, so it does not
+          count.
+        - ``BURN_RECEIPT_IMPORTED``, unless its receipt says the disc
+          failed verification (``verify_passed`` false).
+        - ``LOCATION_MOVE``: a recorded disc was moved.
+        - ``VERIFY_FAIL_REBURN``: written only when an earlier disc of
+          the volume was recorded.
+
+        ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
+        to STAGING and is re-staged or aborted (BURN-05, #483).
+        """
+        rows = self._conn.execute(
+            """SELECT event_type, location, detail FROM volume_events
+               WHERE volume_id = ?
+                 AND event_type IN ('VERIFY_PASS', 'BURN_RECEIPT_IMPORTED',
+                                    'LOCATION_MOVE', 'VERIFY_FAIL_REBURN')
+               ORDER BY event_date, event_id""",
+            (volume_id,),
+        ).fetchall()
+        for event_type, location, detail in rows:
+            where = f" at {location}" if location else ""
+            if event_type == "VERIFY_PASS":
+                if location:
+                    return f"a disc of it passed verification{where}"
+            elif event_type == "BURN_RECEIPT_IMPORTED":
+                try:
+                    receipt = json.loads(detail or "{}")
+                except ValueError:
+                    receipt = {}
+                if not (isinstance(receipt, dict)
+                        and receipt.get("verify_passed") is False):
+                    return f"a burn receipt of it was imported{where}"
+            elif event_type == "LOCATION_MOVE":
+                return f"a disc of it was moved{where}"
+            else:
+                return f"a disc of it was burned again{where}"
+        return None
 
     def _reclaim_summary(self, volume_ids: list[int]) -> AbortSummary:
         """Count the distinct packs/bytes linked to the given volumes."""

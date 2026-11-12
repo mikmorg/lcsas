@@ -280,7 +280,8 @@ def build_parser() -> argparse.ArgumentParser:
     stage_p.add_argument("--force", action="store_true",
                          help="With --clean: also abort a never-burned "
                               "session, deleting its volumes and returning "
-                              "their packs to the unarchived pool.")
+                              "their packs to the unarchived pool. A "
+                              "burned volume is never deleted.")
     stage_p.add_argument("--session", type=str, default=None,
                          help="Session ID (for --clean).")
     stage_p.add_argument("--dry-run", "-n", action="store_true", default=False,
@@ -672,7 +673,8 @@ def build_parser() -> argparse.ArgumentParser:
     sess_abort_p = session_sub.add_parser(
         "abort",
         help="Abort a never-burned session: delete its volumes and return "
-             "their packs to the unarchived pool.",
+             "their packs to the unarchived pool. Refused when a volume of "
+             "it was burned, even if its disc is not recorded yet.",
     )
     sess_abort_p.add_argument(
         "ref", nargs="?", default="latest",
@@ -4359,9 +4361,8 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
             )
         logger.warning(
             "That records the disc at its location and marks the volume "
-            "VERIFIED. Until then, do not run 'lcsas session abort' on "
-            "their burn session: it deletes volumes that have no disc "
-            "record."
+            "VERIFIED. Until then, 'lcsas session abort' and 'lcsas stage "
+            "--clean' refuse their burn session, so it keeps its ISOs."
         )
 
     if result.errors:

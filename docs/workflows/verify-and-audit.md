@@ -306,6 +306,7 @@ lcsas --config lcsas.toml session abort [REF] [--volume LABEL]
 **Prerequisites:**
 - `--config` is **required** (the handler errors without it).
 - The session/volume must be in a never-burned state (the orchestrator refuses to abort a session that produced burned discs).
+- A volume that was burned but has no disc recorded blocks the abort: a `BURNED` volume with no disc (a catalog rebuilt from discs records the newest discs like this), or a `STAGING` one whose events record a good disc. Nothing is deleted. Record each disc with `lcsas verify <label> --disc --location <where it is kept>` (or import its burn receipt), then abort again.
 
 **Steps:**
 1. Argparse: `session abort` with positional `ref` (default `latest`) and `--volume` (`build_parser()`, `src/lcsas/cli/main.py`).
@@ -314,7 +315,7 @@ lcsas --config lcsas.toml session abort [REF] [--volume LABEL]
 4. Returns 0 on success.
 
 **Expected outcome:**
-- The session's STAGING volumes are deleted and their packs return to the unarchived pool (re-selectable by `lcsas stage`). Exit 0; exit 1 if the session is not abortable or `--config` is missing.
+- The session's never-burned STAGING volumes are deleted and their packs return to the unarchived pool (re-selectable by `lcsas stage`). Exit 0; exit 1 if the session is not abortable (including a burned volume with no disc recorded) or `--config` is missing.
 
 **Variant axes that apply:**
 - **Multi-repository:** repository-blind — aborting a session reclaims packs from every repository it staged.

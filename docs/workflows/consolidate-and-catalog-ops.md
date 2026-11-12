@@ -613,8 +613,9 @@ rebuilds the master.
 - No volume whose disc was read is left `STAGING`; the newest burn
   session's volumes are `BURNED` with no disc record until the owner
   runs `lcsas verify <label> --disc --location <where>` for each.
-  Until then, `lcsas session abort` of their session would delete them
-  (it deletes volumes with no disc record).
+  Until then, `lcsas session abort` and `lcsas stage --clean` refuse
+  their burn session (a burned volume is never deleted, even with
+  `--force`), so it keeps its ISOs.
 - Exit 0 if all discs merged; 1 if any disc was skipped or errored
   (master catalog still contains successfully-merged data).
 

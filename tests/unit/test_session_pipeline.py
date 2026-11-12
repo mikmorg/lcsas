@@ -1083,17 +1083,16 @@ class TestCleanSession:
         assert not result.staging_dir.exists()
 
     def test_clean_session_refuses_burned_without_verified_copy(self, env):
-        """#369: a BURNED volume whose post-burn verification failed (no
-        volume_copies row, so no durable disc) must count as strandable --
-        clean refuses without --force, and --force reclaims its packs."""
+        """A BURNED volume with no volume_copies row is never deleted by
+        clean, even with --force.  #369 deleted it under --force (a failed
+        verify before #483 left the volume BURNED with no disc row), but a
+        catalog rebuilt from discs records the newest burned volumes the
+        same way (#678), and for those a disc exists."""
         conn = env["conn"]
         orch = env["orch"]
-        packs = env["packs"]
 
         result = orch.stage()
-        # Simulate a burned-but-verify-failed session: every volume is
-        # BURNED with NO copy row (none STAGING/BURNING), isolating the
-        # BURNED-no-copy case the old guard missed.
+        # Every volume BURNED with NO copy row (none STAGING/BURNING).
         for m in result.manifests:
             conn.execute(
                 "UPDATE volumes SET status='BURNED' WHERE volume_id=?",
@@ -1106,23 +1105,17 @@ class TestCleanSession:
                 (m.volume_id,),
             ).fetchone()[0] == 0
 
-        # Without --force the clean must REFUSE (packs would be stranded).
-        with pytest.raises(ValueError, match="no verified disc"):
-            orch.clean_session(result.session_id)
+        for force in (False, True):
+            with pytest.raises(ValueError, match="never deleted, even with "
+                                                 "--force"):
+                orch.clean_session(result.session_id, force=force)
         for m in result.manifests:
-            assert get_volume_by_id(conn, m.volume_id) is not None
-
-        # --force reclaims the strandable volumes and returns their packs.
-        orch.clean_session(result.session_id, force=True)
-        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
-        assert unarchived == {p.sha256 for p in packs}
-        vids = [m.volume_id for m in result.manifests]
-        placeholders = ",".join("?" for _ in vids)
-        remaining = conn.execute(
-            f"SELECT COUNT(*) FROM volumes WHERE volume_id IN ({placeholders})",
-            vids,
-        ).fetchone()[0]
-        assert remaining == 0
+            assert get_volume_by_id(conn, m.volume_id).status == "BURNED"
+            assert get_pack_ids_for_volume(conn, m.volume_id)
+            assert m.iso_path is not None and m.iso_path.exists()
+        assert result.staging_dir.exists()
+        assert get_session(conn, result.session_id).status == "STAGED"
+        assert get_unarchived_packs(conn) == []
 
     def test_receipts_survive_clean_session(self, env):
         """BURN-08: durable receipts live beside the catalog DB and

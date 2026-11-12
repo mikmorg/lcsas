@@ -676,6 +676,15 @@ a never-burned session, deleting its volumes and returning their packs to the
 unarchived pool. Volumes that already reached `VERIFIED` keep their catalog
 rows; the disc remains the source of truth.
 
+A volume that was burned but has no disc recorded is never deleted, even with
+`--force`. A catalog rebuilt from discs records the newest discs like this
+(`BURNED`, no disc). A `STAGING` volume counts too when its events record a
+good disc (a passed disc check at a location, a passed burn receipt, a disc
+move). Then `stage --clean` and `session abort` refuse the whole burn session,
+name the volume, and delete nothing. Record each disc first with
+`lcsas verify <label> --disc --location <where it is kept>` (or import its
+burn receipt), then run the command again.
+
 ---
 
 ## Variant-axis matrix
