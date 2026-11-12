@@ -185,3 +185,42 @@ def burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
         else:
             return f"a disc of it was burned again{where}"
     return None
+
+
+# #758: the NOTE a catalog rebuild writes on a volume it brought in as
+# STAGING/BURNING with no disc record and no burn evidence.  The prefix
+# is what rebuild_burn_unknown() looks for; keep the two together.
+REBUILD_UNKNOWN_NOTE_PREFIX = "Catalog rebuild: burn state unknown"
+
+
+def rebuild_burn_unknown(conn: sqlite3.Connection, volume_id: int) -> bool:
+    """True when nobody knows whether a disc of the volume was burned.
+
+    A catalog rebuilt from discs knows a volume of a newer burn session
+    only from the disc catalogs of discs staged after it, all copied
+    before that volume was burned.  Unless its own disc was read
+    (``db/rebuild.py`` then marks it BURNED), it comes back STAGING with
+    no disc record and no events, which is how a never-burned volume
+    looks.  The rebuild writes a ``NOTE`` starting with
+    :data:`REBUILD_UNKNOWN_NOTE_PREFIX` on each such volume.
+
+    True while that holds: the volume is STAGING or BURNING, has the
+    note, no ``volume_copies`` row and no :func:`burn_evidence`.
+    Recording its disc ends it.  ``session abort``, ``stage --clean``
+    and ``catalog reconcile --fix`` never delete such a volume unless
+    the owner confirms it was never burned (``--never-burned``).
+    """
+    row = conn.execute(
+        """SELECT 1 FROM volumes v
+           WHERE v.volume_id = ?
+             AND v.status IN ('STAGING', 'BURNING')
+             AND NOT EXISTS (SELECT 1 FROM volume_copies vc
+                             WHERE vc.volume_id = v.volume_id)
+             AND EXISTS (SELECT 1 FROM volume_events e
+                         WHERE e.volume_id = v.volume_id
+                           AND e.event_type = 'NOTE'
+                           AND substr(e.detail, 1, ?) = ?)""",
+        (volume_id, len(REBUILD_UNKNOWN_NOTE_PREFIX),
+         REBUILD_UNKNOWN_NOTE_PREFIX),
+    ).fetchone()
+    return row is not None and burn_evidence(conn, volume_id) is None

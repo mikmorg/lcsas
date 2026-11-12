@@ -686,6 +686,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Abort a single stranded STAGING volume by label instead of "
              "a whole session (for volumes with no session).",
     )
+    sess_abort_p.add_argument(
+        "--never-burned", action="store_true", default=False,
+        help="Confirm that no disc was ever burned of the volumes a catalog "
+             "rebuild left with no record of whether they were burned, so "
+             "they are deleted too. Never deletes a volume that was "
+             "burned but has no disc recorded.",
+    )
 
     # --- config ---
     config_p = subparsers.add_parser("config", help="Configuration management.")
@@ -4291,7 +4298,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     )
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import staged_iso_present
-    from lcsas.db.volume_events import burn_evidence
+    from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
     from lcsas.db.volumes import delete_volume
 
     config = _load_config_opt(args)
@@ -4328,6 +4335,32 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
                 "'lcsas verify <label> --disc --location <where it is "
                 "kept>', or import its burn receipt with 'lcsas catalog "
                 "import-receipts'."
+            )
+
+        # #758: a volume a catalog rebuild brought in with no record of
+        # whether it was burned may have a disc.  Never deleted here, even
+        # with --include-waiting; 'session abort --never-burned' is the
+        # owner's way to say it never was.
+        unknown = [v for v in candidates
+                   if rebuild_burn_unknown(conn, v.volume_id)]
+        if unknown:
+            unknown_ids = {v.volume_id for v in unknown}
+            candidates = [v for v in candidates
+                          if v.volume_id not in unknown_ids]
+            logger.warning(
+                "%d volume(s) come from a catalog rebuilt from discs, and no "
+                "disc it read shows whether they were burned; they are not "
+                "ghosts and --fix never deletes them:", len(unknown),
+            )
+            for v in unknown:
+                logger.warning("  %s  (status=%s)", v.label, v.status)
+            logger.warning(
+                "  For each disc you hold, put it in the drive and run "
+                "'lcsas verify <label> --disc --location <where it is "
+                "kept>', or import its burn receipt with 'lcsas catalog "
+                "import-receipts'. If you are sure a volume was never "
+                "burned, 'lcsas session abort --volume <label> "
+                "--never-burned' deletes it."
             )
 
         # #647: a never-burned volume whose staged ISO still exists is
@@ -4498,6 +4531,23 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
             "That records the disc at its location and marks the volume "
             "VERIFIED. Until then, 'lcsas session abort' and 'lcsas stage "
             "--clean' refuse their burn session, so it keeps its ISOs."
+        )
+
+    # #758: volumes staged before a disc that was read, whose own disc
+    # was not read: nothing shows whether they were burned.
+    if result.burn_unknown:
+        logger.warning(
+            "%d volume(s) are STAGING with no disc recorded, and no disc "
+            "that was read shows whether they were burned: %s",
+            len(result.burn_unknown), ", ".join(result.burn_unknown),
+        )
+        logger.warning(
+            "For each disc of them you hold, run 'lcsas verify <label> "
+            "--disc --location <where it is kept>' (or import its burn "
+            "receipt). 'lcsas session abort', 'lcsas stage --clean' and "
+            "'lcsas catalog reconcile --fix' never delete them; if you are "
+            "sure one was never burned, 'lcsas session abort --volume "
+            "<label> --never-burned' deletes it."
         )
 
     if result.errors:
@@ -8471,15 +8521,16 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
             SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
         try:
+            never_burned = getattr(args, "never_burned", False)
             if args.volume:
-                orch.abort_volume(args.volume)
+                orch.abort_volume(args.volume, never_burned=never_burned)
             else:
                 from lcsas.consolidate.merger import (
                     release_consolidation_sources,
                 )
                 from lcsas.db.sessions import resolve_session_id
                 session_id = resolve_session_id(conn, args.ref)
-                orch.abort_session(session_id)
+                orch.abort_session(session_id, never_burned=never_burned)
                 # #677: a consolidation session's sources go back to
                 # VERIFIED; nothing is left to finish them.
                 released = release_consolidation_sources(conn, session_id)

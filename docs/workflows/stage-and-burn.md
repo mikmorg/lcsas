@@ -699,6 +699,11 @@ name the volume, and delete nothing. Record each disc first with
 `lcsas verify <label> --disc --location <where it is kept>` (or import its
 burn receipt), then run the command again.
 
+A `STAGING` volume that a catalog rebuild brought in with no record of
+whether it was burned is refused the same way (#758): a disc of it may
+exist. Record its disc, or, if you are sure none was burned, run
+`lcsas session abort <id> --never-burned`.
+
 ---
 
 ## Variant-axis matrix

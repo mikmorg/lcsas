@@ -300,11 +300,13 @@ lcsas --config lcsas.toml session abort [REF] [--volume LABEL]
 
 - `REF` — session ID or `latest` (default `latest`).
 - `--volume LABEL` — abort one stranded STAGING volume by label instead of a whole session.
+- `--never-burned` — the owner confirms that no disc was ever burned of the volumes a catalog rebuild left with no record of whether they were burned (#758), so they are deleted too.
 
 **Prerequisites:**
 - `--config` is **required** (the handler errors without it).
 - The session/volume must be in a never-burned state (the orchestrator refuses to abort a session that produced burned discs).
-- A volume that was burned but has no disc recorded blocks the abort: a `BURNED` volume with no disc (a catalog rebuilt from discs records the newest discs like this), or a `STAGING` one whose events record a good disc. Nothing is deleted. Record each disc with `lcsas verify <label> --disc --location <where it is kept>` (or import its burn receipt), then abort again.
+- A volume that was burned but has no disc recorded blocks the abort: a `BURNED` volume with no disc (a catalog rebuilt from discs records the newest discs like this), or a `STAGING` one whose events record a good disc. Nothing is deleted. Record each disc with `lcsas verify <label> --disc --location <where it is kept>` (or import its burn receipt), then abort again. `--never-burned` does not change this.
+- A `STAGING` volume that a catalog rebuild brought in with no record of whether it was burned also blocks the abort (#758): a disc of it may exist. Record its disc the same way, or, if you are sure none was burned, abort again with `--never-burned`.
 
 **Steps:**
 1. Argparse: `session abort` with positional `ref` (default `latest`) and `--volume` (`build_parser()`, `src/lcsas/cli/main.py`).

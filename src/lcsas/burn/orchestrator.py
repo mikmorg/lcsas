@@ -52,7 +52,11 @@ from lcsas.db.sessions import (
     update_session_volume_iso,
 )
 from lcsas.db.volume_copies import add_volume_copy
-from lcsas.db.volume_events import add_event, burn_evidence
+from lcsas.db.volume_events import (
+    add_event,
+    burn_evidence,
+    rebuild_burn_unknown,
+)
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import (
     create_volume,
@@ -121,6 +125,25 @@ def _unrecorded_burn_refusal(
         f"<where it is kept>', or import its burn receipt with 'lcsas "
         f"catalog import-receipts'. That records the disc; then run this "
         f"command again."
+    )
+
+
+def _burn_unknown_refusal(
+    what: str, labels: list[str], abort_cmd: str,
+) -> str:
+    """The clean/abort refusal for volumes a catalog rebuild brought in
+    with no record of whether they were burned (#758)."""
+    one = len(labels) == 1
+    return (
+        f"Refusing to clean or abort {what}: {', '.join(labels)} "
+        f"{'comes' if one else 'come'} from a catalog rebuilt from discs, "
+        f"and no disc it read shows whether {'it was' if one else 'they were'}"
+        f" burned. A disc of {'it' if one else 'each'} may exist. Nothing "
+        f"was deleted. For each disc you hold, put it in the drive and run "
+        f"'lcsas verify <label> --disc --location <where it is kept>', or "
+        f"import its burn receipt with 'lcsas catalog import-receipts'. If "
+        f"you are sure no disc of {'it' if one else 'them'} was ever "
+        f"burned, run '{abort_cmd} --never-burned'."
     )
 
 
@@ -1642,6 +1665,7 @@ class BurnOrchestrator:
         session_ref: str = "latest",
         *,
         force: bool = False,
+        never_burned: bool = False,
     ) -> None:
         """Remove staged ISOs and staging directories for a burn session.
 
@@ -1656,6 +1680,12 @@ class BurnOrchestrator:
         newest burn session, or STAGING/BURNING with an event that records
         a good disc) is never deleted: the whole clean is refused, with or
         without ``force``, before anything is removed.
+
+        A volume a catalog rebuild brought in with no record of whether it
+        was burned (:func:`lcsas.db.volume_events.rebuild_burn_unknown`,
+        #758) is refused the same way, unless *never_burned*: the owner
+        confirms no disc of it was burned, and it is then deleted like a
+        never-burned volume.
 
         The burn receipts inside the staging tree die here too — that is
         fine: they are duplicates of the durable files under
@@ -1673,8 +1703,17 @@ class BurnOrchestrator:
             raise ValueError(
                 _unrecorded_burn_refusal(f"session {session_id}", unrecorded)
             )
+        # #758: checked next, also before anything is deleted.
+        unknown = self._burn_unknown_session_volumes(session_id)
+        if unknown and not never_burned:
+            raise ValueError(_burn_unknown_refusal(
+                f"session {session_id}", unknown,
+                f"lcsas session abort {session_id}",
+            ))
 
-        strandable = self._strandable_session_volumes(session_id)
+        strandable = self._strandable_session_volumes(
+            session_id, never_burned=never_burned,
+        )
         if strandable and not force:
             labels = ", ".join(label for _vid, label in strandable)
             raise ValueError(
@@ -1714,25 +1753,30 @@ class BurnOrchestrator:
         # ABORTED value); the log carries the distinction.
         update_session_status(self._conn, session_id, "CLEANED")
 
-    def abort_session(self, session_ref: str = "latest") -> AbortSummary:
+    def abort_session(
+        self, session_ref: str = "latest", *, never_burned: bool = False,
+    ) -> AbortSummary:
         """Abort a never-burned burn session: reclaim its packs, then clean it.
 
         Deletes the burn session's STAGING/BURNING volumes (returning their packs
         to the unarchived pool so the next `lcsas stage` picks them up),
         removes the ISOs and staging tree, and marks the burn session CLEANED.
         Refused, before anything is deleted, when the burn session has a
-        volume that was burned but has no disc record (see
-        :meth:`clean_session`).
+        volume that was burned but has no disc record, or one a catalog
+        rebuild left with no record of whether it was burned unless
+        *never_burned* (see :meth:`clean_session`).
         """
         from lcsas.log import get_logger
         logger = get_logger()
 
         session_id = resolve_session_id(self._conn, session_ref)
-        strandable = self._strandable_session_volumes(session_id)
+        strandable = self._strandable_session_volumes(
+            session_id, never_burned=never_burned,
+        )
         summary = self._reclaim_summary([vid for vid, _label in strandable])
         summary.labels = [label for _vid, label in strandable]
 
-        self.clean_session(session_id, force=True)
+        self.clean_session(session_id, force=True, never_burned=never_burned)
 
         logger.info(
             "Aborted session %s: deleted %d volume(s)%s, reclaimed %d "
@@ -1745,11 +1789,15 @@ class BurnOrchestrator:
         )
         return summary
 
-    def abort_volume(self, label: str) -> AbortSummary:
+    def abort_volume(
+        self, label: str, *, never_burned: bool = False,
+    ) -> AbortSummary:
         """Delete a single stranded never-burned volume by label.
 
         Covers volumes with no burn session (crash-window strandings from old
-        catalogs).  Refuses anything not in STAGING/BURNING.
+        catalogs).  Refuses anything not in STAGING/BURNING, a volume
+        with burn evidence, and one a catalog rebuild left with no record
+        of whether it was burned unless *never_burned* (#758).
         """
         from lcsas.db.volumes import get_volume_by_label
         from lcsas.log import get_logger
@@ -1777,6 +1825,12 @@ class BurnOrchestrator:
             raise ValueError(_unrecorded_burn_refusal(
                 f"volume {label}", [(label, f"{vol.status}, but {evidence}")],
             ))
+        if not never_burned and rebuild_burn_unknown(self._conn,
+                                                     vol.volume_id):
+            raise ValueError(_burn_unknown_refusal(
+                f"volume {label}", [label],
+                f"lcsas session abort --volume {label}",
+            ))
 
         summary = self._reclaim_summary([vol.volume_id])
         summary.labels = [label]
@@ -1790,7 +1844,7 @@ class BurnOrchestrator:
         return summary
 
     def _strandable_session_volumes(
-        self, session_id: str
+        self, session_id: str, *, never_burned: bool = False,
     ) -> list[tuple[int, str]]:
         """Return (volume_id, label) for a burn session's never-burned
         volumes — cleaning them would strand their packs as falsely
@@ -1803,13 +1857,27 @@ class BurnOrchestrator:
         (however stale its status) and is never deleted by clean/abort
         (FMA-01); nor is a BURNED volume with no disc row, or a
         STAGING/BURNING one with burn evidence: those are
-        :meth:`_unrecorded_burned_session_volumes`.
+        :meth:`_unrecorded_burned_session_volumes`.  Nor, unless
+        *never_burned*, is one a catalog rebuild left with no record of
+        whether it was burned (:meth:`_burn_unknown_session_volumes`).
         """
         return [
             (vid, label)
             for vid, label, status in self._session_volumes_without_disc(
                 session_id)
             if status != "BURNED" and self._burn_evidence(vid) is None
+            and (never_burned or not rebuild_burn_unknown(self._conn, vid))
+        ]
+
+    def _burn_unknown_session_volumes(self, session_id: str) -> list[str]:
+        """Labels of a burn session's volumes that a catalog rebuild left
+        with no record of whether they were burned (#758,
+        :func:`lcsas.db.volume_events.rebuild_burn_unknown`)."""
+        return [
+            label
+            for vid, label, status in self._session_volumes_without_disc(
+                session_id)
+            if status != "BURNED" and rebuild_burn_unknown(self._conn, vid)
         ]
 
     def _unrecorded_burned_session_volumes(
