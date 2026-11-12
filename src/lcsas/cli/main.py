@@ -3782,6 +3782,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     refused = 0
     already = 0
     imported = 0
+    superseded = 0
     with locked_connection(
         _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
@@ -4046,6 +4047,73 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     refused += 1
                     continue
 
+            # Issue #18: persist receipt provenance (iso_sha256, session_id,
+            # device, pack_ids) on the master catalog as a
+            # BURN_RECEIPT_IMPORTED audit event, so later "which device
+            # burned this?" and "does the disc hash match the recorded one?"
+            # queries can be answered from the catalog alone.  burn_date
+            # lets a later import see that the receipt was imported (#666).
+            provenance = {
+                "iso_sha256": receipt_hash,
+                "burn_date": burn_date,
+                "session_id": receipt.get("session_id") or "",
+                "device": receipt.get("device") or "",
+                # pack_ids is emitted by the session-based burn path but NOT
+                # by standalone `burn-iso` (documented limitation — see
+                # docs/workflows/burn-iso-portable.md). Persist verbatim so
+                # whichever path produced the receipt is preserved.
+                "pack_ids": list(receipt.get("pack_ids") or []),
+                "receipt_file": name,
+                "verify_passed": raw_verify,
+            }
+
+            # #754: the disc in service at this location was burned after
+            # this receipt's disc (a re-burn there), so the receipt is for
+            # a disc it replaced.  The disc record keeps its newer burn
+            # date and verify time; a passing receipt only fills in an ISO
+            # hash or size the record lacks (a disc recorded by 'verify
+            # --disc --location' after a rebuild has none).  A failing one
+            # records no VERIFY_FAIL_REBURN: the newer disc is what is
+            # there.  The import event makes a re-run "already imported".
+            if old_copy is not None and old_copy.status == "ACTIVE":
+                recorded_ts = _receipt_timestamp(old_copy.burn_date)
+                burn_ts = _receipt_timestamp(burn_date)
+                if (recorded_ts is not None and burn_ts is not None
+                        and burn_ts < recorded_ts):
+                    filled = ""
+                    if not verify_failed and (
+                        (receipt_hash and not old_copy.iso_sha256)
+                        or (receipt_size is not None
+                            and old_copy.iso_size_bytes is None)
+                    ):
+                        conn.execute(
+                            "UPDATE volume_copies SET "
+                            "iso_sha256 = CASE WHEN COALESCE(iso_sha256, '') "
+                            "= '' THEN ? ELSE iso_sha256 END, "
+                            "iso_size_bytes = COALESCE(iso_size_bytes, ?) "
+                            "WHERE volume_id = ? AND location = ?",
+                            (receipt_hash or None, receipt_size,
+                             vol.volume_id, location),
+                        )
+                        filled = (" Its ISO hash and size were added to the "
+                                  "disc record, which lacked them.")
+                    logger.warning(
+                        f"Receipt '{receipt_file}': the disc of '{label}' "
+                        f"at {location} on record was burned "
+                        f"{old_copy.burn_date}, after this receipt's disc "
+                        f"({burn_date}).  The newer disc record is kept."
+                        f"{filled}"
+                    )
+                    add_event(
+                        conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
+                        location=location,
+                        detail=json.dumps(provenance),
+                        commit=False,
+                    )
+                    conn.commit()
+                    superseded += 1
+                    continue
+
             event_detail = f"Offline burn receipt: {name}"
             if verify_failed:
                 if first_disc and not get_copies_for_volume(conn, vol.volume_id):
@@ -4115,25 +4183,6 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     commit=False,
                 )
 
-            # Issue #18: persist receipt provenance (iso_sha256, session_id,
-            # device, pack_ids) on the master catalog as a
-            # BURN_RECEIPT_IMPORTED audit event, so later "which device
-            # burned this?" and "does the disc hash match the recorded one?"
-            # queries can be answered from the catalog alone.  burn_date
-            # lets a later import see that the receipt was imported (#666).
-            provenance = {
-                "iso_sha256": receipt_hash,
-                "burn_date": burn_date,
-                "session_id": receipt.get("session_id") or "",
-                "device": receipt.get("device") or "",
-                # pack_ids is emitted by the session-based burn path but NOT
-                # by standalone `burn-iso` (documented limitation — see
-                # docs/workflows/burn-iso-portable.md). Persist verbatim so
-                # whichever path produced the receipt is preserved.
-                "pack_ids": list(receipt.get("pack_ids") or []),
-                "receipt_file": name,
-                "verify_passed": raw_verify,
-            }
             add_event(
                 conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
                 location=location,
@@ -4146,6 +4195,11 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     logger.info(f"Imported {imported} receipt(s).")
     if already:
         logger.info(f"Skipped {already} receipt(s) that were already imported.")
+    if superseded:
+        logger.info(
+            f"Kept the newer disc record for {superseded} receipt(s) of a "
+            "disc that was burned again at the same location since."
+        )
     if refused:
         logger.error(
             f"Rejected {refused} receipt(s); see the messages above.  The "
