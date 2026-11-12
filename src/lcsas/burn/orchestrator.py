@@ -87,6 +87,12 @@ from lcsas.utils.labels import (
 
 _logger = logging.getLogger(__name__)
 
+# #731: the oldest tool versions stage() accepts (docs/workflows/
+# stage-and-burn.md).  xorriso 1.4.0 for reliable ISO 9660 level 3;
+# dvdisaster 0.79 for RS03 augmented images (only on ECC media).
+XORRISO_MIN_VERSION: tuple[int, ...] = (1, 4, 0)
+DVDISASTER_MIN_VERSION: tuple[int, ...] = (0, 79, 0)
+
 
 class LowRedundancyError(StagingError):
     """A volume would carry too little RS03 parity (#674)."""
@@ -912,6 +918,10 @@ class BurnOrchestrator:
                 iso_paths=[],
             )
 
+        # #731: the tools must be new enough, checked before any side
+        # effect (a dry run never runs them, so it does not need them).
+        self._tool_version_preflight(apply_ecc=mt.ecc_overhead_pct > 0)
+
         # FMT-03: prove every participating repository decodes with the pinned
         # recovery readers BEFORE any burn-session/staging/ISO side effect.  A
         # repository whose live rustic has outrun the readers (e.g. a v3
@@ -1072,6 +1082,26 @@ class BurnOrchestrator:
             if manifest.iso_path:
                 iso_paths.append(manifest.iso_path)
         self._snapshot_allow = None
+
+    def _tool_version_preflight(self, *, apply_ecc: bool) -> None:
+        """Refuse a stage whose xorriso or dvdisaster is too old (#731).
+
+        Raises :class:`~lcsas.exceptions.BinaryError` (missing, or below
+        :data:`XORRISO_MIN_VERSION` / :data:`DVDISASTER_MIN_VERSION`).
+        dvdisaster is checked only when this stage applies ECC.  Only real
+        subprocess runners are checked: an injected fake runs no binary.
+        """
+        from lcsas.utils.subprocess import (
+            SubprocessRunnerBase,
+            check_binary_version,
+        )
+
+        if isinstance(self._xorriso, SubprocessRunnerBase):
+            check_binary_version(self._xorriso._binary, XORRISO_MIN_VERSION)
+        if apply_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
+            check_binary_version(
+                self._dvdisaster._binary, DVDISASTER_MIN_VERSION,
+            )
 
     def _mirror_preflight(
         self, volume_plans: list[tuple[list[Pack], int]],
