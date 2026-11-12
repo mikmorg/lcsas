@@ -9,7 +9,7 @@ dev:
 	pip install -e ".[dev]"
 
 lint:
-	ruff check src/ tests/
+	ruff check src/ tests/ scripts/
 
 # shellcheck lint for the recovery scripts an heir runs (#484).  The meta
 # disc's only restore driver is recovery/scripts/restore.sh since #689.  A
@@ -19,7 +19,7 @@ shellcheck:
 	python3 scripts/shellcheck_gate.py recovery/scripts/*.sh
 
 lint-fix:
-	ruff check --fix src/ tests/
+	ruff check --fix src/ tests/ scripts/
 
 typecheck:
 	mypy src/

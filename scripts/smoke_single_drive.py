@@ -18,11 +18,9 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import json
 import os
 import shlex
 import shutil
-import sqlite3
 import subprocess
 import sys
 import time
@@ -110,9 +108,9 @@ def run_lcsas_burn() -> list[Path]:
     from lcsas.config.media import MediaType
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.connection import get_connection
-    from lcsas.db.schema import create_all
     from lcsas.db.queries import get_unarchived_packs
     from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
@@ -242,7 +240,9 @@ def run_restore(iso_files: list[Path]) -> int:
     ]
     print(f"  $ {' '.join(shlex.quote(c) for c in cmd)}")
 
-    import pty, select, re
+    import pty
+    import re
+    import select
 
     pid, fd = pty.fork()
     if pid == 0:
@@ -250,7 +250,6 @@ def run_restore(iso_files: list[Path]) -> int:
 
     prompt_re = re.compile(rb"PLEASE INSERT DISC: (\S*)")
     buf = b""
-    last_loaded = "LCSAS_META"
     exit_code = None
     while True:
         try:
@@ -283,7 +282,6 @@ def run_restore(iso_files: list[Path]) -> int:
                 time.sleep(0.3)
                 cdemu("load", str(iso))
                 time.sleep(0.6)
-                last_loaded = want
                 os.write(fd, b"\n")
                 m = prompt_re.search(buf)
         try:

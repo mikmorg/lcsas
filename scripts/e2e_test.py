@@ -365,8 +365,8 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.queries import get_total_unarchived_bytes, get_unarchived_packs
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
-    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
+    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
 
     mt = MediaType.TEST_TINY
     has_dvdisaster = tool_available("dvdisaster")
