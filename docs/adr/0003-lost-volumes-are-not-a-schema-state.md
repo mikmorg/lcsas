@@ -76,10 +76,11 @@ attack (`docs/DISC_CONFIDENTIALITY.md`).
    - its recorded status still claims a disc (`BURNED`, `VERIFIED`,
      `CONSOLIDATING`: a catalog from before BURN-10, or status/disc drift),
      or
-   - it is `DEPRECATED` and carries a `NOTE` whose detail starts with
-     `auto-deprecated:` (`AUTO_DEPRECATED_NOTE_PREFIX` in
+   - it is `DEPRECATED` and the newest `NOTE` that deprecated it starts
+     with `auto-deprecated:` (`AUTO_DEPRECATED_NOTE_PREFIX` in
      `src/lcsas/constants.py`; only the prefix is matched, because older
-     catalogs say "last physical copy").
+     catalogs say "last physical copy"), not `Status changed: … →
+     DEPRECATED` (`_DEPRECATED_BY_LOSS_SQL`, `deprecated_by_loss()`).
 
    A volume deprecated by consolidation carries `Status changed: … →
    DEPRECATED` instead, so it stays a deprecated volume even after its
@@ -113,6 +114,21 @@ attack (`docs/DISC_CONFIDENTIALITY.md`).
    says `lost` too, so the volume's events tell the two apart. `--lost`
    also warns that the disc may be in a stranger's hands and that only a
    strong password protects it.
+
+6. **A lost volume that gets a disc back is back in service (#726).**
+   When a disc of a lost volume is recorded again (`lcsas burn` of its
+   burn session, an imported burn receipt, or `lcsas verify <label> --disc
+   --location <where>`), `add_volume_copy()` calls `_revive_lost_volume()`
+   (`src/lcsas/db/volume_copies.py`). It sets the volume `VERIFIED` when
+   the disc was verified, else `BURNED`, as a first disc would, and writes
+   the `NOTE` `Status changed: DEPRECATED → <status>; this lost volume has
+   a disc in service again at <location>`. The redundancy report, the
+   stage pool and the deprecation guard then count it again. This is a
+   direct update, like the auto-deprecation: `VALID_TRANSITIONS` still has
+   no way out of `DEPRECATED` except `DESTROYED`, so a volume deprecated by
+   consolidation never comes back by accident. Because the newest
+   deprecating note decides, a lost volume that came back and was later
+   consolidated is a deprecated volume, not a lost one.
 
 ## Consequences
 

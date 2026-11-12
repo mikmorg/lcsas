@@ -3381,8 +3381,10 @@ def cmd_copy(args: argparse.Namespace) -> int:
             logger.error(f"Volume '{args.volume_label}' not found.")
             return 1
         # Warn on the change to lost, not only on auto-deprecation: a lost
-        # volume that regained a disc stays DEPRECATED, so losing that disc
-        # again demotes nothing but makes the volume lost once more.
+        # volume that regained a disc before #726 stayed DEPRECATED, so
+        # losing that disc again demotes nothing but makes the volume lost
+        # once more.  Since #726 a regained disc puts the volume back in
+        # service, and losing it again demotes it.
         was_lost = vol.volume_id in get_lost_volume_ids(conn)
         try:
             if args.copy_command == "deprecate":

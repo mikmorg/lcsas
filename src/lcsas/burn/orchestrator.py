@@ -36,7 +36,11 @@ from lcsas.db.key_escrow import (
 from lcsas.db.label_mark import label_seq, next_label_seq, raise_label_high_water
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume
-from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
+from lcsas.db.queries import (
+    deprecated_by_loss,
+    get_unarchived_or_missing_at_location,
+    get_unarchived_packs,
+)
 from lcsas.db.repos import list_repos
 from lcsas.db.sessions import (
     add_session_volume,
@@ -1120,7 +1124,13 @@ class BurnOrchestrator:
 
             # For multi-location re-burns, skip status transitions if
             # the volume is already VERIFIED (just add another disc).
-            is_reburn = vol.status == "VERIFIED"
+            # A lost volume (DEPRECATED because its last disc went) is
+            # burned again the same way; recording its disc puts it back
+            # in service (#726).  A failed verify leaves it lost.
+            is_reburn = vol.status == "VERIFIED" or (
+                vol.status == "DEPRECATED"
+                and deprecated_by_loss(self._conn, sv.volume_id)
+            )
 
             if not is_reburn:
                 # Update status
@@ -1164,7 +1174,8 @@ class BurnOrchestrator:
                         # the VERIFY_FAIL event keeps the attempt.
                         update_status(self._conn, sv.volume_id, "STAGING", commit=False)
                 else:
-                    # Re-burn case: volume stays VERIFIED (it passed before)
+                    # Re-burn case: volume stays VERIFIED (it passed before),
+                    # or a lost one stays lost until a disc passes.
                     # Record the verify failure for this location's disc
                     if not verify_passed:
                         add_event(
@@ -1186,6 +1197,7 @@ class BurnOrchestrator:
                         iso_sha256=sv.iso_sha256 or None,
                         iso_size_bytes=sv.iso_size_bytes,
                         last_verified_at=verified_at,
+                        verified=True,
                         commit=False,
                     )
                 else:
