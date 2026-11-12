@@ -33,9 +33,9 @@ def _read_readme_source() -> str:
 
 
 # Patterns that indicate the obsolete flag-style UX is being documented
-# for `restore.sh`.  The legacy bash driver (restore_legacy.sh) and the
-# non-interactive `restore-auto.sh` legitimately accept these flags, so
-# we only flag occurrences attached to bare `restore.sh`.
+# for `restore.sh`.  The legacy bash drivers that accepted these flags
+# (restore_legacy.sh, restore-auto.sh) were retired in #689; we still
+# only flag occurrences attached to bare `restore.sh`.
 FORBIDDEN_INVOCATIONS = [
     r"\brestore\.sh\s+--key\b",
     r"\brestore\.sh\s+--repo\b",

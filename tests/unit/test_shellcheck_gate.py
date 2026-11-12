@@ -49,19 +49,19 @@ def test_committed_baseline_matches_the_tree(monkeypatch):
     isn't installed."""
     if shutil.which("shellcheck") is None:
         pytest.skip("shellcheck not installed")
+    # The meta disc's bash drivers under src/lcsas/meta/assets/ were
+    # retired in #689: recovery/scripts/ holds every shipped shell script.
     recovery = sorted(str(p.relative_to(REPO_ROOT))
                       for p in (REPO_ROOT / "recovery" / "scripts").glob("*.sh"))
-    assets = sorted(str(p.relative_to(REPO_ROOT))
-                    for p in (REPO_ROOT / "src" / "lcsas" / "meta" / "assets").glob("*.sh"))
-    assert recovery and assets, "derived file lists must not be empty"
+    assert recovery, "derived file list must not be empty"
     monkeypatch.chdir(REPO_ROOT)
-    found = gate.run_shellcheck(recovery + assets)
+    found = gate.run_shellcheck(recovery)
     assert gate.compare(found, gate.load_baseline(gate.BASELINE)) == []
 
 
 def test_shell_dialect_follows_the_shebang(tmp_path):
-    """#689: the meta disc's bash drivers are linted as bash; the POSIX
-    recovery scripts, and anything without a bash shebang, as sh."""
+    """#689: a bash script is linted as bash; the POSIX recovery scripts,
+    and anything without a bash shebang, as sh."""
     cases = {
         "env_bash.sh": ("#!/usr/bin/env bash\n", "bash"),
         "bin_bash.sh": ("#!/bin/bash\n", "bash"),

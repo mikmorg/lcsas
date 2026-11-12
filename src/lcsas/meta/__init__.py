@@ -8,10 +8,10 @@ Contents of a meta disc:
     tools/          Portable binaries (rustic, xorriso, python3) + shared libs
     lcsas/          LCSAS source code
     docs/           Architecture and project documentation
-    restore.sh      Bootstrap restore script (pure bash + bundled tools)
-    recovery/       Recovery tools; recovery/scripts/ also holds
-                    restore-auto.sh (automation) and restore_legacy.sh
-    README_RESTORE.md   Human-readable restore instructions
+    restore.sh      The one restore driver (POSIX sh, from recovery/scripts/)
+    recovery/       Recovery tools: tier-1 binaries, restore_auto.sh
+                    (automation), docs (RECOVER.txt, RECOVER_WINDOWS.txt)
+    README_RESTORE.md   Short pointer to the restore manuals
     VOLUME_INFO.txt     What this disc is, in plain text
     volume_info.json    Self-describing disc metadata
 """

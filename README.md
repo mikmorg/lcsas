@@ -521,10 +521,9 @@ The **meta disc** solves this by bundling *everything* needed for a restore onto
 | `recovery/docs/` | On-disc recovery manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
 | `restore.sh` | Interactive restore script — start here |
 | `restore.bat` | Windows entry point |
-| `recovery/scripts/restore-auto.sh` | Non-interactive variant for automation (off the disc root, so heirs see one restore script) |
-| `recovery/scripts/restore_legacy.sh` | Superseded flag-style bash driver, kept for compatibility |
+| `recovery/scripts/restore_auto.sh` | Automation only: runs `restore.sh` for every backup set with no questions (off the disc root, so heirs see one restore script) |
 | `standalone_restorer.py` | Tier-3 Python reader (requires only Python 3.10+) |
-| `README_RESTORE.md` | Human-readable step-by-step restore instructions |
+| `README_RESTORE.md` | Short guide that points at `recovery/docs/RECOVER.txt` (Linux, macOS) and `RECOVER_WINDOWS.txt` |
 | `VOLUME_INFO.txt` | Plain-text note: this is the meta disc, when it was built, the LCSAS version |
 | `volume_info.json` | Machine-readable details of this disc |
 

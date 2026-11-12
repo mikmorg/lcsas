@@ -59,7 +59,8 @@ ID 002 -- /restore.sh is one file among many at disc root
 ────────────────────────────────────────────────────────────────────
 STATUS: CLOSED (#491)
 RESOLVED BY: #491 -- restore-auto.sh and restore_legacy.sh moved off
-             the disc root, under recovery/scripts/.
+             the disc root, under recovery/scripts/.  #689 retired
+             both, and restore_c89.sh: restore.sh is the one driver.
 IMPACT: MEDIUM.  Heir opens disc in file explorer, sees
         15-20 files (README, README_RESTORE, restore.sh,
         restore-auto.sh, restore_legacy.sh, restore_c89.sh,

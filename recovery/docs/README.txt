@@ -39,9 +39,9 @@ SOURCE LAYOUT
     tree                                    -- recursive restorer
     main                                    -- CLI
 
-  scripts/             POSIX-sh drivers (a meta disc adds two bash
-                       drivers here: restore-auto.sh, automation
-                       only, and restore_legacy.sh, superseded)
+  scripts/             POSIX-sh drivers: restore.sh (the one restore
+                       driver; a meta disc copies it to its root),
+                       restore_auto.sh (automation only), restore.bat
   tests/               FIPS/RFC test vectors
   docs/                plain-text documentation
   vendored/            third-party source (Phase 2)

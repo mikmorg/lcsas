@@ -201,7 +201,7 @@ The **META disc** holds no catalog.  It contains:
 LCSAS_META.iso
 ├── restore.sh               Start here (Linux, macOS).  Interactive restore script.
 ├── restore.bat              Start here (Windows).
-├── README_RESTORE.md        Detailed restore guide
+├── README_RESTORE.md        Short guide: points at recovery/docs/RECOVER.txt
 ├── VOLUME_INFO.txt          What this disc is and when it was built
 ├── metadata/<id>/           Every repository's metadata, as of this disc
 ├── recovery/bin/<triple>/   Per-platform recovery binaries

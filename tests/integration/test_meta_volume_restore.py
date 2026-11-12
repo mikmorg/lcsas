@@ -6,9 +6,11 @@ constructs a meta-volume, then deletes everything except:
   2. The meta-volume directory (rescue disc)
   3. The key file
 
-It then runs the meta-volume's ``restore.sh`` using ONLY the bundled
-tools — no system-installed rustic, xorriso, or Python — and verifies
-that every file is restored byte-for-byte.
+It then runs the meta-volume's ``restore.sh`` (the disc's one restore
+driver, #689) using ONLY the meta disc's tools — no system-installed
+rustic or Python — and verifies that every file is restored
+byte-for-byte.  The ISOs are unpacked with the system xorriso, standing
+in for mounting the discs.
 
 Requires: ``rustic`` and ``xorriso`` on PATH (for initial setup only).
 """
@@ -201,8 +203,10 @@ class TestMetaVolumeRestore:
 
         # ── Build meta-volume ────────────────────────────────────
         meta_dir = tmp_path / "meta_volume"
+        # With the catalog, as a real meta disc is built: the disc then
+        # carries metadata/photos/ (keys, index, snapshots).
         meta_builder = MetaVolumeBuilder(
-            meta_dir, allow_no_dvdisaster_source=True
+            meta_dir, catalog_db_path=db_path, allow_no_dvdisaster_source=True
         )
         meta_builder.build()
 
@@ -267,77 +271,91 @@ class TestMetaVolumeRestore:
         vi = json.loads((self.meta_dir / "volume_info.json").read_text())
         assert vi["type"] == "meta"
 
-    def test_restore_sh_executes(self):
-        """restore.sh restores data using ONLY bundled tools."""
-        # Run restore.sh with a pristine environment — no system tools.
-        # The script uses absolute paths to its bundled rustic/xorriso,
-        # so we only need basic shell utilities on PATH.
+    def _run_restore_sh(self) -> subprocess.CompletedProcess:
+        """Run the meta disc's restore.sh, the disc's one restore driver
+        (#689), against the data discs, with no questions."""
+        return self._run_on_discs(
+            [str(self.meta_dir / "restore.sh"), str(self.restore_target), "latest"],
+            LCSAS_REPO="photos",
+        )
+
+    def _run_on_discs(self, argv: list[str], **extra: str) -> subprocess.CompletedProcess:
+        """Run ``sh argv...`` against the data discs, with no questions.
+
+        Each ISO is unpacked into its own folder, as if the discs were
+        mounted side by side under LCSAS_MOUNT_DIRS.  restore.sh finds the
+        catalog and the packs there; the tools folder, the pack cache and
+        HOME are under the test's tmp dir, so nothing touches the host.
+        """
+        discs = self.tmp / "discs"
+        discs.mkdir()
+        for iso in self.all_isos:
+            disc = discs / iso.stem
+            subprocess.run(
+                ["xorriso", "-osirrox", "on", "-indev", str(iso),
+                 "-extract", "/", str(disc)],
+                capture_output=True, check=True,
+            )
+            subprocess.run(["chmod", "-R", "u+w", str(disc)], check=True)
+        (self.tmp / "tmp").mkdir(exist_ok=True)
+        # A pristine environment: no system rustic or Python is needed,
+        # only basic shell utilities on PATH.
         env = {
-            "PATH": "/usr/bin:/bin",   # basic shell commands only
+            "PATH": "/usr/bin:/bin",
             "HOME": str(self.tmp),
             "TMPDIR": str(self.tmp / "tmp"),
+            "LCSAS_PWFILE": str(self.key_file),
+            "LCSAS_MOUNT_DIRS": str(discs),
+            "LCSAS_TOOLS_DIR": str(self.tmp / "tools"),
+            "LCSAS_NEWEST_DISC_PROMPT": "0",
+            "LCSAS_ANOTHER_SET": "0",
+            **extra,
         }
-        (self.tmp / "tmp").mkdir(exist_ok=True)
-
-        result = subprocess.run(
-            [
-                # The active /restore.sh is the new POSIX-sh driver (3-tier
-                # cascade, positional args).  The legacy bash driver that
-                # accepts --key/--isos/--target is preserved on the meta
-                # disc as recovery/scripts/restore_legacy.sh (#491); run it
-                # from there so the full end-to-end restore flow is covered.
-                "bash", str(
-                    self.meta_dir / "recovery" / "scripts" / "restore_legacy.sh"
-                ),
-                "--key", str(self.key_file),
-                "--isos", str(self.iso_dir),
-                "--target", str(self.restore_target),
-            ],
+        return subprocess.run(
+            ["sh", *argv],
             capture_output=True,
             text=True,
             env=env,
+            stdin=subprocess.DEVNULL,
+            timeout=600,
         )
 
+    def test_restore_sh_executes(self):
+        """restore.sh restores data using ONLY the meta disc's tools.
+
+        #689 retired the legacy bash driver this test used to run
+        (recovery/scripts/restore_legacy.sh --key/--isos/--target); it now
+        runs the disc's one driver, restore.sh."""
+        result = self._run_restore_sh()
         assert result.returncode == 0, (
             f"restore.sh failed (rc={result.returncode}):\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
         )
-        assert "Restore complete" in result.stdout
 
     def test_restored_files_match_originals(self):
         """Every file restored by restore.sh matches the original hash."""
-        # First, run the restore
-        env = {
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(self.tmp),
-            "TMPDIR": str(self.tmp / "tmp"),
-        }
-        (self.tmp / "tmp").mkdir(exist_ok=True)
+        result = self._run_restore_sh()
+        assert result.returncode == 0, result.stderr
+        self._assert_restored(self.restore_target)
 
-        subprocess.run(
-            [
-                # The active /restore.sh is the new POSIX-sh driver (3-tier
-                # cascade, positional args).  The legacy bash driver that
-                # accepts --key/--isos/--target is preserved on the meta
-                # disc as recovery/scripts/restore_legacy.sh (#491); run it
-                # from there so the full end-to-end restore flow is covered.
-                "bash", str(
-                    self.meta_dir / "recovery" / "scripts" / "restore_legacy.sh"
-                ),
-                "--key", str(self.key_file),
-                "--isos", str(self.iso_dir),
-                "--target", str(self.restore_target),
-            ],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=True,
-        )
+    def test_restore_auto_sh_restores_every_set(self):
+        """#689: recovery/scripts/restore_auto.sh, the disc's one automation
+        script, run as README_RESTORE says (RECOVERY = the disc's recovery/
+        folder), finds the set in the meta disc's metadata/ and restores it
+        into TARGET/<id> through restore.sh."""
+        result = self._run_on_discs([
+            str(self.meta_dir / "recovery" / "scripts" / "restore_auto.sh"),
+            str(self.meta_dir / "recovery"), str(self.restore_target),
+        ])
+        assert result.returncode == 0, result.stderr
+        assert "==> restoring photos" in result.stderr
+        self._assert_restored(self.restore_target / "photos")
 
+    def _assert_restored(self, target: Path) -> None:
         # Find all .bin files under the restore target
         found: dict[str, Path] = {}
-        for root, _dirs, files in os.walk(self.restore_target):
+        for root, _dirs, files in os.walk(target):
             for f in files:
                 if f.endswith(".bin"):
                     found[f] = Path(root) / f

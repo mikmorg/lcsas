@@ -528,25 +528,24 @@ def _build_meta_iso() -> Path:
     ).build()
 
     # Issue #261 — strip operator-convenience wrappers from the test
-    # meta disc.  Real meta discs ship `restore-auto.sh`, `restore_legacy.sh`
-    # (both under recovery/scripts/ since #491), `restore_c89.sh`, and
-    # `restore.bat` as ergonomic shortcuts; verify.sh
-    # forbids the test agent from using them (see no_authoring_check.py
-    # line ~238).  Their presence on the test fixture is pure temptation
-    # — about 1-in-5 haiku runs bypasses the canonical `restore.sh` path
-    # for `restore-auto.sh`.  Pull them out of the fixture so the agent
-    # has no choice but the canonical path.
-    for convenience in ("recovery/scripts/restore-auto.sh",
-                        "recovery/scripts/restore_legacy.sh",
-                        "restore_c89.sh", "restore.bat"):
+    # meta disc.  Real meta discs ship the automation wrapper
+    # `recovery/scripts/restore_auto.sh` and the Windows `restore.bat`
+    # beside `restore.sh`, the one restore driver since #689 (which
+    # retired `restore-auto.sh`, `restore_legacy.sh` and `restore_c89.sh`).
+    # The agent prompt forbids running them.  Their presence on the test
+    # fixture is pure temptation — about 1-in-5 haiku runs bypassed the
+    # canonical `restore.sh` path for the old `restore-auto.sh`.  Pull
+    # them out of the fixture so the agent has no choice but the
+    # canonical path.
+    for convenience in ("recovery/scripts/restore_auto.sh", "restore.bat"):
         p = META_STAGE / convenience
         if p.exists():
             p.unlink()
-    # The two under recovery/ carry MANIFEST.sha256 rows; drop them too so
-    # an agent's `sha256sum -c` does not report files missing.
+    # The one under recovery/ carries a MANIFEST.sha256 row; drop it too
+    # so an agent's `sha256sum -c` does not report a file missing.
     manifest = META_STAGE / "recovery" / "MANIFEST.sha256"
     if manifest.is_file():
-        gone = {"./scripts/restore-auto.sh", "./scripts/restore_legacy.sh"}
+        gone = {"./scripts/restore_auto.sh"}
         rows = [
             line for line in manifest.read_text().splitlines()
             if line.split("  ", 1)[-1] not in gone

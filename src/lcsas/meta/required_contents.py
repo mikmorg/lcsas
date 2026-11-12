@@ -60,11 +60,11 @@ _WINDOWS_TARGETS = frozenset({"x86_64-pc-windows-gnu"})
 # outside recovery/ (so the recovery/ manifest never covers them) but are
 # load-bearing for the restore flow an heir actually uses.
 #
-# Deliberately NOT required: recovery/scripts/restore-auto.sh (automation
-# only) and recovery/scripts/restore_legacy.sh (superseded by restore.sh).
-# #491 moved both off the disc root; no heir restore depends on either, so
-# a disc without them is not incomplete.  Nor is VOLUME_INFO.txt, which
-# only describes the disc.
+# Deliberately NOT required: recovery/scripts/restore_auto.sh (automation
+# only; no heir restore depends on it, so a disc without it is not
+# incomplete), nor VOLUME_INFO.txt, which only describes the disc.  The
+# root restore.sh is copied from recovery/scripts/restore.sh, and the
+# build fails without that (#689).
 _ROOT_ARTIFACTS: tuple[str, ...] = (
     "standalone_restorer.py",
     "keyshare_combine.py",
