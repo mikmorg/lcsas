@@ -46,7 +46,7 @@ If the host is alive and the master catalog is intact, **start here**.
 - `rustic >= 0.9.0` on `PATH` — checked up-front via
   `check_binary_version("rustic", min_version=(0, 9, 0))` in both
   `cmd_restore_plan()` and `cmd_restore_exec()`
-  ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 - A populated master catalog at `config.db_path` (the same SQLite file
   the burn pipeline writes to). Schema v10
   ([`CLAUDE.md`](../../CLAUDE.md), Catalog schema section).
@@ -61,7 +61,7 @@ If the host is alive and the master catalog is intact, **start here**.
   pack — `restore exec` creates a `lcsas-restore-*` tempdir there when
   `--cache-dir` is not given
   (`cmd_restore_exec()` in
-  [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 
 If any of the above is *not* true (no live mirror, no config, no
 catalog), drop to the disc-only path documented in
@@ -76,7 +76,7 @@ copied and `rustic` is invoked only for `--dry-run`.
 **Prerequisites:**
 - `--config` pointing at a valid LCSAS TOML config
   (checked at the top of `cmd_restore_plan()` in
-  [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 - `--repo <name>` matching an entry in `config.repositories`
   (`cmd_restore_plan()`).
 - `repo_cfg.password_file` set in the config (otherwise the command
@@ -91,9 +91,9 @@ copied and `rustic` is invoked only for `--dry-run`.
 1. The owner runs `lcsas --config /etc/lcsas/lcsas.toml restore plan
    <snapshot_id> --repo <name>` — parser definitions in the
    `restore plan` subparser of
-   [`build_parser()`](../../src/lcsas/cli/main.py).
+   [`build_parser()`](../../src/lcsas/cli/parser.py).
 2. `cmd_restore_plan()` loads config and opens the catalog
-   ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+   ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 3. A `SubprocessRusticRunner` runs `rustic restore <id> --dry-run --json
    /dev/null` against the live mirror to enumerate required pack IDs
    (`cmd_restore_plan()` →
@@ -151,9 +151,9 @@ copied and `rustic` is invoked only for `--dry-run`.
   scripting.
 
 **Source refs:**
-- CLI handler: `cmd_restore_plan()` in [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)
+- CLI handler: `cmd_restore_plan()` in [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)
 - Parser: the `restore plan` subparser in `build_parser()`
-  ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py))
+  ([`src/lcsas/cli/parser.py`](../../src/lcsas/cli/parser.py))
 - Planner: `RestorePlanner.generate_pick_list_v2()` in
   [`src/lcsas/restore/planner.py`](../../src/lcsas/restore/planner.py)
 - Rustic dry-run: `SubprocessRusticRunner.restore_dry_run()` in
@@ -170,7 +170,7 @@ assembling required packs into a local cache and running
 - `--password-file <path>` (required argument — it is checked for
   existence before any rustic call to fail fast)
   (early check in `cmd_restore_exec()`
-  ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)),
+  ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)),
   declared in the `restore exec` subparser of `build_parser()`).
 - A writable `target_path` on the host
   (positional argument of the `restore exec` subparser).
@@ -186,11 +186,11 @@ assembling required packs into a local cache and running
    <snapshot_id> /restore/target --repo family
    --password-file /root/keys/family.key`
    (the `restore exec` subparser in
-   [`build_parser()`](../../src/lcsas/cli/main.py)).
+   [`build_parser()`](../../src/lcsas/cli/parser.py)).
 2. Config + catalog load, password-file existence and `rustic` version are
    validated up-front
    (`cmd_restore_exec()` in
-   [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+   [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 3. `rustic restore --dry-run` enumerates required packs
    (`cmd_restore_exec()` →
    `SubprocessRusticRunner.restore_dry_run()`).
@@ -223,7 +223,7 @@ assembling required packs into a local cache and running
 10. Failed packs are retried from alternate volumes via
     `_retry_from_alternates_batch()` (non-interactive) or
     `_retry_from_alternates_interactive()`
-    ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+    ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 11. `RestoreExecutor.verify_cache_completeness()` confirms every required
     pack is present before launching `rustic`, so the owner sees a clear
     LCSAS error instead of an opaque rustic crash
@@ -297,9 +297,9 @@ assembling required packs into a local cache and running
     `tests/unit/test_dvdisaster.py`).
 
 **Source refs:**
-- CLI handler: `cmd_restore_exec()` in [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)
+- CLI handler: `cmd_restore_exec()` in [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)
 - Parser: the `restore exec` subparser in `build_parser()`
-  ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py))
+  ([`src/lcsas/cli/parser.py`](../../src/lcsas/cli/parser.py))
 - Executor: [`src/lcsas/restore/executor.py`](../../src/lcsas/restore/executor.py)
 - Planner v2 + alternates: `RestorePlanner.generate_pick_list_v2()` in
   [`src/lcsas/restore/planner.py`](../../src/lcsas/restore/planner.py)
@@ -325,7 +325,7 @@ discs accessible to the host.
 3. In the interactive `restore exec` prompt, type
    `/mnt/lcsas/<label>` when asked for the mount path
    (mount-path prompt in `cmd_restore_exec()`,
-   [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+   [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 
 **Steps (physical optical drive):**
 1. Insert disc; udev/`udisks` auto-mounts it at
@@ -379,7 +379,7 @@ every required pack; ingestion logs `ingested N packs` per volume.
 - `find_pack_file()` (flat + two-level): imported by `executor.py` from
   [`src/lcsas/utils/pack_layout.py`](../../src/lcsas/utils/pack_layout.py).
 - CLI prompt loop: interactive branch of `cmd_restore_exec()`
-  ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 - `--volume-dir` resolution: non-interactive branch of
   `cmd_restore_exec()`.
 
@@ -397,7 +397,7 @@ the rustic `--password-file` contract).
    `config.repositories[<repo>].password_file`
    (password-file check + `restore_dry_run()` call in
    `cmd_restore_plan()`,
-   [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+   [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
    The config loader resolves the path (the `resolve()` helper inside
    `load_config()`) and warns when the file is missing (missing-file
    warning in `load_config()`; also flagged by `validate_config()`)
@@ -452,9 +452,9 @@ failing rustic invocation.
 
 **Source refs:**
 - CLI argument: `--password-file` in the `restore exec` subparser of
-  `build_parser()` ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py))
+  `build_parser()` ([`src/lcsas/cli/parser.py`](../../src/lcsas/cli/parser.py))
 - Existence check: `cmd_restore_exec()` in
-  [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)
+  [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)
 - Config loader: `load_config()` in
   [`src/lcsas/config/settings.py`](../../src/lcsas/config/settings.py)
 - Rustic argv: `SubprocessRusticRunner._run()` in
@@ -476,7 +476,7 @@ the rustic CLI directly using the cache LCSAS just built.
    --password-file <pw> --cache-dir /scratch/cache`. LCSAS does not
    accept a path filter on its own
    (no filter option exists on the `restore exec` subparser in
-   [`build_parser()`](../../src/lcsas/cli/main.py)) —
+   [`build_parser()`](../../src/lcsas/cli/parser.py)) —
    the executor unconditionally passes only the snapshot id and target
    to rustic
    (`RestoreExecutor.execute_restore()` in
@@ -524,7 +524,7 @@ rustic-decompression side, not on the disc-ingest side.
 
 **Source refs:**
 - CLI arguments (no filter): the `restore exec` subparser in
-  `build_parser()` ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py))
+  `build_parser()` ([`src/lcsas/cli/parser.py`](../../src/lcsas/cli/parser.py))
 - Restore call (no filter): `RestoreExecutor.execute_restore()` in
   [`src/lcsas/restore/executor.py`](../../src/lcsas/restore/executor.py)
 - Rustic argv: `SubprocessRusticRunner.restore()` in
@@ -549,7 +549,7 @@ must still be readable.
    restore is *impossible* — every alternate volume for those packs
    is gone
    (missing-packs error block in `cmd_restore_plan()`
-   ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py));
+   ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py));
    detection via `get_missing_packs()` inside
    `RestorePlanner.generate_pick_list_v2()`).
 2. If `deprecated_disc_labels` lists volumes, the catalog believes
@@ -564,7 +564,7 @@ must still be readable.
    indexed in the catalog
    (alternates map in `cmd_restore_exec()` +
    `_retry_from_alternates_batch()` in
-   [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+   [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 4. For an *interactive* run, type `skip` at the mount prompt to
    move past a missing disc; failed/missing packs are collected and
    retried from alternates afterwards
@@ -623,7 +623,7 @@ must still be readable.
     `vol_dir`
     (the missing-directory fallback in
     `_retry_from_alternates_batch()`,
-    [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)),
+    [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)),
     but no regression test pins that.
   - No end-to-end test of the "catalog rebuild after disc loss" loop
     suggested by the error text.
@@ -638,7 +638,7 @@ must still be readable.
   (imported at the top of `planner.py`).
 - Alternate retry helpers: `_retry_from_alternates_batch()` /
   `_retry_from_alternates_interactive()` in
-  [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)
+  [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)
 - Completeness gate: `RestoreExecutor.verify_cache_completeness()` in
   [`src/lcsas/restore/executor.py`](../../src/lcsas/restore/executor.py)
 
@@ -651,7 +651,7 @@ must still be readable.
   ([`src/lcsas/rustic/wrapper.py`](../../src/lcsas/rustic/wrapper.py))
   and the `exec_p.add_argument("--password-file", ..., required=True)`
   declaration in the `restore exec` subparser of `build_parser()`
-  ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  ([`src/lcsas/cli/parser.py`](../../src/lcsas/cli/parser.py)).
   Decided against (#491): the CLI deliberately takes no password from
   the environment (see
   [README.md](../../README.md#how-lcsas-passes-passwords-to-rustic));
@@ -670,7 +670,7 @@ must still be readable.
   The CLI wires `RestoreExecutor(runner,
   ecc_runner=select_ecc_runner())` (FMT-01,
   `cmd_restore_exec()` in
-  [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)), but ECC
+  [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)), but ECC
   verify/repair only fires when a `<label>.iso` is reachable — a
   sibling file under `--volume-dir`, or `--iso-dir` for interactive
   runs (`RestoreExecutor.ingest_volume()` in
@@ -686,6 +686,6 @@ must still be readable.
   tier-1 path does prompt.
 - **No regression test for cache cleanup on SIGINT** during ingestion
   (despite the `ShutdownManager` wiring in `cmd_restore_exec()`,
-  [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  [`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
   `ShutdownManager` itself is unit-tested (`tests/unit/test_shutdown.py`),
   but nothing signals a running `restore exec`. (Still open.)

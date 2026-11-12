@@ -909,7 +909,7 @@ class TestCmdRecovery:
             recorded["kwargs"] = kwargs
             return _CompletedStub()
 
-        monkeypatch.setattr("lcsas.cli.main.subprocess.run", _fake_run)
+        monkeypatch.setattr("lcsas.cli.commands.recovery.subprocess.run", _fake_run)
 
         result = main(["recovery", "verify"])
         assert result == 0
@@ -923,22 +923,24 @@ class TestCmdRecovery:
         error.
 
         ``cmd_recovery`` derives the recovery tree from
-        ``Path(__file__).resolve().parents[3]`` of the ``cli.main``
-        module; patching ``__file__`` to point at a tmp tree without a
-        ``recovery/`` subdir exercises the error branch without touching
-        the real repo layout.
+        ``Path(__file__).resolve().parents[4]`` of the
+        ``cli.commands.recovery`` module; patching ``__file__`` to point
+        at a tmp tree without a ``recovery/`` subdir exercises the error
+        branch without touching the real repo layout.
         """
         import logging
 
-        import lcsas.cli.main as cli_main
+        import lcsas.cli.commands.recovery as cli_recovery
 
         fake_root = tmp_path / "fake_project"
-        fake_module_path = fake_root / "src" / "lcsas" / "cli" / "main.py"
+        fake_module_path = (
+            fake_root / "src" / "lcsas" / "cli" / "commands" / "recovery.py"
+        )
         fake_module_path.parent.mkdir(parents=True)
         fake_module_path.write_text("# stub\n")
         # No recovery/ directory under fake_root.
 
-        monkeypatch.setattr(cli_main, "__file__", str(fake_module_path))
+        monkeypatch.setattr(cli_recovery, "__file__", str(fake_module_path))
         # Also patch RecoveryBuilder so we know it was *not* constructed.
         fake = _patch_recovery_builder(monkeypatch)
 

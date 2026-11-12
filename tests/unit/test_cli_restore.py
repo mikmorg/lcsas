@@ -853,7 +853,7 @@ class TestRestoreExecSpacePreflight:
                   return_value=mock_runner),
             patch("shutil.disk_usage", side_effect=fake_disk_usage),
             # Mock the two paths onto distinct filesystems.
-            patch("lcsas.cli.main._fs_dev",
+            patch("lcsas.cli.commands.restore._fs_dev",
                   side_effect=lambda p: 2 if "cachefs" in str(p) else 1),
             patch("lcsas.restore.executor.RestoreExecutor") as mock_exec_cls,
             patch("sys.stdin") as mock_stdin,

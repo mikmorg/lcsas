@@ -157,7 +157,7 @@ def test_receipt_fills_the_hash_of_a_disc_recorded_by_verify(
               "read_disc_volume_id", return_value=label),
         patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
               return_value=True),
-        patch("lcsas.cli.main._verify_disc_against_recorded_hash",
+        patch("lcsas.cli.commands.verify._verify_disc_against_recorded_hash",
               return_value=True),
     ):
         assert main(["--db", str(db), "verify", label, "--disc",

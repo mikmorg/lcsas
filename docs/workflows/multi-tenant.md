@@ -44,7 +44,7 @@ key ID from the mirror's `keys/` directory.
    another repository already has (the error names that repository; the
    schema has no UNIQUE index, so the command checks, #685), generate
    UUID, scan `keys/` for the first key filename, INSERT into
-   `repositories`. (`cmd_repo_add` in `src/lcsas/cli/main.py`)
+   `repositories`. (`cmd_repo_add` in `src/lcsas/cli/commands/repo.py`)
 2. `register_repo()` writes `repo_id`, `name`, absolute `mirror_path`,
    and `encryption_key_id`. (`register_repo` in `src/lcsas/db/repos.py`)
 3. The key ID is auto-detected from `mirror_path/keys/`.
@@ -80,8 +80,8 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
 
 **Source refs:**
 
-- CLI parser: `build_parser()` (`repo add`) in `src/lcsas/cli/main.py`
-- Handler: `cmd_repo_add` in `src/lcsas/cli/main.py`
+- CLI parser: `build_parser()` (`repo add`) in `src/lcsas/cli/parser.py`
+- Handler: `cmd_repo_add` in `src/lcsas/cli/commands/repo.py`
 - Catalog insert: `register_repo` in `src/lcsas/db/repos.py`
 - Key-ID auto-detection: `read_repo_key_ids` in `src/lcsas/utils/fs.py`
 - Model: `Repository` in `src/lcsas/db/models.py`
@@ -99,13 +99,13 @@ resolve repository names to UUIDs.
 **Steps:**
 
 1. `lcsas repo list` — fetch all rows from `repositories` ordered by
-   name, print one line per repository. (`cmd_repo_list` in `src/lcsas/cli/main.py`)
+   name, print one line per repository. (`cmd_repo_list` in `src/lcsas/cli/commands/repo.py`)
 2. `list_repos()` runs `SELECT * FROM repositories ORDER BY name`
    and maps rows to frozen `Repository` dataclasses.
    (`list_repos` in `src/lcsas/db/repos.py`)
 3. Format: `<name>  <status>  <uuid>  <mirror_path>`. Empty catalog emits
    `No repositories registered.` and exits 0.
-   (`cmd_repo_list` in `src/lcsas/cli/main.py`)
+   (`cmd_repo_list` in `src/lcsas/cli/commands/repo.py`)
 
 **Expected outcome:** Repositories listed alphabetically; exit 0 in all
 cases.
@@ -128,8 +128,8 @@ cases.
 
 **Source refs:**
 
-- CLI parser: `build_parser()` (`repo list`) in `src/lcsas/cli/main.py`
-- Handler: `cmd_repo_list` in `src/lcsas/cli/main.py`
+- CLI parser: `build_parser()` (`repo list`) in `src/lcsas/cli/parser.py`
+- Handler: `cmd_repo_list` in `src/lcsas/cli/commands/repo.py`
 - Catalog query: `list_repos` in `src/lcsas/db/repos.py`
 
 ---
@@ -161,11 +161,11 @@ catalog ID (the UUID from `lcsas repo list`) (#581).
    (exact, then any case; `_find_repo`); exit 1 with
    `Repository '<repo>' not found.` if absent, or name the clash if
    two repositories share the name.
-   (`cmd_repo_retire` in `src/lcsas/cli/main.py`)
+   (`cmd_repo_retire` in `src/lcsas/cli/commands/repo.py`)
 2. The handler opens a `locked_connection` and runs `ensure_schema`
    first, so a pre-v10 catalog (no `status` column) migrates in place
    rather than failing the `UPDATE`.
-   (`_cmd_repo_set_status` in `src/lcsas/cli/main.py`)
+   (`_cmd_repo_set_status` in `src/lcsas/cli/commands/repo.py`)
 3. `set_repo_status()` validates the value against `REPO_STATUSES` in
    Python — the column carries no SQL `CHECK`, because SQLite cannot
    retro-apply one through `ALTER TABLE ADD COLUMN` and a migrated
@@ -205,8 +205,8 @@ not `estate` — retirement narrows exactly one gate and nothing more.
 
 **Source refs:**
 
-- CLI parser: `build_parser()` (`repo retire` / `repo activate`) in `src/lcsas/cli/main.py`
-- Handlers: `cmd_repo_retire`, `cmd_repo_activate` in `src/lcsas/cli/main.py`
+- CLI parser: `build_parser()` (`repo retire` / `repo activate`) in `src/lcsas/cli/parser.py`
+- Handlers: `cmd_repo_retire`, `cmd_repo_activate` in `src/lcsas/cli/commands/repo.py`
 - Catalog write: `set_repo_status` in `src/lcsas/db/repos.py`
 - Migration: `migrate()` v9 → v10 in `src/lcsas/db/schema.py`
 
@@ -227,18 +227,18 @@ lives on `volumes` (managed by `consolidate --deprecate`).
 **Steps:**
 
 1. `lcsas repo remove <repo> [--force]` — look up by catalog ID, then by
-   name (`_find_repo`); exit 1 with `not found` if missing. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
+   name (`_find_repo`); exit 1 with `not found` if missing. (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
 2. List active (non-pruned) packs. Refuse without `--force` if any are
    linked to active volumes, then refuse without `--force` if any
-   active packs exist at all. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
+   active packs exist at all. (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
 3. With `--force`, prompt `Type 'yes' to confirm`; EOF on stdin
-   returns exit 1. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
+   returns exit 1. (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
 4. `bulk_mark_pruned` active packs → `DELETE FROM volume_packs` per
    pack → `DELETE FROM packs WHERE repo_id = ?` → delete snapshots →
    delete the `repositories` row. (`cmd_repo_remove` in
-   `src/lcsas/cli/main.py`, `delete_repo` in `src/lcsas/db/repos.py`)
+   `src/lcsas/cli/commands/repo.py`, `delete_repo` in `src/lcsas/db/repos.py`)
 5. Whole teardown runs inside `locked_connection` (single transaction).
-   (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
+   (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
 
 **Expected outcome:**
 
@@ -275,8 +275,8 @@ lives on `volumes` (managed by `consolidate --deprecate`).
 
 **Source refs:**
 
-- CLI parser: `build_parser()` (`repo remove`) in `src/lcsas/cli/main.py`
-- Handler: `cmd_repo_remove` in `src/lcsas/cli/main.py`
+- CLI parser: `build_parser()` (`repo remove`) in `src/lcsas/cli/parser.py`
+- Handler: `cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`
 - Catalog delete: `delete_repo` in `src/lcsas/db/repos.py`
 - Snapshot cascade: `delete_snapshots_for_repo` in `src/lcsas/db/snapshots.py`
 

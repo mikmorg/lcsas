@@ -108,7 +108,7 @@ An unknown location or repository fails the check (exit 1). An unknown
 location gets a "did you mean" suggestion.
 
 **Source refs:** `cmd_config_check`, `_config_check_collections`,
-`_collection_catalog_check` (`src/lcsas/cli/main.py`);
+`_collection_catalog_check` (`src/lcsas/cli/commands/config.py` and `src/lcsas/cli/commands/stage.py`);
 `collection_password_errors` (`src/lcsas/config/settings.py`).
 
 ---
@@ -151,7 +151,7 @@ lcsas --config lcsas.toml burn --session latest --location Bank_Box
 ```
 
 **Source refs:** `cmd_stage`, `_stage_collection_and_fill`,
-`_collection_catalog_check` (`src/lcsas/cli/main.py`).
+`_collection_catalog_check` (`src/lcsas/cli/commands/stage.py`).
 
 ---
 
@@ -269,7 +269,7 @@ output of plain `lcsas status` is unchanged.
 `--stale-copies` or `--redundancy`.
 
 **Source refs:** `cmd_status`, `_status_json`, `STATUS_JSON_FORMAT`
-(`src/lcsas/cli/main.py`).
+(`src/lcsas/cli/commands/status.py`).
 
 ---
 
@@ -322,7 +322,8 @@ Exit codes of `stage --collection`, for a script:
   `_type_errors`.
 - `src/lcsas/burn/orchestrator.py`: `BurnOrchestrator.stage`,
   `_trim_underfilled`, `_pack_space_bytes`, `UnderfilledVolume`.
-- `src/lcsas/cli/main.py`: `cmd_stage`, `_stage_collection_and_fill`,
-  `_collection_catalog_check`, `cmd_config_check`,
-  `_config_check_collections`, `cmd_status`, `_status_json`,
-  `cmd_repo_list`.
+- `src/lcsas/cli/commands/stage.py`: `cmd_stage`, `_stage_collection_and_fill`,
+  `_collection_catalog_check`; `src/lcsas/cli/commands/config.py`:
+  `cmd_config_check`, `_config_check_collections`;
+  `src/lcsas/cli/commands/status.py`: `cmd_status`, `_status_json`;
+  `src/lcsas/cli/commands/repo.py`: `cmd_repo_list`.

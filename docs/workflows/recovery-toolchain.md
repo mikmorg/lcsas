@@ -4,7 +4,7 @@ The **recovery toolchain** is the in-house C89 + POSIX-sh tier-1
 restore path, plus the cross-build, manifest, and reproducible-build
 tooling that keeps it durable.  It is driven by
 `lcsas recovery {build,test,manifest,verify}`
-(`cmd_recovery` in `src/lcsas/cli/main.py`) over the on-disk
+(`cmd_recovery` in `src/lcsas/cli/commands/recovery.py`) over the on-disk
 `recovery/` build tree, orchestrated by `RecoveryBuilder`
 (`src/lcsas/recovery/build.py`).  For the wider architecture and the
 disc catalog model, see [`docs/architecture.md`](../architecture.md).
@@ -105,7 +105,7 @@ recovery/
 
 The Python orchestrator lives at `src/lcsas/recovery/build.py`
 (`RecoveryBuilder`); its CLI surface is the `recovery` subparser in
-`build_parser()` (`src/lcsas/cli/main.py`), dispatched by
+`build_parser()` (`src/lcsas/cli/parser.py`), dispatched by
 `cmd_recovery`.
 
 ## Supported target arches
@@ -176,7 +176,7 @@ lcsas recovery build [--arch ARCH] [--cc CC] [--verbose]
 **Steps:**
 
 1. CLI parses `lcsas recovery build` and dispatches to `cmd_recovery`
-   (`src/lcsas/cli/main.py`), which constructs a `RecoveryBuilder`
+   (`src/lcsas/cli/commands/recovery.py`), which constructs a `RecoveryBuilder`
    rooted at `recovery/`.
 2. For `--arch host`, `RecoveryBuilder.build_host()` runs
    `make -C recovery all` for the detected host arch.
@@ -220,7 +220,7 @@ manifest — run `lcsas recovery manifest` for that.  Exit code 0.
 - C-side behaviour is covered by `make -C recovery test`
   (see [`recovery test`](#lcsas-recovery-test--run-the-recovery-test-suite)).
 
-**Source refs:** `cmd_recovery` (`src/lcsas/cli/main.py`);
+**Source refs:** `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`);
 `RecoveryBuilder.build_host` / `RecoveryBuilder.cross_build`
 (`src/lcsas/recovery/build.py`); `recovery/Makefile` (`all:` +
 per-arch `bin/<arch>/lcsas-*` rules); `recovery/docs/BUILD.txt`.
@@ -242,7 +242,7 @@ build` first) and a host `make`/`cc`.
 **Steps:**
 
 1. CLI parses `lcsas recovery test` and dispatches to `cmd_recovery`
-   (`src/lcsas/cli/main.py`).
+   (`src/lcsas/cli/commands/recovery.py`).
 2. The handler calls `RecoveryBuilder.run_tests(verbose=...)`
    (`src/lcsas/recovery/build.py`), which shells out to
    `make -C recovery test`.
@@ -268,7 +268,7 @@ test`, plus the always-on no-dvdisaster ECC self-repair gate
 (`tests/e2e/test_ecc_selfrepair_no_dvdisaster.py`, FMT-01) and the
 bare-path gate referenced in `recovery/docs/TIERS.txt`.
 
-**Source refs:** `cmd_recovery` (`src/lcsas/cli/main.py`);
+**Source refs:** `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`);
 `RecoveryBuilder.run_tests` (`src/lcsas/recovery/build.py`);
 `recovery/Makefile` (`test:` target); `recovery/tests/`.
 
@@ -290,7 +290,7 @@ manifest covers source, not binaries).
 **Steps:**
 
 1. CLI parses `lcsas recovery manifest [--output PATH]` and dispatches
-   to `cmd_recovery` (`src/lcsas/cli/main.py`).
+   to `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`).
 2. The handler calls `RecoveryBuilder.write_manifest(output)`
    (`src/lcsas/recovery/build.py`), defaulting to
    `recovery/MANIFEST.sha256`.
@@ -329,7 +329,7 @@ so `lcsas meta verify --strict` passes even when the checkout has them
 disc you will burn from a clean checkout of the release; that keeps the
 disc reproducible.
 
-**Source refs:** `cmd_recovery` (`src/lcsas/cli/main.py`);
+**Source refs:** `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`);
 `RecoveryBuilder.write_manifest` (`src/lcsas/recovery/build.py`);
 `recovery/MANIFEST.sha256`; `recovery/UPSTREAM.sha256`.
 
@@ -350,7 +350,7 @@ recovery tree twice.
 **Steps:**
 
 1. CLI parses `lcsas recovery verify` and dispatches to `cmd_recovery`
-   (`src/lcsas/cli/main.py`).
+   (`src/lcsas/cli/commands/recovery.py`).
 2. The handler shells out to `make -C recovery repro-check`, whose
    exit code is returned verbatim.
 3. The `repro-check` target builds the toolchain twice (pinning
@@ -368,7 +368,7 @@ non-zero (the make target's code) otherwise.
 - Recovery tier: this is what makes **Tier 1 trustworthy**.
 - Reproducibility: this *is* the reproducibility check.
 
-**Source refs:** `cmd_recovery` (`src/lcsas/cli/main.py`);
+**Source refs:** `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`);
 `recovery/Makefile` (`repro-check:` target).
 
 ---
@@ -512,7 +512,7 @@ the full `(OS, machine)` matrix and explicit rejections.
 
 ## Consolidated source refs
 
-- `cmd_recovery` (`src/lcsas/cli/main.py`) — `recovery` subparser +
+- `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`) — `recovery` subparser +
   dispatch for `build`/`test`/`manifest`/`verify`.
 - `RecoveryBuilder` (`src/lcsas/recovery/build.py`) — `build_host`,
   `cross_build`, `run_tests`, `write_manifest`, `SUPPORTED_ARCHES`,

@@ -871,7 +871,11 @@ class TestEnsureSchema:
         create_all — otherwise the future-version guard and the
         read-only compat path are silently bypassed."""
         repo_root = Path(__file__).resolve().parents[2]
-        for rel in ("src/lcsas/cli/main.py", "src/lcsas/db/rebuild.py"):
+        # Every module of the CLI (#690 split cli/main.py into several).
+        cli = sorted((repo_root / "src/lcsas/cli").rglob("*.py"))
+        assert len(cli) > 2
+        rels = [p.relative_to(repo_root).as_posix() for p in cli]
+        for rel in (*rels, "src/lcsas/db/rebuild.py"):
             source = (repo_root / rel).read_text(encoding="utf-8")
             assert "create_all(" not in source, (
                 f"{rel} calls create_all() directly — use "

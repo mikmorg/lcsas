@@ -215,8 +215,8 @@ command.
 
 **Source refs:**
 
-- `build_parser()` in `src/lcsas/cli/main.py` — argparse wiring for `burn-iso`.
-- `cmd_burn_iso` in `src/lcsas/cli/main.py` — handler and dispatch.
+- `build_parser()` in `src/lcsas/cli/parser.py` — argparse wiring for `burn-iso`.
+- `cmd_burn_iso` in `src/lcsas/cli/commands/burn.py` — handler and dispatch.
 - `src/lcsas/iso/xorriso.py` — `burn_iso` and `verify_disc`.
 - `src/lcsas/burn/device_verify.py` — `read_device_sha256`, shared with
   `lcsas burn`.
@@ -371,10 +371,10 @@ B.
 
 **Source refs:**
 
-- `build_parser()` in `src/lcsas/cli/main.py` — `burn-iso` and
+- `build_parser()` in `src/lcsas/cli/parser.py` — `burn-iso` and
   `catalog import-receipts` CLI wiring.
-- `cmd_burn_iso` in `src/lcsas/cli/main.py`.
-- `cmd_catalog_import` in `src/lcsas/cli/main.py`.
+- `cmd_burn_iso` in `src/lcsas/cli/commands/burn.py`.
+- `cmd_catalog_import` in `src/lcsas/cli/commands/catalog.py`.
 - `src/lcsas/burn/orchestrator.py` — `stage()` (on host A) and the
   session manifest + receipt writers.
 - `src/lcsas/staging/metadata.py` — disc catalog injection.
@@ -643,9 +643,9 @@ behaviour.
 
 **Source refs:**
 
-- `build_parser()` in `src/lcsas/cli/main.py` — argparse for `catalog
+- `build_parser()` in `src/lcsas/cli/parser.py` — argparse for `catalog
   import-receipts`.
-- `cmd_catalog_import` in `src/lcsas/cli/main.py` — handler and dispatch.
+- `cmd_catalog_import` in `src/lcsas/cli/commands/catalog.py` — handler and dispatch.
 - `src/lcsas/db/volumes.py` — `update_status`, `mark_closed`,
   `VALID_TRANSITIONS`.
 - `src/lcsas/db/volume_copies.py` — `add_volume_copy` upsert,
@@ -880,9 +880,9 @@ workflow (the three that could leave the catalog wrong were resolved in
 
 ## Source refs (consolidated)
 
-- CLI: `build_parser()` in `src/lcsas/cli/main.py` (argparse for
+- CLI: `build_parser()` in `src/lcsas/cli/parser.py` (argparse for
   `burn-iso` and `catalog import-receipts`), `cmd_burn_iso` and
-  `cmd_catalog_import` in `src/lcsas/cli/main.py` (handlers + dispatch).
+  `cmd_catalog_import` in `src/lcsas/cli/commands/burn.py`, `src/lcsas/cli/commands/catalog.py` and `src/lcsas/cli/parser.py` (handlers + dispatch).
 - Burn pipeline: `src/lcsas/burn/orchestrator.py` — `BurnReceipt`,
   `stage`, `burn_session`, and the manifest + receipt writers.
 - ISO tooling: `src/lcsas/iso/xorriso.py` — `burn_iso`, `verify_disc`.

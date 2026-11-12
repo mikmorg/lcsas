@@ -30,7 +30,12 @@ pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VOLUME_COPIES_PY = REPO_ROOT / "src" / "lcsas" / "db" / "volume_copies.py"
-CLI_MAIN_PY = REPO_ROOT / "src" / "lcsas" / "cli" / "main.py"
+CLI = REPO_ROOT / "src" / "lcsas" / "cli"
+# #690 split cli/main.py: the verify handler, the status handler and the
+# parser each have their own module now.
+CLI_VERIFY_PY = CLI / "commands" / "verify.py"
+CLI_STATUS_PY = CLI / "commands" / "status.py"
+CLI_PARSER_PY = CLI / "parser.py"
 
 
 def test_last_verified_at_has_production_writer() -> None:
@@ -50,9 +55,9 @@ def test_last_verified_at_has_production_writer() -> None:
 
 def test_verify_cli_calls_the_writer() -> None:
     """The CLI verify path must call the last_verified_at writer."""
-    source = CLI_MAIN_PY.read_text(encoding="utf-8")
+    source = CLI_VERIFY_PY.read_text(encoding="utf-8")
     assert "touch_last_verified" in source, (
-        "src/lcsas/cli/main.py no longer calls touch_last_verified().  "
+        "src/lcsas/cli/commands/verify.py no longer calls touch_last_verified().  "
         "'lcsas verify --disc' / 'verify --all --disc' must stamp "
         "last_verified_at on a passing copy, or the disc-rot "
         "re-verification loop records nothing (FMA-05)."
@@ -61,8 +66,9 @@ def test_verify_cli_calls_the_writer() -> None:
 
 def test_staleness_report_exists() -> None:
     """The staleness report that surfaces the stamp must exist."""
-    source = CLI_MAIN_PY.read_text(encoding="utf-8")
-    assert "--stale-copies" in source and "find_stale_copies" in source, (
+    parser = CLI_PARSER_PY.read_text(encoding="utf-8")
+    status = CLI_STATUS_PY.read_text(encoding="utf-8")
+    assert "--stale-copies" in parser and "find_stale_copies" in status, (
         "The 'lcsas status --stale-copies' report is gone.  Without it "
         "the last_verified_at stamps are write-only: neither the owner "
         "nor an heir can ask which physical copies are overdue for "

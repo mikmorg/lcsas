@@ -61,15 +61,15 @@ one place that decides it
 - `dvdisaster` binary on `$PATH` if performing ECC verification of an ISO image; `xorriso` binary on `$PATH` if `--disc` mode is used.
 
 **Steps:**
-1. Argparse registers `verify` with optional positional `volume_label` plus `--iso`, `--disc`, `--device`, `--mark-verified`, `--mark-failed`, `--detail`, `--all`, `--location` (`build_parser()`, `src/lcsas/cli/main.py`).
-2. Dispatch routes `args.command == "verify"` to `cmd_verify` (`src/lcsas/cli/main.py`).
-3. `cmd_verify` loads config and acquires a `locked_connection` against the resolved catalog path, then runs `ensure_schema` (schema v10) (`cmd_verify`, `src/lcsas/cli/main.py`).
+1. Argparse registers `verify` with optional positional `volume_label` plus `--iso`, `--disc`, `--device`, `--mark-verified`, `--mark-failed`, `--detail`, `--all`, `--location` (`build_parser()`, `src/lcsas/cli/parser.py`).
+2. Dispatch routes `args.command == "verify"` to `cmd_verify` (`src/lcsas/cli/commands/verify.py`).
+3. `cmd_verify` loads config and acquires a `locked_connection` against the resolved catalog path, then runs `ensure_schema` (schema v10) (`cmd_verify`, `src/lcsas/cli/commands/verify.py`).
 4. If `--all` is set, control hands off to `_verify_all_disc` (when `--disc`) or `_verify_all` — see the next workflow.
 5. Otherwise, look up the volume by label; bail if missing.
 6. **Manual-marking branch (`--mark-verified`, `_mark_verified`):** only a `BURNED` or `STAGING` volume (not a lost one). A volume with no ACTIVE disc needs `--location` (#673): the disc is recorded there (ACTIVE, with the staged ISO's hash; `last_verified_at` stays empty, as nothing read the disc) and `closed_at` is set. Then `BURNED → VERIFIED` (or `STAGING → BURNING → VERIFIED`) and a `VERIFY_PASS` event at that location. A `--location` where the volume has no disc, while it has discs elsewhere, is refused. To check the disc itself instead, see `burn-iso --verify-only` in `burn-iso-portable.md`.
 7. **Manual-marking branch (`--mark-failed`):** append a `VERIFY_FAIL` event with `detail` text; do not change status.
 8. **Physical/ISO branch:** if `--iso` was not passed and `--disc` was not requested, look up the most-recent `session_volumes.iso_path` for the volume; bail if neither is available.
-9. If `--disc`: resolve which disc is in the drive (`--location`, or the volume's sole ACTIVE disc), then run `_check_disc_for_volume` (`src/lcsas/cli/main.py`): an **identity gate** first (read the disc's ISO 9660 Volume ID; a mismatch / unreadable ID is `WRONG_DISC` and records *nothing* — FMA-03), then `verify_disc` (`-check_media` readability), then a **device read-back SHA-256** compared against the hash recorded at stage time (BURN-04). A PASS stamps `last_verified_at` on the disc (FMA-05).
+9. If `--disc`: resolve which disc is in the drive (`--location`, or the volume's sole ACTIVE disc), then run `_check_disc_for_volume` (`src/lcsas/cli/commands/verify.py`): an **identity gate** first (read the disc's ISO 9660 Volume ID; a mismatch / unreadable ID is `WRONG_DISC` and records *nothing* — FMA-03), then `verify_disc` (`-check_media` readability), then a **device read-back SHA-256** compared against the hash recorded at stage time (BURN-04). A PASS stamps `last_verified_at` on the disc (FMA-05).
 10. Else (ISO mode): confirm the ISO image exists, then **FMT-01 ECC chain** via `select_ecc_runner()` — prefer real `dvdisaster` (RS03 verify, can detect *and* repair); else fall back to the bundled in-house `lcsas-ecc` (decode-only); if *neither* ECC tool is present, fall back to a portable **SHA-256** compare against the catalog-recorded hash (detect-only).
 11. Append a `VERIFY_PASS` or `VERIFY_FAIL` event with detail describing the source; the valid event types come from `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`) and the underlying insert is `add_event`.
 12. If the verification passed *and* the volume was `BURNED`, promote it to `VERIFIED` via `update_status`.
@@ -84,7 +84,7 @@ one place that decides it
 **Variant axes that apply:**
 - **Media type:** ISO-mode verification is media-agnostic (it just reads the ISO image file). `--disc` mode reads physical media and is therefore sensitive to drive capability — Blu-ray media (BD25, MDISC100) needs a BD-capable drive at `--device`. DVDisaster RS03 ECC applies to any ISO image regardless of target media, so the same verification machinery is exercised for TEST_TINY images during development.
 - **Multi-repository:** This command operates on a single disc (or ISO image); the disc may carry packs from several repositories. Verification works on the image's bytes (the ECC and SHA-256 layers), not on repositories, so it is repository-blind by design — a single `VERIFY_PASS` covers every repository's packs on the disc.
-- **Optical drive count:** Single-drive setups must serialize `--disc` runs (one drive, one disc at a time). Multi-drive setups can run several `lcsas verify` processes in parallel as long as each names a distinct `--device`; the catalog write path uses `locked_connection` so concurrent event writes are serialized at the SQLite level (`cmd_verify`, `src/lcsas/cli/main.py`).
+- **Optical drive count:** Single-drive setups must serialize `--disc` runs (one drive, one disc at a time). Multi-drive setups can run several `lcsas verify` processes in parallel as long as each names a distinct `--device`; the catalog write path uses `locked_connection` so concurrent event writes are serialized at the SQLite level (`cmd_verify`, `src/lcsas/cli/commands/verify.py`).
 - **Multi-copy:** This command verifies *one* disc at a time. To re-verify every disc of one volume you must run it once per disc with the appropriate `--device` and `--detail` describing which disc was checked. Discs are tracked in `volume_copies`; `verify` does not iterate them automatically. (See "Gaps" below.)
 - **ECC:** ISO mode runs the FMT-01 chain — real `dvdisaster` RS03 (detect + repair) if installed, else the bundled in-house `lcsas-ecc` (decode-only), else a portable SHA-256 compare against the recorded hash. `--disc` mode does the identity gate + `-check_media` readability test + device read-back SHA-256. Either way the repair margin comes from the RS03 parity wrapped around the burned image at stage time.
 - **Storage stage:** This checks the discs (or, in ISO mode, their ISO images); it does not touch the mirrors. A pass here only guarantees the disc is readable — it does not guarantee `rustic restore` will succeed (that's covered by the restore workflows).
@@ -92,12 +92,12 @@ one place that decides it
 **Test coverage:**
 - Existing: `tests/unit/test_db_verify.py` exhaustively covers `_collect_disc_packs` (`tests/unit/test_db_verify.py:16-100`) and `validate_disc` (`tests/unit/test_db_verify.py:103-238`) — the catalog/disc cross-check used by `lcsas catalog validate`. Event insertion paths used by `cmd_verify` are covered by `tests/unit/test_db_volume_events.py::TestAddEvent` (`tests/unit/test_db_volume_events.py:19-68`).
 - Gaps:
-  - No unit test exercises `cmd_verify` end-to-end (the CLI handler is uncovered) — the `BURNED → VERIFIED` promotion and the `STAGING → VERIFIED` split-machine path (`cmd_verify`, `src/lcsas/cli/main.py`) are tested only manually.
-  - No test for the auto-resolution of `iso_path` from `session_volumes` (`cmd_verify`, `src/lcsas/cli/main.py`).
+  - No unit test exercises `cmd_verify` end-to-end (the CLI handler is uncovered) — the `BURNED → VERIFIED` promotion and the `STAGING → VERIFIED` split-machine path (`cmd_verify`, `src/lcsas/cli/commands/verify.py`) are tested only manually.
+  - No test for the auto-resolution of `iso_path` from `session_volumes` (`cmd_verify`, `src/lcsas/cli/commands/verify.py`).
   - No injection point: `SubprocessXorrisoRunner` / `SubprocessDVDisasterRunner` are instantiated inline rather than passed as a `Protocol` — verification of `--disc` and ISO-mode in tests requires monkey-patching.
 
 **Source refs:**
-- `build_parser()` (`verify` subparser) + `cmd_verify` + `_check_disc_for_volume` + `_verify_disc_against_recorded_hash` (`src/lcsas/cli/main.py`)
+- `build_parser()` (`verify` subparser) + `cmd_verify` + `_check_disc_for_volume` + `_verify_disc_against_recorded_hash` (`src/lcsas/cli/commands/verify.py` and `src/lcsas/cli/parser.py`)
 - `select_ecc_runner` (`src/lcsas/ecc/dvdisaster.py`) — FMT-01 dvdisaster → lcsas-ecc selection
 - `add_event` / `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`)
 - `touch_last_verified` (`src/lcsas/db/volume_copies.py`)
@@ -119,7 +119,7 @@ one place that decides it
 - Disc mode: an optical drive at `--device`; `xorriso` on `$PATH`.
 
 **Steps (ISO mode):**
-1. `cmd_verify` checks `args.verify_all`; with `--disc` it calls `_verify_all_disc`, else `_verify_all` (`src/lcsas/cli/main.py`).
+1. `cmd_verify` checks `args.verify_all`; with `--disc` it calls `_verify_all_disc`, else `_verify_all` (`src/lcsas/cli/commands/verify.py`).
 2. `_verify_all` pulls all `BURNED` + `VERIFIED` volumes (optionally filtered by `--location` via `volume_copies`).
 3. Probe the ECC tool ONCE up front with `select_ecc_runner()` (FMT-01); if absent, log that the whole sweep falls back to SHA-256.
 4. For each candidate, look up the most-recent `session_volumes.iso_path`; if missing/gone, report and point at `verify --all --disc`.
@@ -152,7 +152,7 @@ one place that decides it
   - No test for the `BURNED → VERIFIED` promotion in batch mode.
 
 **Source refs:**
-- `build_parser()` (`--all` / `--disc` / `--location`), `_verify_all`, `_verify_all_disc` (`src/lcsas/cli/main.py`)
+- `build_parser()` (`--all` / `--disc` / `--location`), `_verify_all`, `_verify_all_disc` (`src/lcsas/cli/commands/verify.py` and `src/lcsas/cli/parser.py`)
 - `select_ecc_runner` (`src/lcsas/ecc/dvdisaster.py`); `touch_last_verified` (`src/lcsas/db/volume_copies.py`)
 - `add_event` (`src/lcsas/db/volume_events.py`)
 - `tests/unit/test_db_volume_events.py`
@@ -170,8 +170,8 @@ one place that decides it
 - The disc was burned with the `HolographicInjector` (`staging/metadata.py`) so `volume_info.json` and `catalog.db` are present.
 
 **Steps:**
-1. Argparse exposes `lcsas catalog validate <disc>` with an optional `--content` flag (`build_parser()`, `src/lcsas/cli/main.py`).
-2. `cmd_catalog_validate` calls `validate_disc(disc_path, content=args.content)` (`src/lcsas/cli/main.py`).
+1. Argparse exposes `lcsas catalog validate <disc>` with an optional `--content` flag (`build_parser()`, `src/lcsas/cli/parser.py`).
+2. `cmd_catalog_validate` calls `validate_disc(disc_path, content=args.content)` (`src/lcsas/cli/commands/catalog.py`).
 3. `validate_disc` requires `catalog.db` and `data/` to exist; raises `FileNotFoundError` / `ValueError` otherwise (`src/lcsas/db/verify.py`).
 4. Walk `data/` recursively, collecting any filename that is exactly 64 lowercase hex chars — this handles both flat (`data/HASH`) and two-level (`data/ab/abcdef...`) layouts.
 5. Open the disc catalog read-only (`mode=ro` URI).
@@ -199,7 +199,7 @@ one place that decides it
   - `cmd_catalog_validate` does **not** record a `volume_events` entry — a successful validate doesn't move a volume's status. If you want the cross-check to count toward the audit trail, currently you have to follow it with a separate `lcsas verify <label> --mark-verified --detail "catalog validate ok"`.
 
 **Source refs:**
-- `cmd_catalog_validate` (`src/lcsas/cli/main.py`)
+- `cmd_catalog_validate` (`src/lcsas/cli/commands/catalog.py`)
 - `src/lcsas/db/verify.py` (`validate_disc`, `_collect_disc_packs`)
 - `tests/unit/test_db_verify.py` (entire module)
 
@@ -218,8 +218,8 @@ one place that decides it
 - No external tools — pure SQL.
 
 **Steps:**
-1. Argparse: `status` subparser with `--stale-copies`, `--older-than-days` (default 365), `--redundancy`, `--min-copies` (default 2) (`build_parser()`, `src/lcsas/cli/main.py`).
-2. Dispatch: `args.command == "status"` → `cmd_status` (`src/lcsas/cli/main.py`).
+1. Argparse: `status` subparser with `--stale-copies`, `--older-than-days` (default 365), `--redundancy`, `--min-copies` (default 2) (`build_parser()`, `src/lcsas/cli/parser.py`).
+2. Dispatch: `args.command == "status"` → `cmd_status` (`src/lcsas/cli/commands/status.py`).
 3. `cmd_status` opens an existing catalog via `_open_existing_catalog` (read-only; errors if uninitialized).
 4. If `--stale-copies`, delegate to `_print_stale_copies` (FMA-05) and return. If `--redundancy`, delegate to `_print_redundancy_report` (FMA-08) and return.
 5. Otherwise: query `get_archive_status_summary`, `list_volumes`, the lost volumes (`get_lost_volume_ids`), partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), the "needs re-burn" locations (`_volumes_needing_reburn`: per volume and location, the newest of `VERIFY_PASS`, `VERIFY_FAIL` and `VERIFY_FAIL_REBURN` is a failure; other events do not count, #671; once the volume's packs were staged again for that location, or are on another disc there, it is no longer listed unless a disc of it is still recorded there), and `find_stale_copies`.
@@ -243,7 +243,7 @@ one place that decides it
   - No CLI-level smoke test for the `--stale-copies` / `--redundancy` branches of `cmd_status`. `--json`, and the text summary's first line, are pinned by `tests/unit/test_collections.py::TestStatusJson`.
 
 **Source refs:**
-- `build_parser()` (`status` subparser), `cmd_status`, `_print_stale_copies`, `_print_redundancy_report` (`src/lcsas/cli/main.py`)
+- `build_parser()` (`status` subparser), `cmd_status`, `_print_stale_copies`, `_print_redundancy_report` (`src/lcsas/cli/commands/status.py` and `src/lcsas/cli/parser.py`)
 - `find_stale_copies` (`src/lcsas/db/volume_copies.py`); `get_redundancy_report` / `get_live_volumes_for_packs` (`src/lcsas/db/queries.py`)
 
 ---
@@ -257,8 +257,8 @@ one place that decides it
 - `--config` is **required** — `cmd_session_list` errors out without it (this is inconsistent with `status`/`verify`, which fall back to `archive.db`). See "Gaps".
 
 **Steps:**
-1. Argparse: `session` subcommand with `list` (optional `--status` filter) and `abort` sub-commands (`build_parser()`, `src/lcsas/cli/main.py`).
-2. Dispatch: `args.command == "session"` and `args.session_command == "list"` → `cmd_session_list` (`src/lcsas/cli/main.py`).
+1. Argparse: `session` subcommand with `list` (optional `--status` filter) and `abort` sub-commands (`build_parser()`, `src/lcsas/cli/parser.py`).
+2. Dispatch: `args.command == "session"` and `args.session_command == "list"` → `cmd_session_list` (`src/lcsas/cli/commands/session.py`).
 3. Refuse to run without `--config`.
 4. Load config, open a connection on `config.db_path`.
 5. Call `list_sessions(conn, status_filter=args.status)` which translates to a `SELECT * FROM burn_sessions [WHERE status = ?] ORDER BY created_at` (`src/lcsas/db/sessions.py`).
@@ -282,7 +282,7 @@ one place that decides it
   - No test for the `--config required` error path.
 
 **Source refs:**
-- `build_parser()` (`session list` subparser), `cmd_session_list` (`src/lcsas/cli/main.py`)
+- `build_parser()` (`session list` subparser), `cmd_session_list` (`src/lcsas/cli/commands/session.py` and `src/lcsas/cli/parser.py`)
 - `list_sessions` / `get_session_volumes` (`src/lcsas/db/sessions.py`)
 - `tests/unit/test_db_sessions.py`
 
@@ -309,7 +309,7 @@ lcsas --config lcsas.toml session abort [REF] [--volume LABEL]
 - A `STAGING` volume that a catalog rebuild brought in with no record of whether it was burned also blocks the abort (#758): a disc of it may exist. Record its disc the same way, or, if you are sure none was burned, abort again with `--never-burned`.
 
 **Steps:**
-1. Argparse: `session abort` with positional `ref` (default `latest`) and `--volume` (`build_parser()`, `src/lcsas/cli/main.py`).
+1. Argparse: `session abort` with positional `ref` (default `latest`) and `--volume` (`build_parser()`, `src/lcsas/cli/parser.py`).
 2. `cmd_session_abort` loads config, takes a `locked_connection`, and constructs a `BurnOrchestrator`.
 3. With `--volume`, calls `orch.abort_volume(label)`; otherwise `orch.abort_session(ref)`. A `ValueError` (e.g. session already burned) is logged and returns 1.
 4. Returns 0 on success.
@@ -326,7 +326,7 @@ lcsas --config lcsas.toml session abort [REF] [--volume LABEL]
 - Gap: no CLI-level test for `cmd_session_abort`.
 
 **Source refs:**
-- `build_parser()` (`session abort` subparser), `cmd_session_abort` (`src/lcsas/cli/main.py`)
+- `build_parser()` (`session abort` subparser), `cmd_session_abort` (`src/lcsas/cli/commands/session.py` and `src/lcsas/cli/parser.py`)
 - `BurnOrchestrator.abort_session` / `abort_volume` (`src/lcsas/burn/orchestrator.py`)
 - `tests/unit/test_db_sessions.py`
 
@@ -408,7 +408,7 @@ For whoever holds the archive after the owner. Every disc carries this schedule 
 **Source refs:**
 - `src/lcsas/staging/metadata.py` (`write_disc_care`: the long-term schedule on every disc)
 - `recovery/docs/READINESS_CHECKLIST.txt` (the owner's checklist; its HOW OFTEN lines follow the owner schedule)
-- `_print_stale_copies` / `find_stale_copies` (`src/lcsas/cli/main.py`, `src/lcsas/db/volume_copies.py`)
+- `_print_stale_copies` / `find_stale_copies` (`src/lcsas/cli/commands/status.py`, `src/lcsas/db/volume_copies.py`)
 - `src/lcsas/db/volume_events.py` (queries for "when was this last verified")
 
 ---

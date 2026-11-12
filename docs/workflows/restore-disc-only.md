@@ -56,7 +56,7 @@ Pick Tier 3 when, and only when:
 
 - No working `rustic` or `restic` binary is available for the host
   architecture (the rustic probe in `cmd_restore_from_disc()`,
-  `src/lcsas/cli/main.py`).
+  `src/lcsas/cli/commands/restore.py`).
 - The meta disc is lost, damaged, or its bundled binaries cannot
   execute (different CPU, glibc ABI break).
 - Internet access is unavailable, so a new binary cannot be downloaded.
@@ -66,7 +66,7 @@ Pick Tier 3 when, and only when:
 If the snapshot you want spans multiple discs and rustic is unavailable,
 either extract pack files from every relevant disc into a single cache
 directory **before** invoking the restorer (the merge hint logged by
-`cmd_restore_from_disc()` in `src/lcsas/cli/main.py`), or lean on the
+`cmd_restore_from_disc()` in `src/lcsas/cli/commands/restore.py`), or lean on the
 restorer's own disc handling: since #234 `standalone_restorer.py`
 accepts repeatable `--mount-point` roots and, when interactive, prompts
 for the next disc whenever a pack is not found in any search path
@@ -212,7 +212,7 @@ disc — no LCSAS install, no rustic, no network.
    the on-disc tree can be linked verbatim. Linking (instead of
    copying) the on-disc `data/` keeps the cache footprint near zero
    (the data-symlink step in `cmd_restore_from_disc()`,
-   `src/lcsas/cli/main.py`).
+   `src/lcsas/cli/commands/restore.py`).
 2. Run the restorer from the disc using the host's `python3`
    (the "pure Python" section of the on-disc
    `RESTORE_INSTRUCTIONS.txt`, written by
@@ -325,7 +325,7 @@ auto-falls-back to `PurePythonRestorer`.
   restore.
 
 All step references below are to `cmd_restore_from_disc()` in
-`src/lcsas/cli/main.py` unless noted otherwise.
+`src/lcsas/cli/commands/restore.py` unless noted otherwise.
 
 **Steps:**
 
@@ -408,8 +408,8 @@ disc box stops the whole restore with exit code `75`, as the bundled
 
 **Source refs:**
 the `restore standalone` subparser in `build_parser()`
-(`src/lcsas/cli/main.py`),
-`cmd_restore_from_disc()` in `src/lcsas/cli/main.py`
+(`src/lcsas/cli/parser.py`),
+`cmd_restore_from_disc()` in `src/lcsas/cli/commands/restore.py`
 (pure-Python branch),
 `dispatch()` in `src/lcsas/cli/main.py`,
 `RestoreExecutor.prepare_cache()` in `src/lcsas/restore/executor.py`.
@@ -726,7 +726,7 @@ This path deliberately trades capability for portability. It **cannot**:
   `lcsas restore standalone` wrapper likewise symlinks only the
   mounted disc's `data/` and tells the heir to merge other
   discs manually (`cmd_restore_from_disc()` in
-  `src/lcsas/cli/main.py`).
+  `src/lcsas/cli/commands/restore.py`).
 - **Locate missing packs by itself (non-interactive).** In
   non-interactive mode a required pack absent from every search path
   raises `FileNotFoundError` (`_find_pack_path()`); under tolerant
@@ -816,8 +816,9 @@ disc catalog this tier relies on.
 Required reading (repo-relative):
 
 - `CLAUDE.md`
-- `src/lcsas/cli/main.py` — the `restore standalone` subparser in
-  `build_parser()`, handler `cmd_restore_from_disc()`, dispatch
+- `src/lcsas/cli/parser.py` — the `restore standalone` subparser in
+  `build_parser()`; `src/lcsas/cli/commands/restore.py` — handler
+  `cmd_restore_from_disc()`; `src/lcsas/cli/main.py` — dispatch
   `dispatch()`.
 - `src/lcsas/restore/restic_fallback.py` — pure-Python AES/zstd reader
   (full file).
