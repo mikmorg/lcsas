@@ -855,14 +855,20 @@ class BurnOrchestrator:
                 underfilled.describe(mt.name),
             )
 
+        participating_repos = {p.repo_id for _packs, _b in volume_plans
+                               for p in _packs}
+
+        # KEY-08: refuse password split drift for every repository of the
+        # plan BEFORE any side effect, so a refused stage leaves no burn
+        # session, staging directory or half-built session behind (#747).
+        # With --allow-escrow-drift a real stage warns in
+        # _stage_single_volume, which also records the override NOTE on
+        # each volume; a dry run warns here.
+        if dry_run or not self._allow_escrow_drift:
+            self._escrow_preflight(sorted(participating_repos))
+
         # --- Dry-run: report the plan without side effects ---
         if dry_run:
-            # The real run checks each volume's repositories for password
-            # split drift in _stage_single_volume; a dry run must refuse
-            # (or, with --allow-escrow-drift, warn) the same way.
-            self._escrow_preflight(sorted(
-                {p.repo_id for _packs, _b in volume_plans for p in _packs}
-            ))
             total_bytes = sum(b for _, b in volume_plans)
             logger.info(f"[DRY RUN] {len(volume_plans)} volume(s) planned "
                         f"on {mt.name}")
@@ -886,8 +892,6 @@ class BurnOrchestrator:
         # recovery readers BEFORE any burn-session/staging/ISO side effect.  A
         # repository whose live rustic has outrun the readers (e.g. a v3
         # format) is refused here, never burned.
-        participating_repos = {p.repo_id for _packs, _b in volume_plans
-                               for p in _packs}
         self._format_preflight(sorted(participating_repos))
 
         # #657: only snapshots whose packs are all on discs (durable

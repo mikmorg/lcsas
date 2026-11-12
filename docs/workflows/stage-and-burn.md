@@ -200,7 +200,9 @@ machines, or when staging in advance for an unattended burn.
    disagrees with the recorded split (KEY-08); the override is logged
    as a volume event. Without it, an `EscrowDriftError` aborts the stage so a
    disc never prints share instructions that contradict the real split
-   (`cmd_stage`).
+   (`cmd_stage`). Every repository of the plan is checked before the burn
+   session is created, so a refused stage leaves no burn session and
+   nothing in the staging area (#747).
 7. `--allow-low-redundancy` — stage a volume even when its RS03
    redundancy would be below 5 %, or its content exceeds the medium's
    usable bytes (#674). The percentage is recorded as a `NOTE` event on
