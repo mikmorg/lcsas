@@ -180,7 +180,9 @@ in ``recovery/docs/PHYSICAL_DISC_VALIDATION.txt``.
 
 CONFIDENTIALITY (what a STOLEN disc gives an adversary): the integrity
 guards above keep the bytes intact and authentic; they do NOT keep them
-SECRET.  Every data disc carries its full disc catalog in plaintext,
+SECRET.  Every data disc carries its full disc catalog in plaintext
+(since v1.0.0-rc9 without snapshot source folders, tags and
+descriptions, which stay inside the encrypted snapshot files, #733),
 and every disc carries every repository's password-locked key files, so
 the password is the only thing protecting your data against unlimited
 offline guessing.  The stolen-disc threat model, the entropy guidance,
@@ -214,6 +216,18 @@ The loader comes from a fixed Alpine Linux release (musl 1.2.6),
 pinned by SHA-256 in recovery/UPSTREAM.sha256 like the other
 upstream programs.  The 32-bit ARM CPython is a glibc build and needs
 no loader; the macOS and Windows builds need none either.
+
+TIER 3: SPEED
+
+Tier 3 does all of its cryptography in pure Python
+(lcsas.restore._aes_pure, stdlib only), so it is SLOW.  Measured on
+the lab VM (2026-11-13, one x86_64 core): AES-256-CTR decryption about
+0.15 MB/s; the pure-Python zstd decoder about 8 MB/s.  AES sets the
+pace: roughly 2 hours per GB restored, about 11 weeks per TB.  Tiers 1
+and 2 run at disc speed.  Tier 3 exists so that the files that matter
+most can still be restored when tiers 1 and 2 cannot run; for a whole
+large archive, get tier 1 or 2 working (another computer, another
+architecture) instead.
 
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
 
