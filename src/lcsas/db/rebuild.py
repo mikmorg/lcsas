@@ -7,7 +7,6 @@ import logging
 import sqlite3
 import urllib.parse
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
@@ -27,22 +26,8 @@ _STATUS_RANK = {
 }
 
 
-def _parse_timestamp(value: object) -> float | None:
-    """Best-effort: catalog DATETIME text → epoch seconds (None on failure).
-
-    SQLite's CURRENT_TIMESTAMP writes naive UTC ("YYYY-MM-DD HH:MM:SS");
-    naive values are interpreted as UTC.
-    """
-    if not isinstance(value, str):
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.timestamp()
-
+# julianday() of 1970-01-01T00:00:00Z.
+_UNIX_EPOCH_JULIAN_DAY = 2440587.5
 
 # Freshness of a catalog: (newest timestamp found in its rows, file mtime).
 # Tuples compare element by element, so the rows decide and the mtime only
@@ -50,8 +35,8 @@ def _parse_timestamp(value: object) -> float | None:
 Freshness = tuple[float, float]
 
 # Timestamp columns that show how recent a catalog is.  Each is read with
-# its own MAX() and parsed in Python, because the columns do not share one
-# text format (CURRENT_TIMESTAMP vs isoformat with an offset).
+# its own MAX(julianday()), because the columns do not share one text
+# format (CURRENT_TIMESTAMP vs isoformat with an offset, #730).
 _FRESHNESS_COLUMNS = (
     ("volumes", "created_at"),
     ("volumes", "closed_at"),
@@ -78,14 +63,18 @@ def _row_freshness(conn: sqlite3.Connection, schema: str = "main") -> float:
     for table, column in _FRESHNESS_COLUMNS:
         if table not in tables:
             continue
+        # #730: the newest instant, not the greatest text: a column can
+        # mix CURRENT_TIMESTAMP text, isoformat and other offsets.
         try:
             row = conn.execute(
-                f"SELECT MAX({column}) FROM {schema}.{table}"
+                f"SELECT MAX(julianday({column})) FROM {schema}.{table}"
             ).fetchone()
         except sqlite3.Error:
             continue  # column missing in an old catalog
-        ts = _parse_timestamp(row[0] if row else None)
-        if ts is not None and ts > newest:
+        if row is None or row[0] is None:
+            continue
+        ts = (float(row[0]) - _UNIX_EPOCH_JULIAN_DAY) * 86400.0
+        if ts > newest:
             newest = ts
     return newest
 

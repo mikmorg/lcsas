@@ -8,7 +8,7 @@ import sqlite3
 import sys
 from typing import TYPE_CHECKING, Any
 
-from lcsas.cli.common import _open_catalog, _restage_hint
+from lcsas.cli.common import _open_catalog, _reburn_hint
 from lcsas.log import get_logger
 
 if TYPE_CHECKING:
@@ -22,6 +22,7 @@ def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
     from datetime import UTC, datetime
 
     from lcsas.db.volume_copies import find_stale_copies
+    from lcsas.utils.timestamps import parse_utc
 
     stale = find_stale_copies(conn, older_than_days)
     if not stale:
@@ -36,11 +37,14 @@ def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
         f"{older_than_days} days:"
     )
     for label, location, last_verified_at in stale:
+        when = parse_utc(last_verified_at)
         if last_verified_at is None:
             age = "never verified"
+        elif when is None:
+            age = f"unreadable date ({last_verified_at})"
         else:
-            days = (now - datetime.fromisoformat(last_verified_at)).days
-            age = f"{days} days ago ({last_verified_at[:10]})"
+            days = (now - when).days
+            age = f"{days} days ago ({when.date().isoformat()})"
         logger.info(f"  {label:<25} {location:<15} {age}")
     logger.info("Re-verify with: lcsas verify --all --disc")
     return 0
@@ -145,7 +149,7 @@ def _volumes_needing_reburn(
            FROM volume_events e JOIN volumes v USING (volume_id)
            WHERE e.event_type IN ('VERIFY_PASS', 'VERIFY_FAIL',
                                   'VERIFY_FAIL_REBURN')
-           ORDER BY e.event_date, e.event_id"""
+           ORDER BY julianday(e.event_date), e.event_id"""
     ):
         key = (int(row["volume_id"]), row["location"] or "<unknown>")
         newest[key] = (row["event_type"], row["label"])
@@ -258,7 +262,7 @@ def _status_json(
             "SELECT sv.session_id FROM session_volumes sv "
             "JOIN burn_sessions bs USING (session_id) "
             "WHERE sv.volume_id = ? "
-            "ORDER BY bs.created_at DESC, sv.rowid DESC LIMIT 1",
+            "ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC LIMIT 1",
             (v.volume_id,),
         ).fetchone()
         at(v.location)["waiting"].append({
@@ -362,6 +366,25 @@ def _cmd_status(args: argparse.Namespace) -> int:
         # BURN_RECEIPT_IMPORTED written after a failed receipt, don't count).
         needs_reburn = _volumes_needing_reburn(conn)
         failed_labels = {label for label, _, _ in needs_reburn}
+        # #728: one next step per failed burn.  The needs-re-burn line
+        # names it (burn the session again while its ISO is kept, else
+        # stage again), so a PARTIAL session holding one of those volumes
+        # gets no second, different line.
+        reburn_hints: dict[tuple[str, str], str] = {}
+        covered_sessions: set[str] = set()
+        for label, loc, has_disc in needs_reburn:
+            if has_disc or loc == "<unknown>":
+                continue
+            vid = int(conn.execute(
+                "SELECT volume_id FROM volumes WHERE label = ?", (label,)
+            ).fetchone()[0])
+            reburn_hints[(label, loc)] = _reburn_hint(conn, vid, loc)
+            covered_sessions.update(
+                str(r[0]) for r in conn.execute(
+                    "SELECT session_id FROM session_volumes "
+                    "WHERE volume_id = ?", (vid,),
+                )
+            )
         unburned = get_ghost_volumes(conn, older_than_hours=0)
         # #751: a volume with no disc record that was burned is not a
         # ghost: BURNED/VERIFIED with no disc row at all (a catalog rebuilt
@@ -409,7 +432,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
         # #671: a volume whose disc failed verification is listed under
         # "needs re-burn", not as waiting to be burned.
         waiting = [label for label in with_iso if label not in failed_labels]
-        ghost_labels = [v.label for v in unburned if v.label not in with_iso]
+        # #728: nor as a ghost once its ISO is gone: the needs-re-burn
+        # line then names the one step (stage it again for the location).
+        ghost_labels = [v.label for v in unburned
+                        if v.label not in with_iso
+                        and v.label not in failed_labels]
         # FMA-08: packs that live on exactly one disc.  Packs in
         # the <2-copies report with at least one live holder are on one
         # disc; zero-holder packs are the unarchived/staged buckets above.
@@ -505,9 +532,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
             "packs to the unarchived pool.",
             len(burn_unknown), ", ".join(burn_unknown),
         )
+    # #728: nor for the packs of a failed burn, listed under "needs
+    # re-burn" with their step.
     if summary["staged"] > 0 and not (
         with_iso or ghost_labels or incomplete or burn_unknown
-        or staged_but_burned
+        or staged_but_burned or reburn_hints
     ):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
@@ -515,6 +544,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
             summary["staged"],
         )
     for s in partial_sessions:
+        if s.session_id in covered_sessions:
+            continue
         logger.warning(
             "WARNING: session %s is PARTIAL — at least one burn failed "
             "verification and recorded no disc. Re-run: "
@@ -541,7 +572,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
             logger.warning(
                 "WARNING: %s needs re-burn at %s: its disc failed "
                 "verification and no disc of it is recorded there. %s",
-                label, loc, _restage_hint(loc),
+                label, loc, reburn_hints[(label, loc)],
             )
     if single_disc_packs:
         logger.warning(

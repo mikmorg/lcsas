@@ -326,6 +326,28 @@ def _restage_hint(location: str) -> str:
     )
 
 
+def _reburn_hint(
+    conn: sqlite3.Connection, volume_id: int, location: str,
+) -> str:
+    """The one next step for a burn that failed verification and recorded
+    no disc (#728).
+
+    While the session's ISO is still in the staging area, burn the same
+    session again: the step the burn command itself prints, and it keeps
+    the volume and its label.  Once the ISO is gone, stage the packs again
+    for that location (:func:`_restage_hint`).
+    """
+    from lcsas.db.sessions import retained_iso_session
+
+    session_id = retained_iso_session(conn, volume_id)
+    if session_id is None:
+        return _restage_hint(location)
+    return (
+        f"Its ISO is still in the staging area: burn it again with "
+        f"'lcsas burn --session {session_id} --location {location}'."
+    )
+
+
 def _unknown_location_msg(exc: Any) -> str:
     """Error for an unknown --location that this command will not create."""
     msg = f"Unknown location '{exc.name}'"

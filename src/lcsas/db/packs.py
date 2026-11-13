@@ -36,9 +36,12 @@ def register_pack(
     If a pack with the same sha256 already exists, returns the existing one.
     Uses INSERT OR IGNORE to avoid TOCTOU races.
     """
+    from lcsas.utils.timestamps import utc_now
+
     conn.execute(
-        "INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
-        (sha256, size_bytes, repo_id),
+        "INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (sha256, size_bytes, repo_id, utc_now()),
     )
     conn.commit()
     result = get_pack_by_sha256(conn, sha256)
@@ -142,9 +145,13 @@ def bulk_register(
     # Build a map of sha256 -> expected size for mismatch detection
     expected_sizes = {p[0]: p[1] for p in packs}
 
+    from lcsas.utils.timestamps import utc_now
+
+    now = utc_now()
     conn.executemany(
-        "INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
-        packs,
+        "INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        [(*p, now) for p in packs],
     )
     conn.commit()
     # Fetch all by sha256 in batches to avoid SQLite variable limit
@@ -200,6 +207,6 @@ def list_packs(
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     rows = conn.execute(
-        f"SELECT * FROM packs {where} ORDER BY created_at", params
+        f"SELECT * FROM packs {where} ORDER BY julianday(created_at), pack_id", params
     ).fetchall()
     return [_row_to_pack(r) for r in rows]

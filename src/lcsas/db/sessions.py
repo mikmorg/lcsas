@@ -45,10 +45,13 @@ def create_session(
     """Create a new burn session."""
     if session_id is None:
         session_id = generate_session_id()
+    from lcsas.utils.timestamps import utc_now
+
     conn.execute(
-        """INSERT INTO burn_sessions (session_id, media_type, staging_dir)
-           VALUES (?, ?, ?)""",
-        (session_id, media_type, staging_dir),
+        """INSERT INTO burn_sessions (session_id, media_type, staging_dir,
+                                      created_at)
+           VALUES (?, ?, ?, ?)""",
+        (session_id, media_type, staging_dir, utc_now()),
     )
     if commit:
         conn.commit()
@@ -69,7 +72,7 @@ def get_session(conn: sqlite3.Connection, session_id: str) -> BurnSession:
 def get_latest_session(conn: sqlite3.Connection) -> BurnSession:
     """Get the most recently created session."""
     row = conn.execute(
-        "SELECT * FROM burn_sessions ORDER BY created_at DESC LIMIT 1"
+        "SELECT * FROM burn_sessions ORDER BY julianday(created_at) DESC, rowid DESC LIMIT 1"
     ).fetchone()
     if row is None:
         raise ValueError("No sessions exist")
@@ -124,12 +127,12 @@ def list_sessions(
     """List all sessions, optionally filtered by status."""
     if status_filter:
         rows = conn.execute(
-            "SELECT * FROM burn_sessions WHERE status = ? ORDER BY created_at",
+            "SELECT * FROM burn_sessions WHERE status = ? ORDER BY julianday(created_at), rowid",
             (status_filter,),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM burn_sessions ORDER BY created_at"
+            "SELECT * FROM burn_sessions ORDER BY julianday(created_at), rowid"
         ).fetchall()
     return [_row_to_session(r) for r in rows]
 
@@ -208,7 +211,7 @@ def get_staged_iso_path(
            FROM session_volumes sv
            JOIN burn_sessions bs USING (session_id)
            WHERE sv.volume_id = ? AND sv.iso_path != ''
-           ORDER BY bs.created_at DESC, sv.rowid DESC
+           ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC
            LIMIT 1""",
         (volume_id,),
     ).fetchone()
@@ -224,6 +227,33 @@ def staged_iso_present(conn: sqlite3.Connection, volume_id: int) -> bool:
     return path is not None and Path(path).is_file()
 
 
+def retained_iso_session(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> str | None:
+    """The newest burn session whose staged ISO of this volume is still on
+    disk, or None (#728).
+
+    While it is there (BURN-06 keeps ISOs until ``stage --clean``), a
+    disc of the volume that failed verification is burned again from the
+    same session, which keeps the volume and its label.
+    """
+    from pathlib import Path
+
+    for row in conn.execute(
+        """SELECT sv.session_id, sv.iso_path
+           FROM session_volumes sv
+           JOIN burn_sessions bs USING (session_id)
+           WHERE sv.volume_id = ? AND sv.iso_path != ''
+             AND bs.status != 'CLEANED'
+           ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC""",
+        (volume_id,),
+    ):
+        if Path(row["iso_path"]).is_file():
+            return str(row["session_id"])
+    return None
+
+
 def get_staged_iso(
     conn: sqlite3.Connection,
     volume_id: int,
@@ -237,7 +267,7 @@ def get_staged_iso(
            JOIN burn_sessions bs USING (session_id)
            WHERE sv.volume_id = ?
              AND sv.iso_sha256 IS NOT NULL AND sv.iso_sha256 != ''
-           ORDER BY bs.created_at DESC, sv.rowid DESC
+           ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC
            LIMIT 1""",
         (volume_id,),
     ).fetchone()
@@ -266,7 +296,7 @@ def staging_incomplete(conn: sqlite3.Connection, volume_id: int) -> bool:
            JOIN session_volumes sv ON sv.volume_id = v.volume_id
            JOIN burn_sessions bs ON bs.session_id = sv.session_id
            WHERE v.volume_id = ?
-           ORDER BY bs.created_at DESC, sv.rowid DESC
+           ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC
            LIMIT 1""",
         (volume_id,),
     ).fetchone()
