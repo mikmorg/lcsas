@@ -222,6 +222,10 @@ Python dependency; the BARE MINIMUM restore path ends after tier 2.
                                        it if needed -- or else
                                        python3 on PATH.  See TIERS.txt,
                                        "TIER 3: WHICH PYTHON".
+                                       It is VERY slow: about 2 hours
+                                       per GB restored (see TIERS.txt,
+                                       "TIER 3: SPEED").  Use it for
+                                       the files that matter most.
 
 If every tier fails, you have a hardware/environment problem.  See
 "REPAIRING A DAMAGED DISC" below.  See docs/TIERS.txt for the full
