@@ -15,10 +15,15 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from lcsas.restore import restic_fallback
+from lcsas.restore._aes_fast import AesCtrBackend, FastAesCtr, select_aes_ctr_backend
 from lcsas.restore._aes_pure import (
     aes_ctr,
     aes_encrypt_block,
@@ -63,6 +68,7 @@ def _build_repo_and_script(
     tmp_path: Path,
     *,
     corrupt_first_blob: bool = False,
+    file_content: bytes = b"Standalone subprocess test data!\n",
     extra_nodes: list[dict] | None = None,
 ) -> tuple[Path, Path, Path]:
     """Build a synthetic repo + the standalone_restorer.py script.
@@ -103,7 +109,6 @@ def _build_repo_and_script(
     (keys_dir / "testkey01").write_text(json.dumps(key_doc))
 
     # Data blobs
-    file_content = b"Standalone subprocess test data!\n"
     file_id = hashlib.sha256(file_content).hexdigest()
 
     root_nodes: list[dict] = [{
@@ -215,6 +220,70 @@ class TestStandaloneSubprocess:
         contents = list(target.rglob('*'))
         assert restored.is_file(), f"Expected file not found. Dir contents: {contents}"
         assert restored.read_bytes() == b"Standalone subprocess test data!\n"
+
+    @pytest.mark.parametrize("mode", ["pure", "ctypes", "openssl"])
+    def test_restore_with_each_aes_backend(self, tmp_path, monkeypatch, mode):
+        """Each AES backend this host has restores byte-identical data,
+        and the reader says in one line which backend it uses."""
+        if mode == "openssl" and shutil.which("openssl") is None:
+            pytest.skip("no openssl command on this host")
+        monkeypatch.setenv("LCSAS_TIER3_AES", mode)
+        if mode == "ctypes":
+            backend, _ = select_aes_ctr_backend(False)
+            if backend.name != "ctypes":
+                pytest.skip("no usable libcrypto for ctypes on this host")
+        size = 4096 if mode == "pure" else 300_000
+        content = os.urandom(size)
+        repo, pw_file, script = _build_repo_and_script(
+            tmp_path, file_content=content)
+        target = tmp_path / "output"
+        result = subprocess.run(
+            [sys.executable, str(script), "--repo", str(repo),
+             "--password-file", str(pw_file), "--target", str(target)],
+            capture_output=True, text=True, timeout=300,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (target / "standalone_test.txt").read_bytes() == content
+        said = [ln for ln in result.stderr.splitlines() if "AES-256-CTR:" in ln]
+        assert len(said) == 1, result.stderr
+        expect = {"pure": "pure-Python AES", "ctypes": "(ctypes)",
+                  "openssl": "the openssl command"}[mode]
+        assert expect in said[0], said[0]
+        assert MASTER_ENCRYPT.hex() not in result.stderr
+
+    def test_wrong_native_aes_gets_a_second_opinion(self, tmp_path, monkeypatch):
+        """A native AES that turns wrong after its self-test costs no
+        file: the content-hash mismatch triggers a pure re-decrypt, and
+        the backend is switched off for the rest of the run."""
+        content = os.urandom(5000)
+        repo, pw_file, _script = _build_repo_and_script(
+            tmp_path, file_content=content)
+
+        class Liar(AesCtrBackend):
+            name = "liar"
+
+            def describe(self):
+                return "a lying backend"
+
+            def ctr(self, key, iv, data):
+                out = aes_ctr(key, iv, data)
+                if len(data) == len(content):  # only the file's data blob
+                    out = bytes([out[0] ^ 1]) + out[1:]
+                return out
+
+        lines: list[str] = []
+        monkeypatch.setattr(restic_fallback, "_log", lines.append)
+        aes = FastAesCtr(log=lines.append)
+        aes._backend = Liar()
+        monkeypatch.setattr(restic_fallback, "_AES_CTR", aes)
+        restorer = restic_fallback.PurePythonRestorer(
+            repo_path=repo, password_file=pw_file, interactive=False)
+        target = tmp_path / "output"
+        restorer.restore(target=target)
+        assert restorer.failures == 0
+        assert (target / "standalone_test.txt").read_bytes() == content
+        assert aes.backend.name == "pure"
+        assert any("gave wrong output for blob" in ln for ln in lines), lines
 
     def test_list_snapshots_via_subprocess(self, tmp_path):
         """--list-snapshots should print snapshot info and exit 0."""

@@ -30,10 +30,12 @@ _FRONT_ENDS = {"cli", "meta", "__main__"}
 # of them may import in turn (the leaf check).
 _RESTORE_LEAVES: dict[str, set[str]] = {
     "lcsas.restore.restic_fallback": {
-        "lcsas.restore._aes_pure", "lcsas.restore._zstd_pure",
+        "lcsas.restore._aes_pure", "lcsas.restore._aes_fast",
+        "lcsas.restore._zstd_pure",
     },
     "lcsas.restore.standalone_builder": set(),
     "lcsas.restore._aes_pure": set(),
+    "lcsas.restore._aes_fast": {"lcsas.restore._aes_pure"},
     "lcsas.restore._zstd_pure": set(),
 }
 _RESTORE_PUBLIC = {

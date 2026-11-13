@@ -1,7 +1,8 @@
 """Build tier 3, the Python reader (``standalone_restorer.py``), from source modules.
 
-Concatenates ``_aes_pure.py`` and ``restic_fallback.py`` into a single
-file that can be placed on every data disc.  The output has no imports
+Concatenates ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py`` and
+``restic_fallback.py`` into a single file that can be placed on every
+data disc.  The output has no imports
 from the ``lcsas`` package — it is completely self-contained and can run
 with nothing but Python ≥ 3.10 stdlib (plus optional ``zstandard``).
 
@@ -30,11 +31,13 @@ _SRC_DIR = Path(__file__).resolve().parent
 def build_standalone() -> str:
     """Return the text of a self-contained standalone_restorer.py.
 
-    Reads ``_aes_pure.py`` and ``restic_fallback.py`` from the same
-    directory, strips ``from lcsas...`` imports, and concatenates them
-    with a ``__main__`` CLI block.
+    Reads ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py`` and
+    ``restic_fallback.py`` from the same directory, strips
+    ``from lcsas...`` imports, and concatenates them with a ``__main__``
+    CLI block.
     """
     aes_src = (_SRC_DIR / "_aes_pure.py").read_text()
+    aes_fast_src = (_SRC_DIR / "_aes_fast.py").read_text()
     zstd_src = (_SRC_DIR / "_zstd_pure.py").read_text()
     fallback_src = (_SRC_DIR / "restic_fallback.py").read_text()
 
@@ -42,6 +45,18 @@ def build_standalone() -> str:
     # Strip module docstring and __future__ import (will be at top of output)
     aes_lines = _strip_header(aes_src)
     aes_body = "\n".join(aes_lines)
+
+    # ── Process _aes_fast.py ─────────────────────────────────────
+    # The native AES-256-CTR selector (ctypes libcrypto / openssl command,
+    # pure as the floor).  Its one lcsas import, the pure aes_ctr, becomes
+    # a binding to the inlined function of that name.
+    aes_fast_src = re.sub(
+        r"^from lcsas\.restore\._aes_pure import aes_ctr as (\w+)$",
+        r"\1 = aes_ctr",
+        aes_fast_src,
+        flags=re.MULTILINE,
+    )
+    aes_fast_body = "\n".join(_strip_header(aes_fast_src))
 
     # ── Process _zstd_pure.py ────────────────────────────────────
     # Pure-Python zstd decompressor — the tier-3 fallback when the
@@ -57,6 +72,12 @@ def build_standalone() -> str:
         r"^from lcsas\.restore\._aes_pure import \(\n"
         r"(?:    .*\n)*"
         r"\)\n",
+        "",
+        fallback_src,
+        flags=re.MULTILINE,
+    )
+    fallback_src = re.sub(
+        r"^from lcsas\.restore\._aes_fast import .*$\n",
         "",
         fallback_src,
         flags=re.MULTILINE,
@@ -95,6 +116,7 @@ def build_standalone() -> str:
     return (
         _HEADER
         + aes_body + "\n\n"
+        + aes_fast_body + "\n\n"
         + zstd_body + "\n\n"
         + fallback_body + "\n\n"
         + _CLI_BLOCK
@@ -141,6 +163,7 @@ _HEADER = textwrap.dedent("""\
     #
     #  This file is AUTO-GENERATED from:
     #    - src/lcsas/restore/_aes_pure.py   (AES-256-CTR implementation)
+    #    - src/lcsas/restore/_aes_fast.py   (native AES-256-CTR selector)
     #    - src/lcsas/restore/_zstd_pure.py  (pure-Python zstd decompressor)
     #    - src/lcsas/restore/restic_fallback.py  (restic repository reader)
     #
@@ -154,10 +177,15 @@ _HEADER = textwrap.dedent("""\
     #    python3 standalone_restorer.py --repo /path/to/cache \\\\
     #        --password-file password.txt --target /path/to/output
     #
-    #  NO pip packages, NO native binaries, NO internet required.
+    #  NO pip packages, NO native binaries, NO internet REQUIRED.
     #  (zstandard pip package needed only for zstd-compressed repositories)
     #
-    #  Performance: ~1 MB/s — acceptable for an emergency restore.
+    #  AES-256-CTR uses a native OpenSSL when one is safe and passes a
+    #  known-answer test: the libcrypto library (ctypes; Windows, and
+    #  glibc Pythons on Linux) or the 'openssl' command (its command
+    #  line carries the key; LCSAS_TIER3_AES=pure turns it off).  Else
+    #  pure Python at ~0.15 MB/s (about 2 hours per GB).  The log line
+    #  "AES-256-CTR: using ..." says which.
     #
     #  Requires Python 3.10 or newer (stdlib only).
     # ═══════════════════════════════════════════════════════════════════
@@ -279,6 +307,10 @@ _CLI_BLOCK = textwrap.dedent("""\
                     "prompts will show only the pack ID.",
                     file=sys.stderr,
                 )
+
+        # This is the restore command: the openssl command may be used
+        # for AES (see _aes_fast; its argv carries the key).
+        allow_openssl_command()
 
         restorer = PurePythonRestorer(
             repo_path=repo_path,

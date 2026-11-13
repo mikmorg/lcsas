@@ -1,14 +1,18 @@
 """Tier 3, the Python reader: restic repository restore, the last resort.
 
 This module implements a *complete* restic repository reader using only
-Python 3 standard-library primitives (plus the vendored ``_aes_pure``
-module).  It exists so that data can be restored even when the
+Python 3 standard-library primitives (plus the vendored ``_aes_pure``,
+``_aes_fast`` and ``_zstd_pure`` modules).  It exists so that data can be restored even when the
 ``rustic`` and ``restic`` binaries cannot execute — e.g., on a future
 CPU architecture or after ABI changes have rendered all bundled native
 tools unusable.
 
-**Performance:** Expect roughly ~1 MB/s on modern hardware.  This is
-acceptable for a manual emergency restore of the most critical files.
+**Performance:** AES-256-CTR runs through a native OpenSSL when one is
+safe and proven correct (``_aes_fast``: the ``libcrypto`` library via
+ctypes, or the ``openssl`` command when the caller allows it), else
+through the pure-Python code at about 0.15 MB/s.  With native AES the
+pure-Python zstd decoder and Poly1305 set the pace (a few MB/s); with
+pure AES, AES does (about 2 hours per GB).
 
 Crypto stack (all self-contained — no pip packages required):
 
@@ -16,7 +20,8 @@ Crypto stack (all self-contained — no pip packages required):
     Primitive                 Source
     ========================  ================================
     scrypt (KDF)              ``hashlib.scrypt`` (stdlib ≥ 3.6)
-    AES-256-CTR               ``lcsas.restore._aes_pure``
+    AES-256-CTR               ``lcsas.restore._aes_fast`` (native
+                              OpenSSL if usable, else ``_aes_pure``)
     AES-128-ECB (Poly1305)    ``lcsas.restore._aes_pure``
     Poly1305-AES (MAC)        Implemented below
     SHA-256                   ``hashlib`` (stdlib)
@@ -56,6 +61,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from lcsas.restore._aes_fast import FastAesCtr
 from lcsas.restore._aes_pure import (
     aes_ctr,
     aes_encrypt_block,
@@ -64,7 +70,7 @@ from lcsas.restore._aes_pure import (
 
 # ── Progress reporting tunables ──────────────────────────────────
 #
-# Tier-3 restore is slow (~1 MB/s).  An heir watching a quiet
+# Tier-3 restore is slow (a few MB/s at best).  An heir watching a quiet
 # terminal can't tell "frozen" from "still working", so we emit a
 # periodic status line whenever EITHER threshold is reached:
 #
@@ -133,6 +139,37 @@ except ImportError:
                 "for ~100x faster restore"
             )
         return _pure_zstd_decompress(data, max_output_size)
+
+
+# ── AES-256-CTR backend ─────────────────────────────────────────
+#
+# Chosen once, on the first decryption (see _aes_fast).  The ``openssl``
+# command puts the key in its argv, so only the tier-3 restore command
+# turns it on (allow_openssl_command); library use inside lcsas (stage,
+# burn preflight, key checks) uses the libcrypto library or pure code.
+
+_AES_CTR: FastAesCtr | None = None
+_AES_ALLOW_OPENSSL_COMMAND = False
+
+
+def allow_openssl_command() -> None:
+    """Let AES use the ``openssl`` command (the key goes in its argv).
+
+    For the tier-3 restore command only; call before the first
+    decryption.
+    """
+    global _AES_ALLOW_OPENSSL_COMMAND, _AES_CTR
+    _AES_ALLOW_OPENSSL_COMMAND = True
+    if _AES_CTR is not None and _AES_CTR.backend.name == "pure":
+        _AES_CTR = None  # choose again, now with the command allowed
+
+
+def _aes_ctr_fast() -> FastAesCtr:
+    """The process-wide AES-256-CTR, created on first use."""
+    global _AES_CTR
+    if _AES_CTR is None:
+        _AES_CTR = FastAesCtr(allow_cli=_AES_ALLOW_OPENSSL_COMMAND, log=_log)
+    return _AES_CTR
 
 
 # ── Poly1305-AES MAC ────────────────────────────────────────────
@@ -276,6 +313,8 @@ def _decrypt_authenticated(
     mac_k: bytes,
     mac_r: bytes,
     data: bytes,
+    *,
+    pure: bool = False,
 ) -> bytes:
     """Decrypt restic authenticated ciphertext.
 
@@ -286,6 +325,8 @@ def _decrypt_authenticated(
         mac_k: 16-byte AES key for Poly1305 nonce encryption.
         mac_r: 16-byte Poly1305 r key.
         data: Encrypted blob (minimum 33 bytes: 16 IV + 1 ct + 16 MAC).
+        pure: Use the pure-Python AES even when a native one is in use
+            (the second opinion after a content-hash mismatch).
 
     Returns:
         Decrypted plaintext.
@@ -310,7 +351,9 @@ def _decrypt_authenticated(
     if not _constant_time_eq(computed_mac, expected_mac):
         raise IntegrityError("MAC verification failed — wrong key or corrupted data")
 
-    return aes_ctr(encrypt_key, iv, ciphertext)
+    if pure:
+        return aes_ctr(encrypt_key, iv, ciphertext)
+    return _aes_ctr_fast()(encrypt_key, iv, ciphertext)
 
 
 def _constant_time_eq(a: bytes, b: bytes) -> bool:
@@ -791,11 +834,13 @@ class PurePythonRestorer:
         self._master_key = try_keys(keys_dir, self._password)
         _log("Master key decrypted successfully.")
 
-    def _decrypt(self, encrypted: bytes) -> bytes:
+    def _decrypt(self, encrypted: bytes, *, pure: bool = False) -> bytes:
         """Decrypt data using the master key."""
         assert self._master_key is not None
         mk = self._master_key
-        return _decrypt_authenticated(mk.encrypt, mk.mac_k, mk.mac_r, encrypted)
+        return _decrypt_authenticated(
+            mk.encrypt, mk.mac_k, mk.mac_r, encrypted, pure=pure,
+        )
 
     def _decrypt_file(self, path: Path) -> bytes:
         """Read, decrypt, and (if needed) decompress a repository file.
@@ -1393,7 +1438,28 @@ class PurePythonRestorer:
             encrypted = f.read(loc.length)
 
         plaintext = self._decrypt(encrypted)
+        try:
+            return self._decode_blob(blob_id, loc, plaintext)
+        except IntegrityError:
+            # The MAC passed, so the ciphertext is what was written.  If a
+            # native AES did the decryption, get a second opinion from the
+            # pure code before calling the blob bad: a backend that turned
+            # wrong after its self-test must not cost files.
+            if not _aes_ctr_fast().is_native(len(encrypted) - 32):
+                raise
+            second = self._decrypt(encrypted, pure=True)
+            if second == plaintext:
+                raise
+            decoded = self._decode_blob(blob_id, loc, second)
+            _aes_ctr_fast().disable(
+                f"gave wrong output for blob {blob_id[:12]}"
+            )
+            return decoded
 
+    def _decode_blob(
+        self, blob_id: str, loc: BlobLocation, plaintext: bytes,
+    ) -> bytes:
+        """Decompress (if the index says so) and hash-check a blob."""
         # Handle zstd compression.  The restic repository-v2 index contract is
         # the discriminator: a blob is compressed iff its index entry
         # carries `uncompressed_length`.  Auto-compression stores
