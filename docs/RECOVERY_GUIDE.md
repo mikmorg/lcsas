@@ -133,9 +133,14 @@ script automatically falls back to tier 3, the Python reader
 
 ### Tier 3 (the Python reader) is very slow
 
-The Python fallback runs at ~1 MB/s.  A 100 GB archive takes ~28
-hours.  If you have a working system, prefer the C/Rust tiers (the
-default).  See [restore-disc-only.md](workflows/restore-disc-only.md)
+With an OpenSSL on the computer (the `openssl` command, or the
+library that comes with the bundled Windows Python), the Python
+fallback restores photos and other data that does not compress at
+about 8 MB/s and text at about 1 MB/s.  Without one it uses its
+built-in AES: about 2 hours per GB.  The reader says which AES it
+uses in one line at the start.  See `recovery/docs/TIERS.txt`,
+"TIER 3: SPEED".  If you have a working system, prefer the C/Rust
+tiers (the default).  See [restore-disc-only.md](workflows/restore-disc-only.md)
 for the tier-3-only flow.
 
 ### Need a working Linux box?

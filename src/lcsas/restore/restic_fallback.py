@@ -11,8 +11,8 @@ tools unusable.
 safe and proven correct (``_aes_fast``: the ``libcrypto`` library via
 ctypes, or the ``openssl`` command when the caller allows it), else
 through the pure-Python code at about 0.15 MB/s.  With native AES the
-pure-Python zstd decoder and Poly1305 set the pace (a few MB/s); with
-pure AES, AES does (about 2 hours per GB).
+pure-Python zstd decoder (about 1.2 MB/s of text) and Poly1305 (about
+14 MB/s) set the pace; with pure AES, AES does (about 2 hours per GB).
 
 Crypto stack (all self-contained — no pip packages required):
 
