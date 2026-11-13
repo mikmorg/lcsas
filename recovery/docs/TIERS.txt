@@ -255,10 +255,11 @@ Python with the openssl command):
 
 The pure-Python zstd decoder (about 1.2 MB/s of text) and Poly1305
 (about 14 MB/s) now set the pace.  With the built-in AES instead, add
-about 1.8 hours per GB stored (0.15 MB/s): the same 200 MB mix takes
-about 17 minutes.  Tiers 1 and 2 run at disc speed.  Tier 3 exists so
-that the files that matter most can still be restored when tiers 1
-and 2 cannot run; for a whole large archive, get tier 1 or 2 working
+about 1.8 hours per GB stored (0.15 MB/s): the same 200 MB mix would
+take about 17 minutes (worked out from a 5 MB run, not timed in
+full).  Tiers 1 and 2 run at disc speed.  Tier 3 exists so that the
+files that matter most can still be restored when tiers 1 and 2
+cannot run; for a whole large archive, get tier 1 or 2 working
 (another computer, another architecture) instead.
 
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB

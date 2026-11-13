@@ -344,8 +344,10 @@ ships fallback paths:
 - **Direct invocation of the upstream rustic binary** at
   `tools/bin/rustic-static`.  Requires you to manually assemble
   the pack tree (see [troubleshooting.md](../TROUBLESHOOTING.md#manual-pack-assembly-last-resort-tier-3-fallback)).
-- **Tier 3, the Python reader (`standalone_restorer.py`)** (slowest,
-  ~1 MB/s).  Requires only Python 3.10+ + standard library.  Run with
+- **Tier 3, the Python reader (`standalone_restorer.py`)** (slowest:
+  about 8 MB/s for photos and 1 MB/s for text with an OpenSSL on the
+  computer, else about 2 hours per GB; see `recovery/docs/TIERS.txt`,
+  "TIER 3: SPEED").  Requires only Python 3.10+ + standard library.  Run with
   `--repo /path/to/assembled/repo --password-file <file>
   --target <dir>`.  As in tier 1, `q` (or the end of input) at its
   disc box stops the whole restore with exit code 75.  A full disk

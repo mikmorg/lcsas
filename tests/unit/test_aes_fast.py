@@ -335,6 +335,23 @@ def test_choice_is_made_once_and_logged_once(
     assert lines == ["AES-256-CTR: using a fake backend"]
 
 
+def test_a_crash_while_choosing_gives_pure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Choosing a backend must never stop a restore that worked before."""
+    def broken() -> tuple[list[str], str]:
+        raise LookupError("unexpected")
+
+    monkeypatch.setattr(fast, "_aesf_library_candidates", broken)
+    lines: list[str] = []
+    aes = fast.FastAesCtr(allow_cli=True, log=lines.append)
+    data = os.urandom(3000)
+    assert aes(KEY, IV, data) == pure_ctr(KEY, IV, data)
+    assert aes.backend.name == "pure"
+    assert len(lines) == 1
+    assert "choosing a native AES failed (LookupError: unexpected)" in lines[0]
+
+
 def test_pure_choice_log_says_why(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         fast, "select_aes_ctr_backend",

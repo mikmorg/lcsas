@@ -265,7 +265,7 @@ def _aesf_openssl_version(exe: str) -> str:
     """``openssl version`` output, or "" when it cannot be read."""
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
-            [exe, "version"], capture_output=True,
+            [exe, "version"], stdin=subprocess.DEVNULL, capture_output=True,
             timeout=_AESF_PROBE_TIMEOUT, check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -364,7 +364,8 @@ def _aesf_child_probe(path: str) -> str | None:
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
             [sys.executable, "-I", "-c", code, path, *args],
-            capture_output=True, timeout=_AESF_PROBE_TIMEOUT, check=False,
+            stdin=subprocess.DEVNULL, capture_output=True,
+            timeout=_AESF_PROBE_TIMEOUT, check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return f"the probe could not run ({type(exc).__name__}: {exc})"
@@ -458,7 +459,12 @@ class FastAesCtr:
     def backend(self) -> AesCtrBackend:
         """The backend in use (chosen now if not yet chosen)."""
         if self._backend is None:
-            backend, notes = select_aes_ctr_backend(self._allow_cli)
+            try:
+                backend, notes = select_aes_ctr_backend(self._allow_cli)
+            except Exception as exc:  # noqa: BLE001 — choosing must never stop a restore
+                backend = AesCtrBackend()
+                notes = [f"choosing a native AES failed "
+                         f"({type(exc).__name__}: {exc})"]
             self._backend = backend
             line = f"AES-256-CTR: using {backend.describe()}"
             if backend.name == "pure" and notes:
