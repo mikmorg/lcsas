@@ -361,6 +361,10 @@ Procedure:
    records for volumes made *after* that volume, but all prior
    data is fully described
 
+A disc catalog has its snapshots' source folders, tags and descriptions
+blank (#733). The next `lcsas scan` writes paths and tags again from
+rustic.
+
 ---
 
 ## 6. Volume Consolidation
@@ -440,7 +444,6 @@ without needing the password, external tools, or prior knowledge.
 
 **What is exposed in the catalog:**
 
-- File paths and directory names (from snapshot metadata)
 - Hostnames that produced each backup
 - Snapshot timestamps
 - Repository identifiers and mirror paths
@@ -452,18 +455,24 @@ without needing the password, external tools, or prior knowledge.
 - File contents, directory trees, and blob data within packs
 - Keys (stored on-disc in each repository's `keys/` directory, themselves
   requiring the repository's password to unlock)
+- Snapshot source folders, tags and descriptions: they are blank in the
+  disc catalog and only inside rustic's encrypted snapshot files (#733).
+  Discs staged by an LCSAS older than v1.0.0-rc9 still carry them in
+  plaintext.
 
-**Implication:** An attacker with physical access to a disc can learn *what*
-was backed up (file paths, timestamps, hostnames) but cannot read *any* file
-contents without the repository password. The full stolen-disc threat model
+**Implication:** An attacker with physical access to a disc can learn *when*
+and from which computer each repository was backed up (timestamps,
+hostnames), but cannot read the backed-up folders or *any* file contents
+without the repository password. The full stolen-disc threat model
 is in [docs/DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md).
 
 **For highly sensitive archives**, consider:
 
 - Using opaque repository names (e.g., `repo_a` instead of `medical_records`)
-- (A metadata-scrubbed disc catalog is deliberately not offered: it would
-  break catalog rebuild and only protect future discs. See
-  [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) §8.3.)
+- (A further-scrubbed disc catalog is deliberately not offered: it would
+  break catalog rebuild and only protect future discs. Only the snapshots'
+  source folders, tags and descriptions are blanked, which costs nothing.
+  See [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) §8.3.)
 - Physical security of stored media
 
 ---

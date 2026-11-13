@@ -21,6 +21,7 @@ from typing import Any
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
+from lcsas.db.snapshots import DISC_BLANKED_SNAPSHOT_COLUMNS
 from lcsas.restore.standalone_builder import build_standalone
 from lcsas.staging.builder import MirrorUnavailableError
 from lcsas.staging.repo_marker import RepoMarker, write_repo_marker
@@ -392,6 +393,53 @@ def _use_rollback_journal(db: Path) -> None:
         )
 
 
+def _blank_snapshot_columns(db: Path) -> None:
+    """Blank the private snapshot columns in the disc catalog *db* (#733).
+
+    Sets each column of ``DISC_BLANKED_SNAPSHOT_COLUMNS`` to its blank
+    value in every snapshot row, then rebuilds the file with ``VACUUM``.
+    An UPDATE alone leaves the old text in the file's free space, where
+    any hex viewer would find it; ``secure_delete`` zeroes what the
+    UPDATE frees and ``VACUUM`` drops every free page, including those
+    the master catalog had before the copy.  Raises if a row keeps a
+    value, so a disc never carries one by accident.  A file with no
+    ``snapshots`` table is only vacuumed.
+    """
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("PRAGMA secure_delete=ON")
+        cols = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(snapshots)")
+        }
+        blanks = [
+            (col, value)
+            for col, value in DISC_BLANKED_SNAPSHOT_COLUMNS.items()
+            if col in cols
+        ]
+        if blanks:
+            assignments = ", ".join(f"{col} = ?" for col, _ in blanks)
+            conn.execute(
+                f"UPDATE snapshots SET {assignments}",
+                [value for _, value in blanks],
+            )
+            conn.commit()
+        conn.execute("VACUUM")
+        if blanks:
+            kept = " OR ".join(f"{col} IS NOT ?" for col, _ in blanks)
+            left = conn.execute(
+                f"SELECT COUNT(*) FROM snapshots WHERE {kept}",
+                [value for _, value in blanks],
+            ).fetchone()[0]
+            if left:
+                raise RuntimeError(
+                    f"{left} snapshot row(s) in {db} still carry source "
+                    "folders, tags or a description after blanking"
+                )
+    finally:
+        conn.close()
+
+
 class HolographicInjector:
     """Injects repository metadata and catalog into a staging directory."""
 
@@ -496,6 +544,11 @@ class HolographicInjector:
         disc-swap hints and a stock ``sqlite3`` could not read the catalog
         on a burned disc (#534).  The copy is switched to a rollback
         journal, which opens read-only anywhere.
+
+        The copy does not carry the snapshots' source folders, tags and
+        descriptions (#733): those columns are blanked, so a disc shows
+        them only to someone with the repository password, inside
+        rustic's encrypted snapshot files.  The master catalog keeps them.
         """
         dst = self._root / "catalog.db"
         copy_file(db_path, dst)
@@ -503,6 +556,7 @@ class HolographicInjector:
             is_sqlite = fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
         if is_sqlite:
             _use_rollback_journal(dst)
+            _blank_snapshot_columns(dst)
 
     def write_volume_info(
         self,

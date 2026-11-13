@@ -9,6 +9,8 @@ import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lcsas.db.snapshots import DISC_BLANKED_SNAPSHOT_COLUMNS
+
 _logger = logging.getLogger(__name__)
 
 # Liveness rank for volume statuses.  Recency — not rank — decides which
@@ -135,6 +137,47 @@ class RebuildResult:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+
+def _fill_blanked_snapshots(target: sqlite3.Connection, alias: str) -> None:
+    """Fill blanked snapshot rows from the attached disc catalog (#733).
+
+    A disc catalog staged since #733 has no source folders, tags or
+    description (``DISC_BLANKED_SNAPSHOT_COLUMNS``).  Discs merge
+    newest-first, so a blanked row usually lands first; an older disc
+    that still has the values fills it here.  Only a row whose every
+    such column is blank is filled, and only from a source row that has
+    at least one value.  The next ``lcsas scan`` writes paths and tags
+    from rustic anyway.
+    """
+    src_cols = {
+        str(r[1]) for r in target.execute(
+            f"PRAGMA {alias}.table_info(snapshots)"
+        ).fetchall()
+    }
+    cols = [c for c in DISC_BLANKED_SNAPSHOT_COLUMNS if c in src_cols]
+    if not cols:
+        return
+    blank_values = [DISC_BLANKED_SNAPSHOT_COLUMNS[c] for c in cols]
+    target_blank = " AND ".join(f"snapshots.{c} = ?" for c in cols)
+    source_set = " OR ".join(f"s.{c} != ?" for c in cols)
+    assignments = ", ".join(
+        f"{c} = (SELECT s.{c} FROM {alias}.snapshots AS s "
+        f"WHERE s.snapshot_id = snapshots.snapshot_id)"
+        for c in cols
+    )
+    target.execute(
+        f"""
+        UPDATE snapshots SET {assignments}
+        WHERE {target_blank}
+          AND EXISTS (
+            SELECT 1 FROM {alias}.snapshots AS s
+            WHERE s.snapshot_id = snapshots.snapshot_id
+              AND ({source_set})
+          )
+        """,
+        [*blank_values, *blank_values],
+    )
 
 
 def _merge_one_disc(
@@ -316,6 +359,7 @@ def _merge_one_disc(
             """
         )
         counts["snapshots"] = cur.rowcount
+        _fill_blanked_snapshots(target, alias)
 
         # 6. volume_packs — keyed on (volume_id, pack_id).
         #    We must translate IDs from the source catalog since auto-increment

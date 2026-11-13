@@ -1,12 +1,13 @@
 # Disc confidentiality — the stolen-disc threat model
 
 > **One-line version:** A thief holding any single LCSAS data disc gets the
-> archive's whole *catalog* in plaintext and every repository's
-> *password-locked* key files. They do **not** get your file contents unless
-> they also guess your password. The only thing standing between a stolen disc
-> and your data is the strength of that password — so make it long and random,
-> and choose where discs and cards are kept as if every disc carries this
-> inventory; every data disc does.
+> archive's whole *catalog* in plaintext (without the snapshots' source
+> folders, tags and descriptions) and every repository's *password-locked*
+> key files. They do **not** get your file contents unless they also guess
+> your password. The only thing standing between a stolen disc and your data
+> is the strength of that password — so make it long and random, and choose
+> where discs and cards are kept as if every disc carries this inventory;
+> every data disc does.
 
 This document is the deliberate, written threat model for **confidentiality**
 of a burned LCSAS disc (restorability findings live elsewhere). It exists so
@@ -24,23 +25,36 @@ following in the clear. The meta disc carries the same key files and
 `key_storage_hints`, but no catalog.
 
 - **The disc catalog** (`catalog.db`, a SQLite copy of the whole catalog
-  burned verbatim onto every data disc, current as of that disc's burn). That
-  includes:
-  - every snapshot's **hostname, backup paths, tags, and description**;
-  - every repository's **name and mirror path**;
-  - every **location name** and the full map of **which disc is where** —
-    i.e. where every other disc is kept;
-  - the **volume_events audit trail**.
+  on every data disc, current as of that disc's staging). That includes:
+  - every repository's **name, id and mirror path**;
+  - every snapshot's **id, time and hostname**, and which repository it
+    belongs to;
+  - every **disc label**, volume uuid, media type, size and status;
+  - every **pack's hash and size**, and which disc holds it;
+  - every **location name and description**, and the full map of **which
+    disc is where**, with each disc's **media serial** and **notes**;
+  - the **volume_events audit trail** (dates, locations, free-text details);
+  - the **burn sessions**, with the staging folder and ISO image paths of
+    the burning computer;
+  - every recorded **password split**: K of N and the SLIP-0039 id
+    (`key_escrow`), never a share or the password.
 - **Every repository's rustic `keys/` directory** — the scrypt-wrapped master
   keys. The key-file JSON additionally carries the **plaintext `username` and
   `hostname`** of the machine that created the repository (a content-addressed
   artifact; see §6).
 - **The owner's `key_storage_hints`**, printed verbatim into `START_HERE.txt`
   and `PASSWORD_INFO.txt` on every disc.
+- **Each repository's `LCSAS_REPO.txt`** (its id, name and split K/N) and
+  the disc's `VOLUME_INFO.txt` / `volume_info.json` (label, pack hashes,
+  repository ids).
+- **`START_HERE.txt` and `CONFIG_SUMMARY.txt`**: the archive owner,
+  description and technical contact when the config sets them, and every
+  configured repository's name and key id. Filesystem paths are left out.
 
-In short: a single disc reveals your whole backup *topology and metadata*, and
-hands the attacker the locked door (the wrapped keys) to attack offline
-at leisure.
+In short: a single disc reveals your whole backup *topology* — what
+repositories exist, how big they are, when they were backed up, from which
+computer, and where every disc is kept — and hands the attacker the locked
+door (the wrapped keys) to attack offline at leisure.
 
 ## 2. What they do NOT get
 
@@ -48,6 +62,17 @@ at leisure.
   authenticated (Poly1305 / HMAC-SHA-256); the audited crypto is sound. The
   packs are useless without the repository password.
 - **The password itself.** It is never written to any disc.
+- **The snapshots' source folders, tags and descriptions** (#733). They are
+  only inside rustic's own snapshot files (`metadata/<repo>/snapshots/`),
+  which are encrypted under the repository password. The disc catalog has
+  the columns, but blank: `[]` for paths and tags, an empty description.
+  Every restore tier reads a snapshot's folders and tags from the encrypted
+  snapshot file once the password is given (none reads the description),
+  so restore loses nothing. The owner's master catalog keeps them.
+
+  **Discs staged by an LCSAS older than v1.0.0-rc9** still carry the source
+  folders, tags and descriptions in their disc catalog, in plaintext.
+  Destroying those discs is the only way to remove them (§4).
 
 So the entire confidentiality of your *data* reduces to one question: can the
 attacker guess the password?
@@ -124,9 +149,11 @@ and the wrapped (not bare) keys. This is a tradeoff made with intent, not an acc
   only as weak as the password protecting it (§3).
 - The plaintext catalog is metadata, not file contents.
 
-Any future "sanitized disc catalog" option would affect **newly burned
-discs only**: every already-burned data disc carries the full plaintext
-catalog forever. The decision not to offer one is recorded in §8.3.
+The snapshots' source folders, tags and descriptions are the exception:
+newly staged discs carry them only encrypted (§2, #733). That costs no
+restorability. Every other column stays, so every already-burned data disc
+and every new one carries the rest of the catalog in plaintext. The decision
+not to redact more is recorded in §8.3.
 
 Key files and their plaintext `username`/`hostname`: rustic 0.11.2 writes
 **neither** field (measured, §7), so a repository LCSAS created carries none.
@@ -173,11 +200,21 @@ records.
 ### 8.1 Repositories of different people
 
 **Every data disc carries every repository's** catalog rows: repository names
-and mirror paths, every snapshot's hostname, paths, tags and description,
-locations, and the volume map. It also carries every repository's wrapped
-keys. So whoever holds one data disc sees every repository's metadata, and can
-brute-force any repository's password offline (§3). Repositories share
-volumes, so no binpack setting changes that.
+and mirror paths, every snapshot's id, time and hostname, locations, and the
+volume map. It also carries every repository's wrapped keys and encrypted
+metadata. So whoever holds one data disc sees every repository's metadata,
+and can brute-force any repository's password offline (§3). Repositories
+share volumes, so no binpack setting changes that.
+
+**Collections** (`stage --collection`, #701) do not change it either. A
+collection chooses which repositories' packs go to its location, but each
+of its discs still carries the whole disc catalog and every repository's
+encrypted metadata (index, key and snapshot files), not only those of the
+collection's own repositories. Whoever holds a disc of one collection sees
+the names, sizes and snapshot times of the repositories of every other
+collection. The owner accepted that on 2026-11-13 (#733), on condition that
+the snapshots' source folders, tags and descriptions are not readable
+without the password (§2).
 
 That is why an archive has one owner, who holds every repository's password.
 People who need privacy from each other keep separate archives.
@@ -205,11 +242,20 @@ disc; §5 and `ESTATE_PLANNING.md` already forbid that.
 Decided per the charter's default ("keep full catalog, document it"). A
 redacted disc catalog would cost restorability:
 - `db/rebuild.py` rebuilds a lost master catalog from discs by merging their
-  `locations`, `volume_events` and snapshot rows (descriptions included).
-  Redacting them means a rebuilt catalog no longer knows where the other discs
-  are kept or what happened to each volume.
+  `locations`, `volume_events` and snapshot rows. Redacting them means a
+  rebuilt catalog no longer knows where the other discs are kept or what
+  happened to each volume.
 - The swap prompts and restore planning need the pack → volume map.
 - Every data disc already burned keeps the full catalog anyway (§6).
+
+One redaction costs nothing, and is made (#733, owner decision 2026-11-13):
+the snapshots' `paths`, `tags` and `description` are blank in every disc
+catalog staged since. No restore tier reads them from the catalog; the
+tiers read paths and tags from rustic's encrypted snapshot files. A
+catalog rebuilt from such discs has the snapshot rows with those columns
+blank; the rebuild fills them from an older disc that still has them, and
+the next `lcsas scan` writes paths and tags again from rustic. Snapshot
+hostnames stay on the disc for now.
 
 The mitigations stay as they are: opaque repository and location names, and
 custodian-style `key_storage_hints` (§5). Revisit only as an explicit opt-in if

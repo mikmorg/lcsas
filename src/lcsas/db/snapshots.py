@@ -6,6 +6,21 @@ import sqlite3
 
 from lcsas.db.models import Snapshot
 
+# #733: the snapshot columns that a disc catalog does not carry, each
+# with the blank value it gets there (the column's own "none" value).
+# Every restore tier reads a snapshot's source folders, tags and
+# description from rustic's own snapshot file, which is encrypted under
+# the repository password; the catalog's copy is a plaintext duplicate.
+# ``HolographicInjector.inject_catalog`` blanks these columns in each disc
+# catalog; the owner's master catalog keeps them.  ``catalog rebuild``
+# fills a blanked row from an older disc that still has them, and the
+# next ``lcsas scan`` writes paths and tags again from rustic.
+DISC_BLANKED_SNAPSHOT_COLUMNS: dict[str, str] = {
+    "paths": "[]",
+    "tags": "[]",
+    "description": "",
+}
+
 
 def _row_to_snapshot(row: sqlite3.Row) -> Snapshot:
     """Convert a sqlite3.Row to a Snapshot model."""

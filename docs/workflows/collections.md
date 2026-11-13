@@ -19,7 +19,10 @@ collection's disc also carries the whole disc catalog and the
 repository metadata (encrypted index, key and snapshot files) of every
 repository in the archive, as `HolographicInjector` copies them. Each
 repository stays encrypted under its own password, but anyone holding
-the disc can see the names of all the archive's repositories. See
+the disc can see the names of all the archive's repositories and their
+snapshots' times and hostnames. The snapshots' source folders, tags and
+descriptions are blank in the disc catalog (#733); only the password
+shows them. The owner accepted this on 2026-11-13. See
 [DISC_CONFIDENTIALITY.md](../DISC_CONFIDENTIALITY.md).
 
 ## Table of contents

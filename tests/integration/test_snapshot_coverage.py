@@ -12,15 +12,23 @@ the restore asked for a disc that does not exist.  These tests pin:
 """
 from __future__ import annotations
 
+import json
 import os
 import random
+import sqlite3
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from lcsas.db.connection import get_connection
+from lcsas.db.models import Snapshot
+from lcsas.db.repos import register_repo
+from lcsas.db.schema import create_all
+from lcsas.db.snapshots import bulk_upsert_snapshots
 from lcsas.packs.snapshot_coverage import snapshot_coverage
 from lcsas.restore.restic_fallback import PurePythonRestorer
+from lcsas.rustic.wrapper import SubprocessRusticRunner
 from lcsas.staging.metadata import HolographicInjector
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_rustic]
@@ -136,3 +144,80 @@ def test_inject_metadata_filters_snapshots(tmp_path: Path) -> None:
     HolographicInjector(staging2).inject_metadata({"r1": mirror})
     got = sorted(p.name for p in (staging2 / "metadata/r1/snapshots").iterdir())
     assert got == ["aaa", "bbb", "ccc"]
+
+
+def test_disc_catalog_blank_but_reader_lists_snapshot_paths(
+    tmp_path: Path,
+) -> None:
+    """#733: the disc catalog has no source folders, tags or description.
+
+    The master catalog holds them as ``lcsas scan`` wrote them from
+    rustic; the disc catalog holds them blank; the snapshot files are
+    still chosen by id (#657); and the tier-3 reader still lists the
+    snapshot's folders and tags from the disc's encrypted snapshot file.
+    """
+    repo = tmp_path / "repo"
+    pw = tmp_path / "pw"
+    pw.write_text("privacy-test\n")
+    src = tmp_path / "zz-private-folder-733"
+    src.mkdir()
+    (src / "a.bin").write_bytes(random.Random(3).randbytes(4096))
+    _rustic(repo, pw, "init", tmp=tmp_path)
+    _rustic(repo, pw, "backup", "--host", "fixture-host",
+            "--tag", "zz-private-tag-733",
+            "--description", "zz-private-description-733",
+            str(src), tmp=tmp_path)
+
+    # The master catalog, as scan fills it from rustic.
+    master = tmp_path / "archive.db"
+    conn = get_connection(master)
+    create_all(conn)
+    register_repo(conn, "r1", "family", str(repo), "")
+    infos = SubprocessRusticRunner(tmpdir=tmp_path).snapshots(repo, pw)
+    bulk_upsert_snapshots(conn, [
+        Snapshot(snapshot_id=si.snapshot_id, repo_id="r1",
+                 hostname=si.hostname, timestamp=si.timestamp,
+                 paths=json.dumps(si.paths), tags=json.dumps(si.tags),
+                 description="zz-private-description-733")
+        for si in infos
+    ])
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+
+    cov = snapshot_coverage(repo, pw, _packs(repo))
+    ids = {p.name for p in (repo / "snapshots").iterdir()}
+    assert cov.complete == ids
+    assert {si.snapshot_id for si in infos} == ids
+
+    staging = tmp_path / "staging"
+    inj = HolographicInjector(staging)
+    inj.inject_metadata({"r1": repo}, required_repos={"r1"},
+                        snapshot_allow={"r1": cov.complete})
+    inj.inject_catalog(master)
+
+    def rows(db: Path) -> list[tuple[str, str, str, str, str]]:
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            return c.execute(
+                "SELECT snapshot_id, hostname, paths, tags, description "
+                "FROM snapshots").fetchall()
+        finally:
+            c.close()
+
+    ((sid, host, paths, tags, desc),) = rows(master)
+    assert sid in ids and host == "fixture-host"
+    assert json.loads(paths) == [str(src)]
+    assert json.loads(tags) == ["zz-private-tag-733"]
+    assert desc == "zz-private-description-733"
+
+    disc_catalog = staging / "catalog.db"
+    assert rows(disc_catalog) == [(sid, "fixture-host", "[]", "[]", "")]
+    assert b"zz-private" not in disc_catalog.read_bytes()
+
+    meta = staging / "metadata" / "r1"
+    assert {p.name for p in (meta / "snapshots").iterdir()} == ids
+    reader = PurePythonRestorer(meta, password_file=pw, interactive=False)
+    (snap,) = reader.list_snapshots()
+    assert snap.snapshot_id == sid
+    assert snap.paths == [str(src)]
+    assert snap.tags == ["zz-private-tag-733"]
