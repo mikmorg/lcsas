@@ -60,6 +60,19 @@ DECISION FLOW
              --password-file /tmp/pwfile \
              --target ~/restored
 
+            No python3 on this computer?  Use the one on a meta
+            disc instead of "python3" above (<meta> is where that
+            disc is mounted).  On a 64-bit PC with Linux, run it
+            through the loader next to it, which works whether or
+            not the computer has musl:
+
+         <meta>/recovery/bin/x86_64-unknown-linux-musl/python/lib/ld-musl-x86_64.so.1 \
+             <meta>/recovery/bin/x86_64-unknown-linux-musl/python/bin/python3 \
+             /mnt/standalone_restorer.py --repo /tmp/cache ...
+
+            (64-bit ARM: aarch64 in place of x86_64, in all three
+            places.)
+
 IF THE COMPUTER REFUSES TO RUN THE TOOLS
 
 The programs on the disc are fine; a safety setting on the computer
@@ -202,7 +215,13 @@ Python dependency; the BARE MINIMUM restore path ends after tier 2.
   Tier 3.  standalone_restorer.py      the Python reader, LAST RESORT
                                        (only invoked if every C/Rust
                                        option failed; skip entirely
-                                       with LCSAS_ALLOW_PYTHON_TIER=0)
+                                       with LCSAS_ALLOW_PYTHON_TIER=0).
+                                       Runs under the Python bundled in
+                                       bin/<arch>/python/ -- on Linux
+                                       through the musl loader next to
+                                       it if needed -- or else
+                                       python3 on PATH.  See TIERS.txt,
+                                       "TIER 3: WHICH PYTHON".
 
 If every tier fails, you have a hardware/environment problem.  See
 "REPAIRING A DAMAGED DISC" below.  See docs/TIERS.txt for the full

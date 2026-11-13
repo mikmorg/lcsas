@@ -104,14 +104,44 @@ def python_tree_marker(target: str) -> str:
     return f"{base}/bin/python3"
 
 
+# The Linux CPython builds (python-build-standalone, *-linux-musl) are
+# dynamically linked against musl's loader, /lib/ld-musl-<arch>.so.1,
+# which glibc hosts lack (#714).  The disc carries that loader next to
+# the interpreter; restore.sh runs the interpreter through it when it
+# cannot start on its own.  Pinned in recovery/UPSTREAM.sha256 (musl/).
+# The armv7 build is a glibc (gnueabihf) one and needs none.
+MUSL_LOADER_ARCH: dict[str, str] = {
+    "x86_64-unknown-linux-musl": "x86_64",
+    "aarch64-unknown-linux-musl": "aarch64",
+}
+
+
+def musl_loader_name(target: str) -> str | None:
+    """The musl loader's file name for ``target``, or None if it needs none."""
+    arch = MUSL_LOADER_ARCH.get(target)
+    return f"ld-musl-{arch}.so.1" if arch else None
+
+
+def musl_loader_path(target: str) -> str | None:
+    """Relative path of the bundled musl loader for ``target`` (or None)."""
+    name = musl_loader_name(target)
+    if name is None:
+        return None
+    return f"recovery/bin/{target}/python/lib/{name}"
+
+
 def required_target_paths(target: str) -> list[str]:
     """Relative paths a complete meta disc must contain for one target."""
-    return [
+    paths = [
         f"recovery/bin/{target}/{_tier1_exe(target)}",
         f"recovery/bin/{target}/{_rustic_name(target)}",
         f"recovery/bin/{target}/{_ecc_name(target)}",
         python_tree_marker(target),
     ]
+    loader = musl_loader_path(target)
+    if loader is not None:
+        paths.append(loader)
+    return paths
 
 
 def required_meta_paths() -> list[str]:

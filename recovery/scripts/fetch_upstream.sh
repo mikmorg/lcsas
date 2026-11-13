@@ -15,6 +15,8 @@
 #       python/<target>/<python-archive>.tar.gz         ← downloaded archive
 #       python/<target>/python/                         ← extracted prefix
 #       dvdisaster/src/<dvdisaster-archive>.tar.gz       ← downloaded (not extracted)
+#       musl/<target>/alpine-minirootfs-<v>-<arch>.tar.gz  ← downloaded archive
+#       musl/<target>/ld-musl-<arch>.so.1                  ← extracted loader (only)
 #
 # Override the cache root with $LCSAS_RECOVERY_CACHE.
 # Override the manifest path with $LCSAS_UPSTREAM_MANIFEST (default:
@@ -102,9 +104,19 @@ PYTHON_BASE="https://github.com/astral-sh/python-build-standalone/releases/downl
 # tag, so we strip the leading "dvdisaster-" and trailing ".tar.gz" to
 # get the tag back (e.g. dvdisaster-0.79.10-pl6.tar.gz → v0.79.10-pl6).
 DVDISASTER_CODELOAD="https://codeload.github.com/speed47/dvdisaster/tar.gz/refs/tags"
+# musl's dynamic loader for the Linux musl CPython (#714), taken from the
+# minirootfs of a fixed Alpine point release.  The arch is the last
+# "-" field of the filename (alpine-minirootfs-3.24.4-x86_64.tar.gz).
+MUSL_ALPINE_BASE="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases"
+
+# minirootfs_arch FILENAME: the Alpine arch a minirootfs filename names.
+minirootfs_arch() {
+    _a="${1%.tar.gz}"
+    printf '%s\n' "${_a##*-}"
+}
 
 resolve_url() {
-    # $1: category (rustic | python | dvdisaster)
+    # $1: category (rustic | restic | python | dvdisaster | musl)
     # $2: filename (basename of the artifact)
     case "$1" in
         rustic) printf '%s/%s\n' "$RUSTIC_BASE" "$2" ;;
@@ -114,6 +126,8 @@ resolve_url() {
             tag="${2#dvdisaster-}"
             tag="v${tag%.tar.gz}"
             printf '%s/%s\n' "$DVDISASTER_CODELOAD" "$tag" ;;
+        musl)
+            printf '%s/%s/%s\n' "$MUSL_ALPINE_BASE" "$(minirootfs_arch "$2")" "$2" ;;
         *) printf 'unknown category: %s\n' "$1" >&2; return 1 ;;
     esac
 }
@@ -233,6 +247,16 @@ process_line() {
         python)
             # PBS tarballs unpack to a "python/" prefix tree.
             tar -xzf "$dest_file" -C "$dest_dir"
+            ;;
+        musl)
+            # Only musl's dynamic loader is wanted from the Alpine
+            # minirootfs; extract that one member and nothing else.
+            ld_name="ld-musl-$(minirootfs_arch "$filename").so.1"
+            rm -rf "${dest_dir:?}/lib"
+            tar -xzf "$dest_file" -C "$dest_dir" "./lib/$ld_name"
+            mv -f "$dest_dir/lib/$ld_name" "$dest_dir/$ld_name"
+            rmdir "$dest_dir/lib"
+            chmod 755 "$dest_dir/$ld_name"
             ;;
     esac
     printf '%s' "$expected_sha" > "$marker"

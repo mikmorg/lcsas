@@ -932,6 +932,67 @@ class TestBundleUpstreamBinaries:
             assert (recovery_dst / "bin" / t / "rustic-static").is_file(), t
             assert (recovery_dst / "bin" / t / "python" / "bin" / "python3").is_file(), t
 
+    def test_musl_loader_lands_in_the_python_tree(self, tmp_path, monkeypatch):
+        """#714: the cached musl loader (fetch_upstream.sh extracts it to
+        musl/<target>/ld-musl-<arch>.so.1) lands executable in the Linux
+        musl python tree's lib/, at the path required_contents names.
+        Targets that need none (armv7 glibc, macOS) get none."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        from lcsas.meta.required_contents import (
+            MUSL_LOADER_ARCH,
+            musl_loader_path,
+        )
+        cache_root = tmp_path / "cache"
+        targets = [
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+            "armv7-unknown-linux-gnueabihf",
+            "x86_64-apple-darwin",
+        ]
+        for t in targets:
+            self._make_cache(cache_root, t)
+        for t, arch in MUSL_LOADER_ARCH.items():
+            d = cache_root / "musl" / t
+            d.mkdir(parents=True)
+            (d / f"ld-musl-{arch}.so.1").write_bytes(b"\x7fELF fake " + arch.encode())
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        meta = tmp_path / "meta"
+        recovery_dst = meta / "recovery"
+        recovery_dst.mkdir(parents=True)
+        MetaVolumeBuilder(meta)._bundle_upstream_binaries(recovery_dst)
+
+        for t in targets:
+            rel = musl_loader_path(t)
+            if t not in MUSL_LOADER_ARCH:
+                assert rel is None, t
+                assert not list((recovery_dst / "bin" / t).rglob("ld-musl-*")), t
+                continue
+            assert rel is not None
+            loader = meta / rel
+            assert loader.is_file(), rel
+            assert os.access(str(loader), os.X_OK), rel
+            assert loader.read_bytes().endswith(MUSL_LOADER_ARCH[t].encode())
+
+    def test_musl_loader_skipped_without_python_tree(self, tmp_path, monkeypatch):
+        """No python tree for a target: no stray python/lib/ for the loader."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        cache_root = tmp_path / "cache"
+        self._make_cache(cache_root, "x86_64-unknown-linux-musl",
+                         with_python=False)
+        d = cache_root / "musl" / "x86_64-unknown-linux-musl"
+        d.mkdir(parents=True)
+        (d / "ld-musl-x86_64.so.1").write_bytes(b"fake")
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        MetaVolumeBuilder(tmp_path / "meta")._bundle_upstream_binaries(recovery_dst)
+
+        target_dir = recovery_dst / "bin" / "x86_64-unknown-linux-musl"
+        assert (target_dir / "rustic-static").is_file()
+        assert not (target_dir / "python").exists()
+
     def test_orchestration_via_bundle_recovery_toolchain_artifacts(
         self, tmp_path, monkeypatch,
     ):

@@ -81,7 +81,7 @@ root):
 recovery/
 ├── Makefile                       # C89 build rules + per-arch cross targets
 ├── MANIFEST.sha256                # checked-in hashes of source + scripts
-├── UPSTREAM.sha256                # pinned hashes of upstream rustic + CPython
+├── UPSTREAM.sha256                # pinned hashes of upstream rustic, restic, CPython, musl loader
 ├── VERSION  TOOLCHAIN             # pinned toolchain provenance
 ├── src/                           # C89 source: lcsas-restore, lcsas-iso9660,
 │   │                              #   lcsas-keyshare, lcsas-ecc/
@@ -95,7 +95,7 @@ recovery/
 ├── scripts/
 │   ├── restore.sh  restore_auto.sh  restore.bat   # the tier dispatchers
 │   ├── detect_arch.sh             # (uname -s, uname -m) → target arch
-│   └── fetch_upstream.sh          # pinned rustic + CPython downloader
+│   └── fetch_upstream.sh          # pinned upstream downloader (rustic, CPython, ...)
 ├── tests/                         # C unit tests + bare-path / fault-inject gates
 └── docs/
     ├── TIERS.txt                  # the tier cascade (+ disc-integrity layer)
@@ -406,6 +406,8 @@ on-disc at `recovery/docs/TIERS.txt`.
    baseline; a hedge in case tier 1 won't run on a given host.
 4. **Tier 3** — last resort: the bundled CPython runs
    `standalone_restorer.py` (the Python reader, an AES/zstd decoder).
+   On Linux it runs through the musl loader bundled next to it when the
+   host has no musl (#714); failing that, `python3` on PATH.
    Gated by `LCSAS_ALLOW_PYTHON_TIER` (default 1); set it to `0` to forbid
    the Python tier entirely so the restore is provably C-only.
 

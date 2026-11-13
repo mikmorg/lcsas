@@ -1220,7 +1220,8 @@ EOF
     if [ "$rc" -ne 0 ]; then
         printf '[restore.sh] EXIT rc=%d at line approx=%d\n' "$rc" "${LINENO:-0}" \
             >> "$_restore_exit_log" 2>/dev/null
-        printf '[restore.sh] PYBIN=%s PYREST=%s\n' "${PYBIN:-unset}" "${PYREST:-unset}" \
+        printf '[restore.sh] PYBIN=%s PYLOADER=%s PYREST=%s\n' "${PYBIN:-unset}" \
+            "${TIER3_PYLOADER:-none}" "${PYREST:-unset}" \
             >> "$_restore_exit_log" 2>/dev/null
         printf '[restore.sh] exit log: %s\n' "$_restore_exit_log" >&2
     fi
@@ -1980,25 +1981,34 @@ EXIT_NO_RECOVERY_BIN=64
 _RESTORE_BIN_PROBE="$RECOVERY/bin/$TARGET/lcsas-restore"
 _RUSTIC_BIN_PROBE="$RECOVERY/bin/$TARGET/rustic-static"
 
-# tier3_python_runs CAND: true when CAND starts and is Python 3.8 or
+# tier3_python_runs CMD...: true when CMD (an interpreter, or the
+# bundled musl loader followed by one) starts and is Python 3.8 or
 # newer.  Being executable is not enough (#714): the bundled Linux
 # CPython needs the musl loader (/lib/ld-musl-<arch>.so.1), which stock
 # Debian, Ubuntu and Fedora lack, so there it fails with "not found".
 # stdin is closed so a probed program can never eat the password line.
 tier3_python_runs() {
-    "$1" -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
+    "$@" -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
         </dev/null >/dev/null 2>&1
 }
 
-# find_tier3_python: tier 3's interpreter.  The bundled CPython first
-# (it works on hosts with no Python packaged), then python3 / python on
-# PATH, taking the first that runs.  Sets TIER3_PYBIN (empty: none
-# runs) and TIER3_PY_SKIPPED (a bundled interpreter that is there but
-# did not run, else empty).  Used by both the probe below and the
-# tier-3 dispatch, so the two always agree.
+# find_tier3_python: tier 3's interpreter.  In order: the bundled
+# CPython on its own (it works on hosts with no Python packaged); the
+# bundled CPython through the musl loader the disc carries next to it
+# (python/lib/ld-musl-<arch>.so.1: musl's loader runs the program named
+# as its first argument, so this needs no root and nothing installed,
+# #714); then python3 / python on PATH.  The first that runs wins.
+# Sets TIER3_PYBIN (the interpreter; empty: none runs), TIER3_PYLOADER
+# (the loader to run it through, else empty), TIER3_PY_SKIPPED (a
+# bundled interpreter that is there but did not run, else empty) and
+# TIER3_PY_LDTRIED (the bundled loader, if one was tried and failed).
+# Used by both the probe below and the tier-3 dispatch, so the two
+# always agree.
 find_tier3_python() {
     TIER3_PYBIN=""
+    TIER3_PYLOADER=""
     TIER3_PY_SKIPPED=""
+    TIER3_PY_LDTRIED=""
     for _t3_cand in \
         "$RECOVERY/bin/$TARGET/python/bin/python3" \
         "$RECOVERY/bin/$TARGET/python/python.exe" \
@@ -2007,8 +2017,19 @@ find_tier3_python() {
         if tier3_python_runs "$_t3_cand"; then
             TIER3_PYBIN="$_t3_cand"; return 0
         fi
+        for _t3_ld in "$RECOVERY/bin/$TARGET/python/lib/"ld-musl-*.so.1; do
+            [ -x "$_t3_ld" ] || continue
+            if tier3_python_runs "$_t3_ld" "$_t3_cand"; then
+                TIER3_PYBIN="$_t3_cand"; TIER3_PYLOADER="$_t3_ld"; return 0
+            fi
+            TIER3_PY_LDTRIED="$_t3_ld"
+        done
         [ -n "$TIER3_PY_SKIPPED" ] || TIER3_PY_SKIPPED="$_t3_cand"
     done
+    # Why a skipped bundled interpreter did not run, for the messages.
+    TIER3_PY_WHY="missing musl loader?"
+    [ -z "$TIER3_PY_LDTRIED" ] \
+        || TIER3_PY_WHY="not even through its bundled musl loader"
     for _t3_cand in python3 python; do
         command -v "$_t3_cand" >/dev/null 2>&1 || continue
         if tier3_python_runs "$_t3_cand"; then
@@ -2102,7 +2123,8 @@ then
             if [ "$_have_tier3_python" = "0" ] && [ -n "$TIER3_PY_SKIPPED" ]; then
                 printf '  tier 3: the bundled Python %s cannot run on this host\n' \
                        "$TIER3_PY_SKIPPED"
-                printf '          (missing musl loader?), and no working python3 on PATH\n'
+                printf '          (%s), and no working python3 on PATH\n' \
+                       "$TIER3_PY_WHY"
             elif [ "$_have_tier3_python" = "0" ]; then
                 printf '  tier 3: no working python3 on PATH and no bundled CPython at '
                 printf '%s/bin/%s/python/\n' "$RECOVERY" "$TARGET"
@@ -3359,12 +3381,16 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         if [ -f "$cand" ]; then PYREST="$cand"; break; fi
     done
     if [ -n "$PYBIN" ] && [ -n "$PYREST" ]; then
-        if [ -n "$TIER3_PY_SKIPPED" ]; then
-            printf '[tier 3] the bundled Python cannot run on this host (missing musl loader?); using the host %s\n' \
-                   "$PYBIN" >&2
+        if [ -n "$TIER3_PYLOADER" ]; then
+            printf '[tier 3] the bundled Python cannot start on its own here (no musl loader on this host); running it through the bundled loader %s\n' \
+                   "$TIER3_PYLOADER" >&2
+        elif [ -n "$TIER3_PY_SKIPPED" ]; then
+            printf '[tier 3] the bundled Python cannot run on this host (%s); using the host %s\n' \
+                   "$TIER3_PY_WHY" "$PYBIN" >&2
         fi
-        printf '[tier 3] dispatch: pybin=%s pyrest=%s repo=%s\n' \
-            "$PYBIN" "$PYREST" "$REPO" >> "$_restore_exit_log" 2>/dev/null || true
+        printf '[tier 3] dispatch: pybin=%s loader=%s pyrest=%s repo=%s\n' \
+            "$PYBIN" "${TIER3_PYLOADER:-none}" "$PYREST" "$REPO" \
+            >> "$_restore_exit_log" 2>/dev/null || true
         printf '[tier 3] falling back to Python (%s + %s)\n' \
                "$PYBIN" "$PYREST" >&2
         # standalone_restorer.py CLI is flag-based:
@@ -3512,7 +3538,9 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # `||` arm is the failing rc of the Python process -- exactly
         # what we need.
         {
-            { "$PYBIN" "$PYREST" \
+            # The bundled loader, if find_tier3_python chose one (#714),
+            # runs the interpreter named after it.
+            { ${TIER3_PYLOADER:+"$TIER3_PYLOADER"} "$PYBIN" "$PYREST" \
                    --repo "$REPO" \
                    --password-file "$PWFILE" \
                    --target "$TARGET_DIR" \
@@ -3550,7 +3578,8 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         if [ -n "$TIER3_PY_SKIPPED" ]; then
             printf '[tier 3] cannot run: the bundled Python %s cannot run on this host\n' \
                    "$TIER3_PY_SKIPPED" >&2
-            printf '[tier 3] (missing musl loader?), and there is no working python3 on PATH.\n' >&2
+            printf '[tier 3] (%s), and there is no working python3 on PATH.\n' \
+                   "$TIER3_PY_WHY" >&2
         else
             printf '[tier 3] cannot run: no working Python here (bundled or python3 on PATH).\n' >&2
         fi
