@@ -158,15 +158,18 @@ class _ForwardBitReader:
     __slots__ = ("_data", "_bitpos")
 
     def __init__(self, data: bytes) -> None:
-        # Big integer with bit 0 = LSB of data[0], so a shift extracts a
-        # window starting at any bit position.
-        self._data = int.from_bytes(data, "little")
+        # Bit 0 is the LSB of data[0].  Reads convert only the few bytes
+        # that hold the wanted bits: shifting one big integer of the whole
+        # block made every read cost O(block size).
+        self._data = data
         self._bitpos = 0
 
     def peek(self, nbits: int) -> int:
         if nbits == 0:
             return 0
-        return (self._data >> self._bitpos) & ((1 << nbits) - 1)
+        pos = self._bitpos
+        window = self._data[pos >> 3 : ((pos + nbits + 7) >> 3)]
+        return (int.from_bytes(window, "little") >> (pos & 7)) & ((1 << nbits) - 1)
 
     def advance(self, nbits: int) -> None:
         self._bitpos += nbits
@@ -191,9 +194,11 @@ class _BackwardBitReader:
     def __init__(self, data: bytes) -> None:
         if not data:
             raise ZstdError("empty bitstream")
-        # Build a single big integer; bit 0 is the LSB of data[0].
-        # We track an absolute bit index and read downward.
-        self._data = int.from_bytes(data, "little")
+        # Bit 0 is the LSB of data[0]; we track an absolute bit index and
+        # read downward.  Reads convert only the few bytes that hold the
+        # wanted bits: shifting one big integer of the whole block made
+        # every read cost O(block size), about 0.3 MB/s on text.
+        self._data = data
         nbits = len(data) * 8
         # Locate the sentinel: the highest set bit.
         last = data[-1]
@@ -214,11 +219,13 @@ class _BackwardBitReader:
         if start < 0:
             # Partial read at the very start; zero-extend the low end.
             avail = self._bitpos + 1
-            val = (self._data >> 0) & ((1 << avail) - 1)
+            window = self._data[: (avail + 7) >> 3]
+            val = int.from_bytes(window, "little") & ((1 << avail) - 1)
             val <<= (nbits - avail)
             self._bitpos -= nbits
             return val
-        val = (self._data >> start) & ((1 << nbits) - 1)
+        window = self._data[start >> 3 : (self._bitpos >> 3) + 1]
+        val = (int.from_bytes(window, "little") >> (start & 7)) & ((1 << nbits) - 1)
         self._bitpos -= nbits
         return val
 

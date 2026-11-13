@@ -535,6 +535,41 @@ class TestBitReaders:
         assert br.read(3) == 0b010
         assert br.read(5) == 0b10_000
 
+    @pytest.mark.parametrize("seed", range(20))
+    def test_readers_match_the_whole_integer_reference(self, seed):
+        """The byte-window readers (#774) return exactly what shifting one
+        big integer of the whole stream returns, for any read widths,
+        including reads that run past the start or end."""
+        import random
+
+        from lcsas.restore._zstd_pure import _BackwardBitReader, _ForwardBitReader
+
+        rng = random.Random(seed)
+        data = bytes(rng.randrange(256) for _ in range(rng.randint(1, 300)))
+        data = data[:-1] + bytes([data[-1] | 1 << rng.randrange(8)])
+        whole = int.from_bytes(data, "little")
+
+        fwd, fpos = _ForwardBitReader(data), 0
+        while fpos < len(data) * 8 + 40:
+            n = rng.randint(0, 57)
+            assert fwd.peek(n) == (whole >> fpos) & ((1 << n) - 1)
+            assert fwd.read(n) == (whole >> fpos) & ((1 << n) - 1)
+            fpos += n
+
+        back = _BackwardBitReader(data)
+        bpos = len(data) * 8 - 8 + data[-1].bit_length() - 2
+        while bpos >= -40:
+            n = rng.randint(0, 57)
+            if n == 0 or bpos < 0:
+                want = 0
+            elif bpos - n + 1 < 0:
+                want = (whole & ((1 << (bpos + 1)) - 1)) << (n - bpos - 1)
+            else:
+                want = (whole >> (bpos - n + 1)) & ((1 << n) - 1)
+            assert back.read(n) == want
+            if n:
+                bpos -= n
+
 
 class TestHelperUnits:
     def test_read32_little_endian(self):
