@@ -167,6 +167,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier3_catalog_resolution.py` | Hardening test: tier-3 catalog-aware disc-swap prompt (#248). |
 | `test_tier3_disc_swap.py` | Hardening test: tier-3 standalone restorer disc-swap protocol (#234). |
 | `test_tier3_invocation.py` | Hardening test #4: restore.sh tier-3 invocation flag correctness. |
+| `test_tier3_musl_loader_glibc_host.py` | Hardening test (#714): the bundled CPython runs on glibc via its loader. |
 | `test_tier3_progress.py` | Hardening test: tier-3 pure-Python restorer emits periodic progress. |
 | `test_tier3_pythonpath.py` | Hardening test: restore.sh tier-3 PYTHONPATH wiring for bundled zstandard. |
 | `test_tier3_stale_catalog.py` | #635: tier 3 must name the disc it needs after at most one disc insert. |

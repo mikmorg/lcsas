@@ -189,14 +189,31 @@ and the no-rotation reality are documented in
 
 TIER 3: WHICH PYTHON
 
-restore.sh uses the CPython bundled for this computer
-(bin/<arch>/python/) first, then python3 or python on PATH.  It takes
-the first one that actually STARTS and is Python 3.8 or newer (the
-reader itself needs 3.10 and says so).  Being on disc is not enough:
-the bundled Linux builds need the musl loader
-(/lib/ld-musl-<arch>.so.1), which stock Debian, Ubuntu and Fedora do
-not have.  There restore.sh says the bundled Python cannot run and
-uses the host's python3 (#714).  If none runs, tier 3 says so.
+restore.sh tries, in this order, and takes the first one that
+actually STARTS and is Python 3.8 or newer (the reader itself needs
+3.10 and says so):
+
+  1. the CPython bundled for this computer, bin/<arch>/python/, on
+     its own;
+  2. the same CPython run through the musl loader the disc carries
+     next to it (Linux x86_64 and aarch64 only):
+
+         bin/<arch>/python/lib/ld-musl-<arch>.so.1 bin/<arch>/python/bin/python3
+
+  3. python3, then python, on PATH.
+
+Step 2 exists because the bundled Linux builds are linked against
+musl and need its loader (/lib/ld-musl-<arch>.so.1), which stock
+Debian, Ubuntu and Fedora do not have.  There the bundled python3
+fails with "not found" on its own.  musl's loader runs the program
+named after it, so the disc's copy runs the bundled Python with no
+root and nothing installed (#714).  restore.sh says in one line which
+one it used and why.  If none runs, tier 3 says so.
+
+The loader comes from a fixed Alpine Linux release (musl 1.2.6),
+pinned by SHA-256 in recovery/UPSTREAM.sha256 like the other
+upstream programs.  The 32-bit ARM CPython is a glibc build and needs
+no loader; the macOS and Windows builds need none either.
 
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
 
@@ -362,9 +379,10 @@ Python is a healthy ecosystem today, but at a 50-year horizon:
     Python 3.10 (the generated script exits with a clear message on
     anything older).  That single ecosystem version pin is itself a
     risk.
-  * The interpreter binary on the meta disc depends on
-    glibc / musl + dozens of optional shared libraries (ssl, expat,
-    libffi, etc.).  Static-link is possible but uncommon.
+  * The interpreter binary on the meta disc depends on a C library
+    and its loader (on Linux, musl's, shipped next to it) + dozens of
+    optional shared libraries (ssl, expat, libffi, etc.).
+    Static-link is possible but uncommon.
 
 Statically-linked C binaries have neither of those properties.  The
 prebuilt artefacts in tiers 1-2 link against musl baked into the

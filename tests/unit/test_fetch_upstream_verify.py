@@ -170,3 +170,67 @@ class TestMakeVerifyRecoveryTarget:
         body = " ".join(recipe_lines)
         assert "fetch_upstream.sh" in body
         assert "--verify-only" in body
+
+
+class TestMuslLoaderExtraction:
+    """#714: the musl/ category pins an Alpine minirootfs; only musl's
+    loader is extracted from it, flat into musl/<target>/."""
+
+    def _minirootfs(self, path: Path, arch: str) -> bytes:
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for name, data, mode in (
+                (f"./lib/ld-musl-{arch}.so.1", b"\x7fELF loader", 0o755),
+                ("./etc/passwd", b"root:x:0:0::/root:/bin/sh\n", 0o644),
+                ("./bin/busybox", b"\x7fELF busybox", 0o755),
+            ):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                info.mode = mode
+                tar.addfile(info, io.BytesIO(data))
+        body = buf.getvalue()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+        return body
+
+    def test_only_the_loader_is_extracted(self, tmp_path):
+        cache = tmp_path / "cache"
+        rel = ("musl/aarch64-unknown-linux-musl/"
+               "alpine-minirootfs-3.24.4-aarch64.tar.gz")
+        body = self._minirootfs(cache / rel, "aarch64")
+        manifest = tmp_path / "UPSTREAM.sha256"
+        manifest.write_text(f"{hashlib.sha256(body).hexdigest()}  {rel}\n")
+
+        result = _run("--cache", str(cache), "--manifest", str(manifest))
+
+        assert result.returncode == 0, result.stderr
+        target_dir = cache / "musl" / "aarch64-unknown-linux-musl"
+        loader = target_dir / "ld-musl-aarch64.so.1"
+        assert loader.read_bytes() == b"\x7fELF loader"
+        assert loader.stat().st_mode & 0o111
+        names = sorted(p.name for p in target_dir.iterdir())
+        assert names == [
+            ".extracted",
+            "alpine-minirootfs-3.24.4-aarch64.tar.gz",
+            "ld-musl-aarch64.so.1",
+        ], names
+
+    def test_committed_manifest_pins_a_loader_per_linux_musl_target(self):
+        """UPSTREAM.sha256 pins one minirootfs for each target that
+        required_contents says needs a musl loader."""
+        from lcsas.meta.required_contents import MUSL_LOADER_ARCH
+
+        rows = [
+            line.split("  ", 1)[1]
+            for line in (REPO_ROOT / "recovery" / "UPSTREAM.sha256")
+            .read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+        musl_rows = sorted(r for r in rows if r.startswith("musl/"))
+        assert musl_rows == sorted(
+            f"musl/{t}/alpine-minirootfs-3.24.4-{a}.tar.gz"
+            for t, a in MUSL_LOADER_ARCH.items()
+        ), musl_rows

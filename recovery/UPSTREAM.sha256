@@ -22,6 +22,7 @@
 #   https://github.com/rustic-rs/rustic/releases/download/v0.11.2/
 #   https://github.com/astral-sh/python-build-standalone/releases/download/20260510/
 #   https://codeload.github.com/speed47/dvdisaster/tar.gz/refs/tags/v0.79.10-pl6
+#   https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/<arch>/
 
 # ── rustic v0.11.2 ────────────────────────────────────────────────
 ff5954015236b21d121d43c6a9d690c21613c0a1ea42a767604ba17eec266bd3  rustic/x86_64-unknown-linux-musl/rustic-v0.11.2-x86_64-unknown-linux-musl.tar.gz
@@ -58,3 +59,25 @@ f92cf137f80ec75abbe1540f2cdd637ce05a82b6230b7b2eb6b598753222828f  python/armv7-u
 # not extracted — onto every meta-volume as the in-archive source of
 # truth for re-implementing RS03 repair.
 f302b92df53abde1fb239230fc4c8b1fc425405c0ba59da3e2ba85c30f5320cc  dvdisaster/src/dvdisaster-0.79.10-pl6.tar.gz
+
+# ── musl dynamic loader, from Alpine Linux 3.24.4 (musl 1.2.6-r3) ──
+# The two Linux musl CPython builds above are dynamically linked against
+# musl: program interpreter /lib/ld-musl-<arch>.so.1, NEEDED libc.so.
+# Stock Debian, Ubuntu and Fedora lack that loader, so there the bundled
+# python3 fails with "not found" (#714).  The meta disc carries the loader
+# at bin/<target>/python/lib/ld-musl-<arch>.so.1, and restore.sh runs
+#     ld-musl-<arch>.so.1 python3 ...
+# when python3 cannot start on its own (musl's loader runs the program
+# named as its first argument; no root, nothing installed).
+# Version: python-build-standalone 20260510 links its dynamic musl
+# targets against musl 1.2.2 (pythonbuild/downloads.py, "musl" entry);
+# the loader here is musl 1.2.6, and a newer musl runs programs linked
+# against an older one.  The armv7 CPython is a glibc (gnueabihf) build
+# and needs no loader from us.
+# Source: the minirootfs of a fixed Alpine point release (an immutable
+# file, sha256 published by Alpine next to it).  Not the branch's
+# musl-*.apk: Alpine keeps only the newest package revision in a branch,
+# so a pinned .apk URL 404s after the next rebuild.  fetch_upstream.sh
+# extracts only lib/ld-musl-<arch>.so.1 from it.
+cdaa38cb8de3537967ee5b6c9b6cd00cc962da2b018e6eea48696bb274923012  musl/x86_64-unknown-linux-musl/alpine-minirootfs-3.24.4-x86_64.tar.gz
+4b14c18f7e90a063b61462ea1462a5732c154bf6adad594974fe6487cd98a8de  musl/aarch64-unknown-linux-musl/alpine-minirootfs-3.24.4-aarch64.tar.gz

@@ -41,6 +41,7 @@ from lcsas.config.settings import LCSASConfig
 from lcsas.meta.bundler import ToolBundler
 from lcsas.meta.required_contents import (
     APPROVED_TARGETS,
+    musl_loader_name,
     required_meta_paths,
 )
 
@@ -1108,6 +1109,8 @@ class MetaVolumeBuilder:
 
             recovery_dst/bin/<target>/rustic-static          (from rustic/<target>/rustic)
             recovery_dst/bin/<target>/python/                (from python/<target>/python/)
+            recovery_dst/bin/<target>/python/lib/ld-musl-<arch>.so.1
+                                     (from musl/<target>/; Linux musl only, #714)
 
         Targets with no rustic binary AND no python tree are skipped
         silently — the recovery cascade in ``restore.sh`` handles the
@@ -1215,6 +1218,22 @@ class MetaVolumeBuilder:
                         else:
                             shutil.copy2(str(entry), str(py_dst / entry.name))
                     staged_any = True
+
+            # ── musl loader (#714) ─────────────────────────────────
+            # The Linux CPython needs /lib/ld-musl-<arch>.so.1, which
+            # glibc hosts lack.  fetch_upstream.sh extracts the pinned
+            # loader to musl/<target>/; put it in the python tree's lib/
+            # (after the copytree above, which replaces that tree) so
+            # restore.sh can run `ld-musl-<arch>.so.1 python3 ...`.
+            loader_name = musl_loader_name(target)
+            py_tree = bin_dst / "python"
+            if loader_name is not None and py_tree.is_dir():
+                loader_cache = cache_root / "musl" / target / loader_name
+                if loader_cache.is_file():
+                    loader_dst = py_tree / "lib" / loader_name
+                    loader_dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(loader_cache), str(loader_dst))
+                    os.chmod(str(loader_dst), 0o755)
 
             if staged_any:
                 # No-op: directory already created by the per-binary
