@@ -210,6 +210,16 @@ key_escrow (
 > and the `keyshare/` package. `lcsas key unsplit --repo R` removes the
 > record when a split is abandoned (#681).
 
+> Timestamps (#730): new rows are written in UTC ISO-8601 with an offset
+> (`2026-11-11T10:00:00.123456+00:00`), including the columns whose schema
+> default is `CURRENT_TIMESTAMP`, and a receipt's burn date is stored
+> converted to UTC (the BURN_RECEIPT_IMPORTED detail keeps it as written).
+> Older catalogs and burned discs keep `CURRENT_TIMESTAMP` text
+> (`2026-11-11 10:00:00`, UTC), which no migration rewrites. The two do
+> not sort as text, so code that orders or compares timestamps reads them
+> as instants (`julianday()` in SQL, `lcsas.utils.timestamps.parse_utc`
+> in Python).
+
 > `volumes.location` is the location a volume was **staged for** (from
 > `stage --for-location`, else the configured default). It is free text,
 > not checked against `locations`, and it never says where a disc is: a

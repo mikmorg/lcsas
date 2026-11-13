@@ -57,10 +57,13 @@ def register_repo(
     encryption_key_id: str = "",
 ) -> Repository:
     """Insert a repository. Returns the created Repository object."""
+    from lcsas.utils.timestamps import utc_now
+
     conn.execute(
-        """INSERT INTO repositories (repo_id, name, mirror_path, encryption_key_id)
-           VALUES (?, ?, ?, ?)""",
-        (repo_id, name, mirror_path, encryption_key_id),
+        """INSERT INTO repositories (repo_id, name, mirror_path,
+                                     encryption_key_id, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (repo_id, name, mirror_path, encryption_key_id, utc_now()),
     )
     conn.commit()
     return get_repo(conn, repo_id)

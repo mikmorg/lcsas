@@ -78,8 +78,15 @@ def add_volume_copy(
     *verified* says whether it was; None reads it from *last_verified_at*.
     A volume deprecated by consolidation stays DEPRECATED.
     """
+    from lcsas.utils.timestamps import to_utc_iso
+
     if burn_date is None:
         burn_date = datetime.now(UTC).isoformat()
+    # #730: one format (UTC ISO-8601) for new values; a receipt's burn
+    # date may carry another offset.  Unreadable text is kept as given.
+    burn_date = to_utc_iso(burn_date) or burn_date
+    if last_verified_at is not None:
+        last_verified_at = to_utc_iso(last_verified_at) or last_verified_at
     conn.execute(
         """INSERT INTO volume_copies
                (volume_id, location, burn_date, notes, iso_sha256,
@@ -148,7 +155,7 @@ def get_disc_retired_at(
     for row in conn.execute(
         """SELECT event_date, detail FROM volume_events
            WHERE volume_id = ? AND event_type = 'NOTE' AND location = ?
-           ORDER BY event_date DESC, event_id DESC""",
+           ORDER BY julianday(event_date) DESC, event_id DESC""",
         (volume_id, location),
     ):
         if str(row["detail"]).startswith(prefix):
@@ -210,7 +217,7 @@ def get_iso_sha256_for_label(
            JOIN burn_sessions bs USING (session_id)
            WHERE sv.volume_id = ?
              AND sv.iso_sha256 IS NOT NULL
-           ORDER BY bs.created_at DESC
+           ORDER BY julianday(bs.created_at) DESC
            LIMIT 1""",
         (vol.volume_id,),
     ).fetchone()
@@ -308,8 +315,9 @@ def find_stale_copies(
     (NULL) first, then oldest first.  Discs of DEPRECATED/DESTROYED
     volumes are excluded — those discs are already out of service.
 
-    Timestamps are ISO-8601 UTC strings written by this module, so a
-    lexicographic compare against the cutoff is exact.
+    ``last_verified_at`` is compared and ordered as an instant
+    (``julianday``), not as text: rows written before #730 or imported
+    from receipts may carry another text form or offset.
     """
     if now is None:
         now = datetime.now(UTC)
@@ -319,9 +327,10 @@ def find_stale_copies(
            FROM volume_copies vc JOIN volumes v USING (volume_id)
            WHERE vc.status = 'ACTIVE'
              AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-             AND (vc.last_verified_at IS NULL OR vc.last_verified_at < ?)
+             AND (julianday(vc.last_verified_at) IS NULL
+                  OR julianday(vc.last_verified_at) < julianday(?))
            ORDER BY vc.last_verified_at IS NOT NULL,
-                    vc.last_verified_at, v.label, vc.location""",
+                    julianday(vc.last_verified_at), v.label, vc.location""",
         (cutoff,),
     ).fetchall()
     return [

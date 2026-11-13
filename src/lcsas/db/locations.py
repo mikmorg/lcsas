@@ -43,9 +43,12 @@ def create_location(
     description: str = "",
 ) -> Location:
     """Register a new location."""
+    from lcsas.utils.timestamps import utc_now
+
     conn.execute(
-        "INSERT INTO locations (name, description) VALUES (?, ?)",
-        (name, description),
+        "INSERT INTO locations (name, description, created_at) "
+        "VALUES (?, ?, ?)",
+        (name, description, utc_now()),
     )
     conn.commit()
     return get_location(conn, name)
@@ -73,9 +76,12 @@ def ensure_location(
     ``commit=False`` leaves the insert in the caller's transaction, so a
     later failure rolls it back with everything else.
     """
+    from lcsas.utils.timestamps import utc_now
+
     conn.execute(
-        "INSERT OR IGNORE INTO locations (name, description) VALUES (?, ?)",
-        (name, description),
+        "INSERT OR IGNORE INTO locations (name, description, created_at) "
+        "VALUES (?, ?, ?)",
+        (name, description, utc_now()),
     )
     if commit:
         conn.commit()

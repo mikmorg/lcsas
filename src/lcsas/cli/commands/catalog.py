@@ -11,8 +11,8 @@ from lcsas.cli.common import (
     _confirm,
     _load_config_opt,
     _open_catalog,
+    _reburn_hint,
     _resolve_db_path,
-    _restage_hint,
 )
 from lcsas.log import get_logger
 
@@ -76,14 +76,17 @@ def _receipt_already_imported(
     """
     from lcsas.db.volume_copies import get_copy_at_location
     from lcsas.db.volume_events import get_events_for_volume
+    from lcsas.utils.timestamps import same_instant
 
+    # #730: the catalog stores a receipt's burn date in UTC, so a date
+    # written with another offset is matched as the same instant.
     for prior in get_events_for_volume(conn, volume_id):
         if (
             prior.event_type in ("VERIFY_PASS", "VERIFY_FAIL",
                                  "VERIFY_FAIL_REBURN")
             and prior.location == location
             and burn_date
-            and prior.event_date == burn_date
+            and same_instant(prior.event_date, burn_date)
         ):
             return True
     for prior in get_events_for_volume(conn, volume_id, "BURN_RECEIPT_IMPORTED"):
@@ -102,7 +105,7 @@ def _receipt_already_imported(
     copy = get_copy_at_location(conn, volume_id, location)
     return (
         copy is not None
-        and copy.burn_date == burn_date
+        and same_instant(copy.burn_date, burn_date)
         and (copy.iso_sha256 or "") == receipt_hash
     )
 
@@ -440,6 +443,18 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 "receipt_file": name,
                 "verify_passed": raw_verify,
             }
+            # #734: how the disc was checked.  `burn-iso` receipts carry
+            # the hash read back from the disc (#664, null when nothing
+            # was read) and whether the run only checked a disc burned
+            # earlier (#673).  Session-burn receipts carry neither; the
+            # keys are then left out.
+            if "device_sha256" in receipt:
+                dev_hash = receipt.get("device_sha256")
+                provenance["device_sha256"] = (
+                    str(dev_hash) if dev_hash is not None else None
+                )
+            if isinstance(receipt.get("verify_only"), bool):
+                provenance["verify_only"] = receipt["verify_only"]
 
             # #754: the disc in service at this location was burned after
             # this receipt's disc (a re-burn there), so the receipt is for
@@ -509,7 +524,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     f"Receipt '{receipt_file}': the disc for '{label}' "
                     f"FAILED verification at {location}.  No disc was "
                     "recorded; that location still needs this volume.  "
-                    + _restage_hint(location)
+                    + _reburn_hint(conn, vol.volume_id, location)
                 )
             else:
                 if verify_passed:

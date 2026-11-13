@@ -151,11 +151,18 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
             logger.info("  No disc of this volume is recorded in the catalog.")
         elif not any(c.status == "ACTIVE" for c in copies):
             logger.info("  No disc of this volume is left in service.")
+        from lcsas.utils.timestamps import parse_utc
+
         now = datetime.now(UTC)
         for c in copies:
-            if c.last_verified_at:
-                days = (now - datetime.fromisoformat(c.last_verified_at)).days
-                age = f"last verified {days} day(s) ago ({c.last_verified_at[:10]})"
+            # #730: an older or imported value may have no offset.
+            when = parse_utc(c.last_verified_at)
+            if when is not None:
+                days = (now - when).days
+                age = (f"last verified {days} day(s) ago "
+                       f"({when.date().isoformat()})")
+            elif c.last_verified_at:
+                age = f"last verified on an unreadable date ({c.last_verified_at})"
             else:
                 age = "never verified"
             logger.info(f"  disc at {c.location:<20} [{c.status}]  {age}")

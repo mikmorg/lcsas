@@ -59,7 +59,7 @@ can reference it via foreign key.
    `cmd_location()`).
 
 **Expected outcome:** A new row in `locations` with `name`, default empty
-`description`, and `created_at = CURRENT_TIMESTAMP`. Future `volume_copies`
+`description`, and `created_at` set to the current UTC time (ISO-8601, #730). Future `volume_copies`
 inserts may now reference this name (FK
 `volume_copies.location → locations.name` — the `volume_copies` table DDL
 in `src/lcsas/db/schema.py`).

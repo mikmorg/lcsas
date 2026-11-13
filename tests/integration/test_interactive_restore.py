@@ -1,27 +1,27 @@
-"""Interactive single-drive restore via PTY + loop devices.
+"""Interactive single-drive restore via PTY + loop mounts.
 
 Builds a LCSAS scenario (repo → backup → burn → meta volume), then
 drives the production ``restore.sh`` interactively through a
-pseudoterminal.  Disc swaps are simulated by re-attaching ISOs to a
-Linux loop device, so no cdemu or physical hardware is needed.
+pseudoterminal, with the interface it has since #689 (#756): the
+flags ``--key``/``--target``/``--repo``, the tools folder as its work
+folder, discs found where they are mounted (``LCSAS_MOUNT_DIRS``),
+step 0's newest-disc question and tier 1's disc questions.  A disc
+swap is an unmount and a read-only loop mount of the next ISO at the
+same place, so no cdemu or physical hardware is needed.  The command
+line, the prompts and the answers come from
+``tests/e2e/restore_sh_driver.py``, which a unit test checks against
+``restore.sh`` and tier 1's source on every run.
 
 Requires: root (for losetup + mount), ``rustic`` and ``xorriso`` on PATH.
 """
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import os
-import pty
 import random
-import re
-import select
 import shutil
-import signal
-import sqlite3
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -35,6 +35,17 @@ from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.packs.delta import DeltaAnalyzer
 from lcsas.packs.scanner import scan_mirror_packs
 from tests.e2e.fixture_lib import add_repo
+from tests.e2e.restore_sh_driver import (
+    ENTER,
+    EXIT_DISC_PROMPT_QUIT,
+    QUIT,
+    TIER1_DONE,
+    DiscPicker,
+    Prompt,
+    build_restore_cmd,
+    build_restore_env,
+    drive_restore,
+)
 
 # ── Skip conditions ──────────────────────────────────────────────
 
@@ -243,125 +254,47 @@ class TestInteractiveRestore:
 
         self.restore_target = tmp_path / "restored"
         self.restore_target.mkdir()
-        (tmp_path / "work").mkdir()
         (tmp_path / "tmp").mkdir()
+        # Discs are mounted in here; the tools folder is restore.sh's
+        # work folder (LCSAS_TOOLS_DIR).
+        self.mount_dir = tmp_path / "mnt"
+        self.mount_dir.mkdir()
+        self.tools_dir = tmp_path / "lcsas-restore-tools"
 
         self.all_isos = sorted(self.iso_dir.glob("*.iso"))
 
-    # ── Loop-device helpers ──────────────────────────────────────
+    # ── The drive: one mount point, discs swapped by mount ──────
+    #
+    # restore.sh has no drive flag (#689, #756): it finds the discs
+    # mounted in LCSAS_MOUNT_DIRS.  The one "drive" is the folder
+    # <tmp>/mnt/drive; putting a disc in is a read-only loop mount of its
+    # ISO there, taking it out is the unmount.
 
-    @staticmethod
-    def _find_free_loop() -> str:
-        """Return the path of an unused loop device."""
-        r = subprocess.run(
-            ["losetup", "-f"], capture_output=True, text=True, check=True
-        )
-        return r.stdout.strip()
+    @property
+    def _drive(self) -> Path:
+        return self.mount_dir / "drive"
 
-    @staticmethod
-    def _attach_loop(dev: str, iso: Path) -> None:
-        subprocess.run(["losetup", dev, str(iso)], check=True)
+    def _eject(self) -> None:
+        self._in_drive = None
+        if os.path.ismount(self._drive):
+            subprocess.run(["umount", str(self._drive)],
+                           capture_output=True, check=False)
 
-    @staticmethod
-    def _detach_loop(dev: str) -> None:
+    def _insert(self, iso: Path) -> None:
+        # Already in: leave it (tier 1 may be reading it, and a box shown
+        # again after a stray ENTER asks for the disc that is in).
+        if getattr(self, "_in_drive", None) == iso and os.path.ismount(self._drive):
+            return
+        self._eject()
+        self._drive.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["losetup", "-d", dev], capture_output=True, check=False
+            ["mount", "-o", "ro,loop", str(iso), str(self._drive)],
+            check=True, capture_output=True,
         )
+        self._in_drive = iso
 
-    @staticmethod
-    def _swap_loop(dev: str, iso: Path) -> None:
-        """Detach current backing file (if any) and attach *iso*."""
-        subprocess.run(["losetup", "-d", dev], capture_output=True, check=False)
-        subprocess.run(["losetup", dev, str(iso)], check=True)
-
-    # ── ISO manipulation ────────────────────────────────────────
-
-    def _prepare_stale_bootstrap_iso(self) -> None:
-        """Inject a complete-but-backdated catalog into the oldest ISO.
-
-        After the burn loop, each disc's catalog only knows about
-        itself and earlier discs.  To test the organic catalog upgrade
-        path we need the *oldest* disc to carry a pick list that spans
-        all volumes, but with a stale freshness timestamp so that later
-        discs trigger an upgrade.
-
-        Steps:
-          1. Mount the freshest (last) data ISO → copy its catalog.db
-          2. Backdate ``created_at`` on all volumes by one hour
-          3. Extract the oldest ISO, swap in the stale catalog, rebuild
-        """
-        data_isos = sorted(
-            iso for iso in self.all_isos if "META" not in iso.stem
-        )
-        oldest_iso = data_isos[0]
-        freshest_iso = data_isos[-1]
-
-        work = self.tmp / "_iso_patch"
-        work.mkdir()
-        fresh_mnt = work / "fresh_mnt"
-        old_mnt = work / "old_mnt"
-        extract = work / "extract"
-        fresh_mnt.mkdir()
-        old_mnt.mkdir()
-        extract.mkdir()
-
-        try:
-            # 1. Copy the freshest catalog.
-            subprocess.run(
-                ["mount", "-o", "ro,loop", str(freshest_iso), str(fresh_mnt)],
-                check=True, capture_output=True,
-            )
-            stale_cat = work / "catalog.db"
-            shutil.copy2(str(fresh_mnt / "catalog.db"), str(stale_cat))
-            subprocess.run(
-                ["umount", str(fresh_mnt)],
-                check=True, capture_output=True,
-            )
-
-            # 2. Backdate freshness so later discs appear fresher.
-            conn = sqlite3.connect(str(stale_cat))
-            conn.execute(
-                "UPDATE volumes "
-                "SET created_at = datetime(created_at, '-1 hour')"
-            )
-            conn.commit()
-            conn.close()
-
-            # 3. Extract oldest ISO, replace catalog, rebuild.
-            subprocess.run(
-                ["mount", "-o", "ro,loop", str(oldest_iso), str(old_mnt)],
-                check=True, capture_output=True,
-            )
-            # cp -a preserves structure
-            subprocess.run(
-                ["cp", "-a", str(old_mnt) + "/.", str(extract)],
-                check=True, capture_output=True,
-            )
-            subprocess.run(
-                ["umount", str(old_mnt)],
-                check=True, capture_output=True,
-            )
-
-            shutil.copy2(str(stale_cat), str(extract / "catalog.db"))
-
-            vol_label = oldest_iso.stem
-            subprocess.run(
-                ["xorriso", "-as", "mkisofs", "-r", "-J", "-joliet-long",
-                 "-iso-level", "3", "-V", vol_label,
-                 "-o", str(oldest_iso), str(extract)],
-                capture_output=True, text=True, check=True,
-            )
-        finally:
-            # Best-effort cleanup.
-            subprocess.run(
-                ["umount", str(fresh_mnt)],
-                capture_output=True, check=False,
-            )
-            subprocess.run(
-                ["umount", str(old_mnt)],
-                capture_output=True, check=False,
-            )
-            shutil.rmtree(work, ignore_errors=True)
+    def _data_isos(self) -> list[Path]:
+        return sorted(iso for iso in self.all_isos if "META" not in iso.stem)
 
     # ── PTY driver ───────────────────────────────────────────────
 
@@ -369,199 +302,84 @@ class TestInteractiveRestore:
         self,
         bootstrap_oldest: bool = False,
         on_prompt: None | callable = None,
-    ) -> tuple[int, str]:
-        """Spawn restore.sh under a PTY, respond to disc-swap prompts.
+    ) -> tuple[int, str, list[Prompt]]:
+        """Run the META disc's restore.sh under a PTY and answer it.
 
-        Returns ``(exit_code, full_output_text)``.
+        Returns ``(exit_code, output, prompts)``.
 
-        When *bootstrap_oldest* is True the Phase 1 empty-label prompt
-        is answered with the oldest data disc instead of the freshest.
+        Step 0 ("put in your NEWEST data disc") is answered with the
+        newest data disc, or the oldest one when *bootstrap_oldest*.  At
+        each tier 1 disc question the first disc it names is put in, then
+        ENTER; when it names none (its catalog does not know the pack
+        yet), the data discs in turn, newest first (``DiscPicker``).
 
-        *on_prompt*, if provided, is called as ``on_prompt(label, n)``
-        for every disc-swap prompt (n starts at 1).  Return values:
+        *on_prompt*, if given, is called as ``on_prompt(prompt, n)`` for
+        every disc question of tier 1 (n counts all questions from 1)
+        before that.  It may return:
 
-        * ``None`` — default behaviour (load the correct disc).
-        * ``"skip"`` — type ``skip`` to skip the disc.
-        * ``"detach"`` — detach the loop device then press Enter
-          (simulates an empty / unreadable drive).
-        * A ``Path`` — load that ISO instead of the requested one.
+        * ``None``: the default above.
+        * ``"quit"``: type ``q`` (tier 1 stops; restore.sh exits 75).
+        * ``"eject"``: take the disc out, then ENTER (an empty drive).
+        * a ``Path``: put that ISO in instead, then ENTER.
         """
-        loop_dev = self._find_free_loop()
-        # Don't pre-attach — Phase 1 unmounts/ejects before prompting,
-        # so we attach the right ISO when the first prompt arrives.
-
-        env = {
-            "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
-            "HOME": str(self.tmp),
-            "TMPDIR": str(self.tmp / "tmp"),
-            "TERM": "dumb",
-        }
-        cmd = [
-            "bash",
-            str(self.meta_dir / "restore.sh"),
-            "--key", str(self.key_file),
-            "--target", str(self.restore_target),
-            "--repo", "photos",
-            "--drive", loop_dev,
-            "--work-dir", str(self.tmp / "work"),
-        ]
-
-        pid, fd = pty.fork()
-        if pid == 0:
-            os.execvpe(cmd[0], cmd, env)
-            # execvpe doesn't return; if it does, bail.
-            os._exit(127)  # noqa: SLF001
-
-        try:
-            return self._pty_loop(
-                pid, fd, loop_dev, bootstrap_oldest, on_prompt,
-            )
-        finally:
-            # Ensure child is dead.
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
-            with contextlib.suppress(ChildProcessError):
-                os.waitpid(pid, os.WNOHANG)
-            with contextlib.suppress(OSError):
-                os.close(fd)
-            # Always detach the loop device.
-            self._detach_loop(loop_dev)
-
-    def _pty_loop(
-        self, pid: int, fd: int, loop_dev: str,
-        bootstrap_oldest: bool = False,
-        on_prompt: None | callable = None,
-    ) -> tuple[int, str]:
-        # Labels are UPPER_ALPHA + digits + underscores.  Must NOT
-        # match the ║ box-drawing character that follows the %-36s field.
-        prompt_re = re.compile(rb"INSERT DISC:\s*([A-Za-z0-9_]*)")
-
-        # Data ISOs only (no META).  Sorted so [-1] = highest-numbered
-        # = freshest catalog, used for the Phase-1 empty-label prompt.
-        data_isos = sorted(
-            iso for iso in self.all_isos if "META" not in iso.stem
-        )
+        data_isos = self._data_isos()
         assert data_isos, "no data ISOs found — check burn pipeline output"
-        iso_by_label: dict[str, Path] = {iso.stem: iso for iso in self.all_isos}
-        bootstrap_iso = data_isos[0] if bootstrap_oldest else data_isos[-1]
+        by_label = {iso.stem: iso for iso in data_isos}
+        newest = data_isos[-1]
+        bootstrap = data_isos[0] if bootstrap_oldest else newest
+        picker = DiscPicker(list(by_label))
+        prompts: list[Prompt] = []
 
-        buf = b""
-        output_chunks: list[bytes] = []
-        deadline = time.monotonic() + RESTORE_TIMEOUT
-        prompt_idx = 0
+        def answer(prompt: Prompt, n: int) -> bytes | None:
+            prompts.append(prompt)
+            if prompt.kind == "newest":
+                self._insert(bootstrap)
+                return ENTER
+            if prompt.kind == "ram":
+                return b"y\n"  # a tmpfs pytest temp folder is fine here
+            if prompt.kind != "disc":
+                return None  # N: no other backup set
+            action = on_prompt(prompt, n) if on_prompt else None
+            if action == "quit":
+                return QUIT
+            if action == "eject":
+                self._eject()
+                return ENTER
+            if isinstance(action, Path):
+                self._insert(action)
+                return ENTER
+            label = picker.pick(prompt.labels)
+            if label is None:  # it names discs we do not have
+                return QUIT
+            self._insert(by_label[label])
+            return ENTER
 
-        while time.monotonic() < deadline:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-
-            try:
-                r, _, _ = select.select([fd], [], [], min(remaining, 2.0))
-            except InterruptedError:
-                continue
-
-            if r:
-                try:
-                    chunk = os.read(fd, 4096)
-                except OSError:
-                    break
-                if not chunk:
-                    break
-                output_chunks.append(chunk)
-                buf += chunk
-
-                # Respond to every disc-swap prompt in the buffer.
-                while True:
-                    m = prompt_re.search(buf)
-                    if not m:
-                        break
-                    want = m.group(1).decode().strip()
-                    buf = buf[m.end():]
-
-                    # Phase 1 empty label → pick bootstrap disc.
-                    if not want:
-                        want = bootstrap_iso.stem
-
-                    prompt_idx += 1
-                    action = on_prompt(want, prompt_idx) if on_prompt else None
-
-                    if action == "skip":
-                        os.write(fd, b"skip\n")
-                    elif action == "detach":
-                        self._detach_loop(loop_dev)
-                        time.sleep(0.1)
-                        os.write(fd, b"\n")
-                    elif isinstance(action, Path):
-                        self._swap_loop(loop_dev, action)
-                        time.sleep(0.1)
-                        os.write(fd, b"\n")
-                    else:
-                        # Default: load the requested disc.
-                        iso = iso_by_label.get(want)
-                        if iso is None:
-                            os.write(fd, b"skip\n")
-                        else:
-                            self._swap_loop(loop_dev, iso)
-                            time.sleep(0.1)
-                            os.write(fd, b"\n")
-
-            # Check if child exited.
-            try:
-                wpid, status = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                break
-            if wpid == pid:
-                # Drain remaining output from the PTY.
-                self._drain(fd, output_chunks)
-                full = b"".join(output_chunks).decode(errors="replace")
-                return os.waitstatus_to_exitcode(status), full
-
-        # Reached here either by break (EOF / child exit) or timeout.
-        full = b"".join(output_chunks).decode(errors="replace")
-
-        # Try to reap the child — it probably already exited.
+        self._eject()  # only the META disc is "in" at the start
+        cmd = build_restore_cmd(
+            self.meta_dir, key=self.key_file,
+            target=self.restore_target, repo="photos",
+        )
+        env = build_restore_env(
+            home=self.tmp, tools_dir=self.tools_dir,
+            mount_dir=self.mount_dir, meta_disc=self.meta_dir,
+            tmpdir=self.tmp / "tmp",
+        )
         try:
-            wpid, status = os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
-            return -1, full
-        if wpid == pid:
-            return os.waitstatus_to_exitcode(status), full
-
-        # Still running → timeout.  Kill and report.
-        os.kill(pid, signal.SIGKILL)
-        os.waitpid(pid, 0)
-        return -1, full
-
-    @staticmethod
-    def _drain(fd: int, sink: list[bytes], timeout: float = 1.0) -> None:
-        """Read any remaining bytes from *fd* after child exits."""
-        end = time.monotonic() + timeout
-        while time.monotonic() < end:
-            try:
-                r, _, _ = select.select([fd], [], [], 0.2)
-            except (InterruptedError, OSError):
-                break
-            if not r:
-                break
-            try:
-                chunk = os.read(fd, 4096)
-            except OSError:
-                break
-            if not chunk:
-                break
-            sink.append(chunk)
+            rc, out = drive_restore(cmd, env, answer,
+                                    timeout=RESTORE_TIMEOUT)
+        finally:
+            self._eject()
+        return rc, out, prompts
 
     # ── State reset ─────────────────────────────────────────────
 
     def _reset_restore_state(self) -> None:
-        """Clear restore target and work dirs so tests are independent."""
+        """Clear the restore target and tools folder between runs."""
         if self.restore_target.exists():
             shutil.rmtree(self.restore_target)
         self.restore_target.mkdir()
-        work = self.tmp / "work"
-        if work.exists():
-            shutil.rmtree(work)
-        work.mkdir()
+        if self.tools_dir.exists():
+            shutil.rmtree(self.tools_dir)
 
     # ── Assertions ───────────────────────────────────────────────
 
@@ -586,117 +404,99 @@ class TestInteractiveRestore:
 
     def test_interactive_restore_completes(self):
         """Drive restore.sh interactively and verify restored data."""
-        rc, output = self._drive_restore()
+        rc, output, prompts = self._drive_restore()
 
-        assert rc == 0, (
-            f"restore.sh failed (rc={rc}):\n{output}"
+        assert rc == 0, f"restore.sh failed (rc={rc}):\n{output}"
+        assert TIER1_DONE.decode() in output, (
+            f"Missing tier 1's 'restore complete':\n{output[-2000:]}"
         )
-        assert "RESTORE COMPLETE" in output, (
-            f"Missing 'RESTORE COMPLETE' in output:\n{output[-2000:]}"
+        # Step 0 asked for the newest data disc first.
+        assert prompts and prompts[0].kind == "newest"
+        # The whole point: tier 1 asked for other discs in the one drive.
+        named = [p for p in prompts if p.kind == "disc" and p.labels]
+        assert len(named) >= 1, (
+            f"Expected tier 1 to ask for another disc by label:\n{output[-2000:]}"
         )
-
-        # The whole point: verify that multiple disc swaps occurred.
-        phase2_swaps = len(re.findall(
-            r"INSERT DISC:\s+ITEST_", output
-        ))
-        assert phase2_swaps >= 2, (
-            f"Expected ≥2 disc-swap prompts in Phase 2, got {phase2_swaps}"
-        )
+        assert all(lab.startswith("ITEST_") for p in named for lab in p.labels)
 
         self._assert_files_restored()
 
     def test_stale_catalog_triggers_upgrade(self):
-        """Bootstrap from oldest disc with stale catalog; verify upgrade."""
+        """Start from the OLDEST data disc: its catalog is older than the
+        others.  Tier 1 reads the newer catalog off a later disc as it is
+        put in (the freshest catalog.db wins), and the restore completes."""
         self._reset_restore_state()
-        self._prepare_stale_bootstrap_iso()
 
-        rc, output = self._drive_restore(bootstrap_oldest=True)
+        rc, output, prompts = self._drive_restore(bootstrap_oldest=True)
 
-        assert rc == 0, (
-            f"restore.sh failed (rc={rc}):\n{output}"
+        assert rc == 0, f"restore.sh failed (rc={rc}):\n{output}"
+        assert TIER1_DONE.decode() in output, (
+            f"Missing tier 1's 'restore complete':\n{output[-2000:]}"
         )
-        assert "RESTORE COMPLETE" in output, (
-            f"Missing 'RESTORE COMPLETE' in output:\n{output[-2000:]}"
+        assert any(p.kind == "disc" for p in prompts), (
+            f"Expected tier 1 to ask for a later disc:\n{output[-2000:]}"
         )
-
-        # The organic upgrade must have fired at least once.
-        assert "Fresher catalog" in output, (
-            f"Expected catalog upgrade message in output:\n{output[-2000:]}"
-        )
-
         self._assert_files_restored()
 
     def test_wrong_disc_reprompts(self):
-        """Loading the wrong disc triggers WRONG DISC and a re-prompt."""
+        """The wrong disc in the drive: tier 1 asks for the same disc again."""
         self._reset_restore_state()
-        data_isos = sorted(
-            iso for iso in self.all_isos if "META" not in iso.stem
-        )
-        triggered = [False]
+        data_isos = self._data_isos()
+        asked: list[list[str]] = []
 
-        def on_prompt(label: str, n: int):
-            # On the first Phase 2 prompt, load a different disc.
-            if n == 2 and not triggered[0]:
-                triggered[0] = True
-                wrong = next(
-                    iso for iso in data_isos if iso.stem != label
-                )
-                return wrong
+        def on_prompt(prompt: Prompt, n: int):
+            asked.append(prompt.labels)
+            if len(asked) == 1 and prompt.labels:
+                return next(iso for iso in data_isos
+                            if iso.stem not in prompt.labels)
             return None
 
-        rc, output = self._drive_restore(on_prompt=on_prompt)
+        rc, output, _ = self._drive_restore(on_prompt=on_prompt)
 
-        assert rc == 0, (
-            f"restore.sh failed (rc={rc}):\n{output}"
+        assert rc == 0, f"restore.sh failed (rc={rc}):\n{output}"
+        assert len(asked) >= 2 and asked[1] == asked[0], (
+            f"Expected the same disc asked for again:\n{output[-2000:]}"
         )
-        assert "WRONG DISC:" in output, (
-            f"Expected 'WRONG DISC:' in output:\n{output[-2000:]}"
-        )
-        assert "RESTORE COMPLETE" in output
+        assert TIER1_DONE.decode() in output
         self._assert_files_restored()
 
     def test_skip_disc_reports_incomplete(self):
-        """Skipping a disc causes restore to exit non-zero."""
+        """``q`` at tier 1's disc question stops the restore: exit 75,
+        nothing claims it completed, and how to carry on is printed.
+        (Before #689 this typed ``skip``; nothing accepts that now.)"""
         self._reset_restore_state()
-        skipped = [False]
 
-        def on_prompt(label: str, n: int):
-            # Skip the first Phase 2 disc.
-            if n == 2 and not skipped[0]:
-                skipped[0] = True
-                return "skip"
-            return None
+        def on_prompt(prompt: Prompt, n: int):
+            return "quit"
 
-        rc, output = self._drive_restore(on_prompt=on_prompt)
+        rc, output, prompts = self._drive_restore(on_prompt=on_prompt)
 
-        assert rc != 0, (
-            f"Expected non-zero exit after skip, got rc={rc}"
+        assert any(p.kind == "disc" for p in prompts), (
+            f"tier 1 never asked for a disc:\n{output[-2000:]}"
         )
-        assert "RESTORE COMPLETE" not in output
-        assert "Skipping" in output or "missing" in output.lower(), (
-            f"Expected skip/missing message in output:\n{output[-2000:]}"
+        assert rc == EXIT_DISC_PROMPT_QUIT, (
+            f"Expected exit {EXIT_DISC_PROMPT_QUIT} after q, got rc={rc}:\n"
+            f"{output[-2000:]}"
         )
+        assert TIER1_DONE.decode() not in output
+        assert "stopped at the disc prompt at your request" in output
+        assert "The restore stopped before it finished" in output
 
     def test_unreadable_drive_reprompts(self):
-        """Empty drive triggers re-prompt, restore succeeds after retry."""
+        """An empty drive at a disc question: tier 1 asks again, and the
+        restore completes once the disc is in."""
         self._reset_restore_state()
-        triggered = [False]
+        asked: list[list[str]] = []
 
-        def on_prompt(label: str, n: int):
-            # On the first Phase 2 prompt, detach the loop device
-            # so mount fails (simulates empty / unreadable drive).
-            if n == 2 and not triggered[0]:
-                triggered[0] = True
-                return "detach"
-            return None
+        def on_prompt(prompt: Prompt, n: int):
+            asked.append(prompt.labels)
+            return "eject" if len(asked) == 1 else None
 
-        rc, output = self._drive_restore(on_prompt=on_prompt)
+        rc, output, _ = self._drive_restore(on_prompt=on_prompt)
 
-        assert rc == 0, (
-            f"restore.sh failed (rc={rc}):\n{output}"
+        assert rc == 0, f"restore.sh failed (rc={rc}):\n{output}"
+        assert len(asked) >= 2 and asked[1] == asked[0], (
+            f"Expected the same disc asked for again:\n{output[-2000:]}"
         )
-        assert "WRONG DISC" in output, (
-            f"Expected 'WRONG DISC' in output:\n{output[-2000:]}"
-        )
-        assert "RESTORE COMPLETE" in output
+        assert TIER1_DONE.decode() in output
         self._assert_files_restored()

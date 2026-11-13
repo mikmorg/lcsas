@@ -164,8 +164,10 @@ machines, or when staging in advance for an unattended burn.
   `lcsas scan`. `--dry-run` only reports the unscanned pack files.
 - `xorriso ≥ 1.4.0` on `PATH`. For production media (any `MediaType`
   with `ecc_overhead_pct > 0`), `dvdisaster ≥ 0.79` is also required.
-  `stage` invokes them for ISO + ECC. It does not check their
-  versions (only the removed single-volume `execute` path did, #699).
+  `stage` invokes them for ISO + ECC. Before it writes anything it
+  checks their versions and stops with an error naming the tool when
+  one is missing or too old (#731). dvdisaster is checked only when
+  the media gets ECC. `--dry-run` runs neither tool and checks neither.
 - `staging_path` filesystem with enough free space; pre-flight requires
   `total_data_bytes × (1.05 × (1 + ecc%/100) + 1)`
   (`BurnOrchestrator.stage`).

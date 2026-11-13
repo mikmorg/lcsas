@@ -69,10 +69,13 @@ def create_volume(
     commit: bool = True,
 ) -> Volume:
     """Insert a new volume and return the created Volume object."""
+    from lcsas.utils.timestamps import utc_now
+
     cursor = conn.execute(
-        """INSERT INTO volumes (label, uuid, media_type, capacity_bytes, location, status)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (label, uuid, media_type, capacity_bytes, location, status),
+        """INSERT INTO volumes (label, uuid, media_type, capacity_bytes, location,
+                                status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (label, uuid, media_type, capacity_bytes, location, status, utc_now()),
     )
     if commit:
         conn.commit()
@@ -216,12 +219,12 @@ def list_volumes(
     """List all volumes, optionally filtered by status."""
     if status_filter:
         rows = conn.execute(
-            "SELECT * FROM volumes WHERE status = ? ORDER BY created_at",
+            "SELECT * FROM volumes WHERE status = ? ORDER BY julianday(created_at), volume_id",
             (status_filter,),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM volumes ORDER BY created_at"
+            "SELECT * FROM volumes ORDER BY julianday(created_at), volume_id"
         ).fetchall()
     return [_row_to_volume(r) for r in rows]
 

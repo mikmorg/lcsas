@@ -57,7 +57,9 @@ def add_event(
     detail:
         Free-text detail (e.g. JSON with failed pack list).
     event_date:
-        ISO datetime string; defaults to now.
+        ISO datetime string; defaults to now.  Stored in UTC ISO-8601
+        (#730): a value with another offset or none (a receipt's burn
+        date) is rewritten; one that does not parse is kept as given.
     """
     if event_type not in VALID_EVENT_TYPES:
         raise ValueError(
@@ -66,6 +68,10 @@ def add_event(
         )
     if event_date is None:
         event_date = datetime.now(UTC).isoformat()
+    else:
+        from lcsas.utils.timestamps import to_utc_iso
+
+        event_date = to_utc_iso(event_date) or event_date
 
     cursor = conn.execute(
         """INSERT INTO volume_events (volume_id, event_type, event_date, location, detail)
@@ -100,14 +106,14 @@ def get_events_for_volume(
         rows = conn.execute(
             """SELECT * FROM volume_events
                WHERE volume_id = ? AND event_type = ?
-               ORDER BY event_date DESC""",
+               ORDER BY julianday(event_date) DESC, event_id DESC""",
             (volume_id, event_type),
         ).fetchall()
     else:
         rows = conn.execute(
             """SELECT * FROM volume_events
                WHERE volume_id = ?
-               ORDER BY event_date DESC""",
+               ORDER BY julianday(event_date) DESC, event_id DESC""",
             (volume_id,),
         ).fetchall()
     return [_row_to_event(r) for r in rows]
@@ -123,14 +129,14 @@ def get_latest_event(
         row = conn.execute(
             """SELECT * FROM volume_events
                WHERE volume_id = ? AND event_type = ?
-               ORDER BY event_date DESC LIMIT 1""",
+               ORDER BY julianday(event_date) DESC, event_id DESC LIMIT 1""",
             (volume_id, event_type),
         ).fetchone()
     else:
         row = conn.execute(
             """SELECT * FROM volume_events
                WHERE volume_id = ?
-               ORDER BY event_date DESC LIMIT 1""",
+               ORDER BY julianday(event_date) DESC, event_id DESC LIMIT 1""",
             (volume_id,),
         ).fetchone()
     return _row_to_event(row) if row else None
@@ -164,7 +170,7 @@ def burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
            WHERE volume_id = ?
              AND event_type IN ('VERIFY_PASS', 'BURN_RECEIPT_IMPORTED',
                                 'LOCATION_MOVE', 'VERIFY_FAIL_REBURN')
-           ORDER BY event_date, event_id""",
+           ORDER BY julianday(event_date), event_id""",
         (volume_id,),
     ).fetchall()
     for event_type, location, detail in rows:
