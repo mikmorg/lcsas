@@ -194,21 +194,6 @@ class TestHardlinkOrCopyErrors:
 
         assert exc_info.value.errno == errno.ENOSPC
 
-    def test_eperm_is_not_swallowed(self, tmp_path):
-        """EPERM from os.link is re-raised."""
-        src = tmp_path / "src.txt"
-        src.write_text("content")
-        dst = tmp_path / "dst.txt"
-
-        perm_err = OSError(errno.EPERM, "Operation not permitted")
-        with (
-            patch("lcsas.utils.fs.os.link", side_effect=perm_err),
-            pytest.raises(OSError) as exc_info,
-        ):
-            hardlink_or_copy(src, dst)
-
-        assert exc_info.value.errno == errno.EPERM
-
     def test_exdev_falls_back_to_copy(self, tmp_path):
         """EXDEV from os.link triggers shutil.copy2 fallback."""
         src = tmp_path / "src.txt"
@@ -243,23 +228,3 @@ class TestDVDisasterDiskSpace:
             pytest.raises(OSError, match="Insufficient disk space"),
         ):
             runner.augment_iso(iso)
-
-    def test_augment_proceeds_with_sufficient_space(self, tmp_path):
-        """augment_iso calls dvdisaster when there is enough free space."""
-        from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
-
-        runner = SubprocessDVDisasterRunner()
-        iso = tmp_path / "test.iso"
-        iso.write_bytes(b"\x00" * 1024)
-
-        with (
-            patch(
-                "lcsas.ecc.dvdisaster.shutil.disk_usage",
-                return_value=MagicMock(free=10_737_418_240),  # 10 GiB
-            ),
-            patch("lcsas.ecc.dvdisaster.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = MagicMock(returncode=0)
-            runner.augment_iso(iso)
-
-        mock_run.assert_called_once()

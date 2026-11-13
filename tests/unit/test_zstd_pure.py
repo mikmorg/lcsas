@@ -209,12 +209,14 @@ def _skewed_text(n: int, alphabet: bytes, seed: int) -> bytes:
 _BIG_ALPHA = b"etaoinshrdlucmfwypvbgkjqxz"
 
 
-def _roundtrip(original: bytes, level: int, *, checksum: bool = False) -> None:
+def _roundtrip(original: bytes, level: int, *, checksum: bool = False) -> bytes:
     comp = _zstd.ZstdCompressor(
         level=level, write_checksum=checksum
     ).compress(original)
     cap = (len(original) + 1) * 8 + (1 << 16)
-    assert decompress(comp, max_output_size=cap) == original
+    out = decompress(comp, max_output_size=cap)
+    assert out == original
+    return out
 
 
 @pytest.mark.skipif(not _HAS_ZSTD, reason="zstandard needed to produce frames")
@@ -228,7 +230,7 @@ class TestHuffmanLiterals:
         # (FSE branch), _fse_decode_weight_stream, _build_huffman_from_weights
         # and _decode_literals_4streams.
         original = _skewed_text(20000, _BIG_ALPHA, seed=level)
-        _roundtrip(original, level)
+        assert _roundtrip(original, level) == original
 
     @pytest.mark.parametrize("level", [3, 9, 19])
     def test_treeless_and_direct_weights(self, level):
@@ -237,12 +239,12 @@ class TestHuffmanLiterals:
         # at low level a *direct* (4-bit) weight representation
         # (header_byte >= 128).
         original = _skewed_text(300000, _BIG_ALPHA, seed=100 + level)
-        _roundtrip(original, level)
+        assert _roundtrip(original, level) == original
 
     def test_huffman_with_checksum(self):
         # Huffman literals + frame content checksum together.
         original = _skewed_text(40000, _BIG_ALPHA, seed=7)
-        _roundtrip(original, 19, checksum=True)
+        assert _roundtrip(original, 19, checksum=True) == original
 
     def test_many_sequences(self):
         # Many short matches → a large num_seq (multi-byte count encoding)
@@ -252,7 +254,7 @@ class TestHuffmanLiterals:
         rng = random.Random(5)
         words = [b"apple ", b"banana ", b"cherry ", b"date ", b"fig "]
         original = b"".join(rng.choice(words) for _ in range(20000))
-        _roundtrip(original, 19)
+        assert _roundtrip(original, 19) == original
 
     @pytest.mark.parametrize("seed", range(6))
     def test_fuzz_huffman_shapes(self, seed):
@@ -266,7 +268,7 @@ class TestHuffmanLiterals:
         for _ in range(20):
             n = rng.randint(1024, 50000)
             original = _skewed_text(n, _BIG_ALPHA, seed=rng.randint(0, 1 << 30))
-            _roundtrip(original, rng.choice([3, 9, 19]))
+            assert _roundtrip(original, rng.choice([3, 9, 19])) == original
 
 
 def _decode_and_sniff(frame: bytes) -> tuple[bytes, bool]:

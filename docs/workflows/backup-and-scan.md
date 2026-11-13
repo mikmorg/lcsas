@@ -187,12 +187,12 @@ Other axes: N/A.
 - `test_scan_prints_total_summary` — footer formatting.
 - Scanner specifics: `tests/unit/test_scanner_delta.py::TestScanner`
   (two-level layout, flat layout, missing `data/`, permission errors).
-- `tests/unit/test_scan_gaps.py::TestNoSnapshots::test_control_without_flag_checks_version_and_lists_snapshots`
+- `tests/unit/test_cli_scan.py::TestNoSnapshots::test_control_without_flag_checks_version_and_lists_snapshots`
   covers the snapshot-persistence branch of `cmd_scan` with a configured
   `password_file`: the rustic version is checked, the runner's snapshots
   are listed for the repository and persisted (`Snapshots persisted: 1`). The
   runner and version check are patched, so no real rustic is involved.
-- `tests/unit/test_scan_gaps.py::TestNoSnapshots::test_rustic_version_check_failure_aborts_scan_with_rc1`
+- `tests/unit/test_cli_scan.py::TestNoSnapshots::test_rustic_version_check_failure_aborts_scan_with_rc1`
   covers the `rustic` binary-version check failure path (the
   `check_binary_version` call in `cmd_scan`): the scan exits 1, the error
   is printed, the runner is never built and no snapshot rows are written.
@@ -250,7 +250,7 @@ Other axes: N/A.
   registered.
 - `tests/unit/test_cli_scan.py::TestScanParser::test_scan_parser_with_repo_filter`
   covers argparse acceptance of multiple names.
-- `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_unknown_repo_warning`
+- `tests/unit/test_cli_scan.py::TestCmdScanFromConfig::test_scan_unknown_repo_warning`
   covers the "unknown repository name" path: it is an error (#516). The
   command names the unknown repository, lists the configured ones, scans
   nothing and exits 1.
@@ -291,12 +291,12 @@ rustic-on-PATH requirement (both checked inside the snapshot branch only).
 
 **Test coverage:**
 - The flag is passed explicitly by `tests/unit/test_cli_scan.py::TestPruneSyncGuards`
-  (all three tests), `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_registers_new_packs`
+  (all three tests), `tests/unit/test_cli_scan.py::TestCmdScanFromConfig::test_scan_registers_new_packs`
   and `::test_scan_unknown_repo_warning`, and
   `tests/unit/test_cli_e2e.py::TestInitRepoScanPipeline`. On a host
   without rustic a regression that ignored the flag would make those
   scans return 1 at the `check_binary_version` call.
-- `tests/unit/test_scan_gaps.py::TestNoSnapshots` asserts the skip itself,
+- `tests/unit/test_cli_scan.py::TestNoSnapshots` asserts the skip itself,
   with a `password_file` configured (otherwise the snapshot loop would skip
   the repository anyway and the flag would be unobservable) and a control run
   without the flag proving the patched seams are live:
@@ -373,7 +373,7 @@ mark them as pruned" step.
   asserts the prune-sync block runs in a default (sub-threshold) scan and
   flips `is_pruned`; `::test_partial_scan_does_not_mark_pruned` covers the
   incomplete-scan guard.
-- `tests/unit/test_scan_gaps.py::TestNoPruneSync` exercises `--no-prune-sync`
+- `tests/unit/test_cli_scan.py::TestNoPruneSync` exercises `--no-prune-sync`
   itself (the flag's skip path): packs missing from the mirror stay active,
   with a control run of the same setup that does prune
   (`::test_flag_keeps_packs_missing_from_mirror_active`,
@@ -450,7 +450,7 @@ This is the `.packs` field of the `MirrorScanResult` returned by
 - `tests/unit/test_scanner_delta.py::TestDeltaAnalyzer` — register-new,
   skip-existing, unarchived totals, repository filtering, pruned detection.
 - `tests/unit/test_db_packs.py` — CRUD operations on the packs table.
-- `tests/unit/test_scan_gaps.py::TestBatchingBeyond900` exercises the
+- `tests/unit/test_cli_scan.py::TestBatchingBeyond900` exercises the
   SQLite-variable-batching path with more than 900 packs, at the boundaries
   (899, 900, 901) and over several batches (1800, 1801, 2500) for
   `DeltaAnalyzer.register_new_packs`, `bulk_register`, `bulk_mark_pruned`,
@@ -459,7 +459,7 @@ This is the `.packs` field of the `MirrorScanResult` returned by
   The `sqlite_999_vars` fixture lowers each connection's variable limit to
   the classic 999 and proves the cap is live, because a modern SQLite
   accepts 32 766 variables and an unbatched query would otherwise pass.
-- `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch` asserts the
+- `tests/unit/test_cli_scan.py::TestBulkRegisterSizeMismatch` asserts the
   size-mismatch warning in `bulk_register` (`src/lcsas/db/packs.py`): it
   warns once naming the pack and both sizes, the catalog keeps the
   first-recorded size, a matching size or a brand-new pack is silent, only
@@ -487,7 +487,7 @@ This is the `.packs` field of the `MirrorScanResult` returned by
   registered.
   An unknown `--repo` name is an error (exit 1, configured names listed),
   no longer a silent exit 0 (`cmd_scan`;
-  `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_unknown_repo_warning`).
+  `tests/unit/test_cli_scan.py::TestCmdScanFromConfig::test_scan_unknown_repo_warning`).
 - **Size mismatch is non-fatal (intentional: pack names are content
   hashes, so trusting the first-recorded size is the conservative choice).**
   A re-scan logs a warning for every already-registered pack whose size on
@@ -496,7 +496,7 @@ This is the `.packs` field of the `MirrorScanResult` returned by
   `bulk_register` in `src/lcsas/db/packs.py` warns the same way). No
   observability surface (catalog column, audit event) records that a mismatch
   was seen; the owner only sees the log line (pinned by
-  `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch::test_rescan_after_mirror_pack_changed_size_warns`).
+  `tests/unit/test_cli_scan.py::TestBulkRegisterSizeMismatch::test_rescan_after_mirror_pack_changed_size_warns`).
 - **`detect_pruned` semantics when the mirror is *partly* missing
   (intentional: a scan cannot tell "pruned" from "not mounted" below the
   guards).** A partial mirror that raises read errors is now skipped for

@@ -5,13 +5,16 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
+from lcsas.db.connection import get_connection
 from lcsas.db.models import Pack, Volume
+from lcsas.db.schema import create_all
 from lcsas.staging.builder import (
     CorruptPacksError,
     MirrorUnavailableError,
@@ -886,3 +889,113 @@ class TestPasswordInfoSharedSentence:
         assert "NOTE:" not in text
         assert _OWN not in text
         assert _SHARED not in text
+
+
+def _mem_conn() -> sqlite3.Connection:
+    conn = get_connection(":memory:")
+    create_all(conn)
+    return conn
+
+
+class TestOrphanedStagingCleanup:
+    def test_detect_no_orphans(self, tmp_path):
+        from lcsas.config.settings import LCSASConfig
+        from lcsas.staging.cleanup import detect_orphaned_staging
+
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=tmp_path / "db",
+        )
+        conn = _mem_conn()
+        result = detect_orphaned_staging(cfg, conn)
+        assert result == []
+
+    def test_detect_orphan_dir(self, tmp_path):
+        from lcsas.config.settings import LCSASConfig
+        from lcsas.staging.cleanup import detect_orphaned_staging
+
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        (staging / "2025-01-01T00-00-00.000000+00-00-deadbeef").mkdir()
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=tmp_path / "db",
+        )
+        conn = _mem_conn()
+
+        result = detect_orphaned_staging(cfg, conn)
+        assert len(result) == 1
+        assert result[0].name == "2025-01-01T00-00-00.000000+00-00-deadbeef"
+
+    def test_active_session_not_detected(self, tmp_path):
+        from lcsas.config.settings import LCSASConfig
+        from lcsas.staging.cleanup import detect_orphaned_staging
+
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        active_dir = staging / "active"
+        active_dir.mkdir()
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=tmp_path / "db",
+        )
+        conn = _mem_conn()
+
+        # Add an active session pointing to this dir
+        conn.execute(
+            "INSERT INTO burn_sessions (session_id, media_type, status, staging_dir) "
+            "VALUES (?, ?, ?, ?)",
+            ("s1", "TEST_TINY", "STAGED", str(active_dir)),
+        )
+        conn.commit()
+
+        result = detect_orphaned_staging(cfg, conn)
+        assert result == []
+
+    def test_unmanaged_entries_are_reported(self, tmp_path):
+        """#486: stray ISOs, legacy single-volume dirs and leftover ECC temp
+        files inside a tracked session are listed; session dirs aren't."""
+        from lcsas.config.settings import LCSASConfig
+        from lcsas.staging.cleanup import detect_unmanaged_staging
+
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        (staging / "LCSAS-TINY-0003.iso").write_bytes(b"iso")
+        (staging / "LCSAS-TINY-0003.iso.ecc.tmp").write_bytes(b"tmp")
+        (staging / "LCSAS-TINY-0003").mkdir()             # execute() layout
+        orphan = staging / "2025-01-01T00-00-00.000000+00-00-deadbeef"
+        orphan.mkdir()
+        active = staging / "2025-02-02T00-00-00.000000+00-00-cafef00d"
+        (active / "sub").mkdir(parents=True)
+        (active / "V1.iso").write_bytes(b"iso")
+        (active / "sub" / "V2.iso.ecc.tmp").write_bytes(b"killed augment")
+        cfg = LCSASConfig(
+            mirror_base_path=tmp_path, staging_path=staging, db_path=staging / "archive.db",
+        )
+        (staging / "archive.db").write_bytes(b"")          # catalog lives here
+        conn = _mem_conn()
+        conn.execute(
+            "INSERT INTO burn_sessions (session_id, media_type, status, staging_dir) "
+            "VALUES ('s1', 'TEST_TINY', 'STAGED', ?)",
+            (str(active),),
+        )
+        conn.commit()
+
+        found = {p.relative_to(staging).as_posix()
+                 for p in detect_unmanaged_staging(cfg, conn)}
+        assert found == {
+            "LCSAS-TINY-0003",
+            "LCSAS-TINY-0003.iso",
+            "LCSAS-TINY-0003.iso.ecc.tmp",
+            f"{active.name}/sub/V2.iso.ecc.tmp",
+        }
+
+    def test_clean_orphaned(self, tmp_path):
+        from lcsas.staging.cleanup import clean_orphaned_staging
+
+        orphan = tmp_path / "orphan"
+        orphan.mkdir()
+        (orphan / "file.iso").write_bytes(b"data")
+
+        count = clean_orphaned_staging([orphan])
+        assert count == 1
+        assert not orphan.exists()

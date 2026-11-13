@@ -523,9 +523,9 @@ just reached by different routes, so both answer to the same valve:
 `_read_packs_on_discs`, `RepoMetadataResult` (`src/lcsas/meta/builder.py`);
 the exit-code decision in `cmd_meta_build` (`src/lcsas/cli/commands/meta.py`).
 
-**Test coverage:** `tests/unit/test_cli_comprehensive.py::TestCmdMetaBuildKeyGate`;
+**Test coverage:** `tests/unit/test_cli_meta.py::TestCmdMetaBuildKeyGate`;
 `tests/unit/test_meta_builder.py::TestBundleMetadata`;
-`tests/unit/test_cli_comprehensive.py::TestCmdMetaBuildPerRepoKeysNotAllowIncomplete`
+`tests/unit/test_cli_meta.py::TestCmdMetaBuildPerRepoKeysNotAllowIncomplete`
 (the `metadata/<repo>/keys` variant).
 
 ---

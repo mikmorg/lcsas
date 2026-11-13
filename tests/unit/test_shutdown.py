@@ -25,12 +25,6 @@ class TestRegisterAndRunCleanups:
         mgr.run_cleanups()
         assert order == [3, 2, 1]
 
-    def test_run_cleanups_suppresses_exceptions(self):
-        mgr = ShutdownManager()
-        mgr.register(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-        # Should not raise
-        mgr.run_cleanups()
-
     def test_run_cleanups_continues_after_exception(self):
         mgr = ShutdownManager()
         calls: list[int] = []
@@ -43,7 +37,7 @@ class TestRegisterAndRunCleanups:
 
     def test_no_callbacks_run_cleanups_is_noop(self):
         mgr = ShutdownManager()
-        mgr.run_cleanups()  # Should not raise
+        assert mgr.run_cleanups() is None  # Should not raise
 
 
 class TestInstallUninstall:

@@ -56,7 +56,10 @@ BOX_HINT = BOX_NO_HINT.replace(
 
 
 def test_prompt_text_checks_accept_the_real_box() -> None:
-    smoke.check_prompt_text(smoke.last_box("noise\n" + BOX_NO_HINT))
+    assert smoke.check_prompt_text(smoke.last_box("noise\n" + BOX_NO_HINT)) is None
+    # The check is not vacuous: a box without the retry line is refused.
+    with pytest.raises(smoke.CheckError, match="press ENTER to retry"):
+        smoke.check_prompt_text(BOX_NO_HINT.replace("press ENTER to retry", "press a key"))
 
 
 def test_prompt_text_checks_reject_a_reworded_box() -> None:

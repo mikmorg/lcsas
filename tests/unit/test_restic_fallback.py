@@ -2567,7 +2567,7 @@ class TestEmitProgress:
         # Progress counters unchanged proves we returned early
         assert restorer._progress_last_emit_files == 0
 
-    def test_emit_progress_force_no_files_skipped(self, tmp_path):
+    def test_emit_progress_force_no_files_skipped(self, tmp_path, capsys):
         """Line 810-811: force=True with 0 files done emits nothing."""
         repo = _build_test_repo(tmp_path)
         restorer = PurePythonRestorer(repo, password=PASSWORD)
@@ -2578,6 +2578,7 @@ class TestEmitProgress:
         restorer._progress_last_emit_bytes = 0
         # Should not crash or emit
         restorer._emit_progress(force=True)
+        assert "Progress:" not in capsys.readouterr().err
 
     def test_emit_progress_with_total(self, tmp_path, capsys):
         """Line 811: progress line shows N/M format when total > 0."""

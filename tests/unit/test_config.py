@@ -249,14 +249,6 @@ class TestNegativeConfig:
         errors = validate_config(load_config(config_file))
         assert any("password_file does not exist" in e for e in errors)
 
-    def test_malformed_toml_raises(self, tmp_path):
-        """Syntactically invalid TOML raises an error on load."""
-        import tomllib
-        config_file = tmp_path / "bad.toml"
-        config_file.write_bytes(b"[unclosed\nkey = value\n")
-        with pytest.raises((tomllib.TOMLDecodeError, Exception)):
-            load_config(config_file)
-
     def test_missing_required_mirror_path_key(self, tmp_path):
         """A repo block without mirror_path names the repo (#515).  It was a
         bare KeyError, which the CLI showed as "Unexpected error: 'mirror_path'";
@@ -313,3 +305,24 @@ class TestNegativeConfig:
         with caplog.at_level(logging.WARNING, logger="lcsas"):
             load_config(config_file)
         assert "not set" not in caplog.text
+
+
+class TestConfigEdgeCases:
+    def test_load_nonexistent_file(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_config(tmp_path / "nonexistent.toml")
+
+    def test_load_malformed_toml(self, tmp_path):
+        import tomllib
+
+        bad = tmp_path / "bad.toml"
+        bad.write_text("[[[[invalid toml")
+        with pytest.raises(tomllib.TOMLDecodeError):
+            load_config(bad)
+
+    def test_media_type_enum_properties(self):
+        """Verify all media type properties are consistent."""
+        for mt in MediaType:
+            assert mt.usable_bytes <= mt.capacity_bytes
+            assert mt.ecc_overhead_pct >= 0
+            assert mt.usable_bytes >= 0

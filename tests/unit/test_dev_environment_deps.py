@@ -18,4 +18,8 @@ hide the very regression this test exists to catch.
 
 
 def test_zstandard_importable_in_dev_environment() -> None:
-    import zstandard  # noqa: F401
+    import zstandard
+
+    data = b"lcsas tier-3 zstd round trip"
+    frame = zstandard.ZstdCompressor().compress(data)
+    assert zstandard.ZstdDecompressor().decompress(frame) == data

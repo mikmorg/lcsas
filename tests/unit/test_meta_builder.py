@@ -830,7 +830,7 @@ class TestBundleUpstreamBinaries:
         must not crash the build.  Completeness is enforced one level up,
         by the RST-05 build gate in ``cmd_meta_build`` (default ON,
         escape hatch ``--allow-incomplete``) — see
-        ``test_cli_comprehensive.TestCmdMetaBuildGate``."""
+        ``test_cli_meta.TestCmdMetaBuildGate``."""
         from lcsas.meta.builder import MetaVolumeBuilder
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "nonexistent"))
         b = MetaVolumeBuilder(tmp_path / "meta")
@@ -1755,6 +1755,7 @@ class TestBundleDvdisasterSource:
         # name is None + allow flag -> silent return (builder.py:1929-1930).
         b = self._builder(tmp_path, allow=True)
         b._bundle_dvdisaster_source()  # must not raise
+        assert not (tmp_path / "out" / "tools" / "src").exists()
 
     def test_raises_when_unpinned_and_not_allowed(self, tmp_path: Path):
         # name is None + not allowed -> MetaBuildError (builder.py:1931).

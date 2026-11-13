@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lcsas.binpack.algorithm import estimate_volumes_needed, first_fit_decreasing
+from lcsas.config.media import MediaType
 
 
 class TestFirstFitDecreasing:
@@ -110,3 +111,43 @@ class TestEstimateVolumes:
     def test_invalid_usable(self):
         with pytest.raises(ValueError, match="No usable capacity"):
             estimate_volumes_needed(100, 100, reserved=200)
+
+
+class TestBinpackEdgeCases:
+    def test_zero_size_items(self):
+        """Zero-byte items should fit (they take no space)."""
+        items = [("a", 0), ("b", 0), ("c", 0)]
+        selected, remaining = first_fit_decreasing(items, capacity=100)
+        assert len(selected) == 3
+        assert remaining == []
+
+    def test_single_item_exact_fit(self):
+        """One item exactly equal to usable capacity."""
+        items = [("a", 100)]
+        selected, remaining = first_fit_decreasing(items, capacity=100, reserved=0)
+        assert len(selected) == 1
+
+    def test_single_item_with_reserved_exact(self):
+        """Item fits exactly after reserved space."""
+        items = [("a", 80)]
+        selected, remaining = first_fit_decreasing(items, capacity=100, reserved=20)
+        assert len(selected) == 1
+
+    def test_all_items_too_large(self):
+        """All items exceed capacity → none selected."""
+        items = [("a", 200), ("b", 300)]
+        selected, remaining = first_fit_decreasing(items, capacity=100, reserved=0)
+        assert selected == []
+        assert len(remaining) == 2
+
+    def test_estimate_volumes_needed_zero_bytes(self):
+        est = estimate_volumes_needed(0, MediaType.TEST_TINY.capacity_bytes)
+        assert est == 0
+
+    def test_estimate_volumes_needed_exact_fit(self):
+        mt = MediaType.TEST_TINY
+        est = estimate_volumes_needed(
+            mt.usable_bytes, mt.capacity_bytes,
+            ecc_overhead_pct=mt.ecc_overhead_pct,
+        )
+        assert est == 1

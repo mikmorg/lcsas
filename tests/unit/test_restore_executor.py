@@ -107,7 +107,6 @@ class TestPrepareCache:
 # =========================================================================
 
 
-
 class TestIngestVolume:
     def _setup_volume(self, tmp_path, layout="flat"):
         """Create a simulated mounted volume with pack files."""
@@ -887,3 +886,45 @@ class TestIngestVolumeInvokesECC:
             )
         msg = str(exc_info.value)
         assert "SHA-256" in msg, f"Expected 'SHA-256' in error message, got: {msg!r}"
+
+
+class TestPackCorruptionError:
+    def test_bad_hash_raises_and_deletes(self, tmp_path):
+        from lcsas.restore.executor import PackCorruptionError, RestoreExecutor
+
+        mock_runner = MagicMock()
+        executor = RestoreExecutor(mock_runner)
+
+        vol = tmp_path / "volume" / "data"
+        vol.mkdir(parents=True)
+        fake_sha = "bb" * 32
+        (vol / fake_sha).write_bytes(b"wrong content")
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        with pytest.raises(PackCorruptionError):
+            executor.ingest_volume(cache, tmp_path / "volume", [fake_sha], verify=True)
+
+        # Verify the bad file was deleted
+        dst = cache / "data" / fake_sha[:2] / fake_sha
+        assert not dst.exists()
+
+    def test_skip_verify_skips_check(self, tmp_path):
+        from lcsas.restore.executor import RestoreExecutor
+
+        mock_runner = MagicMock()
+        executor = RestoreExecutor(mock_runner)
+
+        vol = tmp_path / "volume" / "data"
+        vol.mkdir(parents=True)
+        fake_sha = "cc" * 32
+        (vol / fake_sha).write_bytes(b"whatever")
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        result = executor.ingest_volume(
+            cache, tmp_path / "volume", [fake_sha], verify=False,
+        )
+        assert result.ingested == 1

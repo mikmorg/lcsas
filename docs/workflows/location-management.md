@@ -249,7 +249,7 @@ created; the disc retains its `burn_date`, `iso_sha256`, and
 **Test coverage:**
 - Existing: `tests/unit/test_db_volume_copies.py` covers
   `move_volume_copy` happy-path and duplicate-destination paths;
-  `tests/unit/test_cli_comprehensive.py::test_location_move_nonexistent_volume`
+  `tests/unit/test_cli_location.py::TestCmdLocation::test_location_move_nonexistent_volume`
   covers the missing-label error path.
 - Gap: no test covers the "no `ACTIVE` disc at source" branch via CLI;
   no test checks that `notes` accrues across multiple moves.

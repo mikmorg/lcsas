@@ -227,8 +227,15 @@ class _InstrumentedConnection(sqlite3.Connection):
 class TestSchema:
     def test_create_all_idempotent(self, memory_db):
         """Creating schema twice should not raise."""
+        def tables():
+            return memory_db.execute(
+                "SELECT name, sql FROM sqlite_master ORDER BY name"
+            ).fetchall()
+
+        before = [tuple(r) for r in tables()]
         create_all(memory_db)  # already done in fixture
         create_all(memory_db)  # should be fine
+        assert [tuple(r) for r in tables()] == before
 
     def test_schema_version_recorded(self, memory_db):
         version = get_schema_version(memory_db)

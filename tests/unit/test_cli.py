@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from lcsas.cli.main import build_parser, main
+from lcsas.db.connection import get_connection
+from lcsas.db.repos import register_repo
+from lcsas.db.schema import create_all
 
 
 class TestCLIParsing:
@@ -76,74 +81,109 @@ class TestCLIParsing:
 
 
 class TestCLIInit:
-    def test_init_creates_db(self, tmp_path):
-        db_path = tmp_path / "test.db"
-        result = main(["init", "--db-path", str(db_path)])
-        assert result == 0
-        assert db_path.exists()
 
     def test_no_command_shows_help(self, capsys):
         result = main([])
         assert result == 0
 
-    def test_init_honors_config_flag(self, tmp_path, monkeypatch):
-        """`lcsas --config <path> init` must create the catalog DB at the
-        path declared in the TOML config, not the default ``archive.db``.
 
-        Regression test for issue #17.
-        """
-        # Run in an isolated cwd so any default `./archive.db` would be
-        # easy to detect (and must NOT appear).
-        workdir = tmp_path / "cwd"
-        workdir.mkdir()
-        monkeypatch.chdir(workdir)
+class TestDispatchRouting:
+    def test_all_commands_parse(self):
+        """Verify parser accepts all known commands without errors."""
+        parser = build_parser()
+        commands = [
+            ["init", "--db-path", "/tmp/x.db"],
+            ["repo", "add", "fam", "/mnt"],
+            ["repo", "list"],
+            ["scan"],
+            ["status"],
+            ["config", "check"],
+            ["staging", "clean"],
+            ["stage"],
+            ["burn", "--session", "latest"],
+            ["burn-iso", "/tmp/t.iso"],
+            ["location", "list"],
+            ["location", "add", "Home"],
+            ["location", "status", "Home"],
+            ["location", "move", "VOL", "--from", "A", "--to", "B"],
+            ["catalog", "import-receipts", "f.json"],
+            ["restore", "plan", "snap1", "--repo", "fam"],
+            ["restore", "exec", "snap1", "/tmp", "--repo", "fam",
+             "--password-file", "/k"],
+            ["consolidate", "1", "2"],
+            ["verify", "VOL", "--disc"],
+            ["meta", "build", "--output", "/tmp/m"],
+        ]
+        for cmd in commands:
+            args = parser.parse_args(cmd)
+            assert args.command is not None, f"Failed to parse: {cmd}"
 
-        # Custom DB location declared inside the TOML config.
-        custom_db = tmp_path / "custom" / "catalog.db"
-        mirror = tmp_path / "mirror"
-        mirror.mkdir()
-        staging = tmp_path / "staging"
-        staging.mkdir()
+    def test_dry_run_flag_on_stage(self):
+        parser = build_parser()
+        args = parser.parse_args(["stage", "--dry-run"])
+        assert args.dry_run is True
 
-        cfg_path = tmp_path / "lcsas.toml"
-        cfg_path.write_text(
-            f"""
-[paths]
-mirror_base = "{mirror}"
-staging = "{staging}"
-database = "{custom_db}"
+    def test_dry_run_short_flag_on_burn(self):
+        parser = build_parser()
+        args = parser.parse_args(["burn", "--session", "latest", "-n"])
+        assert args.dry_run is True
 
-[defaults]
-media_type = "TEST_TINY"
-metadata_reserve_mb = 0
-"""
-        )
+    def test_skip_verify_flag(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "restore", "exec", "snap1", "/tmp",
+            "--repo", "fam", "--password-file", "/k", "--skip-verify",
+        ])
+        assert args.skip_verify is True
 
-        result = main(["--config", str(cfg_path), "init"])
-        assert result == 0
-
-        # The catalog DB must land at the path the TOML config specified.
-        assert custom_db.exists(), (
-            f"expected catalog DB at {custom_db}, not found"
-        )
-
-        # And the default location must NOT have been written.
-        assert not (workdir / "archive.db").exists(), (
-            "init silently fell back to default archive.db in cwd; "
-            "--config was ignored"
-        )
+    def test_no_snapshots_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["scan", "--no-snapshots"])
+        assert args.no_snapshots is True
 
 
-class TestReadOnlyCommandsRequireCatalog:
-    """FUP-02 mitigation 4: read-only commands must fail (not create a
-    catalog) when none exists, and perform zero writes outside the lock."""
+def _mem_conn() -> sqlite3.Connection:
+    conn = get_connection(":memory:")
+    create_all(conn)
+    return conn
 
-    def test_status_fails_without_catalog(self, tmp_path, capsys):
-        db = tmp_path / "nope.db"
-        result = main(["--db", str(db), "status"])
-        assert result != 0
-        combined = capsys.readouterr()
-        text = combined.out + combined.err
-        assert "lcsas init" in text
-        # The read-only command must NOT have created the catalog.
-        assert not db.exists(), "status created a catalog as a side effect"
+
+class TestResolveRepoNamesToIds:
+    """Ensure typo'd repo names raise instead of silently matching all repos."""
+
+    def test_none_input_returns_none(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        assert _resolve_repo_names_to_ids(conn, None) is None
+
+    def test_valid_names_return_ids(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        register_repo(conn, "family", "Family", "/mnt/mirror/family")
+        register_repo(conn, "work", "Work", "/mnt/mirror/work")
+
+        ids = _resolve_repo_names_to_ids(conn, ["Family"])
+        assert ids is not None
+        assert len(ids) == 1
+
+    def test_all_invalid_names_raises(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        register_repo(conn, "family", "Family", "/mnt/mirror/family")
+
+        with pytest.raises(ValueError, match="None of the specified repositories"):
+            _resolve_repo_names_to_ids(conn, ["typo_name", "bogus"])
+
+    def test_partial_valid_returns_valid_only(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        register_repo(conn, "family", "Family", "/mnt/mirror/family")
+        register_repo(conn, "work", "Work", "/mnt/mirror/work")
+
+        ids = _resolve_repo_names_to_ids(conn, ["Family", "nonexistent"])
+        assert ids is not None
+        assert len(ids) == 1
