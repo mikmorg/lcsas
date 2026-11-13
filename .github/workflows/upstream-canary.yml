@@ -38,3 +38,23 @@ jobs:
           sh recovery/scripts/fetch_upstream.sh \
             --no-extract \
             --cache "$RUNNER_TEMP/upstream-cache"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Bundled CPython runs through the bundled musl loader on glibc (#714)
+        run: |
+          # Extract only the x86_64 musl CPython and the Alpine rootfs the
+          # loader comes from (already downloaded and verified above), then
+          # run the bundled interpreter through the bundled loader inside a
+          # stock debian:12-slim container that has no musl.
+          m="$RUNNER_TEMP/upstream-x86_64-musl.sha256"
+          grep -E '  (python|musl)/x86_64-unknown-linux-musl/' recovery/UPSTREAM.sha256 > "$m"
+          test "$(wc -l < "$m")" -eq 2
+          sh recovery/scripts/fetch_upstream.sh --manifest "$m" \
+            --cache "$RUNNER_TEMP/upstream-cache"
+          python -m pip install -q -e . pytest
+          LCSAS_RECOVERY_CACHE="$RUNNER_TEMP/upstream-cache" python -m pytest \
+            tests/recovery_hardening/test_tier3_musl_loader_glibc_host.py \
+            -v -rs -p no:cacheprovider --junitxml="$RUNNER_TEMP/musl.xml"
+          # A skip here means the check did not run: fail instead.
+          python scripts/ci_min_passed.py "$RUNNER_TEMP/musl.xml" --min-passed 2
