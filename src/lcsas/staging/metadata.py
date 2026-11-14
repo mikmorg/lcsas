@@ -47,10 +47,13 @@ _METADATA_FILES = ["config"]
 # (the LCSASConfig default of 100 MB swamps it), but test fixtures that
 # materialize an ISO on the 2 MB TEST_TINY media MUST budget at least
 # this much in ``metadata_reserve_bytes`` or the staging directory will
-# overflow capacity.  Bump if the injector grows.  760 KB since rc9: the
+# overflow capacity.  Bump if the injector grows.  850 KB since rc9: the
 # per-disc tier-3 reader grew ~20 KB with the fast-AES selector (#774),
-# which put the single-tenant blind fixture one sector over TEST_TINY.
-MIN_HOLOGRAPHIC_RESERVE_BYTES = 760_000
+# which put the single-tenant blind fixture's second ISO one sector over
+# TEST_TINY (its 5 packs, 1.3 MB, plus ~800 KB of metadata and ISO
+# overhead); the reserve must exceed that metadata so the packer moves a
+# pack to the next volume.
+MIN_HOLOGRAPHIC_RESERVE_BYTES = 850_000
 
 
 @dataclass(frozen=True)
