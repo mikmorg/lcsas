@@ -219,15 +219,48 @@ no loader; the macOS and Windows builds need none either.
 
 TIER 3: SPEED
 
-Tier 3 does all of its cryptography in pure Python
-(lcsas.restore._aes_pure, stdlib only), so it is SLOW.  Measured on
-the lab VM (2026-11-13, one x86_64 core): AES-256-CTR decryption about
-0.15 MB/s; the pure-Python zstd decoder about 8 MB/s.  AES sets the
-pace: roughly 2 hours per GB restored, about 11 weeks per TB.  Tiers 1
-and 2 run at disc speed.  Tier 3 exists so that the files that matter
-most can still be restored when tiers 1 and 2 cannot run; for a whole
-large archive, get tier 1 or 2 working (another computer, another
-architecture) instead.
+Tier 3 needs nothing but Python, but it uses a native AES when one is
+safe here and gives the right answer.  It picks, once per run, the
+first of these that passes a known-answer test (NIST SP 800-38A) and a
+cross-check against the built-in code:
+
+  1. the OpenSSL library, loaded into Python (ctypes).  Windows: the
+     libcrypto DLL that comes with the bundled Python.  Linux: only
+     when the Python is a glibc build (a host python3), never the
+     bundled musl Python, which may run through the bundled loader on
+     a glibc host and must not load the host's library.  Never macOS.
+     A library is tried in a separate Python process first, so a
+     crash there cannot stop the restore.
+  2. the openssl command (OpenSSL or LibreSSL), if it is on PATH.
+     Linux and macOS hosts usually have it.  NOTE: openssl takes the
+     raw key only on its command line, so while it runs, other users
+     of the same computer can read that key (ps, /proc).  Restore on
+     a computer only you use, or set LCSAS_TIER3_AES=pure to skip it.
+  3. the built-in pure-Python AES (slow, always there).
+
+The reader prints one line saying which it uses, for example
+"AES-256-CTR: using the openssl command (/usr/bin/openssl, ...)".
+LCSAS_TIER3_AES=auto (default), ctypes, openssl or pure overrides the
+choice.  If a native AES fails during the restore, the reader goes
+on with the built-in one.
+
+Measured on the lab VM (2026-11-13, one x86_64 core, the bundled
+Python with the openssl command):
+
+  photos, video, archives (data that does not compress)
+                                about 8.6 MB/s, about 2 minutes per GB
+  text and documents (compresses about 3x)
+                                about 0.85 MB/s, about 20 minutes per GB
+  a 200 MB mix of both          112 seconds
+
+The pure-Python zstd decoder (about 1.2 MB/s of text) and Poly1305
+(about 14 MB/s) now set the pace.  With the built-in AES instead, add
+about 1.8 hours per GB stored (0.15 MB/s): the same 200 MB mix would
+take about 17 minutes (worked out from a 5 MB run, not timed in
+full).  Tiers 1 and 2 run at disc speed.  Tier 3 exists so that the
+files that matter most can still be restored when tiers 1 and 2
+cannot run; for a whole large archive, get tier 1 or 2 working
+(another computer, another architecture) instead.
 
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
 

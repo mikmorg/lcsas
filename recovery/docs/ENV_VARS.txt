@@ -529,6 +529,22 @@ LCSAS_ALLOW_PYTHON_TIER
             recovery tier.  Environments that ban Python
             entirely (air-gapped kiosks) can set this to 0.
 
+LCSAS_TIER3_AES
+  Default:  auto
+  Since:    v1.0.0-rc9 (#774)
+  Read by:  tier 3 only (the Python reader)
+  What:     Which AES-256 decryption tier 3 uses.  auto (default)
+            picks the first that passes a known-answer test: the
+            host's OpenSSL library loaded in-process (Windows, or a
+            glibc python3 on Linux), then the `openssl` command, then
+            pure Python.  ctypes, openssl or pure force one (a forced
+            backend that fails its test falls back to pure).
+  Why:      Pure Python decrypts at about 0.15 MB/s (2 hours per GB);
+            the native backends run at tens to hundreds of MB/s.  The
+            `openssl` command takes the key on its command line, which
+            other local users can read in /proc on a shared machine:
+            set LCSAS_TIER3_AES=pure there.
+
 LCSAS_PROGRESS
   Default:  unset → ON (opt-out / default ON)
   Since:    Phase 22
@@ -789,6 +805,7 @@ LCSAS_CHECK_DISC_AUTOFIX    0         opt-in      unattended ECC repair
 LCSAS_FORCE_NONEMPTY_TARGET 0         opt-in      scripted overwrite ack
 LCSAS_KEYSHARE_PASSPHRASE   unset     opt-in      share passphrase
 LCSAS_PROGRESS              unset     opt-out     set 0 to quiet tier 3
+LCSAS_TIER3_AES             auto      opt-out     set pure on shared hosts
 LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
 LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs
 LCSAS_ALLOW_TMPFS_TARGET    0         opt-in      set 1 to skip RAM-target prompt

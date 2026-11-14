@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
+import runpy
 
 import pytest
 
@@ -118,3 +119,82 @@ class TestBuildStandalone:
         class_defs = re.findall(r"^class (\w+)", standalone_text, re.MULTILINE)
         dupes = [c for c in class_defs if class_defs.count(c) > 1]
         assert dupes == [], f"Duplicate class definitions: {set(dupes)}"
+
+
+# ── Native AES selector ─────────────────────────────────────────────
+
+_CONCATENATED = ("_aes_pure.py", "_aes_fast.py", "_zstd_pure.py",
+                 "restic_fallback.py")
+
+
+def _top_level_names(source: str) -> set[str]:
+    """Names a module defines at top level (defs, classes, assignments)."""
+    names: set[str] = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                names.update(
+                    sub.id for sub in ast.walk(target) if isinstance(sub, ast.Name)
+                )
+    return names
+
+
+class TestFastAesInStandalone:
+    """The generated reader carries the native-AES selector."""
+
+    @pytest.fixture(scope="class")
+    def standalone_text(self):
+        return build_standalone()
+
+    def test_selector_is_inlined(self, standalone_text):
+        for symbol in ("class FastAesCtr", "def select_aes_ctr_backend",
+                       "_AESF_KAT_CT", "_AESF_CTYPES_SRC",
+                       "def _aes_ctr_fast"):
+            assert symbol in standalone_text, symbol
+        # Its import of the pure aes_ctr became a binding to the inlined
+        # function, placed after that function is defined.
+        assert "_aesf_pure_ctr = aes_ctr" in standalone_text
+        assert (standalone_text.index("def aes_ctr(")
+                < standalone_text.index("_aesf_pure_ctr = aes_ctr"))
+
+    def test_restore_command_allows_the_openssl_command(self, standalone_text):
+        cli = standalone_text[standalone_text.index("def _cli_main"):]
+        assert "allow_openssl_command()" in cli
+        assert cli.index("allow_openssl_command()") < cli.index(
+            "restorer = PurePythonRestorer(")
+
+    def test_no_name_collisions_between_concatenated_modules(self):
+        """One namespace: a name defined in two of the modules would
+        silently replace the first (a second ``aes_ctr`` or ``_log``)."""
+        from lcsas.restore import standalone_builder
+
+        names = {
+            fname: _top_level_names(
+                (standalone_builder._SRC_DIR / fname).read_text())
+            for fname in _CONCATENATED
+        }
+        clashes = [
+            f"{name}: {a} and {b}"
+            for i, a in enumerate(_CONCATENATED)
+            for b in _CONCATENATED[i + 1:]
+            for name in sorted(names[a] & names[b])
+        ]
+        assert clashes == [], clashes
+
+    def test_generated_reader_runs_its_own_selector(
+        self, standalone_text, tmp_path, monkeypatch,
+    ):
+        """Exec the generated text and drive the selector inside it."""
+        script = tmp_path / "standalone_restorer.py"
+        script.write_text(standalone_text)
+        ns = runpy.run_path(str(script), run_name="lcsas_standalone_probe")
+        monkeypatch.setenv("LCSAS_TIER3_AES", "pure")
+        backend, notes = ns["select_aes_ctr_backend"](False)
+        assert backend.name == "pure" and notes == ["LCSAS_TIER3_AES=pure"]
+        assert ns["_aesf_self_test"](backend) is None
+        monkeypatch.delenv("LCSAS_TIER3_AES")
+        backend, _notes = ns["select_aes_ctr_backend"](True)
+        assert ns["_aesf_self_test"](backend) is None

@@ -679,7 +679,12 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             from lcsas.restore.restic_fallback import (
                 PurePythonRestorer,
                 RestoreAbortedError,
+                allow_openssl_command,
             )
+
+            # The tier-3 restore may use the `openssl` command for AES
+            # (#774), as the standalone reader on the meta disc does.
+            allow_openssl_command()
 
             data_link = cache_dir / "data"
             disc_data = disc_path / "data"

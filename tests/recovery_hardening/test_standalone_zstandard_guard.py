@@ -195,7 +195,9 @@ def test_build_standalone_preserves_import_guard() -> None:
     # RST-04: the except branch must (a) set _HAS_ZSTD = False and (b)
     # degrade to the inlined pure-Python decoder, NOT raise on missing
     # zstandard.  The old "pip install zstandard" raise stub is gone.
-    except_idx = text.find("except ImportError:")
+    # Search from the import: other inlined modules (the AES backend
+    # selector, #774) have their own `except ImportError:` earlier.
+    except_idx = text.find("except ImportError:", import_idx)
     assert except_idx > import_idx, (
         "the `except ImportError:` fallback no longer follows the import."
     )

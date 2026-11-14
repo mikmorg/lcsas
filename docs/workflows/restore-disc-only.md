@@ -44,8 +44,9 @@ Sibling restore routes (more capable, prefer them when available):
 ## When to use Tier 3
 
 Use this path **only** if all higher tiers are unreachable. Tier 3
-operates at ~1 MB/s (module docstring,
-`src/lcsas/restore/restic_fallback.py`) and reads packs only from its
+is slow: about 8 MB/s for photos and 1 MB/s for text when an OpenSSL
+is on the computer, else about 2 hours per GB (`recovery/docs/TIERS.txt`,
+"TIER 3: SPEED"), and it reads packs only from its
 configured search paths — multi-disc snapshots need the heir's help: merge
 every disc's `data/` into one cache first, pass one `--mount-point` per
 disc, or answer the interactive disc-swap prompt
@@ -747,8 +748,9 @@ This path deliberately trades capability for portability. It **cannot**:
   surfaces as an `IntegrityError` from
   `PurePythonRestorer._read_blob()` (recorded as a per-file failure
   under the default tolerant mode).
-- **Run fast.** Expect ~1 MB/s on modern hardware
-  (module docstring, `src/lcsas/restore/restic_fallback.py`).
+- **Run fast.** With an OpenSSL on the computer, expect about 8 MB/s
+  for data that does not compress and 1 MB/s for text; without one,
+  about 2 hours per GB (`recovery/docs/TIERS.txt`, "TIER 3: SPEED").
 - **Handle a repository where the password is wrong.** Wrong password
   raises `IntegrityError` from the MAC check
   (`_decrypt_authenticated()` / `try_keys()`); use
