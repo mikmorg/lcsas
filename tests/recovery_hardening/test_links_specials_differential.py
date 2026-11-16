@@ -10,8 +10,8 @@ Each test builds a real rustic repo and restores it with tier 1
   whose target is not valid UTF-8 (rustic keeps those bytes in
   ``linktarget_raw``).  Every tier restores each one with its stored
   target, byte for byte.
-- Special files: a FIFO and a socket.  rustic makes them without
-  privilege, and so do tiers 1 and 3.
+- Special files: a FIFO and (on Linux) a socket.  rustic makes them
+  without privilege, and so do tiers 1 and 3.
 - Restore over an earlier restore (#784): snapshot A has links where
   snapshot B has a file and a folder, and a folder where B has a link.
   Restoring A, then B, into one folder must change nothing outside it,
@@ -130,11 +130,14 @@ def _make_links_and_specials(src: Path) -> None:
     root = os.fsencode(src)
     os.symlink(b"tgt\xe9", os.path.join(root, b"nonutf"))  # #852
     os.mkfifo(src / "fifo")
-    sock = socket.socket(socket.AF_UNIX)
-    try:
-        sock.bind(str(src / "sock"))
-    finally:
-        sock.close()
+    if sys.platform.startswith("linux"):
+        # Linux only: macOS caps a socket path at 104 bytes (pytest's
+        # tmp paths are longer) and lets only root mknod a socket.
+        sock = socket.socket(socket.AF_UNIX)
+        try:
+            sock.bind(str(src / "sock"))
+        finally:
+            sock.close()
 
 
 def test_links_and_specials_restore_alike(tmp_path: Path) -> None:

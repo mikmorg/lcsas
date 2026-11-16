@@ -353,6 +353,9 @@ ships fallback paths:
   disc box stops the whole restore with exit code 75.  A full disk
   stops it with exit code 1 and names the full folder.  A damaged file
   is skipped and listed in `RESTORE_FAILURES.txt` (exit code 2).
+  Special files this computer cannot create, and links on a file
+  system without links, are listed there too but do not change the
+  exit code (see `recovery/docs/RECOVER.txt`, "ITEMS NOT RESTORED").
 
 All four are documented in `README_RESTORE.md` on the meta disc.
 

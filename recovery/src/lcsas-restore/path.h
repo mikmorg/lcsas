@@ -6,8 +6,11 @@
  *   - Reject absolute paths.
  *   - Reject any segment equal to "..".
  *   - Reject NUL bytes in path components.
- *   - Reject symlink targets that, when joined against the restore
- *     target, escape the restore root after normalization.
+ *   - lcsas_path_safe_symlink: report a symlink target that, joined
+ *     against the restore target, escapes the restore root.  The tree
+ *     walk no longer calls it (#782): every link is restored as
+ *     stored, as rustic does, and tree.c instead never writes through
+ *     a link (#784).  Kept, with its unit and fuzz tests.
  */
 #ifndef LCSAS_PATH_H
 #define LCSAS_PATH_H
