@@ -7,12 +7,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lcsas.config.media import MediaType
 from lcsas.ecc.dvdisaster import (
     MIN_EFFECTIVE_REDUNDANCY_PCT,
     RS03_MEDIUM_LADDER_BYTES,
+    RS03_MEDIUM_SECTORS,
     LcsasEccRunner,
     SubprocessDVDisasterRunner,
     _log_effective_redundancy,
+    rs03_pad_target_bytes,
+    rs03_redundancy_pct,
+    rs03_staged_image_bytes,
     smallest_fitting_medium_bytes,
 )
 
@@ -298,32 +303,121 @@ class TestDVDisasterMocked:
 
 
 class TestSmallestFittingMedium:
-    """RS03 medium ladder used by the staging pre-flight (BURN-07)."""
+    """RS03 rung choice, mirroring dvdisaster's CalcRS03Layout (#732).
 
-    CD, DVD, DVD9, BD25, BD50, BDXL100 = RS03_MEDIUM_LADDER_BYTES
+    These used to pin a simpler model (smallest nominal medium that holds
+    the image).  dvdisaster really moves up a rung once the image would
+    keep fewer than 8 parity roots, and uses the defect-management BD
+    sizes; the exact sizes below match real dvdisaster output
+    (tests/integration/test_ecc_repair.py).
+    """
 
-    def test_smallest_fitting_medium_ladder(self):
-        # 1 byte → CD
-        assert smallest_fitting_medium_bytes(1) == self.CD
-        # exactly CD → CD; one past → DVD
-        assert smallest_fitting_medium_bytes(self.CD) == self.CD
-        assert smallest_fitting_medium_bytes(self.CD + 1) == self.DVD
-        # one past DVD9 → BD25
-        assert smallest_fitting_medium_bytes(self.DVD9 + 1) == self.BD25
-        # one past BD50 → BDXL100
-        assert smallest_fitting_medium_bytes(self.BD50 + 1) == self.BDXL100
-        # beyond the largest medium → loud failure
-        with pytest.raises(ValueError, match="largest RS03 medium"):
-            smallest_fitting_medium_bytes(self.BDXL100 + 1)
+    S = 2048
+    CD_AUG = 735_836_160          # 255 x 1409 sectors (observed)
+    DVD_AUG = 4_700_160_000       # 255 x 9000 sectors (observed)
+    DVD9_AUG = 8_543_324_160      # 255 x 16359 sectors
+    BD_AUG = 24_219_924_480       # 255 x 46377 sectors (BD_SL_SIZE)
+    # Fewest data sectors that leave < 8 roots on the CD rung:
+    # ds + 2 > 246 x 1409.
+    CD_EDGE = 246 * 1409 - 1
+
+    def test_small_images_go_on_the_cd_rung(self):
+        assert smallest_fitting_medium_bytes(1) == self.CD_AUG
+        assert smallest_fitting_medium_bytes(1000 * self.S) == self.CD_AUG
+
+    def test_rung_changes_at_eight_roots_not_at_the_medium_size(self):
+        last_cd = (self.CD_EDGE - 1) * self.S
+        assert smallest_fitting_medium_bytes(last_cd) == self.CD_AUG
+        assert smallest_fitting_medium_bytes(last_cd + 1) == self.DVD_AUG
+        # Well under the CD's nominal 737 MB, yet already on DVD.
+        assert smallest_fitting_medium_bytes(self.CD_EDGE * self.S) == (
+            self.DVD_AUG
+        )
+
+    def test_bd_rung_uses_the_defect_management_size(self):
+        assert smallest_fitting_medium_bytes(10 * 10**9) == self.BD_AUG
+        assert RS03_MEDIUM_LADDER_BYTES[3] > self.BD_AUG   # fits a BD25
+
+    def test_every_rung_fits_its_nominal_medium(self):
+        for rung, nominal in enumerate(RS03_MEDIUM_LADDER_BYTES):
+            per_layer = RS03_MEDIUM_SECTORS[rung] // 255
+            assert 255 * per_layer * self.S <= nominal
+
+    def test_beyond_the_largest_medium_fails_loud(self):
+        with pytest.raises(ValueError, match="largest medium"):
+            smallest_fitting_medium_bytes(RS03_MEDIUM_LADDER_BYTES[-1])
 
     def test_ladder_is_sector_aligned_and_ascending(self):
-        # dvdisaster sizes media in 2048-byte sectors; the ladder must be
-        # strictly ascending or the smallest-fit search breaks.
         for size in RS03_MEDIUM_LADDER_BYTES:
             assert size % 2048 == 0
         assert list(RS03_MEDIUM_LADDER_BYTES) == sorted(
             set(RS03_MEDIUM_LADDER_BYTES)
         )
+        assert list(RS03_MEDIUM_SECTORS) == sorted(set(RS03_MEDIUM_SECTORS))
+
+
+class TestPadTarget:
+    """#732: pad a part-filled ISO so its RS03 parity clears the floor."""
+
+    S = 2048
+    BD25 = MediaType.BD25.capacity_bytes
+    CD700 = MediaType.CD700.capacity_bytes
+
+    def _sectors(self, n_bytes: float) -> int:
+        return int(n_bytes) // self.S * self.S
+
+    def test_no_padding_when_parity_is_already_ample(self):
+        for size in (self._sectors(1e8), self._sectors(4.4e9),
+                     self._sectors(21e9)):
+            assert rs03_pad_target_bytes(size, self.BD25) == size
+
+    def test_thin_dvd_image_moves_up_to_dvd9(self):
+        iso = self._sectors(4.5e9)
+        assert rs03_redundancy_pct(iso) < MIN_EFFECTIVE_REDUNDANCY_PCT
+        target = rs03_pad_target_bytes(iso, self.BD25)
+        assert target is not None and target > iso
+        # The smallest pad that leaves < 8 roots on DVD (255 x 9000).
+        assert target == (246 * 9000 - 1) * self.S
+        assert smallest_fitting_medium_bytes(target) == 8_543_324_160
+        assert smallest_fitting_medium_bytes(target - self.S) == 4_700_160_000
+        assert rs03_redundancy_pct(target) > 80
+
+    def test_thin_dvd9_image_moves_up_to_the_bd_rung(self):
+        iso = self._sectors(8.2e9)
+        assert rs03_redundancy_pct(iso) < MIN_EFFECTIVE_REDUNDANCY_PCT
+        target = rs03_pad_target_bytes(iso, self.BD25)
+        assert target is not None
+        assert smallest_fitting_medium_bytes(target) == 24_219_924_480
+
+    def test_thin_cd_image_moves_up_on_a_bd25_volume(self):
+        iso = self._sectors(0.705e9)
+        target = rs03_pad_target_bytes(iso, self.BD25)
+        assert target is not None
+        assert smallest_fitting_medium_bytes(target) == 4_700_160_000
+
+    def test_no_padding_helps_on_the_media_own_rung(self):
+        # Thin on the CD rung of a CD: the next rung does not fit.
+        assert rs03_pad_target_bytes(self._sectors(0.705e9), self.CD700) is None
+        # Thin on the BD rung of a BD25.
+        assert rs03_pad_target_bytes(self._sectors(23.1e9), self.BD25) is None
+
+    def test_image_whose_rung_overflows_the_medium_gets_none(self):
+        # dvdisaster would put it on BD dual layer: no fit on a BD25.
+        assert rs03_pad_target_bytes(self._sectors(23.5e9), self.BD25) is None
+
+    def test_empty_image_is_not_padded(self):
+        assert rs03_pad_target_bytes(0, self.BD25) == 0
+        with pytest.raises(ValueError):
+            rs03_redundancy_pct(0)
+
+    def test_staged_image_bytes_includes_the_padding(self):
+        assert rs03_staged_image_bytes(
+            self._sectors(4.5e9), self.BD25) == 8_543_324_160
+        assert rs03_staged_image_bytes(
+            self._sectors(4.4e9), self.BD25) == 4_700_160_000
+        # No padding possible: the unpadded image's size.
+        assert rs03_staged_image_bytes(
+            self._sectors(23.1e9), self.BD25) == 24_219_924_480
 
 
 class TestLcsasEccRunner:

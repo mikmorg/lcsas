@@ -81,6 +81,35 @@ class TestXorrisoMocked:
         assert runner.verify_disc("/dev/sr0") is False
 
     @patch("lcsas.iso.xorriso.subprocess.Popen")
+    def test_create_iso_padding_goes_after_the_mkisofs_args(
+        self, mock_popen, tmp_path,
+    ):
+        """#732: -padding only counts inside the ISO volume when it comes
+        after "--" (end of mkisofs emulation); placed before "-as mkisofs"
+        xorriso silently keeps its default pad.  No padding_bytes: no
+        -padding at all."""
+        cmds: list[list[str]] = []
+
+        def _popen_factory(cmd, **kwargs):
+            cmds.append(list(cmd))
+            Path(cmd[cmd.index("-o") + 1]).write_bytes(b"ISO")
+            proc = MagicMock()
+            proc.communicate.return_value = ("", "")
+            proc.returncode = 0
+            return proc
+
+        mock_popen.side_effect = _popen_factory
+        source = tmp_path / "source"
+        source.mkdir()
+        runner = SubprocessXorrisoRunner()
+        runner.create_iso(source, tmp_path / "a.iso", "V")
+        runner.create_iso(source, tmp_path / "b.iso", "V",
+                          padding_bytes=123_456)
+
+        assert "-padding" not in cmds[0]
+        assert cmds[1][-4:] == [str(source), "--", "-padding", "123456"]
+
+    @patch("lcsas.iso.xorriso.subprocess.Popen")
     def test_create_iso_cleans_tmp_on_failure(self, mock_popen, tmp_path):
         """On subprocess failure, the .iso.tmp file is removed."""
         import subprocess as _sp

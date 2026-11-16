@@ -34,10 +34,11 @@ class MediaType(Enum):
     Every production capacity below is a rung on dvdisaster's RS03 medium
     ladder (``RS03_MEDIUM_LADDER_BYTES`` in lcsas/ecc/dvdisaster.py).  That
     is a hard constraint: RS03 augmented images cannot take a redundancy
-    setting -- dvdisaster pads the image up to the smallest fitting medium
-    and the slack becomes the parity.  A capacity that is not a ladder rung
-    would pad up to the next one and burn a disc mostly full of padding, so
-    do not add media types off the ladder.
+    setting -- dvdisaster pads the image up to a medium on its ladder
+    (``RS03_MEDIUM_SECTORS``) and the slack becomes the parity.  A
+    capacity that is not a ladder rung would pad up to the next one and
+    burn a disc mostly full of padding, so do not add media types off the
+    ladder.
     """
 
     # Production media
