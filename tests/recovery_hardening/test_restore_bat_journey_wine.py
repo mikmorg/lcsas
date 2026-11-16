@@ -1577,10 +1577,13 @@ def test_tier1_missing_stops_a_set_read_from_the_discs(
         _assert_clean(out)
         _missing_program_said(rc, out, "in place")
 
+        # Relocated with the META disc in and no data disc: the newest-disc
+        # question is not asked (no disc swap can help without tier 1).
         rc, out = _quick(wine, "C:\\lcsas-no-exe\\recovery\\scripts\\restore.bat",
-                         {**quiet, "LCSAS_RELOCATED": "D:\\"})
+                         {"LCSAS_RELOCATED": "D:\\"})
         _assert_clean(out)
         _missing_program_said(rc, out, "relocated")
+        assert "Newest data disc: " not in out, out
         assert "C:\\lcsas-no-exe\\recovery\\docs" in out, out
 
         _map_drive(wine.prefix, "d", whole)

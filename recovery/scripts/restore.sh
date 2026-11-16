@@ -337,6 +337,10 @@ tools_dir_remove() {
     if [ -d "$1" ] && ! rmdir "$1" 2>/dev/null \
        && [ -n "$(ls -A "$1" 2>/dev/null)" ]; then
         printf '[restore.sh] %s holds other files, so the folder is kept\n' "$1" >&2
+        # Still ours: without the marker the next run would refuse it as
+        # a folder that holds other files (#627 item 4).  restore.bat
+        # claims a folder that stays the same way.
+        : > "$1/$TOOLS_MARK" 2>/dev/null || true
     fi
     return 0
 }

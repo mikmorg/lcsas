@@ -519,8 +519,16 @@ def test_success_removes_only_what_the_script_put_in_the_tools_folder(tmp_path: 
     res = subprocess.run(["sh", str(tools / "resume.sh")], stdin=subprocess.DEVNULL,
                          capture_output=True, text=True, env=_env(tmp_path), timeout=60)
     assert res.returncode == 0, res.stderr
-    assert sorted(p.name for p in tools.iterdir()) == ["notes.txt"]
+    # The marker stays with the folder (it was removed up to rc9): since
+    # #627 item 4 a folder without it that holds files is refused, and
+    # this one is still the restore's own.
+    assert sorted(p.name for p in tools.iterdir()) == [".lcsas-restore-tools", "notes.txt"]
     assert f"{tools} holds other files, so the folder is kept" in res.stderr
+    res = _run(recovery, tmp_path / "out2",
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools)))
+    assert res.returncode == 0, res.stderr
+    assert "already holds other files" not in res.stderr
+    assert (tools / "notes.txt").read_text() == "mine"
 
 
 # ── resume.sh carries on the SAME restore (#609 review) ──────────────

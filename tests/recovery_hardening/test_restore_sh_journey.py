@@ -656,6 +656,8 @@ def test_the_newest_disc_step_is_asked_only_when_it_can_be(tmp_path: Path, case:
         _set(_data_disc(tmp_path / "media", "D", "LCSAS_TEST_TINY_2026_0001"),
              DOCS_ID, DOCS, tag="disc")
     else:
+        if case == "read-only-meta" and os.geteuid() == 0:
+            pytest.skip("root writes to a 0555 folder")
         del extra["LCSAS_RELOCATED"]
         extra["LCSAS_NEWEST_DISC_PROMPT"] = "1"
         if case == "no-meta":

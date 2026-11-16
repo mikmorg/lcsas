@@ -523,6 +523,9 @@ if defined RL_LABEL goto :newest_done
 call :find_newest
 if defined DATA_SEEN goto :newest_found
 if "%LCSAS_NEWEST_DISC_PROMPT%"=="0" goto :newest_done
+REM Without lcsas-restore.exe no data disc can be read (#631): do not ask
+REM the reader to swap discs first; the banner below says what is wrong.
+if not exist "%RECOVERY%\bin\%ARCH%\lcsas-restore.exe" goto :newest_done
 if defined STAYING_ON_DISC goto :newest_done
 echo.
 echo  Take the META disc out and put in your NEWEST data disc: the one
