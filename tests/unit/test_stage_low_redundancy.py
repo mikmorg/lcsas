@@ -151,9 +151,10 @@ def test_thin_dvd_iso_on_bd25_is_padded_up_a_rung(
     pad = xorriso.create_iso.call_args_list[1].kwargs["padding_bytes"]
     target = (246 * 9000 - 1) * 2048    # first size dvdisaster puts on DVD9
     assert pad == target - _thin_dvd_iso() + XORRISO_DEFAULT_PADDING_BYTES
-    # The padded ISO is what gets augmented.
-    [call] = dvdisaster.augment_iso.call_args_list
-    assert call.args[0].stat().st_size == target
+    # The padded ISO is what gets augmented and recorded.
+    dvdisaster.augment_iso.assert_called_once()
+    assert m.iso_size_bytes == target
+    assert m.iso_path.stat().st_size == target
     notes = [e.detail for e in get_events_for_volume(conn, m.volume_id)
              if e.event_type == "NOTE"]
     assert any("#732" in n and "padded" in n for n in notes)

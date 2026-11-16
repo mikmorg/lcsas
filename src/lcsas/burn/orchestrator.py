@@ -610,6 +610,8 @@ class BurnOrchestrator:
         that fits the medium would (then _check_redundancy decides).
         """
         iso_size = iso.stat().st_size
+        if iso_size <= 0:
+            return
         try:
             target = rs03_pad_target_bytes(iso_size, media_type.capacity_bytes)
         except ValueError:

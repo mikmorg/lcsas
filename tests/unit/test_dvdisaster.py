@@ -405,6 +405,11 @@ class TestPadTarget:
         # dvdisaster would put it on BD dual layer: no fit on a BD25.
         assert rs03_pad_target_bytes(self._sectors(23.5e9), self.BD25) is None
 
+    def test_empty_image_is_not_padded(self):
+        assert rs03_pad_target_bytes(0, self.BD25) == 0
+        with pytest.raises(ValueError):
+            rs03_redundancy_pct(0)
+
     def test_staged_image_bytes_includes_the_padding(self):
         assert rs03_staged_image_bytes(
             self._sectors(4.5e9), self.BD25) == 8_543_324_160

@@ -70,9 +70,10 @@ RS03_MIN_ROOTS = 8
 
 # dvdisaster's own medium sizes in 2048-byte sectors (src/dvdisaster.h:
 # CDR_SIZE, DVD_SL_SIZE, DVD_DL_SIZE, BD_SL_SIZE, BD_DL_SIZE,
-# BDXL_TL_SIZE).  The BD sizes are the defect-management ones that
-# dvdisaster uses by default (no --no-bdr-defect-management), so a BD
-# image is about 24.2 GB, not 25.0.  recovery/src/lcsas-ecc/rs03.c uses
+# BDXL_TL_SIZE).  The BD sizes are the defect-management ones (the
+# installed 0.79.10 has no other; later patch levels add
+# --no-bdr-defect-management, never passed here), so a BD image is about
+# 24.2 GB, not 25.0.  recovery/src/lcsas-ecc/rs03.c uses
 # the same table.  BDXL_QL (quad layer) is left out: nothing LCSAS burns
 # is that large.
 RS03_MEDIUM_SECTORS: tuple[int, ...] = (
@@ -129,6 +130,8 @@ def smallest_fitting_medium_bytes(image_bytes: int) -> int:
 
 def rs03_redundancy_pct(image_bytes: int) -> float:
     """Effective RS03 redundancy, as logged after augmenting."""
+    if image_bytes <= 0:
+        raise ValueError("an empty image has no RS03 redundancy")
     padded = smallest_fitting_medium_bytes(image_bytes)
     return (padded - image_bytes) / image_bytes * 100
 
@@ -159,6 +162,8 @@ def rs03_pad_target_bytes(image_bytes: int, capacity_bytes: int) -> int | None:
     Raises:
         ValueError: if the image is too large for any RS03 medium.
     """
+    if image_bytes <= 0:
+        return image_bytes      # nothing to pad; callers skip empty ISOs
     sectors = -(-image_bytes // RS03_SECTOR_BYTES)
     candidates = [sectors]
     rung = _rs03_rung(sectors)

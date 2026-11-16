@@ -597,7 +597,7 @@ that a forced size can make a damaged image harder to recover; so
 LCSAS pads the ISO instead (#732, above). The `default_ecc_redundancy_pct`
 config knob is deprecated/ignored, and the staging disk-space pre-flight
 budgets the augmented size per volume, after any #732 padding
-(`rs03_staged_image_bytes`, exact to the byte), plus one temp copy for
+(`rs03_staged_image_bytes`, which follows dvdisaster's own rule), plus one temp copy for
 augmentation.
 
 Test media (`TEST_TINY`, `ecc_overhead_pct == 0`) is **implicitly

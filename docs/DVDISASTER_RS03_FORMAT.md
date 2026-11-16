@@ -91,8 +91,12 @@ the smaller medium, not when it stops fitting. The medium sizes, in
 | BDXL triple layer | 47,305,728 | 96,881,786,880 |
 
 The augmented image is `255 × floor(sectors / 255)` sectors. The BD
-sizes are the BD-R sizes with defect management, which dvdisaster uses
-unless it is given `--no-bdr-defect-management`.
+sizes are the BD-R sizes with defect management. The installed
+dvdisaster 0.79.10 has only these (its binary holds 11,826,176 and not
+the 12,219,392 no-defect-management size); newer patch-level builds add
+`--no-bdr-defect-management` for the larger size, which LCSAS does not
+pass. The CD and DVD rows were measured; the others follow from the
+same formula and the sizes in the binary.
 
 Measured with dvdisaster 0.79.10 (#732), at the CD → DVD edge
 (`dataSectors + 2 > 246 × 1409`):
