@@ -1036,10 +1036,14 @@ def _decompress_frame(data: bytes) -> bytes:
 
         if block_type == 0:
             # Raw block.
+            if pos + block_size > len(data):
+                raise ZstdError("truncated raw block")
             out += data[pos : pos + block_size]
             pos += block_size
         elif block_type == 1:
             # RLE block: one byte repeated block_size times.
+            if pos >= len(data):
+                raise ZstdError("truncated RLE block")
             out += bytes([data[pos]]) * block_size
             pos += 1
         elif block_type == 2:
@@ -1178,9 +1182,20 @@ def decompress(data: bytes, max_output_size: int = 0) -> bytes:
 
     Raises:
         ZstdError: malformed frame, unsupported feature (dictionaries),
-            or output exceeding *max_output_size*.
+            or output exceeding *max_output_size*.  Nothing else: the
+            decoder indexes into untrusted bytes in many places, so any
+            other error it raises (IndexError, struct.error, ...) is
+            re-raised as ``ZstdError``.  The restore treats ZstdError as
+            one bad blob and goes on with the next file (#792).
     """
-    result = _decompress_frame(data)
+    try:
+        result = _decompress_frame(data)
+    except ZstdError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any decoder error means a bad frame
+        raise ZstdError(
+            f"malformed zstd frame ({type(exc).__name__}: {exc})"
+        ) from exc
     if max_output_size and len(result) > max_output_size:
         raise ZstdError(
             f"decompressed size {len(result)} exceeds cap {max_output_size}"
