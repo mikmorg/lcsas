@@ -167,10 +167,45 @@ TREE BLOB
   Tree blobs are normal blobs (SHA-256 of plaintext = ID, present in
   the index, located in a pack file like any other blob).
 
+NODE NAMES
+
+  A node's "name" is stored as text.  When the real name holds a
+  double quote, a backslash, a control character or a byte that is not
+  valid UTF-8, rustic (and restic) store it in an escaped form, like a
+  Go string without its outer quotes.  Decode it back to raw bytes
+  before you create the file:
+
+     \\  ->  \              \a  ->  byte 0x07
+     \"  ->  "              \b  ->  byte 0x08
+     \'  ->  '              \f  ->  byte 0x0c
+     \`  ->  `              \n  ->  byte 0x0a
+     \xHH       ->  the one byte 0xHH (two hex digits)
+     \uHHHH     ->  that character, written as UTF-8
+     \UHHHHHHHH ->  that character, written as UTF-8
+     \r  ->  byte 0x0d      \t  ->  byte 0x09      \v  ->  byte 0x0b
+
+  Every other character stands for itself (written as UTF-8).  Example:
+  the stored text  latin\xe9.txt  is the 10-byte name "latin", byte
+  0xE9, ".txt".  A name with no backslash is used as it is.  Only
+  "name" is escaped this way: "linktarget" is plain text.
+
+  Text that does not follow these rules (an unknown escape such as
+  "\q", a backslash at the end, too few hex digits, a \u or \U value
+  that is a surrogate or above 10FFFF) cannot be decoded.  Tiers 1 and
+  3 then do not restore that node; they say so and end with an error.
+  See lcsas_unescape_name in src/lcsas-restore/path.c.
+
 PATH SAFETY
 
-  When materializing a tree:
-   - REJECT any "name" that contains "/" or ".." or NUL bytes.
+  When materializing a tree, check the DECODED name (see NODE NAMES):
+   - REJECT a name that is empty, "." or "..", or that contains "/" or
+     a NUL byte.
+   - On Windows also REJECT a name that holds \ : * ? " < > | or a
+     control character, or that is not valid UTF-8 (NTFS cannot store
+     it).  On macOS REJECT a name that is not valid UTF-8.
+   - A rejected name is never written under another name.  Tiers 1 and
+     3 report each one ("NOT RESTORED"), restore everything else, and
+     end with an error.
    - Symlinks whose "linktarget" is ABSOLUTE are restored as-is (matching
      rustic; see issue #187).  Containment of the restore tree is NOT
      guaranteed for absolute symlinks.  REJECT symlinks whose RELATIVE
