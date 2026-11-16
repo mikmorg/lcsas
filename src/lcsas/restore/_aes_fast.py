@@ -133,8 +133,12 @@ def _aesf_bind(path):
     return lib
 
 
-def _aesf_lib_ctr(lib, key, iv, data):
-    """AES-256-CTR of *data* (CTR: encrypt == decrypt) through EVP."""
+def _aesf_lib_ctr(lib, key, iv, data, step=1 << 30):
+    """AES-256-CTR of *data* (CTR: encrypt == decrypt) through EVP.
+
+    EVP_EncryptUpdate takes an int length, so *data* goes in pieces of
+    *step* bytes (a test sets a small one).
+    """
     if len(key) != 32 or len(iv) != 16:
         raise ValueError("AES-256-CTR needs a 32-byte key and a 16-byte IV")
     ctx = lib.EVP_CIPHER_CTX_new()
@@ -147,7 +151,6 @@ def _aesf_lib_ctr(lib, key, iv, data):
         out = ctypes.create_string_buffer(n + 32)
         outl = ctypes.c_int(0)
         done = 0
-        step = 1 << 30
         for start in range(0, n, step):
             piece = data if n <= step else data[start:start + step]
             if not isinstance(piece, bytes):
