@@ -12,7 +12,7 @@ REPOSITORY LAYOUT (restic format)
     index/<indexid>              encrypted; JSON; { "packs": [...], "supersedes": [...] }
     snapshots/<snapid>           encrypted; JSON; { "tree": ..., "time": ..., "paths": [...] }
     data/<XX>/<packid>           pack files (two-level layout)
-    data/<packid>                pack files (flat layout, LCSAS variant)
+    data/<packid>                pack files (flat; LCSAS discs use two-level)
 
   Encrypted files use the AEAD format: IV(16) || ct || MAC(16).
   After decryption (and optional v2 prefix stripping), the result is
@@ -100,25 +100,98 @@ PACK FILE DISCOVERY
 
 LCSAS CATALOG
 
-  In addition to the restic repository, LCSAS burns a copy of its
-  SQLite catalog (the disc catalog) at /catalog.db onto every data
-  disc.  Phase 1 MVP does not use the catalog; phase 2 will add it.
-  Schema is documented in src/lcsas/db/schema.py (version 5).
+  Every data disc carries /catalog.db: a copy of the owner's SQLite
+  catalog (the disc catalog), as it stood when the disc was staged.
+  A restore does not need it.  Tier 1 and tier 3 use it to say which
+  disc holds a pack; without it they ask for discs by pack instead.
 
-VOLUME LAYOUT (LCSAS disc)
+  - Schema version: the "version" column of the one row in table
+    schema_version (10 for discs from LCSAS 1.0).  Do NOT use
+    PRAGMA user_version: LCSAS keeps the highest disc label number
+    issued there, not the schema version.
+  - Twelve tables: schema_version, repositories, packs, volumes,
+    volume_packs, snapshots, locations, volume_copies, burn_sessions,
+    session_volumes, volume_events, key_escrow.  The full schema is
+    in the LCSAS source, db/schema.py: on the meta disc under
+    lcsas/src/lcsas/, on a production data disc under lcsas_src/.
+  - What a reader needs, and what later versions only add to:
+      packs        (pack_id, sha256, size_bytes, repo_id)
+      volume_packs (volume_id, pack_id)
+      volumes      (volume_id, label, status)
+    A pack's sha256 is its file name under data/.  Join packs to
+    volume_packs to volumes to find the disc LABEL that holds it;
+    skip volumes whose status is DESTROYED.  repo_id is the
+    <repo_id> folder name under metadata/.
+  - The disc's own row in volumes has status STAGING: the copy is
+    taken before the disc is burned.  Discs staged in the same
+    session may be missing from it.  The newest disc's catalog
+    knows the most discs.
+  - In the snapshots table the columns paths, tags and description
+    are blank on a disc ("[]", "[]" and "" in every row; since
+    v1.0.0-rc9, PR #771).  The owner's own catalog keeps them.  The
+    real values are in each snapshot file under
+    metadata/<repo_id>/snapshots/, encrypted with the repository's
+    password (see SNAPSHOT FILE).
+  - The file uses a rollback journal (journal_mode DELETE), not WAL,
+    so it opens on a read-only disc.  Open it read-only (tier 1 uses
+    the SQLite URI parameter immutable=1).
 
-  /catalog.db                          SQLite disc catalog
-  /repos/<repo_id>/                    one full restic repository per
-                                        co-burned repository
-    keys/, index/, snapshots/, data/
-  /recovery/                           this toolchain
-    bin/<arch>/lcsas-restore
-    src/, Makefile
-    scripts/restore.sh, ...
-    docs/FORMAT.txt, BUILD.txt, RECOVER.txt, CRYPTO.txt
-  /standalone_restorer.py              Python reader (tier 3)
-  /MANIFEST.sha256                     SHA-256 of every file on disc
-  /SURVIVABILITY.md                    survivability invariants
+VOLUME LAYOUT (LCSAS data disc)
+
+  Each data disc is an ISO 9660 image (with Rock Ridge and Joliet
+  names) that dvdisaster has extended with RS03 error-correction
+  data.  The ECC data sits in the image after the file system, not
+  in a file.  The files on the disc:
+
+  /data/<XX>/<packid>        pack files, two-level layout: <packid>
+                             is the SHA-256 of the file, <XX> its
+                             first two hex chars.  The packs of all
+                             backup sets on the disc share this one
+                             folder; the catalog's packs.repo_id says
+                             which set each pack belongs to.
+  /metadata/<repo_id>/       one folder for each backup set
+                             (repository) of the archive, on every
+                             data disc, also for a set with no packs
+                             on this disc (if its files could be
+                             read when the disc was staged).
+                             <repo_id> is an id, not the set's name.
+      config                 the repository's config file
+      keys/                  its key files
+      index/                 its index files
+      snapshots/             its snapshot files: only those whose
+                             packs are all on discs (this disc's
+                             burn session counted)
+      LCSAS_REPO.txt         backup set marker: plain "key=value"
+                             lines (format, id, name, name_cmd,
+                             split, split_id).  Restore works
+                             without it.
+  /catalog.db                the disc catalog (see LCSAS CATALOG)
+  /standalone_restorer.py    the Python reader (tier 3)
+  /volume_info.json          this disc: label, uuid, media type,
+                             pack count, the repositories with packs
+                             here, and the SHA-256 of every pack
+  /START_HERE.txt, /RESTORE_INSTRUCTIONS.txt, /PASSWORD_INFO.txt,
+  /VOLUME_INFO.txt, /CONFIG_SUMMARY.txt, /DISC_CARE.txt
+                             notes for a person, in plain text
+  /lcsas_src/                LCSAS Python source: restore/, utils/
+                             and db/ (not on TEST_TINY test media)
+
+  To read one backup set as a restic repository: take
+  metadata/<repo_id>/ (config, keys/, index/, snapshots/) from any
+  data disc (the newest disc knows the most snapshots) and the pack
+  files of that set under data/ from every disc.
+
+  How much fits: before packing a disc, LCSAS measures the catalog,
+  the metadata folders, the reader, the text files and the ISO 9660
+  overhead, and adds a tenth as a margin (since issue #811).  The
+  packs fill the rest of the medium's capacity.
+
+  The recovery tools (recovery/, with bin/<arch>/lcsas-restore,
+  scripts/restore.sh and these docs), the bundled tools/ and the
+  LCSAS source are on the separate meta disc (label LCSAS_META), not
+  on data discs.  A meta disc built from the catalog also carries
+  metadata/<repo_id>/ for each backup set, but no data/ and no
+  catalog.db.
 
 SNAPSHOT FILE
 
