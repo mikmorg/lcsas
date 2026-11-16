@@ -32,12 +32,19 @@ uses it when it is safe and proven correct, else the pure code:
    as a command-line argument (``-K <hex>``): ``-pass`` and ``-kfile``
    feed a password through a key-derivation function and cannot carry a
    raw key, and OpenSSL 3 has no interactive mode that would read the
-   command from stdin.  While the process runs, its command line is
-   readable by other users of the same computer (on Linux,
+   command from stdin.  The key there is the repository's data key
+   (restic's master ``encrypt`` key, the same for every blob), not the
+   password; with it and the discs anyone can decrypt the whole
+   repository.  While the process runs, its command line is readable
+   by other users of the same computer (on Linux,
    ``/proc/<pid>/cmdline`` is world-readable unless /proc is mounted
-   with ``hidepid``).  Starting a process costs about 7 ms, so inputs
-   under ``_AESF_CLI_MIN_BYTES`` go to the pure code, which is faster
-   there; that also keeps the small key-file decryption out of argv.
+   with ``hidepid``), and a host with process accounting or an exec
+   audit log (auditd, for example) writes it to that log, where it
+   stays.  ``LCSAS_TIER3_AES=pure`` (below) keeps it off the command
+   line.  Starting a process costs about 7 ms, so inputs under
+   ``_AESF_CLI_MIN_BYTES`` go to the pure code, which is faster there;
+   that also keeps the small key-file decryption (under the
+   password-derived key) out of argv.
 
 3. Pure Python (``_aes_pure.aes_ctr``), always available.
 
