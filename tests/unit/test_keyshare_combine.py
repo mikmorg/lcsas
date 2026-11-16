@@ -578,13 +578,59 @@ class TestCombinerPerShareValidation:
         assert "stdin line 1" not in err  # card prose is still skipped
 
     def test_stdin_prefix_typed_share_rebuilds(self, monkeypatch, capsysbinary):
-        """A share typed as 4-letter prefixes is not all wordlist words,
-        but it is nearly all share words: it is kept and rebuilds."""
+        """A share typed as 4-letter prefixes is a share line and rebuilds."""
         import io
 
         mns = _make_2of5()
         prefixed = " ".join(w[:4] for w in mns[3].split())
         monkeypatch.setattr("sys.stdin", io.StringIO(prefixed + "\n" + mns[4] + "\n"))
+        assert keyshare_combine.main([]) == 0
+        assert capsysbinary.readouterr().out == _PASSWORD
+
+    def test_prefix_typed_card_files_rebuild(self, tmp_path, capsysbinary):
+        """#797: card FILES with the words cut to 4 letters (as the card
+        invites), or mixed with full words in any case, rebuild."""
+        from lcsas.cli.main import _share_card_text
+
+        mns = _make_2of5()
+        typed = [
+            " ".join(w[:4] for w in mns[0].split()),
+            " ".join(w.upper() if i % 2 else w[:4] for i, w in enumerate(mns[2].split())),
+        ]
+        files = []
+        for i, words in enumerate(typed, start=1):
+            f = tmp_path / f"card{i}.txt"
+            f.write_text(_share_card_text("alpha", i, 2, 5, words, "2026-01-01", 1))
+            files.append(str(f))
+        assert keyshare_combine.main(files) == 0
+        assert capsysbinary.readouterr().out == _PASSWORD
+
+    def test_file_typo_is_named_not_word_count(self, tmp_path, capsys):
+        """#797: a card file with one mistyped word names that word and its
+        position (as the C combiner does), not "found 0 share words"."""
+        from lcsas.cli.main import _share_card_text
+
+        mns = _make_2of5()
+        words = [w[:4] for w in mns[0].split()]
+        words[6] = "qqqq"
+        bad = tmp_path / "card1.txt"
+        bad.write_text(_share_card_text("alpha", 1, 2, 5, " ".join(words), "2026-01-01", 1))
+        good = tmp_path / "card2.txt"
+        good.write_text(mns[1] + "\n")
+        rc = keyshare_combine.main([str(bad), str(good)])
+        err = capsys.readouterr().err
+        assert rc == keyshare_combine.EXIT_BAD_SHARE, err
+        assert f"share ({bad}): word 7 'qqqq' is not a share word" in err
+        assert f"share ({good}): OK" in err
+
+    def test_stdin_short_line_is_skipped_like_c(self, monkeypatch, capsysbinary):
+        """A short line of share words ("that" is the prefix of a word) is
+        not a share: it is skipped, as the C combiner skips it."""
+        import io
+
+        mns = _make_2of5()
+        piped = "that\n" + " ".join(mns[0].split()[:5]) + "\n" + mns[1] + "\n" + mns[2] + "\n"
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
         assert keyshare_combine.main([]) == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 

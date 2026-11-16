@@ -304,6 +304,71 @@ class TestSplitCombineRoundTrip:
             "--share-file", str(cards[1]),
         ]) == 1
 
+    def test_cli_combine_prefix_typed_cards(
+        self, tmp_path: Path, capsys, monkeypatch
+    ) -> None:
+        """#797: cards typed as 4-letter prefixes rebuild, as files and on
+        stdin."""
+        import io
+
+        pw_file = _write_pw_file(tmp_path / "pw")
+        out = tmp_path / "shares"
+        assert main([
+            "key", "split", "--repo", "alpha",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        capsys.readouterr()
+
+        typed = []
+        for i, card in enumerate(_share_card_files(out)[:2]):
+            lines = card.read_text().splitlines()
+            idx = next(
+                n for n, ln in enumerate(lines) if "THE SHARE WORDS" in ln
+            ) + 1
+            words = lines[idx].split()
+            lines[idx] = "  " + " ".join(
+                w[:4].upper() if (i + n) % 2 else w for n, w in enumerate(words)
+            )
+            f = tmp_path / f"typed-{i}.txt"
+            f.write_text("\n".join(lines) + "\n")
+            typed.append(f)
+
+        assert main([
+            "key", "combine",
+            "--share-file", str(typed[0]), "--share-file", str(typed[1]),
+        ]) == 0
+        captured = capsys.readouterr()
+        assert captured.out.encode("utf-8", "surrogateescape") == PASSWORD
+
+        piped = typed[0].read_text() + typed[1].read_text()
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        assert main(["key", "combine"]) == 0
+        captured = capsys.readouterr()
+        assert captured.out.encode("utf-8", "surrogateescape") == PASSWORD
+
+    def test_cli_combine_stdin_typo_is_named(
+        self, tmp_path: Path, capsys, monkeypatch
+    ) -> None:
+        """#797: a share typed on stdin with a typo is checked and the word
+        named, not dropped as prose (it was dropped before)."""
+        import io
+
+        pw_file = _write_pw_file(tmp_path / "pw")
+        out = tmp_path / "shares"
+        assert main([
+            "key", "split", "--repo", "alpha",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        capsys.readouterr()
+        mfiles = _share_mnemonic_files(out)
+        words = mfiles[0].read_text().split()
+        words[6] = "buidling"
+        piped = " ".join(words) + "\n" + mfiles[1].read_text()
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        assert main(["key", "combine"]) == 1
+        err = capsys.readouterr().err
+        assert "share (stdin line 1): word 7 'buidling' is not a share word" in err
+
     def test_card_content(self, tmp_path: Path) -> None:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
@@ -838,10 +903,13 @@ class TestCombineErrors:
             "--share-file", str(mfiles[0]),
             "--share-file", str(bad),
         ]) == 1
-        # A non-wordlist token poisons the line, so no share words are
-        # extracted: the card-tolerant extractor rejects it early (rc 1,
-        # naming the file and the count) before reconstruction. [KEY-01]
-        assert "share words" in capsys.readouterr().out
+        # A non-wordlist token poisons the line, so no complete share is
+        # extracted; the line is nearly all share words, so it is kept and
+        # the per-share check names the bad word (rc 1) before
+        # reconstruction, as the C combiner does.  (#797: this was
+        # "found 0 share words" before.) [KEY-01]
+        captured = capsys.readouterr()
+        assert f"share ({bad}): word 4 'zzzzzz' is not a share word" in captured.err
 
     def test_foreign_share_set_fails(self, tmp_path: Path, capsys) -> None:
         mine = self._make_shares(tmp_path)

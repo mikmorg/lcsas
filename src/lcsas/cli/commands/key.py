@@ -716,7 +716,8 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
         check_share,
         decode_master_secret,
         extract_mnemonic,
-        is_mnemonic_line,
+        is_share_line,
+        normalize_share_line,
         recover_secret,
     )
 
@@ -728,22 +729,27 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
                 logger.error("Share file does not exist: %s", sf)
                 return 1
             # Each file is one share: a bare mnemonic file or a printed
-            # share card.  extract_mnemonic ignores card header/prose and
-            # raises KeyShareError (naming the file + word count) on a
-            # truncated/prose-only file.
+            # share card.  extract_mnemonic ignores card header/prose,
+            # expands 4-letter prefixes, keeps a share line with typos for
+            # the check below to name, and raises KeyShareError (naming the
+            # file + word count) on a truncated/prose-only file.
             text = sf.read_text(encoding="utf-8")
             try:
-                mnemonics.append(extract_mnemonic(text, source=str(sf)))
+                mnemonics.append(
+                    extract_mnemonic(text, source=str(sf), keep_mistyped=True)
+                )
             except KeyShareError as e:
                 logger.error("%s", e)
                 return 1
             labels.append(str(sf))
     else:
-        # No --share-file: read shares from stdin.  Skip non-mnemonic
-        # lines (blanks, card prose) so `cat card1 card2 | ...` works.
+        # No --share-file: read shares from stdin, one per line.  Skip
+        # blanks and card prose so `cat card1 card2 | ...` works; keep a
+        # line that is nearly all share words, so a typo is named below
+        # rather than the line silently dropped (the C combiner's rule).
         for lineno, line in enumerate(sys.stdin, start=1):
-            if is_mnemonic_line(line):
-                mnemonics.append(" ".join(line.split()))
+            if is_share_line(line):
+                mnemonics.append(normalize_share_line(line))
                 labels.append(f"stdin line {lineno}")
 
     if not mnemonics:

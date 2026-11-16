@@ -19,7 +19,8 @@
 #  share words are recognised by their content — header lines and prose
 #  in a card are ignored — so passing the cards directly works.  Supply
 #  any K of the N shares.  On stdin (cat card1 card2 | ...) each line is
-#  treated as words-or-prose the same way.  The reconstructed password
+#  treated as words-or-prose the same way.  A word may be cut to its
+#  first 4 letters, in a file or on stdin.  The reconstructed password
 #  is written to stdout as RAW BYTES with no trailing newline:
 #
 #    python3 keyshare_combine.py ~/card1.txt ~/card2.txt > ~/repo.key
@@ -77,8 +78,8 @@ try:  # source checkout / dev: lcsas.keyshare
         check_share,
         decode_master_secret,
         extract_mnemonic,
-        is_mistyped_share_line,
-        is_mnemonic_line,
+        is_share_line,
+        normalize_share_line,
         recover_secret,
     )
 except ImportError:  # pragma: no cover - meta disc top-level bundle path
@@ -91,8 +92,8 @@ except ImportError:  # pragma: no cover - meta disc top-level bundle path
         check_share,
         decode_master_secret,
         extract_mnemonic,
-        is_mistyped_share_line,
-        is_mnemonic_line,
+        is_share_line,
+        normalize_share_line,
         recover_secret,
     )
 
@@ -110,9 +111,10 @@ def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
     extracted (header/prose lines ignored).  When no paths are given,
     mnemonics are read from stdin keeping one-mnemonic-per-line
     semantics, but non-mnemonic lines (blanks, comments, card prose) are
-    skipped rather than fatal, so ``cat card1 card2 | ...`` works.  A line
-    that is nearly all share words is kept as a share with typing
-    mistakes, so the per-share check names the bad word.
+    skipped rather than fatal, so ``cat card1 card2 | ...`` works.  In
+    every mode a word may be typed as its first 4 letters, in any case.
+    A file or line that is nearly all share words is kept as a share with
+    typing mistakes, so the per-share check names the bad word.
     Returns ``(label, mnemonic)`` pairs in the order encountered; the label
     (a file path or ``"stdin line N"``) is used for per-share diagnostics.
     """
@@ -120,12 +122,14 @@ def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
     if paths:
         for p in paths:
             text = Path(p).read_text(encoding="utf-8")
-            mnemonics.append((p, extract_mnemonic(text, source=p)))
+            mnemonics.append(
+                (p, extract_mnemonic(text, source=p, keep_mistyped=True))
+            )
     else:
         for lineno, line in enumerate(sys.stdin.read().splitlines(), start=1):
-            if is_mnemonic_line(line) or is_mistyped_share_line(line):
+            if is_share_line(line):
                 mnemonics.append(
-                    (f"stdin line {lineno}", " ".join(line.lower().split()))
+                    (f"stdin line {lineno}", normalize_share_line(line))
                 )
     return mnemonics
 
@@ -148,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
             "Reconstructs the repository password from any K SLIP-0039\n"
             "shares (more than K is fine) and writes it (raw bytes, no\n"
             "newline) to stdout.\n"
+            "A word may be cut to its first 4 letters.\n"
             "\n"
             "Exit status:\n"
             "  0  the password was rebuilt and written\n"
