@@ -383,6 +383,35 @@ class TestStagePreflight:
         assert list_sessions(conn) == []
         assert get_unarchived_packs(conn) != []
 
+    def test_stage_preflight_budgets_the_732_rung_pad(self, tmp_path):
+        """A ~4.5 GB ISO on BD25 is padded up from DVD to DVD9 (#732).
+
+        Need: data + 8.54 GB DVD9 image + 8.54 GB temp copy (~21.4 GB).
+        Budgeting the unpadded DVD rung (4.7 GB) would say ~13.7 GB and
+        let this session through to ENOSPC mid-augment; 16 GB free must
+        be refused up front.
+        """
+        config = _make_config(tmp_path, num_repos=1, media=MediaType.BD25)
+        conn = get_memory_connection()
+        create_all(conn)
+        for name in config.repositories:
+            register_repo(conn, name, name.title(),
+                          str(config.repositories[name].mirror_path))
+        # Two catalog-only packs: ~4.5 GB of ISO after the 5% overhead,
+        # in the thin band of the DVD rung.
+        for i in range(2):
+            register_pack(conn, sha256=f"{i:02x}" * 32,
+                          size_bytes=2_142_857_000, repo_id="family")
+
+        orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
+
+        with patch(
+            "lcsas.burn.orchestrator.shutil.disk_usage",
+            return_value=MagicMock(free=16_000_000_000),
+        ), pytest.raises(OSError, match="Insufficient disk space"):
+            orch.stage()
+        assert list_sessions(conn) == []
+
     def test_stage_preflight_no_padding_for_zero_ecc_media(self, env):
         """TEST_TINY (ecc_overhead_pct == 0) skips augmentation, so the
         pre-flight must not demand smallest-medium padding (CD ≈ 737 MB):

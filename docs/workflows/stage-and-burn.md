@@ -98,11 +98,24 @@ The end-to-end flow inside a single session:
      only fails when the disc metadata outgrew `metadata_reserve_mb`
      (#674).
    - Before ECC, the RS03 redundancy is computed from the ISO size: RS03
-     pads the image to the smallest fitting medium, and the padding is
-     the parity. Below 5 % (`MIN_EFFECTIVE_REDUNDANCY_PCT`) the stage
-     fails and names the volume and the percentage (#674). This also
-     catches a small last volume that lands just under a smaller rung
-     (a 4.6 GB ISO pads to a DVD, not to a BD).
+     pads the image up to a medium on dvdisaster's ladder, and the
+     padding is the parity. dvdisaster moves an image up a rung once the
+     smaller medium would leave it fewer than 8 parity roots (about
+     96.5 % full), so the parity on a rung never drops below about 3.7 %.
+   - A part-filled last volume can still land in the thin band just
+     under a smaller rung (a 4.5 GB ISO on a BD25 volume gets about 4.4 %
+     on the DVD rung). Stage then masters the ISO again with zero padding
+     inside the ISO volume (xorriso `-padding`), just enough that
+     dvdisaster moves it up one rung (4.5 GB becomes 4.53 GB and lands on
+     DVD9 with about 88 % parity), as long as that rung still fits the
+     medium. The padding is recorded as a `NOTE` event on the volume
+     (#732). It pads to the next rung only, not to the medium's own rung:
+     the parity there is already far above the floor, and a full pad
+     would turn a tiny last volume into a 24 GB image.
+   - When no rung that fits the medium clears 5 %
+     (`MIN_EFFECTIVE_REDUNDANCY_PCT`), the stage fails and names the
+     volume and the percentage (#674). That happens only on the medium's
+     own rung (an over-full volume).
      `lcsas stage --allow-low-redundancy` stages it anyway and records
      the percentage as a `NOTE` event on the volume. Not recommended.
    - Post-ECC validation: rejects an ISO larger than
@@ -547,9 +560,11 @@ The orchestrator's media handling rules:
 | `MDISC100` | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Same geometry as `BDXL100`; longevity-rated. |
 
 Every production capacity above is a rung on dvdisaster's RS03 medium ladder
-(`RS03_MEDIUM_LADDER_BYTES`). Media types must not be added off the ladder: an
-off-rung capacity pads up to the next rung, burning a disc mostly full of
-padding. Same-capacity media types (M-Disc vs BD-R) must also differ in the enum's
+(`RS03_MEDIUM_LADDER_BYTES`, the nominal capacities). Media types must not be
+added off the ladder: an off-rung capacity pads up to the next rung, burning a
+disc mostly full of padding. dvdisaster's own medium sizes
+(`RS03_MEDIUM_SECTORS`) are a little smaller: a BD image is 24,219,924,480
+bytes, because dvdisaster uses the BD-R size with defect management. Same-capacity media types (M-Disc vs BD-R) must also differ in the enum's
 `family` field, or `Enum` collapses them into aliases.
 
 ### Test media
@@ -573,12 +588,17 @@ the burn pipeline can run dvdisaster-free. See
 [`docs/DVDISASTER_RS03_FORMAT.md`](../DVDISASTER_RS03_FORMAT.md) for the
 on-disc RS03 layout. No `-n` is passed (BURN-07): RS03
 augmented images cannot take a redundancy setting — dvdisaster pads the
-image to the smallest fitting medium (CD → DVD → DVD9 → BD25 → BD50 →
-BDXL100) and the padding *is* the effective redundancy (logged per
-volume after augmentation). The `default_ecc_redundancy_pct` config
-knob is deprecated/ignored, and the staging disk-space pre-flight
-budgets the *padded* ISO size per volume
-(`smallest_fitting_medium_bytes`) plus one temp copy for augmentation.
+image to the smallest medium (CD → DVD → DVD9 → BD25 → BD50 →
+BDXL100) that leaves it at least 8 parity roots, and the padding *is*
+the effective redundancy (logged per volume after augmentation).
+dvdisaster 0.79.10 does take `--debug -n <sectors>` to force a medium
+size, but `lcsas-ecc augment` has no such option, and dvdisaster warns
+that a forced size can make a damaged image harder to recover; so
+LCSAS pads the ISO instead (#732, above). The `default_ecc_redundancy_pct`
+config knob is deprecated/ignored, and the staging disk-space pre-flight
+budgets the augmented size per volume, after any #732 padding
+(`rs03_staged_image_bytes`, exact to the byte), plus one temp copy for
+augmentation.
 
 Test media (`TEST_TINY`, `ecc_overhead_pct == 0`) is **implicitly
 skipped**: `_stage_single_volume` only
