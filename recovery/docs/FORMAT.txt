@@ -181,10 +181,12 @@ VOLUME LAYOUT (LCSAS data disc)
   data disc (the newest disc knows the most snapshots) and the pack
   files of that set under data/ from every disc.
 
-  How much fits: before packing a disc, LCSAS measures the catalog,
-  the metadata folders, the reader, the text files and the ISO 9660
-  overhead, and adds a tenth as a margin (since issue #811).  The
-  packs fill the rest of the medium's capacity.
+  How much fits: each medium type keeps a fixed share of its
+  capacity for the RS03 ECC data.  Of the rest, each disc keeps room
+  for its metadata: the larger of the configured metadata_reserve_mb
+  and a measurement of the catalog, the metadata folders, the reader,
+  the text files and the ISO 9660 overhead, plus a tenth (since
+  issue #811).  The packs fill what is left.
 
   The recovery tools (recovery/, with bin/<arch>/lcsas-restore,
   scripts/restore.sh and these docs), the bundled tools/ and the

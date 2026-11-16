@@ -27,7 +27,7 @@ burns API credits — see the `make blind-restore*` targets).
 | `tier1-tier2-missing` | **stable** | promoted cycle 9 2026-05-28 (PR #285 + #286); root cause + fix recorded below |
 | `split-key-2of5` | tooling smoke | scripted prompt spoon-feeds the combiner + restore commands; cheap regression catcher for the share-reconstruction tools |
 | `split-key-docs` | acceptance gate | KEY-04 docs-driven; scenario-only prompt + 2 production `-card.txt` artifacts, agent derives every command from on-disc text. Must pass every check (16/16 today) twice consecutively before any heir-contract change merges |
-| `mixed-split` | stable | added 2026-11 (#587); one archive: alpha split 2-of-3 in `[repos.alpha]`, bravo ordinary; split-key-docs' prompt and 2 cards, but the data discs and a config-built meta disc carry the per-repository split text |
+| `mixed-split` | 16/16 in the rc9 sweep (one run) | added 2026-11 (#587); one archive: alpha split 2-of-3 in `[repos.alpha]`, bravo ordinary; split-key-docs' prompt and 2 cards, but the data discs and a config-built meta disc carry the per-repository split text |
 | `windows` | NOT BUILT | UX-08 layer-3 restore.bat-under-wine journey. Its blockers (UX-01, INFRA-01) landed, and the owner decided (2026-10-30, #479) to retire it once the manual Windows drill (#476) passes. Fails loud, spending nothing, until then |
 
 The XFAIL ledger (`XFAIL.list`, enforced by
