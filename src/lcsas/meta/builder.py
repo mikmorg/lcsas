@@ -1195,8 +1195,17 @@ class MetaVolumeBuilder:
                     continue
                 try:
                     data = read_verified_archive(cache_root, pin)
-                    if data is None:
-                        continue  # partial cache
+                    if data is None:  # partial cache
+                        unpacked = cache_root / pin.category / pin.target
+                        if unpacked.is_dir() and any(unpacked.iterdir()):
+                            _logger.warning(
+                                "Meta disc: %s is not in the recovery "
+                                "cache, so nothing from %s was bundled; "
+                                "only the pinned archive is used (#832). "
+                                "Run `make fetch-recovery` to fetch it.",
+                                pin.relpath, unpacked,
+                            )
+                        continue
                     entries = upstream_payload(pin, data, musl_loader=loader)
                 except UpstreamError as exc:
                     raise MetaBuildError(
