@@ -371,10 +371,9 @@ class BurnOrchestrator:
         # Group packs by repository so we look for each pack only in its own
         # mirror.  This avoids MissingPacksError when multiple repositories
         # share a volume.
-        from collections import defaultdict
-        packs_by_repo: dict[str, list[Pack]] = defaultdict(list)
+        packs_by_repo: dict[str, list[Pack]] = {}
         for p in selected_packs:
-            packs_by_repo[p.repo_id].append(p)
+            packs_by_repo.setdefault(p.repo_id, []).append(p)
 
         # KEY-08: refuse to stage if disc share-instructions would drift from
         # the recorded split.  Runs BEFORE any catalog write or card render so
@@ -529,7 +528,6 @@ class BurnOrchestrator:
             # so the packs reappear in get_unarchived_packs().
             delete_volume(self._conn, volume.volume_id)
             # The unfinished ISO is never burnable; free its space.
-            import contextlib
             with contextlib.suppress(OSError):
                 unfinished_iso_path(iso_output).unlink(missing_ok=True)
             raise
@@ -979,11 +977,8 @@ class BurnOrchestrator:
                             f"{space_pct:.1f}% of its pack space)")
             logger.info(f"  Total data: {total_bytes:,} bytes")
             return StageResult(
-                session_id="dry-run",
-                media_type=mt,
+                session_id="dry-run", media_type=mt,
                 staging_dir=Path("/dev/null"),
-                manifests=[],
-                iso_paths=[],
             )
 
         # #731: the tools must be new enough, checked before any side
@@ -1247,7 +1242,6 @@ class BurnOrchestrator:
                     "%s and its staging directory were removed.", session_id,
                 )
                 return
-            import contextlib
             with contextlib.suppress(OSError):
                 self._write_session_manifest(
                     session_id, session_dir,
@@ -1552,41 +1546,15 @@ class BurnOrchestrator:
                     if verify_passed:
                         verified_at = utc_now()
 
-                if was_burned:
-                    # #810: VERIFIED once a disc passes; a failed disc
-                    # leaves it BURNED (the VERIFY_FAIL event above keeps
-                    # the attempt).  No VERIFY_FAIL_REBURN: that event
-                    # says an earlier disc was recorded, and none is.
-                    if verify_passed:
-                        update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
-                        mark_closed(self._conn, sv.volume_id, commit=False)
-                elif not is_reburn:
-                    if verify_passed:
-                        # Finalize volume status (atomic: status + close + disc row)
-                        update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
-                        mark_closed(self._conn, sv.volume_id, commit=False)
-                    else:
-                        # Back to STAGING (#483).  A disc
-                        # that failed verification is not recorded (BURN-05), and
-                        # BURNED would count its packs as archived (FMA-01's
-                        # DURABLE_VOLUME_STATUSES) with no verified disc behind
-                        # them.  STAGING returns them to the unarchived pool;
-                        # the VERIFY_FAIL event keeps the attempt.
-                        update_status(self._conn, sv.volume_id, "STAGING", commit=False)
-                else:
-                    # Re-burn case: volume stays VERIFIED (it passed before),
-                    # or a lost one stays lost until a disc passes.
-                    # Record the verify failure for this location's disc
-                    if not verify_passed:
-                        add_event(
-                            self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
-                            location=location,
-                            detail="Post-burn read-back failed on re-burn attempt",
-                            event_date=burn_date,
-                            commit=False,
-                        )
-
                 if verify_passed:
+                    # A STAGING volume (moved to BURNING above) and a
+                    # BURNED one (#810) become VERIFIED, in the same
+                    # transaction as the disc row.  A re-burn stays
+                    # VERIFIED; a lost volume is put back in service by
+                    # its disc row (#726).
+                    if not is_reburn:
+                        update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
+                        mark_closed(self._conn, sv.volume_id, commit=False)
                     # Record the disc at its location, with the verification
                     # evidence (BURN-04: previously iso_sha256 was omitted —
                     # every disc row got NULL, and a re-burn UPSERT blanked
@@ -1603,12 +1571,33 @@ class BurnOrchestrator:
                         commit=False,
                     )
                 else:
+                    if marks_burning:
+                        # Back to STAGING (#483).  BURNED would count its
+                        # packs as archived (FMA-01's DURABLE_VOLUME_STATUSES)
+                        # with no verified disc behind them.  STAGING
+                        # returns them to the unarchived pool; the
+                        # VERIFY_FAIL event keeps the attempt.
+                        update_status(self._conn, sv.volume_id, "STAGING", commit=False)
+                    elif is_reburn:
+                        # The volume stays VERIFIED (it passed before), or
+                        # a lost one stays lost until a disc passes.
+                        add_event(
+                            self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
+                            location=location,
+                            detail="Post-burn read-back failed on re-burn attempt",
+                            event_date=burn_date,
+                            commit=False,
+                        )
+                    # A BURNED volume stays BURNED (#810), with no
+                    # VERIFY_FAIL_REBURN: that event says an earlier disc
+                    # was recorded, and none is.
+                    #
                     # BURN-05: a failed disc is not recorded. Recording one
                     # would satisfy the ACTIVE-disc location queries and
                     # `stage --for-location` would never re-stage these
                     # packs — a phantom disc in the catalog forever. The
-                    # VERIFY_FAIL event above carries the location for
-                    # the audit trail.
+                    # VERIFY_FAIL event carries the location for the
+                    # audit trail.
                     _logger.error(
                         "Burn at %s FAILED verification for %s. NO disc "
                         "was recorded — this location still needs this "
@@ -1718,11 +1707,12 @@ class BurnOrchestrator:
         """
         from lcsas.exceptions import BurnError
 
-        incomplete: list[str] = []
-        for sv in session_vols:
-            vol = get_volume_by_id(self._conn, sv.volume_id)
-            if vol.status in ("STAGING", "BURNING") and not sv.iso_sha256:
-                incomplete.append(vol.label)
+        vols = [(sv, get_volume_by_id(self._conn, sv.volume_id))
+                for sv in session_vols]
+        incomplete = [
+            vol.label for sv, vol in vols
+            if vol.status in ("STAGING", "BURNING") and not sv.iso_sha256
+        ]
         if incomplete:
             raise BurnError(
                 f"Staging of {', '.join(incomplete)} did not finish: the "
@@ -1743,8 +1733,7 @@ class BurnOrchestrator:
         from lcsas.db.volume_copies import get_copies_for_volume
         from lcsas.db.volumes import status_before_burning
 
-        for sv in session_vols:
-            vol = get_volume_by_id(self._conn, sv.volume_id)
+        for sv, vol in vols:
             if vol.status != "BURNING":
                 continue
             if get_copies_for_volume(
@@ -1823,15 +1812,16 @@ class BurnOrchestrator:
         receipt, so a replayed receipt is seen as imported (#727).  Returns True only when every
         applicable step passed.
         """
-        if not self._xorriso.verify_disc(device):
+        def fail(detail: str) -> bool:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
-                location=location,
-                event_date=event_date,
-                detail="Post-burn read-back failed",
+                location=location, event_date=event_date, detail=detail,
                 commit=False,
             )
             return False
+
+        if not self._xorriso.verify_disc(device):
+            return fail("Post-burn read-back failed")
 
         # Disc identity: the PVD Volume ID was written from the volume
         # label at mastering time, so a mismatch means the disc in the
@@ -1839,17 +1829,10 @@ class BurnOrchestrator:
         # a silently failed burn left an old disc behind).  [FMA-03]
         disc_id = self._xorriso.read_disc_volume_id(device)
         if disc_id != label:
-            add_event(
-                self._conn, sv.volume_id, "VERIFY_FAIL",
-                location=location,
-                event_date=event_date,
-                detail=(
-                    f"Disc in {device} identifies as '{disc_id}' — "
-                    f"expected '{label}'. Wrong disc?"
-                ),
-                commit=False,
+            return fail(
+                f"Disc in {device} identifies as '{disc_id}' — "
+                f"expected '{label}'. Wrong disc?"
             )
-            return False
 
         expected_hash = sv.iso_sha256
         if not expected_hash:
@@ -1887,41 +1870,22 @@ class BurnOrchestrator:
                 "is on record",
                 label,
             )
-            add_event(
-                self._conn, sv.volume_id, "VERIFY_FAIL",
-                location=location,
-                event_date=event_date,
-                detail="device hash check impossible: no recorded ISO size "
-                       "(pre-upgrade session); -check_media alone is "
-                       "insufficient evidence",
-                commit=False,
+            return fail(
+                "device hash check impossible: no recorded ISO size "
+                "(pre-upgrade session); -check_media alone is "
+                "insufficient evidence"
             )
-            return False
 
         try:
             device_hash = self._device_reader(device, iso_size)
         except OSError as exc:
-            add_event(
-                self._conn, sv.volume_id, "VERIFY_FAIL",
-                location=location,
-                event_date=event_date,
-                detail=f"device read-back failed: {exc}",
-                commit=False,
-            )
-            return False
+            return fail(f"device read-back failed: {exc}")
 
         if device_hash != expected_hash:
-            add_event(
-                self._conn, sv.volume_id, "VERIFY_FAIL",
-                location=location,
-                event_date=event_date,
-                detail=(
-                    f"device hash mismatch: expected {expected_hash[:8]}.., "
-                    f"got {device_hash[:8]}.."
-                ),
-                commit=False,
+            return fail(
+                f"device hash mismatch: expected {expected_hash[:8]}.., "
+                f"got {device_hash[:8]}.."
             )
-            return False
 
         add_event(
             self._conn, sv.volume_id, "VERIFY_PASS",
@@ -2117,7 +2081,7 @@ class BurnOrchestrator:
                 f"Volume {label} has a recorded disc — a burned disc "
                 f"exists, refusing to abort it."
             )
-        evidence = self._burn_evidence(vol.volume_id)
+        evidence = burn_evidence(self._conn, vol.volume_id)
         if evidence is not None:
             raise ValueError(_unrecorded_burn_refusal(
                 f"volume {label}", [(label, f"{vol.status}, but {evidence}")],
@@ -2149,7 +2113,8 @@ class BurnOrchestrator:
 
         That is a STAGING/BURNING volume (never burned, or burned but
         failed its post-burn verification, #483) with no ``volume_copies``
-        row and no event that records a good disc (:meth:`_burn_evidence`).
+        row and no event that records a good disc
+        (:func:`~lcsas.db.volume_events.burn_evidence`).
         A volume with any ``volume_copies`` row corresponds to a disc
         (however stale its status) and is never deleted by clean/abort
         (FMA-01); nor is a BURNED volume with no disc row, or a
@@ -2162,7 +2127,7 @@ class BurnOrchestrator:
             (vid, label)
             for vid, label, status in self._session_volumes_without_disc(
                 session_id)
-            if status != "BURNED" and self._burn_evidence(vid) is None
+            if status != "BURNED" and burn_evidence(self._conn, vid) is None
             and (never_burned or not rebuild_burn_unknown(self._conn, vid))
         ]
 
@@ -2188,7 +2153,7 @@ class BurnOrchestrator:
         volume with no disc row from before #483 (a failed post-burn
         verification) looks the same, so it is kept too.  A STAGING/BURNING
         volume counts when an event records a good disc of it
-        (:meth:`_burn_evidence`).
+        (:func:`~lcsas.db.volume_events.burn_evidence`).
         """
         found: list[tuple[str, str]] = []
         for vid, label, status in self._session_volumes_without_disc(
@@ -2196,7 +2161,7 @@ class BurnOrchestrator:
             if status == "BURNED":
                 found.append((label, "BURNED, but no disc of it is recorded"))
                 continue
-            evidence = self._burn_evidence(vid)
+            evidence = burn_evidence(self._conn, vid)
             if evidence is not None:
                 found.append((label, f"{status}, but {evidence}"))
         return found
@@ -2220,12 +2185,6 @@ class BurnOrchestrator:
         ).fetchall()
         return [(row["volume_id"], row["label"], row["status"])
                 for row in rows]
-
-    def _burn_evidence(self, volume_id: int) -> str | None:
-        """Why the volume's events say a good disc of it was burned, or
-        None (:func:`lcsas.db.volume_events.burn_evidence`, which
-        ``catalog reconcile --fix`` shares, #746)."""
-        return burn_evidence(self._conn, volume_id)
 
     def _reclaim_summary(self, volume_ids: list[int]) -> AbortSummary:
         """Count the distinct packs/bytes linked to the given volumes."""
@@ -2290,20 +2249,13 @@ class BurnOrchestrator:
             packs = get_unarchived_or_missing_at_location(
                 self._conn, for_location,
             )
-        else:
-            all_packs: list[Pack] = []
             if repo_ids:
-                for rid in repo_ids:
-                    all_packs.extend(get_unarchived_packs(self._conn, rid))
-            else:
-                all_packs = get_unarchived_packs(self._conn)
-            packs = all_packs
-
-        # Apply repository filter if both for_location and repo_ids specified
-        if for_location and repo_ids:
-            packs = [p for p in packs if p.repo_id in repo_ids]
-
-        return packs
+                packs = [p for p in packs if p.repo_id in repo_ids]
+            return packs
+        if repo_ids:
+            return [p for rid in repo_ids
+                    for p in get_unarchived_packs(self._conn, rid)]
+        return get_unarchived_packs(self._conn)
 
     def _hold_back_waiting(
         self, packs: list[Pack],
