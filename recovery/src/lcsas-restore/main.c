@@ -38,7 +38,8 @@
  * the cwd inside it, so an heir with a SINGLE optical drive can eject
  * the meta disc and reuse the same drive for data discs.
  *
- * Exit status: 0 restored (or listed); 1 failed; 2 usage error;
+ * Exit status: 0 restored (or listed); 1 failed, or finished with
+ * some items not restored (each named on stderr); 2 usage error;
  * 75 the reader typed q at the disc prompt (run the same command again
  * to carry on); 77 wrong password.
  */
@@ -186,7 +187,8 @@ usage(const char *argv0)
         "\n"
         "Exit status:\n"
         "    0   restored (or listed)\n"
-        "    1   failed\n"
+        "    1   failed, or some items were not restored (each one\n"
+        "        is named in a NOT RESTORED line)\n"
         "    2   usage error\n"
         "    75  you typed q at the disc prompt; run the same command\n"
         "        again to carry on (files already restored are kept)\n"
@@ -701,6 +703,15 @@ main(int argc, char **argv)
                     "[lcsas-restore] To carry on, run the same command "
                     "again; finished files are skipped.\n");
             rc = EXIT_READER_QUIT;
+            goto out;
+        }
+        if (tree_rc == LCSAS_TREE_INCOMPLETE) {
+            /* Issue #781: the walk finished, but some items were not
+             * restored (each one is named above).  Exit 1, so the
+             * restore is never reported as complete. */
+            fprintf(stderr,
+                    "[lcsas-restore] finished with errors: every other "
+                    "item was restored to %s\n", target);
             goto out;
         }
         if (tree_rc != 0) {

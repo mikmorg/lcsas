@@ -961,3 +961,176 @@ class TestBulkRegisterSizeMismatch:
         assert env.scan("--no-snapshots") == 0
 
         assert "size mismatch" not in capsys.readouterr().out
+
+
+class TestForgottenSnapshots:
+    """#824: a scan reconciles snapshot rows with rustic's listing.
+
+    A snapshot removed by ``rustic forget`` loses its row unless a disc
+    may still hold its file; then the row is kept and says so.
+    """
+
+    OLD = SnapshotInfo("old11111", "2026-01-02T03:04:05+02:00", "nas", ["/d"], [])
+    KEPT = SnapshotInfo("kept2222", "2026-02-02T03:04:05Z", "nas", ["/d"], [])
+
+    def _env(self, tmp_path: Path) -> _Env:
+        env = _Env(tmp_path, on_disk=[_sha(1)], with_password=True)
+        assert self._scan(env, [self.OLD, self.KEPT]) == 0
+        return env
+
+    @staticmethod
+    def _scan(env: _Env, listing, *flags: str) -> int:
+        with patch(_SEAMS["runner"]) as runner_cls, patch(_SEAMS["version"]):
+            if isinstance(listing, Exception):
+                runner_cls.return_value.snapshots.side_effect = listing
+            else:
+                runner_cls.return_value.snapshots.return_value = listing
+            return env.scan(*flags)
+
+    @staticmethod
+    def _rows(env: _Env) -> dict[str, str]:
+        conn = get_connection(env.db_path)
+        try:
+            return {
+                r[0]: r[1] for r in conn.execute(
+                    "SELECT snapshot_id, description FROM snapshots"
+                )
+            }
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _add_volume(env: _Env, created_at: str, status: str = "VERIFIED") -> None:
+        conn = get_connection(env.db_path)
+        vol = create_volume(conn, "TEST_TINY_2026_0001", "uuid-v1", "TEST_TINY",
+                            1_000_000, "Home_Shelf", status)
+        conn.execute("UPDATE volumes SET created_at = ? WHERE volume_id = ?",
+                     (created_at, vol.volume_id))
+        conn.commit()
+        conn.close()
+
+    def test_forgotten_snapshot_on_no_disc_is_removed(self, tmp_path, capsys):
+        env = self._env(tmp_path)
+        assert set(self._rows(env)) == {"old11111", "kept2222"}
+
+        assert self._scan(env, [self.KEPT]) == 0
+
+        assert self._rows(env) == {"kept2222": ""}
+        assert "removed 1 snapshot row(s) no longer in the mirror" in (
+            capsys.readouterr().out
+        )
+
+    def test_forgotten_snapshot_a_disc_may_hold_is_kept_and_noted(
+        self, tmp_path, capsys,
+    ):
+        env = self._env(tmp_path)
+        # A volume staged after the snapshot was taken: its disc may hold
+        # the snapshot file.
+        self._add_volume(env, "2026-03-01 00:00:00")
+
+        assert self._scan(env, [self.KEPT]) == 0
+
+        rows = self._rows(env)
+        assert set(rows) == {"old11111", "kept2222"}
+        assert rows["old11111"].startswith("LCSAS: not in the mirror since ")
+        assert "disc" in rows["old11111"]
+        assert rows["kept2222"] == ""
+        assert "their catalog rows now say so" in capsys.readouterr().out
+        # Readers that hand snapshots to rustic leave the noted row out.
+        conn = get_connection(env.db_path)
+        assert [s.snapshot_id for s in list_snapshots(conn)] == ["kept2222"]
+        assert {s.snapshot_id for s in list_snapshots(
+            conn, include_forgotten=True)} == {"old11111", "kept2222"}
+        conn.close()
+
+        # A second scan keeps the note as it is.
+        note = rows["old11111"]
+        assert self._scan(env, [self.KEPT]) == 0
+        assert self._rows(env)["old11111"] == note
+
+    def test_snapshot_newer_than_every_disc_is_removed(self, tmp_path):
+        env = self._env(tmp_path)
+        # The only volume predates both snapshots (by instant: 01:04 UTC
+        # on 2 January is after 00:00 UTC).
+        self._add_volume(env, "2026-01-02 01:00:00")
+
+        assert self._scan(env, []) == 0  # empty listing: left as is
+        assert set(self._rows(env)) == {"old11111", "kept2222"}
+
+        assert self._scan(env, [self.KEPT]) == 0
+        assert self._rows(env) == {"kept2222": ""}
+
+    def test_destroyed_volume_holds_nothing(self, tmp_path):
+        env = self._env(tmp_path)
+        self._add_volume(env, "2026-03-01 00:00:00", status="DESTROYED")
+
+        assert self._scan(env, [self.KEPT]) == 0
+        assert self._rows(env) == {"kept2222": ""}
+
+    def test_unreadable_time_is_kept_when_a_disc_exists(self, tmp_path):
+        env = _Env(tmp_path, on_disk=[_sha(1)], with_password=True)
+        odd = SnapshotInfo("odd33333", "not a time", "nas", [], [])
+        assert self._scan(env, [odd, self.KEPT]) == 0
+        self._add_volume(env, "2026-03-01 00:00:00")
+
+        assert self._scan(env, [self.KEPT]) == 0
+        assert self._rows(env)["odd33333"].startswith("LCSAS: not in the mirror")
+
+    def test_snapshot_that_comes_back_loses_the_note(self, tmp_path):
+        env = self._env(tmp_path)
+        self._add_volume(env, "2026-03-01 00:00:00")
+        assert self._scan(env, [self.KEPT]) == 0
+        assert self._rows(env)["old11111"] != ""
+
+        assert self._scan(env, [self.OLD, self.KEPT]) == 0
+        assert self._rows(env) == {"old11111": "", "kept2222": ""}
+
+    def test_rows_untouched_when_listing_fails(self, tmp_path):
+        env = self._env(tmp_path)
+        assert self._scan(env, RuntimeError("mirror unreadable")) == 0
+        assert set(self._rows(env)) == {"old11111", "kept2222"}
+
+    def test_rows_untouched_on_empty_listing(self, tmp_path, capsys):
+        env = self._env(tmp_path)
+        capsys.readouterr()
+        assert self._scan(env, []) == 0
+        assert set(self._rows(env)) == {"old11111", "kept2222"}
+        assert "rustic listed no snapshots" in capsys.readouterr().out
+
+    def test_rows_untouched_with_no_snapshots_flag(self, tmp_path):
+        env = self._env(tmp_path)
+        assert self._scan(env, [self.KEPT], "--no-snapshots") == 0
+        assert set(self._rows(env)) == {"old11111", "kept2222"}
+
+    def test_rows_untouched_without_password_file(self, tmp_path):
+        env = self._env(tmp_path)
+        env.config = _write_config_scan(
+            tmp_path, env.db_path, {"family": env.mirror}, None,
+        )
+        assert self._scan(env, [self.KEPT]) == 0
+        assert set(self._rows(env)) == {"old11111", "kept2222"}
+
+    def test_rows_of_a_repo_outside_the_filter_are_untouched(self, tmp_path):
+        """--repo work: the family listing is not taken, so family rows stay."""
+        env = self._env(tmp_path)
+        work_mirror = _make_mirror_scan(tmp_path, "work", [_sha(2)])
+        work_pw = tmp_path / "work.pw"
+        work_pw.write_text("pw\n")
+        env.config = _write_config_scan(
+            tmp_path, env.db_path,
+            {"family": env.mirror, "work": work_mirror},
+            {"family": env.password_file, "work": work_pw},
+        )
+        conn = get_connection(env.db_path)
+        register_repo(conn, "work", "work", str(work_mirror), "")
+        conn.close()
+
+        # The runner lists only KEPT for any repository: had the family
+        # listing been taken, old11111 would be removed (no volumes).
+        assert self._scan(env, [self.KEPT], "--repo", "work") == 0
+        assert {"old11111", "kept2222"} <= set(self._rows(env))
+        conn = get_connection(env.db_path)
+        owners = {r[0] for r in conn.execute(
+            "SELECT repo_id FROM snapshots WHERE snapshot_id = 'old11111'")}
+        conn.close()
+        assert owners == {"family"}

@@ -141,6 +141,59 @@ def seed_v5_catalog(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def seed_v5_rows(conn: sqlite3.Connection) -> None:
+    """One row in every table of a v5 catalog that has a foreign key.
+
+    ``PRAGMA foreign_key_check`` only reports rows, so a migration test
+    needs a child row in each referencing table to see a broken key.
+    """
+    conn.executescript(
+        """
+        INSERT INTO repositories (repo_id, name, mirror_path)
+            VALUES ('r1', 'family', '/mnt/mirror');
+        INSERT INTO locations (name) VALUES ('Home_Shelf');
+        INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status)
+            VALUES ('VOL-0001', 'uuid-1', 'BD25', 25000000000, 'VERIFIED');
+        INSERT INTO packs (sha256, size_bytes, repo_id)
+            VALUES ('aa', 100, 'r1');
+        INSERT INTO volume_packs (volume_id, pack_id) VALUES (1, 1);
+        INSERT INTO snapshots (snapshot_id, repo_id) VALUES ('s1', 'r1');
+        INSERT INTO volume_copies (volume_id, location, burn_date)
+            VALUES (1, 'Home_Shelf', '2026-01-01T00:00:00+00:00');
+        INSERT INTO burn_sessions (session_id, media_type, staging_dir)
+            VALUES ('sess1', 'BD25', '/staging/sess1');
+        INSERT INTO session_volumes (session_id, volume_id, iso_path)
+            VALUES ('sess1', 1, '/staging/sess1/VOL-0001.iso');
+        INSERT INTO volume_events (volume_id, event_type, location, detail)
+            VALUES (1, 'VERIFY_PASS', 'Home_Shelf', 'ok');
+        """
+    )
+    conn.commit()
+
+
+def assert_foreign_keys_clean(
+    conn: sqlite3.Connection, *, whole_catalog: bool = True,
+) -> None:
+    """Every row's foreign keys resolve, and (for a whole catalog, not a
+    one-step fixture holding only some tables) every foreign key names a
+    table that exists.  #822: a migration once left keys pointing at a
+    dropped ``volumes_old``."""
+    if whole_catalog:
+        tables = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        for table in sorted(tables):
+            for fk in conn.execute(
+                f"PRAGMA foreign_key_list({table})"
+            ).fetchall():
+                assert fk[2] in tables, (
+                    f"{table} has a foreign key to missing table {fk[2]}"
+                )
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 # Historical v4 catalog DDL (FMA-07 crash-atomicity fixtures): the v4
 # `volumes` CHECK lacks CONSOLIDATING and `volume_events` has the
 # 6-type CHECK, so a full migrate() exercises BOTH table-recreating
@@ -283,7 +336,12 @@ class TestSchema:
 
 
 class TestMigrateV3ToV4:
-    """Test the v3 → v4 migration path."""
+    """A v3 catalog is refused, unchanged (#822).
+
+    Ported: these tests pinned the v3 → v4 step, which was removed with
+    every step below v5.  Each now checks that the step's effect does
+    NOT happen and the refusal names the last release with the steps.
+    """
 
     def _make_v3_db(self):
         """Create a minimal v3-era database (no volume_events, no extra volume_copies cols)."""
@@ -348,40 +406,44 @@ class TestMigrateV3ToV4:
     def test_migrate_creates_volume_events(self):
         conn = self._make_v3_db()
         assert get_schema_version(conn) == 3
-        migrate(conn)
+        with pytest.raises(SchemaVersionError, match=r"v1\.0\.0-rc9"):
+            migrate(conn)
         tables = {
             r["name"]
             for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        assert "volume_events" in tables
+        assert "volume_events" not in tables
         conn.close()
 
     def test_migrate_adds_volume_copies_columns(self):
         conn = self._make_v3_db()
-        migrate(conn)
+        with pytest.raises(SchemaVersionError):
+            migrate(conn)
         cols = {
             r[1]
             for r in conn.execute("PRAGMA table_info(volume_copies)").fetchall()
         }
-        assert "iso_sha256" in cols
-        assert "last_verified_at" in cols
-        assert "media_serial" in cols
+        assert "iso_sha256" not in cols
+        assert "last_verified_at" not in cols
+        assert "media_serial" not in cols
         conn.close()
 
     def test_migrate_updates_version(self):
         conn = self._make_v3_db()
-        migrate(conn)
-        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        with pytest.raises(SchemaVersionError, match="schema is v3"):
+            migrate(conn)
+        assert get_schema_version(conn) == 3
         conn.close()
 
     def test_migrate_idempotent(self):
-        """Running migrate twice should not raise."""
+        """Refused every time, the same way."""
         conn = self._make_v3_db()
-        migrate(conn)
-        migrate(conn)
-        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        for _ in range(2):
+            with pytest.raises(SchemaVersionError, match="schema is v3"):
+                migrate(conn)
+        assert get_schema_version(conn) == 3
         conn.close()
 
     def test_migrate_preserves_existing_data(self):
@@ -396,33 +458,47 @@ class TestMigrateV3ToV4:
             "VALUES (1, 'Home_Shelf', '2025-01-01')"
         )
         conn.commit()
-        migrate(conn)
+        with pytest.raises(SchemaVersionError):
+            migrate(conn)
         row = conn.execute("SELECT * FROM volume_copies WHERE id = 1").fetchone()
         assert row["volume_id"] == 1
         assert row["location"] == "Home_Shelf"
         assert row["burn_date"] == "2025-01-01"
-        # New columns should have defaults
-        assert row["iso_sha256"] is None
-        assert row["last_verified_at"] is None
-        assert row["media_serial"] == ""
         conn.close()
 
     def test_volume_events_indexes_created(self):
         conn = self._make_v3_db()
-        migrate(conn)
+        with pytest.raises(SchemaVersionError):
+            migrate(conn)
         indexes = {
             r["name"]
             for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='index'"
             ).fetchall()
         }
-        assert "idx_volume_events_volume" in indexes
-        assert "idx_volume_events_type" in indexes
+        assert "idx_volume_events_volume" not in indexes
+        assert "idx_volume_events_type" not in indexes
+        conn.close()
+
+    def test_v2_catalog_is_refused(self):
+        """A v2 catalog used to fail part way through; now it is refused."""
+        conn = self._make_v3_db()
+        conn.execute("UPDATE schema_version SET version = 2")
+        conn.commit()
+        with pytest.raises(SchemaVersionError, match="schema is v2"):
+            migrate(conn)
+        assert get_schema_version(conn) == 2
         conn.close()
 
 
 class TestMigrateV4ToV5:
-    """Test the v4 → v5 migration (CONSOLIDATING status in volumes CHECK)."""
+    """A v4 catalog is refused, unchanged (#822).
+
+    Ported: these tests pinned the v4 → v5 step (CONSOLIDATING in the
+    volumes CHECK).  That step renamed ``volumes`` to ``volumes_old`` and
+    left the other tables' foreign keys pointing at the dropped copy, so
+    it was removed with the other steps below v5.
+    """
 
     def _make_v4_db(self):
         """Create a minimal v4 database with data in volume_copies and volume_events."""
@@ -466,16 +542,14 @@ class TestMigrateV4ToV5:
     def test_migrate_adds_consolidating_status(self):
         conn = self._make_v4_db()
         assert get_schema_version(conn) == 4
-        migrate(conn)
-        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
-
-        # CONSOLIDATING should now be a valid status
-        conn.execute(
-            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
-            "VALUES ('V1', 'uuid1', 'BD25', 25000000000, 'CONSOLIDATING')"
-        )
-        row = conn.execute("SELECT status FROM volumes WHERE label='V1'").fetchone()
-        assert row[0] == "CONSOLIDATING"
+        with pytest.raises(SchemaVersionError, match=r"v1\.0\.0-rc9"):
+            migrate(conn)
+        assert get_schema_version(conn) == 4
+        # The volumes table was not recreated (no CHECK added).
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'volumes'"
+        ).fetchone()[0]
+        assert "CONSOLIDATING" not in sql
         conn.close()
 
     def test_migrate_v4_preserves_existing_data(self):
@@ -485,7 +559,8 @@ class TestMigrateV4ToV5:
             "VALUES ('EXISTING', 'uuid2', 'BD25', 25000000000, 'VERIFIED')"
         )
         conn.commit()
-        migrate(conn)
+        with pytest.raises(SchemaVersionError):
+            migrate(conn)
         row = conn.execute("SELECT label, status FROM volumes WHERE label='EXISTING'").fetchone()
         assert row[0] == "EXISTING"
         assert row[1] == "VERIFIED"
@@ -493,27 +568,69 @@ class TestMigrateV4ToV5:
 
     def test_migrate_idempotent_from_v4(self):
         conn = self._make_v4_db()
-        migrate(conn)
-        migrate(conn)
-        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        for _ in range(2):
+            with pytest.raises(SchemaVersionError, match="schema is v4"):
+                migrate(conn)
+        assert get_schema_version(conn) == 4
         conn.close()
 
     def test_migrate_v4_to_v5_recreates_status_index(self):
-        """Verify v5 migration recreates idx_volumes_status after table recreation."""
+        """No index or table is added to a refused catalog."""
         conn = self._make_v4_db()
-        # v4 DB might not have all indices; verify status index exists after migration
-        migrate(conn)
+        before = conn.execute(
+            "SELECT type, name FROM sqlite_master ORDER BY type, name"
+        ).fetchall()
+        with pytest.raises(SchemaVersionError):
+            migrate(conn)
+        after = conn.execute(
+            "SELECT type, name FROM sqlite_master ORDER BY type, name"
+        ).fetchall()
+        assert after == before
+        conn.close()
 
-        # Check that the status index exists
-        indexes = {
-            r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
-            ).fetchall()
-        }
-        assert "idx_volumes_status" in indexes, (
-            "idx_volumes_status not found after v4→v5 migration. "
-            "Status-filtered queries will degrade to full table scans."
-        )
+    def test_create_all_and_ensure_schema_refuse_v4(self):
+        """create_all would add the missing tables before migrating: the
+        refusal comes first, so nothing is added."""
+        for entry in (create_all, ensure_schema):
+            conn = self._make_v4_db()
+            with pytest.raises(SchemaVersionError, match="schema is v4"):
+                entry(conn)
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "packs" not in tables
+            assert "key_escrow" not in tables
+            conn.close()
+
+    def test_readonly_v4_catalog_still_opens(self, tmp_path):
+        """A read-only (disc) catalog is never migrated, so not refused."""
+        db = tmp_path / "disc-catalog.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(V4_HISTORICAL_DDL)
+        conn.close()
+        db.chmod(0o444)
+        conn = sqlite3.connect(db)
+        assert ensure_schema(conn) == 4
+        conn.close()
+
+    def test_cli_refuses_v4_catalog(self, tmp_path, capsys):
+        """The CLI prints the refusal and exits 1, not 'Unexpected error'."""
+        from lcsas.cli.main import main
+
+        db = tmp_path / "archive.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(V4_HISTORICAL_DDL)
+        conn.close()
+
+        assert main(["--db", str(db), "init"]) == 1
+        out = capsys.readouterr().out
+        assert "Unexpected error" not in out
+        assert "schema is v4" in out
+        assert "v1.0.0-rc9" in out
+        conn = sqlite3.connect(db)
+        assert get_schema_version(conn) == 4
         conn.close()
 
 
@@ -566,6 +683,7 @@ class TestMigrateV6ToV7:
         assert row["iso_size_bytes"] is None
         assert row["iso_path"] == "/staging/V1.iso"
         assert row["iso_sha256"] == "abc123"
+        assert_foreign_keys_clean(conn, whole_catalog=False)
         conn.close()
 
     def test_migrate_idempotent_from_v6(self):
@@ -644,6 +762,7 @@ class TestMigrateV7ToV8:
         assert row["iso_size_bytes"] is None
         assert row["location"] == "Home_Shelf"
         assert row["iso_sha256"] == "abc123"
+        assert_foreign_keys_clean(conn, whole_catalog=False)
         conn.close()
 
     def test_migrate_idempotent_from_v7(self):
@@ -719,6 +838,7 @@ class TestMigrateV9ToV10:
         assert row["mirror_path"] == "/mnt/mirror/family"
         assert row["encryption_key_id"] == "keyabc"
         assert row["status"] == "active"
+        assert_foreign_keys_clean(conn, whole_catalog=False)
         conn.close()
 
     def test_migrate_idempotent_from_v9(self):
@@ -822,6 +942,30 @@ class TestEnsureSchema:
             "VALUES (1, 'VERIFY_FAIL_REBURN')"
         )
         conn.commit()
+        assert_foreign_keys_clean(conn)
+        conn.close()
+
+    def test_v5_catalog_with_rows_migrates_with_clean_foreign_keys(self, tmp_path):
+        """#822: the oldest supported catalog, with a row in every table
+        that has a foreign key, migrates to the current schema with every
+        key resolving and every referenced table present."""
+        db = tmp_path / "archive.db"
+        conn = sqlite3.connect(db)
+        seed_v5_catalog(conn)
+        seed_v5_rows(conn)
+        assert_foreign_keys_clean(conn)
+        conn.close()
+
+        conn = sqlite3.connect(db)
+        conn.execute("PRAGMA foreign_keys=ON")
+        assert ensure_schema(conn) == CURRENT_SCHEMA_VERSION
+        assert_foreign_keys_clean(conn)
+        counts = {
+            t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            for t in ("volumes", "packs", "volume_packs", "volume_copies",
+                      "session_volumes", "volume_events", "snapshots")
+        }
+        assert set(counts.values()) == {1}, counts
         conn.close()
 
     def test_refuses_future_schema(self):
@@ -921,16 +1065,17 @@ class TestMigrationCrashAtomicity:
         }
 
     def test_migration_crash_window_is_atomic(self, tmp_path):
-        """A crash right after the v4→v5 RENAME rolls the whole step
-        back: reopening the file shows the intact v4 catalog, and a
-        retry migrates cleanly."""
+        """Ported (#822): the v4→v5 step and its crash window are gone.
+        A v4 catalog is refused before any statement runs (no RENAME),
+        and reopening the file shows the intact v4 catalog."""
         db = tmp_path / "archive.db"
         self._seed_v4_file(db)
 
         conn = sqlite3.connect(db, factory=_InstrumentedConnection)
         conn.crash_after_sql = "ALTER TABLE volumes RENAME"
-        with pytest.raises(_SimulatedCrashError):
+        with pytest.raises(SchemaVersionError, match="schema is v4"):
             migrate(conn)
+        assert conn.rename_txn_states == []
         conn.close()
 
         conn = sqlite3.connect(db)
@@ -938,11 +1083,6 @@ class TestMigrationCrashAtomicity:
         assert "volumes" in tables
         assert "volumes_old" not in tables
         assert get_schema_version(conn) == 4
-        labels = {r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()}
-        assert labels == {"VOL-0001", "VOL-0002"}
-
-        # Retry completes cleanly with all rows intact.
-        assert migrate(conn) == CURRENT_SCHEMA_VERSION
         labels = {r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()}
         assert labels == {"VOL-0001", "VOL-0002"}
         conn.close()
@@ -980,19 +1120,23 @@ class TestMigrationCrashAtomicity:
         assert migrate(conn) == CURRENT_SCHEMA_VERSION
         rows = conn.execute("SELECT event_type, detail FROM volume_events").fetchall()
         assert rows == [("VERIFY_PASS", "ok")]
+        assert_foreign_keys_clean(conn)
         conn.close()
 
     def test_migration_is_in_transaction_during_recreate(self, tmp_path):
-        """Pins the isolation fix directly: both RENAMEs execute inside
-        an open transaction (legacy isolation autocommitted them — the
-        exact crash window this plan closes)."""
+        """Pins the isolation fix directly: the RENAME executes inside
+        an open transaction (legacy isolation autocommitted it — the
+        exact crash window this plan closes).  Ported to a v5 seed: the
+        v4→v5 rename is gone (#822)."""
         db = tmp_path / "archive.db"
-        self._seed_v4_file(db)
+        conn = sqlite3.connect(db)
+        seed_v5_catalog(conn)
+        conn.close()
 
         conn = sqlite3.connect(db, factory=_InstrumentedConnection)
         assert migrate(conn) == CURRENT_SCHEMA_VERSION
-        # v4→v5 renames volumes, v5→v6 renames volume_events.
-        assert len(conn.rename_txn_states) == 2
+        # v5→v6 renames volume_events.
+        assert len(conn.rename_txn_states) == 1
         for sql, in_txn in conn.rename_txn_states:
             assert in_txn, f"{sql!r} ran outside a transaction (autocommitted)"
         conn.close()
@@ -1072,7 +1216,12 @@ class TestMigrationCrashAtomicity:
         conn.commit()
 
         assert detect_wedged_migration(conn) == []
-        assert migrate(conn) == CURRENT_SCHEMA_VERSION
+        labels = {r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()}
+        assert labels == {"VOL-0001", "VOL-0002"}
+        # Ported (#822): the un-wedged catalog is v4, which this build no
+        # longer migrates; it is refused with its rows intact.
+        with pytest.raises(SchemaVersionError, match="schema is v4"):
+            migrate(conn)
         labels = {r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()}
         assert labels == {"VOL-0001", "VOL-0002"}
         conn.close()

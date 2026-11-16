@@ -872,3 +872,48 @@ class TestFromDiscPythonReader:
         rc = self._run(tmp_path, ValueError("wrong password"))
         assert rc == 1
         assert "Python reader restore failed: wrong password" in caplog.text
+
+
+def test_latest_is_the_later_instant_across_utc_offsets(tmp_path):
+    """#821: 'latest' compares instants, not time strings.
+
+    11:00Z is later than 12:30+02:00 (10:30Z), though it sorts first as
+    text.  A time that does not parse is never taken as latest.
+    """
+    from lcsas.rustic.types import SnapshotInfo
+
+    disc = tmp_path / "disc"
+    disc.mkdir()
+    (disc / "data").mkdir()
+    pack_hashes = _write_catalog_with_packs(disc / "catalog.db", repo_name="family")
+    (disc / "metadata" / "family").mkdir(parents=True)
+    vol_dir = tmp_path / "vols"
+    vol_dir.mkdir()
+
+    mock_plan = MagicMock(spec=RestorePlan)
+    mock_plan.required_pack_hashes = pack_hashes
+    mock_runner = MagicMock()
+    mock_runner.snapshots.return_value = [
+        SnapshotInfo("older0000", "2026-11-01T12:30:00+02:00", "host"),
+        SnapshotInfo("newer0000", "2026-11-01T11:00:00Z", "host"),
+        SnapshotInfo("garbage00", "not a time", "host"),
+    ]
+    mock_runner.restore_dry_run.return_value = mock_plan
+    mock_executor = MagicMock()
+    mock_executor.ingest_volume.return_value = IngestionResult(len(pack_hashes), [])
+    key_file = tmp_path / "secret.key"
+    key_file.write_bytes(b"password")
+
+    args = _make_disc_args(
+        disc=disc, target_path=tmp_path / "restored", volume_dir=vol_dir,
+        skip_verify=True, password_file=key_file, snapshot="latest",
+    )
+    with (
+        patch("lcsas.utils.subprocess.check_binary_version", return_value="1.0.0"),
+        patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+        patch("lcsas.restore.executor.RestoreExecutor", return_value=mock_executor),
+        patch("lcsas.restore.executor.RestoreExecutor.verify_cache_completeness",
+              return_value=[]),
+    ):
+        assert cmd_restore_from_disc(args) == 0
+    assert mock_runner.restore_dry_run.call_args.kwargs["snapshot_id"] == "newer0000"

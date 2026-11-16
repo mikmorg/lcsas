@@ -72,6 +72,10 @@ DROP TABLE volumes;
 ALTER TABLE volumes_old RENAME TO volumes;
 ```
 
+The repaired catalog is schema v4. This LCSAS build no longer migrates
+catalogs older than v5 (#822): it refuses them, changes nothing, and
+names the last release that can migrate them.
+
 ### If the leftover is `volume_events_old` (interrupted v5→v6)
 
 Same pattern:
@@ -95,8 +99,10 @@ Exit sqlite3 (`.quit`) and re-run any LCSAS command, e.g.:
 lcsas status
 ```
 
-The pending migration re-runs — atomically this time — and the catalog
-comes back at the current schema version with all rows intact.
+After a `volume_events_old` repair, the pending migration re-runs —
+atomically this time — and the catalog comes back at the current schema
+version with all rows intact. After a `volumes_old` repair the catalog
+is v4, which this build refuses (see above).
 
 ## If anything looks wrong
 

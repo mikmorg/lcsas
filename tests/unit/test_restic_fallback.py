@@ -2275,7 +2275,7 @@ class TestRestoreTreeSecurityPaths:
         return repo, file_id
 
     def test_path_traversal_node_skipped(self, tmp_path, capsys):
-        """Lines 664-668: node with '../' in name is skipped with warning."""
+        """A node with '../' in its name is refused and counted (#781)."""
         repo, _ = self._build_repo_with_tree(tmp_path, [
             {"name": "../escape.txt", "type": "file", "content": []},
             {"name": "safe.txt", "type": "file", "content": []},
@@ -2286,7 +2286,9 @@ class TestRestoreTreeSecurityPaths:
         # Traversal node must not be created
         assert not (tmp_path / "escape.txt").exists()
         captured = capsys.readouterr()
-        assert "suspicious name" in captured.err
+        assert "NOT RESTORED" in captured.err
+        assert restorer.failures == 1
+        assert (target / "safe.txt").exists()
 
     def test_symlink_absolute_target_skipped(self, tmp_path, capsys):
         """Lines 706-710: symlink pointing to absolute path is skipped."""

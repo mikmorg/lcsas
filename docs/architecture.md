@@ -540,6 +540,13 @@ disappear from the mirror. LCSAS detects this during `scan`:
 4. Accurate prune flags feed into consolidation analysis — identifying
    volumes where a high percentage of packs are dead
 
+Snapshot rows follow the same listing (#824). After `rustic snapshots`
+succeeds for a repository, a snapshot it no longer lists loses its row,
+unless a disc may still hold its file: a volume (not DESTROYED) was
+staged, burned or verified after the snapshot was taken. That row is
+kept, and its `description` starts with `LCSAS: not in the mirror`.
+An empty listing leaves every row as it is.
+
 
 
 The Python source lives under `src/lcsas/` and is organised into **16

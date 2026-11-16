@@ -308,6 +308,134 @@ class _NodeFailed(Exception):  # noqa: N818 — internal control-flow sentinel, 
     """
 
 
+# ── Node names (issue #781) ──────────────────────────────────────
+#
+# rustic (and restic) store a tree node's "name" as Go strconv.Quote
+# text without the outer quotes when the name holds '"', '\', a
+# control character or a byte that is not valid UTF-8: ``quo"te`` is
+# stored as ``quo\"te``, a tab as ``\t``, the Latin-1 byte 0xE9 as
+# ``\xe9``.  The decoder below is rustic's ``unescape_filename``; the
+# C twin is ``lcsas_unescape_name`` in recovery/src/lcsas-restore/path.c.
+
+_NAME_ESCAPES = {
+    "\\": b"\\", '"': b'"', "'": b"'", "`": b"`",
+    "a": b"\x07", "b": b"\x08", "f": b"\x0c", "n": b"\n",
+    "r": b"\r", "t": b"\t", "v": b"\x0b",
+}
+_NAME_HEX_WIDTH = {"x": 2, "u": 4, "U": 8}
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+# Bytes an NTFS name cannot hold (besides control characters).
+_WINDOWS_BAD_NAME_BYTES = frozenset(b'\\:*?"<>|')
+# Which host name rule applies (module globals so tests can exercise
+# each rule on any host).  macOS file systems (APFS, HFS+) only hold
+# names in valid UTF-8.
+_WINDOWS_NAMES = os.name == "nt"
+_MACOS_NAMES = sys.platform == "darwin"
+
+
+class NameDecodeError(ValueError):
+    """A stored node name is not valid escaped text (issue #781)."""
+
+
+def unescape_node_name(stored: str) -> bytes:
+    """Decode a stored (escaped) node name to the raw bytes to create.
+
+    The escapes are ``\\\\ \\" \\' \\` \\a \\b \\f \\n \\r \\t \\v``,
+    ``\\xHH`` (one raw byte), ``\\uHHHH`` and ``\\UHHHHHHHH`` (a code
+    point, written as UTF-8); every other character is written as
+    UTF-8.  Raises :class:`NameDecodeError` for text no encoder writes
+    (unknown escape, trailing backslash, short or non-hex digits, a
+    surrogate or a code point above U+10FFFF).  rustic would use such a
+    name literally; we refuse it, so it is never restored under a name
+    nobody chose.
+    """
+    out = bytearray()
+    i = 0
+    n = len(stored)
+    while i < n:
+        c = stored[i]
+        i += 1
+        if c != "\\":
+            try:
+                out += c.encode("utf-8")
+            except UnicodeEncodeError as exc:  # a lone surrogate from JSON
+                raise NameDecodeError("lone surrogate in name") from exc
+            continue
+        if i >= n:
+            raise NameDecodeError("trailing backslash")
+        e = stored[i]
+        i += 1
+        simple = _NAME_ESCAPES.get(e)
+        if simple is not None:
+            out += simple
+            continue
+        width = _NAME_HEX_WIDTH.get(e)
+        if width is None:
+            raise NameDecodeError(f"unknown escape \\{e}")
+        digits = stored[i:i + width]
+        # Strict: int(x, 16) alone would also take '+', '_' and spaces.
+        if len(digits) != width or not set(digits) <= _HEX_DIGITS:
+            raise NameDecodeError(f"bad \\{e} escape")
+        i += width
+        value = int(digits, 16)
+        if e == "x":
+            out.append(value)
+        elif value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+            raise NameDecodeError(f"\\{e}{digits} is not a character")
+        else:
+            out += chr(value).encode("utf-8")
+    return bytes(out)
+
+
+def node_name_refusal(
+    raw: bytes, *, windows: bool, macos: bool = False
+) -> str | None:
+    """Why the decoded name *raw* cannot be created, or ``None``.
+
+    Refuses an empty name, ``.``, ``..``, and a name holding ``/`` or a
+    NUL byte.  With *windows* also a name NTFS cannot store: one holding
+    ``\\ : * ? " < > |`` or a control character, or one that is not
+    valid UTF-8.  With *macos* also a name that is not valid UTF-8.  The
+    reasons match tier 1's (path.c and tree.c).
+    """
+    if not raw:
+        return "the name is empty"
+    if b"\0" in raw:
+        return "the name holds a NUL byte"
+    if raw in (b".", b".."):
+        return "the name is '.' or '..'"
+    if b"/" in raw:
+        return "the name holds '/'"
+    if windows and any(b < 0x20 or b in _WINDOWS_BAD_NAME_BYTES for b in raw):
+        return ("Windows cannot store a name that holds "
+                '\\ : * ? " < > | or a control character')
+    if windows or macos:
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            host = "Windows" if windows else "macOS"
+            return f"{host} cannot store a name that is not valid UTF-8"
+    return None
+
+
+def _visible(text: str) -> str:
+    """*text* with control characters, DEL and lone surrogates shown as
+    escapes, so a name cannot move the cursor or split a line of the
+    log or of RESTORE_FAILURES.txt (tier 1 prints them the same way)."""
+    out = []
+    for ch in text:
+        o = ord(ch)
+        if o < 0x20 or o == 0x7F:
+            out.append(f"\\x{o:02x}")
+        elif 0xDC80 <= o <= 0xDCFF:  # a raw byte kept by os.fsdecode
+            out.append(f"\\x{o - 0xDC00:02x}")
+        elif 0xD800 <= o <= 0xDFFF:
+            out.append(f"\\u{o:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _decrypt_authenticated(
     encrypt_key: bytes,
     mac_k: bytes,
@@ -792,9 +920,16 @@ class PurePythonRestorer:
             "path\treason\tblob_id",
         ]
         for path, blob_id, reason in self._failures:
-            lines.append(f"{path}\t{reason}\t{blob_id}")
+            # _visible: a tab or newline in a restored name (#781) must
+            # not split the row.
+            lines.append(f"{_visible(path)}\t{_visible(reason)}\t{blob_id}")
         try:
-            manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            # backslashreplace: a restored name that is not valid UTF-8
+            # (#781) reaches here as a surrogate-escaped str.
+            manifest.write_text(
+                "\n".join(lines) + "\n", encoding="utf-8",
+                errors="backslashreplace",
+            )
         except OSError as exc:
             # The manifest is best-effort: never let writing it mask the
             # fact that the bulk of the data did restore.
@@ -1546,14 +1681,13 @@ class PurePythonRestorer:
         for node in tree_doc.get("nodes", []):
             name = node["name"]
             node_type = node.get("type", "file")
-            # Sanitize node name to prevent path traversal (e.g., "../../../etc/passwd")
-            # Use only the basename to strip any directory components
-            safe_name = Path(name).name
-            if not safe_name or safe_name != name:
-                _log(
-                    f"Skipping node with suspicious name: {name!r} "
-                    f"(contains directory components or empty)"
-                )
+            # Issue #781: decode rustic's escaped name to raw bytes, then
+            # run the path-safety checks (empty, ".", "..", "/", NUL; on
+            # Windows also what NTFS cannot store) on the DECODED bytes.
+            # A refused name is a failure: logged, listed in
+            # RESTORE_FAILURES.txt, and the restore ends non-zero.
+            safe_name = self._node_fs_name(name, target_dir)
+            if safe_name is None:
                 continue
             node_path = target_dir / safe_name
 
@@ -1707,6 +1841,36 @@ class PurePythonRestorer:
         self._progress_done_files += 1
         self._progress_done_bytes += bytes_written
         self._emit_progress()
+
+    def _node_fs_name(self, stored: object, target_dir: Path) -> str | None:
+        """The file-system name for a node whose stored name is *stored*,
+        or ``None`` (after recording a failure) when it is refused.
+
+        On POSIX the decoded bytes go through ``os.fsdecode``, so a name
+        that is not valid UTF-8 is created with exactly its bytes.
+        """
+        shown = _visible(stored) if isinstance(stored, str) else repr(stored)
+        why: str | None
+        raw = b""
+        if not isinstance(stored, str):
+            why = "the name is too long or badly stored"
+        else:
+            try:
+                raw = unescape_node_name(stored)
+            except NameDecodeError:
+                why = "the name cannot be decoded"
+            else:
+                why = node_name_refusal(
+                    raw, windows=_WINDOWS_NAMES, macos=_MACOS_NAMES
+                )
+        if why is None:
+            return os.fsdecode(raw)
+        where = f"{_visible(str(target_dir))}/{shown}"
+        if self._strict:
+            raise IntegrityError(f"NOT RESTORED: {where} ({why})")
+        self._failures.append((where, "", f"name refused: {why}"))
+        _log(f"NOT RESTORED: {where} ({why})")
+        return None
 
     def _record_failure(
         self, path: Path, blob_id: str, exc: BaseException
@@ -1974,16 +2138,22 @@ def _parse_timestamp(ts: str) -> float:
     return _parse_instant(ts).timestamp()
 
 
-def _snapshot_sort_key(snap: SnapshotMeta) -> tuple[int, float]:
-    """Sort key for snapshots: the instant of ``snap.time`` (#663).
+def time_sort_key(ts: str) -> tuple[int, float]:
+    """Sort key for a snapshot time: its instant, not its text (#663).
 
     A time that does not parse gives ``(0, 0.0)``, before every real
     time, so a damaged snapshot file is never chosen as "latest".
+    Shared with ``lcsas restore standalone latest`` (#821).
     """
     try:
-        return (1, _parse_timestamp(snap.time))
+        return (1, _parse_timestamp(ts))
     except ValueError:
         return (0, 0.0)
+
+
+def _snapshot_sort_key(snap: SnapshotMeta) -> tuple[int, float]:
+    """Sort key for snapshots: :func:`time_sort_key` of ``snap.time``."""
+    return time_sort_key(snap.time)
 
 
 _QUIET = False

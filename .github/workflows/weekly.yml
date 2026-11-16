@@ -71,8 +71,6 @@ jobs:
     uses: ./.github/workflows/upstream-canary.yml
 
   windows-e2e:
-    # The fixture artifact of a weekly run belongs to THIS run's id
-    # (windows-debug.yml's fixture_run_id input).
     uses: ./.github/workflows/windows-e2e.yml
 
   format-canary:

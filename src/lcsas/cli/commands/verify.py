@@ -288,13 +288,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         recorded_disc = False
 
         if args.disc:
-            from datetime import UTC, datetime
-
             from lcsas.db.volume_copies import (
                 add_volume_copy,
                 get_copies_for_volume,
                 touch_last_verified,
             )
+            from lcsas.utils.timestamps import utc_now
 
             # FMA-05: resolve which disc this IS before touching
             # the device — with several ACTIVE discs the owner must
@@ -360,7 +359,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
                             "recorded by 'lcsas verify --disc'; the burn "
                             "date is the date it was recorded"
                         ),
-                        last_verified_at=datetime.now(UTC).isoformat(),
+                        last_verified_at=utc_now(),
                         commit=False,
                     )
                     recorded_disc = True

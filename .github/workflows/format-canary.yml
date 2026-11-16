@@ -21,6 +21,15 @@ name: format-canary
 # and labelled format-drift as before).
 
 on:
+  # A change to the tier-3 reader (src/lcsas/restore/) starts this canary
+  # too (#837): the latest rustic is the newest writer that reader must
+  # still follow.  A red here on such a PR can also be upstream drift;
+  # the failure text says which reader failed.
+  pull_request:
+    paths:
+      - "src/lcsas/restore/**"
+      - "tests/recovery_hardening/test_format_canary.py"
+      - ".github/workflows/format-canary.yml"
   workflow_dispatch: {}
   workflow_call: {}
 
@@ -76,4 +85,11 @@ jobs:
           LCSAS_FORMAT_CANARY: "1"
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          python -m pytest tests/recovery_hardening/test_format_canary.py -v
+          python -m pytest tests/recovery_hardening/test_format_canary.py -v \
+            --junitxml=/tmp/format-canary.xml
+
+      - name: Both readers were checked (not skipped)
+        # #831: the canary self-skips without rustic or the tier-1 binary,
+        # and the job stayed green.  Weekly run 43877950099 (2026-11-16):
+        # 2 passed (tier 1 and tier 3).  Both must pass.
+        run: python3 scripts/ci_min_passed.py /tmp/format-canary.xml --min-passed 2

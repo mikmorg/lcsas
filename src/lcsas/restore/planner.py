@@ -108,7 +108,6 @@ class RestorePlanner:
     def generate_pick_list_v2(
         self,
         required_pack_hashes: list[str],
-        preferred_location: str = "",
     ) -> PickListV2:
         """Generate a pick list with alternate volume information.
 
@@ -118,9 +117,7 @@ class RestorePlanner:
         if not required_pack_hashes:
             return PickListV2(volumes={}, missing_packs=[])
 
-        raw = get_pick_list_with_alternates(
-            self._conn, required_pack_hashes, preferred_location,
-        )
+        raw = get_pick_list_with_alternates(self._conn, required_pack_hashes)
         missing = get_missing_packs(self._conn, required_pack_hashes)
         deprecated = get_deprecated_only_packs(self._conn, required_pack_hashes)
 
