@@ -10,13 +10,15 @@
 #
 # Subcommands:
 #   setup        Install pkgs, persist udev/modprobe, start daemon (one-time)
-#   start        Make sure vhba is loaded and cdemu-daemon user service is up
+#   start        Make sure vhba is loaded, cdemu-daemon user service is up
+#                and device 0 is mapped to a /dev/srN (restarts the daemon
+#                once if it is not, else fails naming the problem)
 #   stop         Stop cdemu-daemon user service
 #   status       Show device + loaded image
 #   load <iso>   Insert an ISO image into the virtual drive
 #   unload       Eject the virtual drive
 #   swap <iso>   unload then load (the typical restore inner loop)
-#   device       Print the kernel device node (e.g. /dev/sr0)
+#   device       Print device 0's kernel node (e.g. /dev/sr0)
 #
 # Notes:
 # - Runs as your normal user; the daemon is a systemd --user unit.
@@ -29,10 +31,36 @@
 set -euo pipefail
 
 PROG="$(basename "$0")"
-DEVICE="/dev/sr0"
+DEVICE="/dev/sr0"   # the usual node; `start` and `device` read the real one
+VHBA_CTL="${VHBA_CTL:-/dev/vhba_ctl}"
+MAP_TRIES="${CDEMU_MAP_TRIES:-25}"   # polls of 0.2 s for device 0's node
 
 err()  { printf '\033[0;31m[ERR]\033[0m %s\n' "$*" >&2; }
 info() { printf '\033[0;32m[+]\033[0m %s\n' "$*"; }
+
+# Device 0's SCSI CD-ROM node from `cdemu device-mapping` (a row
+# "0  /dev/sr0  /dev/sg0"), or nothing when the daemon is not answering
+# or device 0 has no node.  After a run of blind-restore teardowns the
+# daemon can stay up with device 0 unmapped (#768).
+device0_node() {
+  cdemu device-mapping 2>/dev/null \
+    | awk '$1 == "0" && $2 ~ /^\/dev\// { print $2; exit }' || true
+}
+
+# Wait up to MAP_TRIES x 0.2 s (5 s) for device 0 to be mapped to a node
+# that exists.  Prints the node; returns 1 if it never is.
+wait_device0() {
+  local node="" _
+  for _ in $(seq "$MAP_TRIES"); do
+    node="$(device0_node)"
+    if [[ -n $node && -e $node ]]; then
+      printf '%s\n' "$node"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
 
 need_user() {
   if [[ $EUID -eq 0 ]]; then
@@ -98,8 +126,8 @@ cmd_start() {
     info "loading vhba kernel module"
     sudo modprobe vhba
   fi
-  if [[ ! -e /dev/vhba_ctl ]]; then
-    err "/dev/vhba_ctl missing — did setup run?"
+  if [[ ! -e $VHBA_CTL ]]; then
+    err "$VHBA_CTL missing — did setup run?"
     exit 1
   fi
   # Preflight: the cdemu daemon runs as the seat user and needs RW on
@@ -110,10 +138,10 @@ cmd_start() {
   # daemon will fail with `Permission denied!` deep in libMirage.
   # Detect it here and print the exact fix command rather than leaving
   # you to chase a cryptic systemctl failure.
-  if [[ ! -r /dev/vhba_ctl || ! -w /dev/vhba_ctl ]]; then
-    err "/dev/vhba_ctl: $USER lacks rw permission."
-    err "  current owner/mode: $(stat -c '%U:%G %a' /dev/vhba_ctl 2>/dev/null)"
-    err "  granted via ACL:    $(getfacl /dev/vhba_ctl 2>/dev/null | \
+  if [[ ! -r $VHBA_CTL || ! -w $VHBA_CTL ]]; then
+    err "$VHBA_CTL: $USER lacks rw permission."
+    err "  current owner/mode: $(stat -c '%U:%G %a' "$VHBA_CTL" 2>/dev/null)"
+    err "  granted via ACL:    $(getfacl "$VHBA_CTL" 2>/dev/null | \
         grep -E '^(user|group):[^:]+:' | tr '\n' ' ')"
     err ""
     err "Fix options (pick one):"
@@ -124,15 +152,23 @@ cmd_start() {
   fi
   systemctl --user daemon-reload
   systemctl --user start cdemu-daemon.service
-  # wait for /dev/sr0 to appear
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [[ -e $DEVICE ]] && break
-    sleep 0.2
-  done
-  if [[ ! -e $DEVICE ]]; then
-    err "$DEVICE never appeared; check: journalctl --user -u cdemu-daemon"
-    exit 1
+  # The daemon being up is not enough: device 0 must be mapped to a
+  # /dev/srN.  It can lose that mapping and stay up (#768); a restart of
+  # the user daemon brings it back, so try that once.
+  local node
+  if ! node="$(wait_device0)"; then
+    info "cdemu device 0 has no /dev/srN mapping; restarting cdemu-daemon once"
+    systemctl --user restart cdemu-daemon.service
+    if ! node="$(wait_device0)"; then
+      err "cdemu device 0 is still not mapped to a /dev/srN after one restart"
+      err "of cdemu-daemon.  What cdemu device-mapping shows:"
+      cdemu device-mapping >&2 2>&1 || true
+      err "Check: journalctl --user -u cdemu-daemon"
+      err "Then try: sudo modprobe -r vhba && $PROG start"
+      exit 1
+    fi
   fi
+  DEVICE="$node"
   info "virtual drive ready at $DEVICE"
 }
 
@@ -171,7 +207,9 @@ cmd_swap() {
 }
 
 cmd_device() {
-  echo "$DEVICE"
+  local node
+  node="$(device0_node)"
+  echo "${node:-$DEVICE}"
 }
 
 case "${1:-}" in

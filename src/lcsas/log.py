@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TextIO
 
 
@@ -27,6 +29,47 @@ class _StdoutHandler(logging.StreamHandler[TextIO]):
     @stream.setter
     def stream(self, _value: TextIO) -> None:
         pass  # ignore attempts to set the stream
+
+
+class _StderrHandler(logging.StreamHandler[TextIO]):
+    """Handler that always writes to the *current* ``sys.stderr``.
+
+    The stderr twin of :class:`_StdoutHandler` (resolved on every emit, so
+    ``capsys`` captures it).
+    """
+
+    def __init__(self) -> None:  # noqa: D107
+        super().__init__()
+
+    @property
+    def stream(self) -> TextIO:
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, _value: TextIO) -> None:
+        pass  # ignore attempts to set the stream
+
+
+@contextmanager
+def log_to_stderr() -> Iterator[None]:
+    """Send the ``lcsas`` log to stderr while the block runs.
+
+    The log normally goes to stdout.  A command whose stdout is data that
+    a script or a file captures (a rebuilt password, a JSON document) must
+    keep everything else off stdout, so it runs inside this block.  Level
+    and format are kept from the current handler.
+    """
+    lg = logging.getLogger("lcsas")
+    saved = lg.handlers[:]
+    handler = _StderrHandler()
+    if saved:
+        handler.setLevel(saved[0].level)
+        handler.setFormatter(saved[0].formatter)
+    lg.handlers = [handler]
+    try:
+        yield
+    finally:
+        lg.handlers = saved
 
 
 def setup_logging(verbose: bool = False) -> logging.Logger:

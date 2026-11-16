@@ -1,18 +1,23 @@
-"""Interactive single-drive restore via PTY + loop mounts.
+"""Interactive single-drive restore via a pseudoterminal, no root.
 
 Builds a LCSAS scenario (repo → backup → burn → meta volume), then
 drives the production ``restore.sh`` interactively through a
 pseudoterminal, with the interface it has since #689 (#756): the
 flags ``--key``/``--target``/``--repo``, the tools folder as its work
 folder, discs found where they are mounted (``LCSAS_MOUNT_DIRS``),
-step 0's newest-disc question and tier 1's disc questions.  A disc
-swap is an unmount and a read-only loop mount of the next ISO at the
-same place, so no cdemu or physical hardware is needed.  The command
+step 0's newest-disc question and tier 1's disc questions.  The command
 line, the prompts and the answers come from
 ``tests/e2e/restore_sh_driver.py``, which a unit test checks against
 ``restore.sh`` and tier 1's source on every run.
 
-Requires: root (for losetup + mount), ``rustic`` and ``xorriso`` on PATH.
+The one drive is a folder in ``LCSAS_MOUNT_DIRS``.  Each data ISO is
+unpacked once (``xorriso -osirrox``) onto a shelf; putting a disc in is
+renaming its folder to the drive, taking it out is renaming it back, so
+the drive's contents change at once, as when a disc is mounted.  No
+root, loop device, cdemu or optical hardware is needed (#630), so the
+CI integration job (``make test-integration``) runs it.
+
+Requires: ``rustic`` and ``xorriso`` on PATH (self-skips without them).
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from lcsas.db.schema import create_all
 from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.packs.delta import DeltaAnalyzer
 from lcsas.packs.scanner import scan_mirror_packs
+from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
 from tests.e2e.fixture_lib import add_repo
 from tests.e2e.restore_sh_driver import (
     ENTER,
@@ -52,10 +58,6 @@ from tests.e2e.restore_sh_driver import (
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        os.geteuid() != 0,
-        reason="requires root (loop devices + mount)",
-    ),
-    pytest.mark.skipif(
         not shutil.which("rustic"), reason="rustic not installed"
     ),
     pytest.mark.skipif(
@@ -67,7 +69,7 @@ pytestmark = [
 
 RNG_SEED = 20260413
 NUM_FILES = 40
-FILE_SIZE_RANGE = (12_000, 30_000)  # ~840 KB total → forces multi-disc on TEST_TINY
+FILE_SIZE_RANGE = (80_000, 120_000)  # ~4 MB total: 3+ discs on TEST_TINY (2 MB)
 
 # Total timeout for the restore subprocess (seconds).
 RESTORE_TIMEOUT = 300
@@ -133,7 +135,7 @@ class _TestXorrisoRunner:
 # ═════════════════════════════════════════════════════════════════
 
 class TestInteractiveRestore:
-    """Drive restore.sh interactively via PTY + loop device swaps."""
+    """Drive restore.sh interactively via a PTY, swapping discs in one drive."""
 
     # ── Fixture ──────────────────────────────────────────────────
 
@@ -201,7 +203,9 @@ class TestInteractiveRestore:
             default_media_type=mt,
             default_ecc_redundancy_pct=0,
             label_prefix="ITEST",
-            metadata_reserve_bytes=150_000,
+            # The metadata every TEST_TINY disc carries (#778); 150 KB
+            # overflowed the disc once the tier-3 reader grew.
+            metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,
             repositories=repo_configs,
         )
 
@@ -255,7 +259,7 @@ class TestInteractiveRestore:
         self.restore_target = tmp_path / "restored"
         self.restore_target.mkdir()
         (tmp_path / "tmp").mkdir()
-        # Discs are mounted in here; the tools folder is restore.sh's
+        # Discs are "mounted" in here; the tools folder is restore.sh's
         # work folder (LCSAS_TOOLS_DIR).
         self.mount_dir = tmp_path / "mnt"
         self.mount_dir.mkdir()
@@ -263,34 +267,47 @@ class TestInteractiveRestore:
 
         self.all_isos = sorted(self.iso_dir.glob("*.iso"))
 
-    # ── The drive: one mount point, discs swapped by mount ──────
+        # Every data disc unpacked onto the shelf, outside the mount dirs,
+        # so restore.sh sees only the disc in the drive.
+        self.shelf = tmp_path / "shelf"
+        self.shelf.mkdir()
+        for iso in self._data_isos():
+            disc = self.shelf / iso.stem
+            subprocess.run(
+                ["xorriso", "-osirrox", "on", "-indev", str(iso),
+                 "-extract", "/", str(disc)],
+                capture_output=True, check=True,
+            )
+            subprocess.run(["chmod", "-R", "u+w", str(disc)], check=True)
+        self._in_drive: Path | None = None
+        self._drive.mkdir()  # the empty drive, as an empty mount point
+
+    # ── The drive: one folder, discs swapped by rename ──────────
     #
     # restore.sh has no drive flag (#689, #756): it finds the discs
     # mounted in LCSAS_MOUNT_DIRS.  The one "drive" is the folder
-    # <tmp>/mnt/drive; putting a disc in is a read-only loop mount of its
-    # ISO there, taking it out is the unmount.
+    # <tmp>/mnt/drive.  Putting a disc in renames its unpacked folder
+    # from the shelf onto the (empty) drive folder; taking it out renames
+    # it back and leaves an empty folder, like an unmounted mount point.
+    # A rename is atomic: tier 1 never sees half a disc.
 
     @property
     def _drive(self) -> Path:
         return self.mount_dir / "drive"
 
     def _eject(self) -> None:
-        self._in_drive = None
-        if os.path.ismount(self._drive):
-            subprocess.run(["umount", str(self._drive)],
-                           capture_output=True, check=False)
+        iso, self._in_drive = self._in_drive, None
+        if iso is not None:
+            os.rename(self._drive, self.shelf / iso.stem)
+            self._drive.mkdir()
 
     def _insert(self, iso: Path) -> None:
         # Already in: leave it (tier 1 may be reading it, and a box shown
         # again after a stray ENTER asks for the disc that is in).
-        if getattr(self, "_in_drive", None) == iso and os.path.ismount(self._drive):
+        if self._in_drive == iso:
             return
         self._eject()
-        self._drive.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["mount", "-o", "ro,loop", str(iso), str(self._drive)],
-            check=True, capture_output=True,
-        )
+        os.rename(self.shelf / iso.stem, self._drive)  # onto the empty folder
         self._in_drive = iso
 
     def _data_isos(self) -> list[Path]:
@@ -479,8 +496,12 @@ class TestInteractiveRestore:
             f"{output[-2000:]}"
         )
         assert TIER1_DONE.decode() not in output
-        assert "stopped at the disc prompt at your request" in output
-        assert "The restore stopped before it finished" in output
+        # The exit handler says the restore stopped and how to carry on
+        # (the tools folder stays, with resume.sh).  "[tier 1] stopped at
+        # the disc prompt at your request" is printed only with
+        # LCSAS_TIER_FALLBACK=1, which this run does not set.
+        assert "The restore stopped before it finished (exit code 75)" in output
+        assert "resume.sh" in output
 
     def test_unreadable_drive_reprompts(self):
         """An empty drive at a disc question: tier 1 asks again, and the

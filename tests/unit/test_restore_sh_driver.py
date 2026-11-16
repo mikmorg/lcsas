@@ -1,13 +1,15 @@
 """#756: the root-only restore.sh drivers stay in step with restore.sh.
 
 ``tests/integration/test_interactive_restore.py`` and
-``scripts/smoke_single_drive.py`` need root (mounts, cdemu), so they
-self-skip in CI, and they rotted once: they passed ``--drive`` and
+``scripts/smoke_single_drive.py`` once needed root (mounts, cdemu), so
+they self-skipped in CI and rotted: they passed ``--drive`` and
 ``--work-dir`` after #689 retired them, and waited for prompts nothing
 prints any more.  Both now build their command line and read the
-prompts with ``tests/e2e/restore_sh_driver.py``.  This checks that
-module against ``restore.sh`` and tier 1's source, and runs its
-pseudoterminal loop against a fake restore.sh, with no root.
+prompts with ``tests/e2e/restore_sh_driver.py``, and the integration
+test swaps discs as folders, with no root, so CI runs it (#630); the
+smoke script stays a cdemu drill aid.  This checks that module against
+``restore.sh`` and tier 1's source, and runs its pseudoterminal loop
+against a fake restore.sh, with no root.
 """
 
 from __future__ import annotations
@@ -71,6 +73,14 @@ def test_drivers_use_the_shared_command(driver):
         assert retired not in valid
         assert f'"{retired}"' not in text
     assert "INSERT DISC" not in text  # the prompt nothing prints now
+
+
+def test_interactive_restore_needs_no_root():
+    """#630: the integration test runs as a normal user (CI's runner), so
+    a root gate would hide it again."""
+    text = DRIVERS[0].read_text(encoding="utf-8")
+    assert "geteuid" not in text
+    assert '"mount"' not in text and '"umount"' not in text
 
 
 def _box_line_in_c(path: Path, text: str) -> bool:

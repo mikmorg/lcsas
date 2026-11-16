@@ -306,24 +306,6 @@ def make_pack_and_index(
                 "inode": 5, "device_id": 0,
             },
             {
-                "name": "../escape",   # unsafe name -> exercises skip
-                "type": "file",
-                "mode": 420,
-                "mtime": "2026-05-21T00:00:00Z",
-                "uid": 1000, "gid": 1000,
-                "size": 0,
-                "content": [],
-            },
-            {
-                "name": "foo/bar",     # slash in name -> rejected by tree.c
-                "type": "file",
-                "mode": 420,
-                "mtime": "2026-05-21T00:00:00Z",
-                "uid": 1000, "gid": 1000,
-                "size": 0,
-                "content": [],
-            },
-            {
                 "name": "evil_link",
                 "type": "symlink",
                 "linktarget": "../../../etc/passwd",  # escapes target_root
@@ -582,8 +564,31 @@ def make_pack_and_index(
     # SECOND so that the *buggy* behaviour (write hostile over sibling)
     # would clobber the sibling's content — the test then bites.  With
     # the fix the hostile node is skipped and "evil" keeps its content.
+    #
+    # Issue #781: a refused name makes the restore end non-zero, so every
+    # hostile name lives in this side tree, never in the snapshot tree
+    # the happy-path tests restore: "../escape" and "foo/bar" (both hold
+    # '/') moved here from the root tree.
     nul_name_doc = {
         "nodes": [
+            {
+                "name": "../escape",   # unsafe name -> refused
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 0,
+                "content": [],
+            },
+            {
+                "name": "foo/bar",     # slash in name -> refused
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 0,
+                "content": [],
+            },
             {
                 "name": "evil",
                 "type": "file",

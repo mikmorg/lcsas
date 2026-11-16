@@ -85,7 +85,7 @@ class TestSymlinkEscapeProtection:
     """Drive the real restorer; assert escaping links never materialize."""
 
     def test_reject_node_name_with_parent_dir_component(self, tmp_path, capsys):
-        """Node names with ``../`` are sanitized to the basename and skipped."""
+        """A node name holding ``/`` is refused and counted (#781)."""
         repo = _build_repo_with_tree(
             tmp_path,
             [
@@ -94,11 +94,15 @@ class TestSymlinkEscapeProtection:
             ],
         )
         target = tmp_path / "restored"
-        PurePythonRestorer(repo, password=PASSWORD).restore(target=target)
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
         # The traversal node must not escape the target.
         assert not (tmp_path / "etc" / "passwd").exists()
         assert not (tmp_path.parent / "passwd").exists()
-        assert "suspicious name" in capsys.readouterr().err
+        # #781: a refused name is reported and is a failure, not a
+        # silent skip.
+        assert "NOT RESTORED" in capsys.readouterr().err
+        assert restorer.failures == 1
 
     def test_reject_absolute_symlink_target(self, tmp_path, capsys):
         """Absolute symlink targets are skipped (never created)."""

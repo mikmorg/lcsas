@@ -75,6 +75,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_meta_upstream_provenance.py` | test_meta_upstream_provenance.py -- bundled upstream bytes come from the pinned archives (#832). |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
 | `test_multidisc_cases.py` | Run recovery/tests/test_multidisc.py's cases inside the hardening tier (#465). |
+| `test_name_escaping_differential.py` | Issue #781: tiers 1, 2 and 3 restore escaped file names alike. |
 | `test_no_boot_deadend_routing.py` | test_no_boot_deadend_routing.py -- static regression guard against the |
 | `test_no_bypass_check.py` | Unit tests for the blind-restore #13 bypass check. |
 | `test_no_unpinned_boot_artifacts.py` | BOOT-07: nothing executable reaches a meta-volume tree unpinned. |

@@ -516,8 +516,13 @@ LCSAS_BLIND_ACK_COST=1 make blind-restore   # setup → run (capped) → verify
 Claude sub-agent and burns API credits (≈ USD 5 per run), so it refuses
 to run unless `LCSAS_BLIND_ACK_COST=1` is set. The target drives
 `setup.py`, then `run.sh` under a 45-minute wall-clock `timeout`
-(`RUN_DIR=/tmp/lcsas-blind-run-$$`), then `verify.sh` against the newest
-run dir. Run `teardown.sh` separately (`make blind-restore-teardown`)
+(`RUN_DIR=<base>/lcsas-blind-run-$$`), then scores that same run dir with
+`blind_runs.py score` (never "the newest run dir", #830): a pass needs all
+16 of `verify.sh`'s checks to run and pass. The base is
+`$LCSAS_BLIND_TMPDIR`, else `$TMPDIR`, else `/tmp` (`sudo -E` drops
+`TMPDIR`). A passing run removes its run dir, a failing one keeps it, and
+`run.sh` prunes kept run dirs older than `LCSAS_BLIND_KEEP_DAYS` (default
+14; #840). Run `teardown.sh` separately (`make blind-restore-teardown`)
 when you're done.
 
 The blind restore target is **deliberately out-of-band** — it is not in
@@ -605,7 +610,10 @@ Two split-key blind variants now coexist with different jobs:
   `LCSAS_META` and follow the on-disc instructions, and is handed 2
   production `-card.txt` artifacts. It must derive every command from the
   burned START_HERE / PASSWORD_INFO text and parse the real cards. This is the
-  only variant that proves the heir's actual journey.
+  only variant that proves the heir's actual journey. Since #828 its fixture
+  is a real split archive: every password is split 2-of-5 in the config, the
+  splits are recorded under the cards' own identifiers, and the meta disc is
+  built from the config, so it carries the PASSWORD_INFO.txt the prompt names.
 
 **Acceptance policy.** Any PR that changes the heir-facing recovery
 contract — `src/lcsas/staging/metadata.py` heir text, the on-disc
