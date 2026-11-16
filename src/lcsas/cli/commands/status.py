@@ -5,11 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-import sys
 from typing import TYPE_CHECKING, Any
 
 from lcsas.cli.common import _open_catalog, _reburn_hint
-from lcsas.log import get_logger
+from lcsas.log import get_logger, log_to_stderr
 
 if TYPE_CHECKING:
     from lcsas.db.models import Pack
@@ -181,30 +180,6 @@ def _volumes_needing_reburn(
     return sorted(result)
 
 
-class _LogToStderr:
-    """Send the ``lcsas`` log to stderr while active (``status --json``).
-
-    The log normally goes to stdout; a JSON document on stdout must be
-    the only thing there, so a script can parse it.
-    """
-
-    def __enter__(self) -> None:
-        import logging
-
-        lg = logging.getLogger("lcsas")
-        self._saved = lg.handlers[:]
-        handler = logging.StreamHandler(sys.stderr)
-        if self._saved:
-            handler.setLevel(self._saved[0].level)
-            handler.setFormatter(self._saved[0].formatter)
-        lg.handlers = [handler]
-
-    def __exit__(self, *exc: object) -> None:
-        import logging
-
-        logging.getLogger("lcsas").handlers = self._saved
-
-
 # Version of the `lcsas status --json` document.  Bump it when a field
 # changes meaning or is removed; adding a field does not need a bump.
 STATUS_JSON_FORMAT = 1
@@ -316,7 +291,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "--stale-copies or --redundancy."
         )
         return 1
-    with _LogToStderr():
+    with log_to_stderr():
         return _cmd_status(args)
 
 

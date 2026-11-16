@@ -19,7 +19,7 @@ from lcsas.cli.common import (
     _open_catalog,
     _resolve_db_path,
 )
-from lcsas.log import get_logger
+from lcsas.log import get_logger, log_to_stderr
 
 if TYPE_CHECKING:
     from lcsas.config.settings import LCSASConfig
@@ -710,13 +710,24 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
 
 
 def cmd_key_combine(args: argparse.Namespace) -> int:
-    """Reconstruct a repository password from K SLIP-0039 share mnemonics."""
+    """Reconstruct a repository password from K SLIP-0039 share mnemonics.
+
+    stdout carries the rebuilt password and nothing else: a script runs
+    ``lcsas key combine > pw``, so every message, log line included, goes
+    to stderr.  On failure stdout stays empty.
+    """
+    with log_to_stderr():
+        return _key_combine(args)
+
+
+def _key_combine(args: argparse.Namespace) -> int:
     from lcsas.keyshare import (
         KeyShareError,
         check_share,
         decode_master_secret,
         extract_mnemonic,
-        is_mnemonic_line,
+        is_share_line,
+        normalize_share_line,
         recover_secret,
     )
 
@@ -728,22 +739,27 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
                 logger.error("Share file does not exist: %s", sf)
                 return 1
             # Each file is one share: a bare mnemonic file or a printed
-            # share card.  extract_mnemonic ignores card header/prose and
-            # raises KeyShareError (naming the file + word count) on a
-            # truncated/prose-only file.
+            # share card.  extract_mnemonic ignores card header/prose,
+            # expands 4-letter prefixes, keeps a share line with typos for
+            # the check below to name, and raises KeyShareError (naming the
+            # file + word count) on a truncated/prose-only file.
             text = sf.read_text(encoding="utf-8")
             try:
-                mnemonics.append(extract_mnemonic(text, source=str(sf)))
+                mnemonics.append(
+                    extract_mnemonic(text, source=str(sf), keep_mistyped=True)
+                )
             except KeyShareError as e:
                 logger.error("%s", e)
                 return 1
             labels.append(str(sf))
     else:
-        # No --share-file: read shares from stdin.  Skip non-mnemonic
-        # lines (blanks, card prose) so `cat card1 card2 | ...` works.
+        # No --share-file: read shares from stdin, one per line.  Skip
+        # blanks and card prose so `cat card1 card2 | ...` works; keep a
+        # line that is nearly all share words, so a typo is named below
+        # rather than the line silently dropped (the C combiner's rule).
         for lineno, line in enumerate(sys.stdin, start=1):
-            if is_mnemonic_line(line):
-                mnemonics.append(" ".join(line.split()))
+            if is_share_line(line):
+                mnemonics.append(normalize_share_line(line))
                 labels.append(f"stdin line {lineno}")
 
     if not mnemonics:
@@ -786,7 +802,10 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
 
     if args.out is not None:
         _write_private_file(args.out, password)
-        print(f"Reconstructed password written to {args.out} (mode 0600).")
+        print(
+            f"Reconstructed password written to {args.out} (mode 0600).",
+            file=sys.stderr,
+        )
     else:
         # Raw bytes: a password may not be valid UTF-8 and must not gain a
         # trailing newline, or it would no longer match the original.
