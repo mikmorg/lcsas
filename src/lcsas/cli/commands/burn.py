@@ -71,15 +71,14 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
             return 0
 
         device = _resolve_device(args, config)
-        if not getattr(args, "skip_burn", False):
-            import os
-            if not os.path.exists(device):
-                logger.error(
-                    "Optical device '%s' not found.\n"
-                    "Insert a disc or specify the correct device with --device.",
-                    device,
-                )
-                return 1
+        import os
+        if not os.path.exists(device):
+            logger.error(
+                "Optical device '%s' not found.\n"
+                "Insert a disc or specify the correct device with --device.",
+                device,
+            )
+            return 1
 
         receipts = orch.burn_session(
             session_ref=args.session,
@@ -224,6 +223,9 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             "session_id": args.session,
             "location": args.location,
             "device": device,
+            # A receipt is a file, not the catalog: its burn date keeps the
+            # format receipts always had (microseconds), and import copies
+            # it to the disc record through to_utc_iso, as it always did.
             "burn_date": datetime.now(UTC).isoformat(),
             "iso_sha256": iso_sha256,
             "iso_size_bytes": iso_size_bytes,

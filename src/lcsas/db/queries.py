@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import sqlite3
 from collections.abc import Collection
 from typing import Any, NamedTuple
@@ -11,8 +10,6 @@ from lcsas.constants import AUTO_DEPRECATED_NOTE_PREFIX, DISPLAY_STATUS_LOST
 from lcsas.db.models import Pack, Volume
 from lcsas.db.packs import _row_to_pack
 from lcsas.db.volumes import _row_to_volume
-
-_logger = logging.getLogger(__name__)
 
 # Conservative batch limit – stays below SQLite's 999-variable limit on old builds.
 _SQLITE_BATCH = 900
@@ -240,7 +237,6 @@ def get_volumes_for_pack(
 def get_pick_list(
     conn: sqlite3.Connection,
     pack_sha256_list: list[str],
-    preferred_location: str = "",
 ) -> dict[str, list[Pack]]:
     """Generate a restore 'pick list': map volume labels to needed packs.
 
@@ -250,9 +246,7 @@ def get_pick_list(
 
     Prefers non-DEPRECATED/DESTROYED volumes. If a pack exists on multiple
     volumes, prefers durable (BURNED/VERIFIED/CONSOLIDATING) volumes over
-    never-burned STAGING/BURNING ones, then volumes at *preferred_location*
-    (if specified) to minimise disc-swapping across locations. Falls back
-    to alphabetical order.
+    never-burned STAGING/BURNING ones, then alphabetical order.
 
     STAGING/BURNING volumes are deliberately NOT excluded: every disc
     catalog lists its own volume as STAGING (the catalog is
@@ -264,26 +258,9 @@ def get_pick_list(
     Args:
         conn: catalog connection.
         pack_sha256_list: SHA-256 hashes of required packs.
-        preferred_location: Optional location to prefer (e.g.
-            ``"Home_Shelf"``).  Volumes at this location are chosen
-            over volumes elsewhere when both carry the same pack.
     """
     if not pack_sha256_list:
         return {}
-
-    if preferred_location:
-        # Warn if the preferred location doesn't exist in the catalog so the
-        # caller gets feedback rather than silently falling back to any volume.
-        row = conn.execute(
-            "SELECT 1 FROM locations WHERE name = ? LIMIT 1",
-            (preferred_location,),
-        ).fetchone()
-        if row is None:
-            _logger.warning(
-                "get_pick_list: preferred_location '%s' not found in catalog — "
-                "falling back to alphabetical volume order",
-                preferred_location,
-            )
 
     # Deduplicate: each pack assigned to one volume only.
     # Process in batches to avoid SQLite variable limit.
@@ -295,37 +272,20 @@ def get_pick_list(
         placeholders = ",".join("?" for _ in batch)
 
         # Order by: durable volumes first (a disc that exists always beats
-        # a never-burned STAGING claim), then preferred location, then
-        # alphabetically.
-        if preferred_location:
-            rows = conn.execute(
-                f"""SELECT p.*, v.volume_id, v.label as vol_label,
-                           v.status as vol_status, v.location as vol_location
-                    FROM packs p
-                    JOIN volume_packs vp ON p.pack_id = vp.pack_id
-                    JOIN volumes v ON vp.volume_id = v.volume_id
-                    WHERE p.sha256 IN ({placeholders})
-                      AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-                    ORDER BY (CASE WHEN v.status IN {_DURABLE_SQL}
-                                   THEN 0 ELSE 1 END),
-                             (CASE WHEN v.location = ? THEN 0 ELSE 1 END),
-                             v.label""",
-                [*batch, preferred_location],
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                f"""SELECT p.*, v.volume_id, v.label as vol_label,
-                           v.status as vol_status
-                    FROM packs p
-                    JOIN volume_packs vp ON p.pack_id = vp.pack_id
-                    JOIN volumes v ON vp.volume_id = v.volume_id
-                    WHERE p.sha256 IN ({placeholders})
-                      AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-                    ORDER BY (CASE WHEN v.status IN {_DURABLE_SQL}
-                                   THEN 0 ELSE 1 END),
-                             v.label""",
-                batch,
-            ).fetchall()
+        # a never-burned STAGING claim), then alphabetically.
+        rows = conn.execute(
+            f"""SELECT p.*, v.volume_id, v.label as vol_label,
+                       v.status as vol_status
+                FROM packs p
+                JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                JOIN volumes v ON vp.volume_id = v.volume_id
+                WHERE p.sha256 IN ({placeholders})
+                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                ORDER BY (CASE WHEN v.status IN {_DURABLE_SQL}
+                               THEN 0 ELSE 1 END),
+                         v.label""",
+            batch,
+        ).fetchall()
 
         for row in rows:
             pack = _row_to_pack(row)
@@ -341,7 +301,6 @@ def get_pick_list(
 def get_pick_list_with_alternates(
     conn: sqlite3.Connection,
     pack_sha256_list: list[str],
-    preferred_location: str = "",
 ) -> dict[str, dict[str, Any]]:
     """Generate a pick list with alternate volumes for each pack.
 
@@ -350,8 +309,8 @@ def get_pick_list_with_alternates(
                   "primary_volume_id": int, "alternates": [str, ...]}}
 
     The primary volume is chosen by: durable (BURNED/VERIFIED/
-    CONSOLIDATING) before never-burned STAGING/BURNING, then preferred
-    location, then VERIFIED before BURNED, then alphabetical label.
+    CONSOLIDATING) before never-burned STAGING/BURNING, then VERIFIED
+    before BURNED, then alphabetical label.
     Alternates are the remaining volumes that also hold the pack.
 
     STAGING volumes are kept as last-resort candidates rather than
@@ -368,15 +327,9 @@ def get_pick_list_with_alternates(
         batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
         placeholders = ",".join("?" for _ in batch)
 
-        params: list[Any] = list(batch)
-        location_order = ""
-        if preferred_location:
-            location_order = "(CASE WHEN v.location = ? THEN 0 ELSE 1 END),"
-            params.append(preferred_location)
-
         rows = conn.execute(
             f"""SELECT p.*, v.volume_id, v.label AS vol_label,
-                       v.status AS vol_status, v.location AS vol_location
+                       v.status AS vol_status
                 FROM packs p
                 JOIN volume_packs vp ON p.pack_id = vp.pack_id
                 JOIN volumes v ON vp.volume_id = v.volume_id
@@ -384,12 +337,11 @@ def get_pick_list_with_alternates(
                   AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
                 ORDER BY (CASE WHEN v.status IN {_DURABLE_SQL}
                                THEN 0 ELSE 1 END),
-                         {location_order}
                          (CASE WHEN v.status = 'VERIFIED' THEN 0
                                WHEN v.status = 'BURNED' THEN 1
                                ELSE 2 END),
                          v.label""",
-            params,
+            batch,
         ).fetchall()
 
         for row in rows:
