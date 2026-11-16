@@ -175,7 +175,8 @@ space**. The volumes before it are staged. Its packs wait for a later
 stage, when more data has come in.
 
 The pack space is what one volume can hold: the medium's usable bytes,
-after its 15 % error-correction share, less `metadata_reserve_mb`. A
+after its 15 % error-correction share, less the disc metadata reserve
+(`metadata_reserve_mb`, or the measured disc metadata when larger). A
 volume packed as full as it can be is at 100 %. (`--dry-run` shows both
 numbers per volume: the share of the disc's capacity, and the share of
 its pack space.)

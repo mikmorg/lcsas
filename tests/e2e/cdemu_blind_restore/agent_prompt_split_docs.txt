@@ -89,23 +89,21 @@ any data discs one at a time as the recovery process asks for them.
     ~/disc-labels.txt (skipping LCSAS_META), mount it where the prompt
     expects, then send ENTER in the restore-shell session
     (`restore-shell send ""`).
-  - Use a bounded loop (cap at 40 swaps) and exit the loop as soon as the
-    session reports the restore is complete or the session ends.
+  - The test rig does that loop for you with ONE command; do not type
+    the loop out or save it to a file:
 
-    DATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )
-    disc_idx=0
-    for _ in $(seq 1 40); do
-        out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break
-        case "$out" in
-            *"restore complete"*) echo "RESTORE COMPLETE"; break ;;
-            *"Insert the right"*) ;;  # fall through to swap
-        esac
-        sudo umount /media 2>/dev/null
-        disc-loader insert "${DATA_DISCS[$disc_idx]}"
-        disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))
-        sudo mount /dev/sr0 /media
-        restore-shell send ""
-    done
+        restore-shell swap-loop
+
+    It is a bounded loop (cap at 40 swaps).  Each time round it waits up
+    to 120 s for `Insert the right disc` or `restore complete`.  On a
+    disc box it unmounts /media, inserts the next data disc of
+    ~/disc-labels.txt (LCSAS_META skipped, in label order), mounts
+    /dev/sr0 at /media and sends ENTER.  (`restore-shell swap-loop /mnt`
+    mounts at /mnt instead.)  On `restore complete` it prints RESTORE
+    COMPLETE, answers "Restore another backup set?" with n, and exits 0.
+    If the session ends it stops at once (exit 2); if nothing new comes
+    for 120 s it stops (exit 1).  Then look with `restore-shell screen`,
+    and run `restore-shell swap-loop` again if a disc box is waiting.
 
   The recovery process may take up to 60 seconds between progress lines
   on a slow drive — do NOT treat silence as a hang.

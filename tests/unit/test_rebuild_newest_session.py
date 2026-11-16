@@ -106,8 +106,9 @@ def discs(tmp_path):
     session_a = orch.stage()
     orch.burn_session(session_a.session_id, location="Home", skip_burn=True)
 
-    # 3 packs of 800 kB do not fit one 2 MiB TEST_TINY disc: two volumes.
-    _add_packs(conn, config, 2, 3, 800_000)
+    # 3 packs of 450 kB do not fit one 2 MiB TEST_TINY disc beside its
+    # disc metadata (#811), two do: two volumes.
+    _add_packs(conn, config, 2, 3, 450_000)
     session_b = orch.stage()
     assert len(session_b.manifests) == 2
     conn.close()

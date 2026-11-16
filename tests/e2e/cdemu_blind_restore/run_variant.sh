@@ -45,12 +45,15 @@
 #                          once the manual Windows drill (#476) passes.  It
 #                          fails loud, spending nothing, until then.
 #
-# Exits 0 with `SCORE: 16/16 (variant=<name>)` on full pass.
+# Exits 0 with `SCORE: 16/16 (variant=<name>)  OUTCOME PASS  CONDUCT PASS`
+# on full pass: verify.sh's checks come in two groups, OUTCOME (every file
+# restored intact, from the discs, with the documented tools) and CONDUCT
+# (the rules kept), and a run passes when both pass (#827).
 # Exits non-zero on any failure; the score line still prints.
 #
 # The run is scored on its OWN run folder ($RUN_DIR), never "the newest
 # /tmp/lcsas-blind-* folder" (#830).  A pass needs all 16 of verify.sh's
-# checks to run and pass; a run that cannot be scored (no folder, no
+# checks (9 OUTCOME, 7 CONDUCT) to run and pass; a run that cannot be scored (no folder, no
 # transcript, a 0/0 score) fails, XFAIL-listed or not.  Besides the
 # SCORE line it prints `RUN_DIR: <path>` before the agent starts and one
 # `RESULT: {json}` line (run folder, score, cost, turns) at the end, for

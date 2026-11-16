@@ -35,6 +35,7 @@ from lcsas.meta.bundler import (
     get_shared_libs,
     resolve_binary,
 )
+from tests.fixtures.upstream_cache import add_upstream
 from tests.unit.test_heir_doc_commands import _accepted_flags
 
 # ── resolve_binary ───────────────────────────────────────────────
@@ -799,33 +800,24 @@ class TestBundleUpstreamBinaries:
     required) to exercise the dispatch logic.
     """
 
-    def _make_cache(self, root, target, *, with_rustic=True, with_python=True):
-        """Populate root with fake cached files for one target.
+    def _make_cache(
+        self, root, target, *, with_rustic=True, with_python=True,
+        recovery_dir=None,
+    ):
+        """Pin and cache fake upstream archives for one target.
 
-        Mirrors the REAL fetch_upstream.sh layout: python lands under
-        its own triple — x86_64-pc-windows-MSVC for the windows-gnu
-        target, because python-build-standalone ships no gnu build
-        (UPSTREAM.sha256 header; MetaVolumeBuilder.PYTHON_TRIPLE_OVERRIDE,
-        #404).  Faking python under the gnu triple would re-encode the
-        pre-#404 bug this layout exposed.
+        #832: the builder unpacks the archives pinned in UPSTREAM.sha256,
+        so the fake cache holds archives (plus the copy fetch_upstream.sh
+        unpacks beside them), pinned in ``<root>/../pins/UPSTREAM.sha256``
+        unless *recovery_dir* is given.  Pass the same folder to the
+        builder as ``recovery_dir``.  Python lands under its own triple,
+        x86_64-pc-windows-MSVC for the windows-gnu target, exactly as the
+        real fetch does (#404).
         """
-        from lcsas.meta.builder import MetaVolumeBuilder
-
-        if with_rustic:
-            d = root / "rustic" / target
-            d.mkdir(parents=True)
-            (d / "rustic").write_text("#!/bin/sh\necho fake rustic\n")
-            (d / "rustic").chmod(0o755)
-        if with_python:
-            py_target = MetaVolumeBuilder.PYTHON_TRIPLE_OVERRIDE.get(
-                target, target
-            )
-            d = root / "python" / py_target / "python" / "bin"
-            d.mkdir(parents=True)
-            (d / "python3").write_text("#!/bin/sh\necho fake python3\n")
-            (d / "python3").chmod(0o755)
-            # Add a stdlib placeholder so the tree looks real.
-            (root / "python" / py_target / "python" / "lib").mkdir()
+        add_upstream(
+            root, recovery_dir or root.parent / "pins", target,
+            rustic=with_rustic, python=with_python,
+        )
 
     def test_no_cache_dir_is_silent_skip(self, tmp_path, monkeypatch):
         """Missing cache root → the *bundler* returns without error or
@@ -836,7 +828,7 @@ class TestBundleUpstreamBinaries:
         ``test_cli_meta.TestCmdMetaBuildGate``."""
         from lcsas.meta.builder import MetaVolumeBuilder
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "nonexistent"))
-        b = MetaVolumeBuilder(tmp_path / "meta")
+        b = MetaVolumeBuilder(tmp_path / "meta", recovery_dir=tmp_path / "pins")
         recovery_dst = tmp_path / "meta" / "recovery"
         recovery_dst.mkdir(parents=True)
         # Must not raise.
@@ -854,7 +846,7 @@ class TestBundleUpstreamBinaries:
 
         recovery_dst = tmp_path / "meta" / "recovery"
         recovery_dst.mkdir(parents=True)
-        b = MetaVolumeBuilder(tmp_path / "meta")
+        b = MetaVolumeBuilder(tmp_path / "meta", recovery_dir=tmp_path / "pins")
         b._bundle_upstream_binaries(recovery_dst)
 
         target_dir = recovery_dst / "bin" / "x86_64-unknown-linux-musl"
@@ -881,7 +873,7 @@ class TestBundleUpstreamBinaries:
 
         recovery_dst = tmp_path / "meta" / "recovery"
         recovery_dst.mkdir(parents=True)
-        b = MetaVolumeBuilder(tmp_path / "meta")
+        b = MetaVolumeBuilder(tmp_path / "meta", recovery_dir=tmp_path / "pins")
         b._bundle_upstream_binaries(recovery_dst)
 
         # Approved target landed.
@@ -902,7 +894,7 @@ class TestBundleUpstreamBinaries:
 
         recovery_dst = tmp_path / "meta" / "recovery"
         recovery_dst.mkdir(parents=True)
-        b = MetaVolumeBuilder(tmp_path / "meta")
+        b = MetaVolumeBuilder(tmp_path / "meta", recovery_dir=tmp_path / "pins")
         b._bundle_upstream_binaries(recovery_dst)
 
         target_dir = recovery_dst / "bin" / "armv7-unknown-linux-gnueabihf"
@@ -928,48 +920,56 @@ class TestBundleUpstreamBinaries:
 
         recovery_dst = tmp_path / "meta" / "recovery"
         recovery_dst.mkdir(parents=True)
-        b = MetaVolumeBuilder(tmp_path / "meta")
+        b = MetaVolumeBuilder(tmp_path / "meta", recovery_dir=tmp_path / "pins")
         b._bundle_upstream_binaries(recovery_dst)
 
+        # Windows names come from the real archives: rustic.exe in the
+        # rustic tarball, python.exe at the top of the CPython tree.
         for t in targets:
-            assert (recovery_dst / "bin" / t / "rustic-static").is_file(), t
-            assert (recovery_dst / "bin" / t / "python" / "bin" / "python3").is_file(), t
+            win = t == "x86_64-pc-windows-gnu"
+            rustic = "rustic-static.exe" if win else "rustic-static"
+            python = "python.exe" if win else "bin/python3"
+            assert (recovery_dst / "bin" / t / rustic).is_file(), t
+            assert (recovery_dst / "bin" / t / "python" / python).is_file(), t
 
     def test_python_trees_carry_no_bytecode(self, tmp_path, monkeypatch):
         """#815: a .pyc file names the folder it was compiled in, so the
-        cached CPython trees (compiled in place on the build machine)
-        must reach the meta disc without __pycache__, .pyc or .pyo.
-        Both cache layouts: a python/ tree, and the flat Windows tree."""
+        CPython trees must reach the meta disc without __pycache__, .pyc
+        or .pyo, even when the pinned archive itself carries them (#832:
+        the disc gets the archive's members, not the cache's copy).
+        Both layouts: a python/ tree, and the flat Windows tree."""
         from lcsas.meta.builder import MetaVolumeBuilder
         cache_root = tmp_path / "cache"
-        self._make_cache(cache_root, "x86_64-unknown-linux-musl")
-        stdlib = (
-            cache_root / "python" / "x86_64-unknown-linux-musl" / "python"
-            / "lib" / "python3.12"
+        pins = tmp_path / "pins"
+        add_upstream(
+            cache_root, pins, "x86_64-unknown-linux-musl", rustic=False,
+            python_extra=(
+                ("lib/__pycache__", None, 0o755),
+                ("lib/__pycache__/os.cpython-312.pyc", b"pyc", 0o644),
+                ("lib/old.pyo", b"pyo", 0o644),
+            ),
         )
-        (stdlib / "__pycache__").mkdir(parents=True)
-        (stdlib / "os.py").write_text("# os\n")
-        (stdlib / "__pycache__" / "os.cpython-312.pyc").write_bytes(b"pyc")
-        (stdlib / "old.pyo").write_bytes(b"pyo")
-        # The flat Windows layout: python.exe at the top of the triple.
-        flat = cache_root / "python" / "x86_64-pc-windows-msvc"
-        (flat / "Lib" / "__pycache__").mkdir(parents=True)
-        (flat / "python.exe").write_bytes(b"MZ")
-        (flat / "Lib" / "os.py").write_text("# os\n")
-        (flat / "Lib" / "__pycache__" / "os.cpython-312.pyc").write_bytes(b"pyc")
-        (flat / "stray.pyc").write_bytes(b"pyc")
+        add_upstream(
+            cache_root, pins, "x86_64-pc-windows-gnu", rustic=False,
+            python_flat=True,
+            python_extra=(
+                ("Lib/__pycache__", None, 0o755),
+                ("Lib/__pycache__/os.cpython-312.pyc", b"pyc", 0o644),
+                ("stray.pyc", b"pyc", 0o644),
+            ),
+        )
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
 
         recovery_dst = tmp_path / "meta" / "recovery"
         recovery_dst.mkdir(parents=True)
-        MetaVolumeBuilder(tmp_path / "meta")._bundle_upstream_binaries(
-            recovery_dst
-        )
+        MetaVolumeBuilder(
+            tmp_path / "meta", recovery_dir=pins,
+        )._bundle_upstream_binaries(recovery_dst)
 
         bin_dir = recovery_dst / "bin"
         linux_py = bin_dir / "x86_64-unknown-linux-musl" / "python"
         win_py = bin_dir / "x86_64-pc-windows-gnu" / "python"
-        assert (linux_py / "lib" / "python3.12" / "os.py").is_file()
+        assert (linux_py / "lib" / "os.py").is_file()
         assert (win_py / "Lib" / "os.py").is_file()
         assert (win_py / "python.exe").is_file()
         bytecode = [
@@ -998,16 +998,17 @@ class TestBundleUpstreamBinaries:
         ]
         for t in targets:
             self._make_cache(cache_root, t)
-        for t, arch in MUSL_LOADER_ARCH.items():
-            d = cache_root / "musl" / t
-            d.mkdir(parents=True)
-            (d / f"ld-musl-{arch}.so.1").write_bytes(b"\x7fELF fake " + arch.encode())
+        for t in MUSL_LOADER_ARCH:
+            add_upstream(cache_root, tmp_path / "pins", t,
+                         rustic=False, python=False, musl=True)
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
 
         meta = tmp_path / "meta"
         recovery_dst = meta / "recovery"
         recovery_dst.mkdir(parents=True)
-        MetaVolumeBuilder(meta)._bundle_upstream_binaries(recovery_dst)
+        MetaVolumeBuilder(
+            meta, recovery_dir=tmp_path / "pins",
+        )._bundle_upstream_binaries(recovery_dst)
 
         for t in targets:
             rel = musl_loader_path(t)
@@ -1027,14 +1028,15 @@ class TestBundleUpstreamBinaries:
         cache_root = tmp_path / "cache"
         self._make_cache(cache_root, "x86_64-unknown-linux-musl",
                          with_python=False)
-        d = cache_root / "musl" / "x86_64-unknown-linux-musl"
-        d.mkdir(parents=True)
-        (d / "ld-musl-x86_64.so.1").write_bytes(b"fake")
+        add_upstream(cache_root, tmp_path / "pins", "x86_64-unknown-linux-musl",
+                     rustic=False, python=False, musl=True)
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
 
         recovery_dst = tmp_path / "meta" / "recovery"
         recovery_dst.mkdir(parents=True)
-        MetaVolumeBuilder(tmp_path / "meta")._bundle_upstream_binaries(recovery_dst)
+        MetaVolumeBuilder(
+            tmp_path / "meta", recovery_dir=tmp_path / "pins",
+        )._bundle_upstream_binaries(recovery_dst)
 
         target_dir = recovery_dst / "bin" / "x86_64-unknown-linux-musl"
         assert (target_dir / "rustic-static").is_file()
@@ -1055,10 +1057,6 @@ class TestBundleUpstreamBinaries:
 
         from lcsas.meta.builder import MetaVolumeBuilder
 
-        cache_root = tmp_path / "cache"
-        self._make_cache(cache_root, "aarch64-unknown-linux-musl")
-        self._make_cache(cache_root, "x86_64-pc-windows-gnu", with_python=False)
-        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
 
         # Use a COPY of the real recovery tree as the source.  We
         # delete its bin/ subtree first so the test sees a deterministic
@@ -1072,6 +1070,13 @@ class TestBundleUpstreamBinaries:
         bin_root = src_recovery / "bin"
         if bin_root.exists():
             _sh.rmtree(bin_root)
+        # The fake archives are pinned in the copy's UPSTREAM.sha256.
+        cache_root = tmp_path / "cache"
+        self._make_cache(cache_root, "aarch64-unknown-linux-musl",
+                         recovery_dir=src_recovery)
+        self._make_cache(cache_root, "x86_64-pc-windows-gnu",
+                         with_python=False, recovery_dir=src_recovery)
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
 
         out = tmp_path / "meta"
         out.mkdir()
@@ -1091,7 +1096,7 @@ class TestBundleUpstreamBinaries:
         assert (arm / "python" / "bin" / "python3").is_file()
         win = out / "recovery" / "bin" / "x86_64-pc-windows-gnu"
         assert win.is_dir()
-        assert (win / "rustic-static").is_file()
+        assert (win / "rustic-static.exe").is_file()
         # No python on the windows target (we asked for rustic-only).
         assert not (win / "python").exists()
         # And no other approved target slipped in.  (We cleared the
@@ -1313,13 +1318,6 @@ class TestBundleTier1Binaries:
         # build for the SAME target.
         cache = tmp_path / "cache"
         target = "x86_64-unknown-linux-musl"
-        (cache / "rustic" / target).mkdir(parents=True)
-        (cache / "rustic" / target / "rustic").write_text("#!fake\n")
-        (cache / "rustic" / target / "rustic").chmod(0o755)
-        (cache / "python" / target / "python" / "bin").mkdir(parents=True)
-        (cache / "python" / target / "python" / "bin" / "python3").write_text("#!fake\n")
-        (cache / "python" / target / "python" / "bin" / "python3").chmod(0o755)
-        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
 
         # Use the REAL recovery/ source tree so copytree finds
         # everything else (MANIFEST.sha256, etc.), but ALSO pre-seed
@@ -1335,6 +1333,9 @@ class TestBundleTier1Binaries:
         fake_bin = fake_bin_dir / "lcsas-restore"
         fake_bin.write_text("#!/bin/sh\nfake C89 binary\n")
         fake_bin.chmod(0o755)
+        # The fake upstream archives are pinned in the copy (#832).
+        add_upstream(cache, src_recovery, target)
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
 
         out = tmp_path / "meta"
         out.mkdir()
@@ -1498,27 +1499,24 @@ class TestRegenerateRecoveryManifest:
         """
         from lcsas.meta.builder import MetaVolumeBuilder
 
+        repo_root = Path(__file__).resolve().parents[2]
+        # A copy of the real recovery/ tree, so the fake archives can be
+        # pinned in its UPSTREAM.sha256 (#832).
+        src_recovery = tmp_path / "source_recovery"
+        shutil.copytree(repo_root / "recovery", src_recovery, symlinks=True)
+
         cache_root = tmp_path / "cache"
         # One target with rustic + python.
         target = "x86_64-unknown-linux-musl"
-        (cache_root / "rustic" / target).mkdir(parents=True)
-        (cache_root / "rustic" / target / "rustic").write_text("#!fake\n")
-        (cache_root / "rustic" / target / "rustic").chmod(0o755)
-        (cache_root / "python" / target / "python" / "bin").mkdir(parents=True)
-        (cache_root / "python" / target / "python" / "bin" / "python3").write_text(
-            "#!fake\n"
-        )
-        (cache_root / "python" / target / "python" / "bin" / "python3").chmod(0o755)
-
+        add_upstream(cache_root, src_recovery, target)
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
 
-        repo_root = Path(__file__).resolve().parents[2]
         out = tmp_path / "meta"
         out.mkdir()
         b = MetaVolumeBuilder(
             out,
             project_root=repo_root,
-            recovery_dir=repo_root / "recovery",
+            recovery_dir=src_recovery,
         )
         b._bundle_recovery_toolchain_artifacts()
 
@@ -2681,21 +2679,21 @@ class TestBundleUpstreamBinariesStaging:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         # Stock restic is bundled per-target so the standard-tools tier works
-        # offline: cache restic/<target>/restic (or restic.exe) -> the builder
-        # stages it to recovery/bin/<target>/restic[.exe].
+        # offline: the pinned restic/<target>/*.bz2 (or the Windows .zip)
+        # -> the builder stages it to recovery/bin/<target>/restic[.exe].
         cache = tmp_path / "cache"
+        pins = tmp_path / "pins"
         unix_target = "x86_64-unknown-linux-musl"
         win_target = "x86_64-pc-windows-gnu"
-        (cache / "restic" / unix_target).mkdir(parents=True)
-        (cache / "restic" / unix_target / "restic").write_bytes(b"\x7fELFrestic")
-        (cache / "restic" / win_target).mkdir(parents=True)
-        (cache / "restic" / win_target / "restic.exe").write_bytes(b"MZrestic")
+        for target in (unix_target, win_target):
+            add_upstream(cache, pins, target,
+                         rustic=False, python=False, restic=True)
 
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
         out = tmp_path / "out"
         recovery_dst = out / "recovery"
         recovery_dst.mkdir(parents=True)
-        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b = MetaVolumeBuilder(out, project_root=tmp_path, recovery_dir=pins)
         b._bundle_upstream_binaries(recovery_dst)
 
         unix_bin = recovery_dst / "bin" / unix_target / "restic"
@@ -2704,41 +2702,34 @@ class TestBundleUpstreamBinariesStaging:
         assert win_bin.is_file(), "stock restic.exe not staged for the windows target"
         assert os.access(unix_bin, os.X_OK), "staged restic is not executable"
         # restic is kept under its own name, distinct from rustic-static.
-        assert unix_bin.read_bytes() == b"\x7fELFrestic"
+        assert unix_bin.read_bytes() == b"\x7fELF fake restic"
+        assert win_bin.read_bytes() == b"MZ fake restic"
 
     def test_stages_linux_tree_and_windows_flat_install(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        # Build a fake recovery-binaries cache:
-        #  * a Linux target with a python/<target>/python/ TREE
-        #    (exercises the directory-copy branch + its rmtree on re-run,
-        #     builder.py:2161-2169 incl. 2165),
-        #  * a Windows target with a flat python.exe install
-        #    (exercises the alt-install branch builder.py:2176-2191).
-        cache = tmp_path / "cache"
-        # Linux tree install.
-        lin = cache / "python" / "x86_64-unknown-linux-musl" / "python"
-        (lin / "bin").mkdir(parents=True)
-        (lin / "bin" / "python3").write_text("#!/bin/sh\n")
-        # Windows flat install: python.exe at the target root, plus a
-        # sibling dir + file, and tarball/marker files that must be skipped.
-        # Cached under the MSVC triple exactly as fetch_upstream.sh
-        # produces it (PBS ships no windows-gnu python); the builder's
+        # Pin and cache two python archives:
+        #  * a Linux one holding the usual python/ tree,
+        #  * a Windows one with a flat install (python.exe at the top, no
+        #    python/ prefix): all of it lands under bin/<target>/python/.
+        # The Windows one is pinned under the MSVC triple exactly as the
+        # real fetch does (PBS ships no windows-gnu python); the builder's
         # PYTHON_TRIPLE_OVERRIDE remaps the gnu target's lookup (#404).
+        cache = tmp_path / "cache"
+        pins = tmp_path / "pins"
+        add_upstream(cache, pins, "x86_64-unknown-linux-musl", rustic=False)
+        add_upstream(cache, pins, "x86_64-pc-windows-gnu", rustic=False,
+                     python_flat=True)
         win = cache / "python" / "x86_64-pc-windows-msvc"
-        win.mkdir(parents=True)
-        (win / "python.exe").write_bytes(b"MZ")
-        (win / "Lib").mkdir()
-        (win / "Lib" / "os.py").write_text("# stdlib\n")
+        # Files beside the archive that no archive holds stay off the disc.
         (win / "vcruntime.dll").write_bytes(b"\x00")
-        (win / "cpython.tar.gz").write_bytes(b"skip-me")
         (win / ".extracted").write_text("marker\n")
 
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
         out = tmp_path / "out"
         recovery_dst = out / "recovery"
         recovery_dst.mkdir(parents=True)
-        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b = MetaVolumeBuilder(out, project_root=tmp_path, recovery_dir=pins)
 
         b._bundle_upstream_binaries(recovery_dst)
         b._bundle_upstream_binaries(recovery_dst)  # re-run -> rmtree branches
@@ -2749,10 +2740,11 @@ class TestBundleUpstreamBinariesStaging:
         win_dst = recovery_dst / "bin" / "x86_64-pc-windows-gnu" / "python"
         assert (win_dst / "python.exe").is_file()
         assert (win_dst / "Lib" / "os.py").is_file()
-        assert (win_dst / "vcruntime.dll").is_file()
-        # Tarball + extraction marker are not copied into the meta tree.
-        assert not (win_dst / "cpython.tar.gz").exists()
-        assert not (win_dst / ".extracted").exists()
+        # Only what the archive holds: no stray cache file, no tarball,
+        # no extraction marker.
+        assert sorted(
+            p.relative_to(win_dst).as_posix() for p in win_dst.rglob("*")
+        ) == ["Lib", "Lib/os.py", "python.exe"]
 
 
 # ── ToolBundler edge-branch coverage (cycle 19) ──────────────────────

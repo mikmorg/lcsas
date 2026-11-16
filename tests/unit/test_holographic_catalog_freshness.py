@@ -52,8 +52,9 @@ def staged(tmp_path):
         register_repo(conn, name, name.title(),
                       str(config.repositories[name].mirror_path))
 
-    # 3 packs @ 800KB > 2MB TEST_TINY → exactly 2 volumes.
-    _seed_packs(conn, config, num_packs=3, pack_size=800_000)
+    # 3 packs @ 450 KB: two fit a 2 MB TEST_TINY volume beside its disc
+    # metadata (#811), three do not → exactly 2 volumes.
+    _seed_packs(conn, config, num_packs=3, pack_size=450_000)
 
     xorriso = MagicMock()
 

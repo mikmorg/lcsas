@@ -416,7 +416,7 @@ supports three reachable targets for the C89 binary today:
 - `x86_64-unknown-linux-musl` — `<arch>-linux-musl-gcc` or `zig cc`
 - `aarch64-unknown-linux-musl` — same
 - `x86_64-pc-windows-gnu` — `zig cc -target x86_64-windows-gnu`
-  (Makefile already encodes this; see `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`)
+  (Makefile already encodes this; see `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt`)
 
 **Still missing toolchains.**
 
