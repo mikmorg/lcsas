@@ -25,7 +25,8 @@ Crypto stack (all self-contained — no pip packages required):
     AES-128-ECB (Poly1305)    ``lcsas.restore._aes_pure``
     Poly1305-AES (MAC)        Implemented below
     SHA-256                   ``hashlib`` (stdlib)
-    zstd (optional decomp.)   ``zstandard`` if installed
+    zstd decompression        ``zstandard`` if importable, else
+                              ``lcsas.restore._zstd_pure``
     ========================  ================================
 
 Usage::
@@ -55,11 +56,11 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from lcsas.restore._aes_fast import FastAesCtr
 from lcsas.restore._aes_pure import (
@@ -82,6 +83,13 @@ from lcsas.restore._aes_pure import (
 # to silence progress output entirely.
 _PROGRESS_FILES_INTERVAL = 50
 _PROGRESS_BYTES_INTERVAL = 64 * 1024 * 1024  # 64 MiB
+
+# The file-count pass reads every tree blob; the restore pass then needs
+# the same trees again.  On a multi-disc archive a second read can mean
+# a second disc prompt (#602), so the count pass keeps the trees it read
+# (checked against their hash) for the restore pass, up to this many
+# bytes of tree data.  Trees past the cap are read again, as before.
+_TREE_CACHE_MAX_BYTES = 128 * 1024 * 1024  # 128 MiB
 
 
 # ── Optional zstd ────────────────────────────────────────────────
@@ -135,8 +143,9 @@ except ImportError:
         if not _warned_pure_zstd:
             _warned_pure_zstd = True
             _log(
-                "using slow built-in zstd decoder — install 'zstandard' "
-                "for ~100x faster restore"
+                "zstd: using the slow built-in zstd decoder (about "
+                "1.2 MB/s of text); the 'zstandard' package is not "
+                "available to this Python"
             )
         return _pure_zstd_decompress(data, max_output_size)
 
@@ -484,6 +493,82 @@ def _decrypt_authenticated(
     return _aes_ctr_fast()(encrypt_key, iv, ciphertext)
 
 
+#: What parsing a decrypted key, index, snapshot or config file raises
+#: when its plaintext is wrong: bad UTF-8 or JSON, bad base64 (all
+#: ValueError), a wrong shape, or (index, snapshot) a bad zstd frame.
+_PARSE_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError, TypeError, KeyError, AttributeError, *_ZSTD_ERRORS,
+)
+
+_T = TypeVar("_T")
+
+
+def _decrypt_and_parse(  # noqa: UP047 — the reader must run on Python 3.10
+    encrypt_key: bytes,
+    mac_k: bytes,
+    mac_r: bytes,
+    data: bytes,
+    parse: Callable[[bytes], _T],
+    what: str,
+) -> _T:
+    """Decrypt *data* and return ``parse(plaintext)``, with a second attempt.
+
+    Key, index, snapshot and config files carry no content hash, so a
+    native AES that turned wrong after its self-test would show only as
+    a file that will not parse (#793).  When parsing fails and a native
+    AES did the decryption, decrypt once more with the pure-Python AES.
+    If that parses, the native AES was wrong: it is switched off for the
+    rest of the run.  If not, the first parse error is raised: the file
+    itself is damaged.
+
+    Raises:
+        IntegrityError: the MAC check failed.
+        One of ``_PARSE_ERRORS``: *parse* failed on both attempts.
+    """
+    plaintext = _decrypt_authenticated(encrypt_key, mac_k, mac_r, data)
+    try:
+        return parse(plaintext)
+    except _PARSE_ERRORS:
+        if not _aes_ctr_fast().is_native(len(data) - 32):
+            raise
+        second = _decrypt_authenticated(
+            encrypt_key, mac_k, mac_r, data, pure=True,
+        )
+        if second == plaintext:
+            raise
+        try:
+            result = parse(second)
+        except _PARSE_ERRORS:
+            pass
+        else:
+            _aes_ctr_fast().disable(f"gave wrong output for {what}")
+            return result
+        raise
+
+
+def _unpack_repo_file(data: bytes) -> bytes:
+    """Strip the repository-v2 compression byte; decompress if zstd.
+
+    Restic repository format v2 prepends a compression-type byte
+    after decryption:
+      - ``\\x00``  → uncompressed (strip the prefix)
+      - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
+      - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
+      - ``{``       → v1 repository, raw JSON, no prefix
+
+    After the prefix byte the data is either raw JSON or a
+    zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
+    """
+    # Repo v2: first byte is a compression-type indicator
+    if len(data) > 5 and data[1:5] == _ZSTD_MAGIC:
+        # Byte 0 is compression type (1 or 2), rest is zstd frame
+        return _decompress_zstd(data[1:])
+    if len(data) > 1 and data[0:1] in (b"\x00", b"\x01", b"\x02"):
+        # Compression type present but no zstd magic → just strip
+        return data[1:]
+    return data
+
+
 def _constant_time_eq(a: bytes, b: bytes) -> bool:
     """Constant-time byte comparison to prevent timing attacks."""
     if len(a) != len(b):
@@ -585,19 +670,22 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     kek_mac_k = derived[32:48]
     kek_mac_r = derived[48:64]
 
-    # Decrypt the master key
-    master_json = _decrypt_authenticated(
-        kek_encrypt, kek_mac_k, kek_mac_r, encrypted_master
-    )
-
-    try:
+    def parse(master_json: bytes) -> MasterKey:
         master = json.loads(master_json)
         return MasterKey(
             encrypt=base64.b64decode(master["encrypt"]),
             mac_k=base64.b64decode(master["mac"]["k"]),
             mac_r=base64.b64decode(master["mac"]["r"]),
         )
-    except (ValueError, TypeError, KeyError, AttributeError) as e:
+
+    # Decrypt the master key (the MAC check raises IntegrityError: a
+    # wrong password) and parse it, with a pure-AES second attempt.
+    try:
+        return _decrypt_and_parse(
+            kek_encrypt, kek_mac_k, kek_mac_r, encrypted_master, parse,
+            f"key file {key_file.name}",
+        )
+    except _PARSE_ERRORS as e:
         raise KeyFileCorruptError(
             f"key file {key_file}: the password is right, but the master "
             f"key inside is malformed ({type(e).__name__}: {e})"
@@ -796,6 +884,10 @@ class PurePythonRestorer:
 
         self._master_key: MasterKey | None = None
         self._blob_index: dict[str, BlobLocation] | None = None
+        # Tree blobs kept from the count pass for the restore pass
+        # (#602); emptied when restore() returns.
+        self._tree_cache: dict[str, bytes] = {}
+        self._tree_cache_bytes = 0
         self._snapshots: list[SnapshotMeta] | None = None
 
         # Progress reporting state — reset at the top of every
@@ -873,6 +965,9 @@ class PurePythonRestorer:
             if self._failures:
                 self._write_failure_manifest(target)
             raise
+        finally:
+            self._tree_cache.clear()
+            self._tree_cache_bytes = 0
 
         # Force a final 100% line so the last reported count matches
         # the total — otherwise the heir sees e.g. 47/50 and
@@ -980,27 +1075,23 @@ class PurePythonRestorer:
     def _decrypt_file(self, path: Path) -> bytes:
         """Read, decrypt, and (if needed) decompress a repository file.
 
-        Restic repository format v2 prepends a compression-type byte
-        after decryption:
-          - ``\\x00``  → uncompressed (strip the prefix)
-          - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
-          - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
-          - ``{``       → v1 repository, raw JSON, no prefix
-
-        After the prefix byte the data is either raw JSON or a
-        zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
+        See ``_unpack_repo_file`` for the compression byte.  No second
+        AES attempt here: ``_read_json_file`` is the reader with one.
         """
-        data = self._decrypt(path.read_bytes())
+        return _unpack_repo_file(self._decrypt(path.read_bytes()))
 
-        # Repo v2: first byte is a compression-type indicator
-        if len(data) > 5 and data[1:5] == _ZSTD_MAGIC:
-            # Byte 0 is compression type (1 or 2), rest is zstd frame
-            data = _decompress_zstd(data[1:])
-        elif len(data) > 1 and data[0:1] in (b"\x00", b"\x01", b"\x02"):
-            # Compression type present but no zstd magic → just strip
-            data = data[1:]
+    def _read_json_file(self, path: Path) -> Any:
+        """Decrypt, decompress and parse an index, snapshot or config file.
 
-        return data
+        With a pure-AES second attempt when it will not parse (#793).
+        """
+        assert self._master_key is not None
+        mk = self._master_key
+        return _decrypt_and_parse(
+            mk.encrypt, mk.mac_k, mk.mac_r, path.read_bytes(),
+            lambda plain: json.loads(_unpack_repo_file(plain)),
+            f"{path.parent.name}/{path.name[:12]}",
+        )
 
     def _load_index(self) -> None:
         """Read and decrypt all index files → build blob location map."""
@@ -1017,8 +1108,7 @@ class PurePythonRestorer:
         for idx_file in index_files:
             if not idx_file.is_file():
                 continue
-            plaintext = self._decrypt_file(idx_file)
-            idx_doc = json.loads(plaintext)
+            idx_doc = self._read_json_file(idx_file)
             index_data.append((idx_file.name, idx_doc))
             for sup in idx_doc.get("supersedes", []):
                 supersedes.add(sup)
@@ -1052,8 +1142,7 @@ class PurePythonRestorer:
         for snap_file in sorted(snap_dir.iterdir()):
             if not snap_file.is_file():
                 continue
-            plaintext = self._decrypt_file(snap_file)
-            snap_doc = json.loads(plaintext)
+            snap_doc = self._read_json_file(snap_file)
             self._snapshots.append(
                 SnapshotMeta(
                     snapshot_id=snap_file.name,
@@ -1165,29 +1254,15 @@ class PurePythonRestorer:
         heir inserts a data disc -- restore.sh's one-shot startup scan
         cannot, because no data disc is mounted yet at that point.
         """
-        seen: set[Path] = set()
-        for root in self._pack_search_paths:
-            for candidate in (
-                root / "catalog.db",
-                root.parent / "catalog.db",
-                root / "recovery" / "catalog.db",
-            ):
-                # Resolve only the parent to keep symlinks under control
-                # without forcing the file itself to exist (resolve(strict=False)
-                # may not be portable on every libc).
-                try:
-                    key = candidate.resolve(strict=False)
-                except OSError:
-                    key = candidate
-                if key in seen:
-                    continue
-                seen.add(key)
-                if candidate.is_file():
-                    return candidate
-        return None
+        found = self._discover_catalogs()
+        return found[0] if found else None
 
     def _discover_catalogs(self) -> list[Path]:
-        """Every ``catalog.db`` reachable now, in ``_discover_catalog`` order."""
+        """Every ``catalog.db`` reachable now, in ``_discover_catalog`` order.
+
+        A path reached twice (the same root listed twice, or a root and
+        its ``data/`` subdirectory) is listed once.
+        """
         found: list[Path] = []
         seen: set[Path] = set()
         for root in self._pack_search_paths:
@@ -1196,6 +1271,7 @@ class PurePythonRestorer:
                 root.parent / "catalog.db",
                 root / "recovery" / "catalog.db",
             ):
+                # resolve(strict=False): the file itself need not exist.
                 try:
                     key = candidate.resolve(strict=False)
                 except OSError:
@@ -1237,10 +1313,21 @@ class PurePythonRestorer:
     ) -> tuple[list[str], bool, int, str | None]:
         """(labels, pack known, number of discs listed, newest disc listed).
 
-        Raises sqlite3.Error on an unreadable catalog.
+        The one place the catalog is queried.  Raises sqlite3.Error on an
+        unreadable catalog.
         """
+        # immutable=1: ISO 9660 is read-only so SQLite must not try to
+        # create WAL/shm sidecar files.  Without this, sqlite3.connect()
+        # with mode=ro raises OperationalError on iso9660 mounts AND
+        # (critically) leaves a kernel reference on the mount point that
+        # makes `umount /media` fail with EBUSY, preventing disc swaps.
+        # Issue #284 root cause 2.
         conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
         try:
+            # Three-table join: volume_packs.pack_id is the INT FK, not
+            # the sha256 hex we have in hand -- so we go through
+            # packs.sha256.  ORDER BY label keeps the output stable
+            # across SQLite query-planner versions.
             labels = [row[0] for row in conn.execute(
                 "SELECT v.label FROM volumes v "
                 "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
@@ -1257,6 +1344,10 @@ class PurePythonRestorer:
             ).fetchone()
             return labels, known, int(n_vols), newest[0] if newest else None
         finally:
+            # Explicit close is required: `with sqlite3.connect() as c:`
+            # is a transaction context manager, not a connection closer.
+            # Leaving the connection open keeps a fd on the iso9660 mount
+            # and prevents `umount /media` during disc swaps.
             conn.close()
 
     def _lookup_volume_labels(
@@ -1348,46 +1439,9 @@ class PurePythonRestorer:
                 f"[lcsas-restore] auto-discovered catalog at {discovered}\n"
             )
         try:
-            # immutable=1: ISO 9660 is read-only so SQLite must not try to
-            # create WAL/shm sidecar files.  Without this, sqlite3.connect()
-            # with mode=ro raises OperationalError on iso9660 mounts AND
-            # (critically) leaves a kernel reference on the mount point that
-            # makes `umount /media` fail with EBUSY, preventing disc swaps.
-            # Issue #284 root cause 2.
-            uri = f"file:{self.catalog_path}?mode=ro&immutable=1"
-            conn = sqlite3.connect(uri, uri=True)
-            try:
-                # Three-table join: volume_packs.pack_id is the INT FK,
-                # not the sha256 hex we have in hand -- so we go through
-                # packs.sha256.  ORDER BY label keeps the output stable
-                # across SQLite query-planner versions.
-                cur = conn.execute(
-                    "SELECT v.label "
-                    "FROM volumes v "
-                    "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
-                    "JOIN packs p ON p.pack_id = vp.pack_id "
-                    "WHERE p.sha256 = ? "
-                    "ORDER BY v.label",
-                    (pack_id,),
-                )
-                labels = [row[0] for row in cur.fetchall()]
-                if labels:
-                    return labels, ""
-                # Pack ID present in the catalog but no volume mapping?
-                # Disambiguate that from "pack ID absent from catalog".
-                cur = conn.execute(
-                    "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1",
-                    (pack_id,),
-                )
-                if cur.fetchone() is not None:
-                    return [], self._CATALOG_HIT_NO_VOLS
-                return [], self._CATALOG_MISS
-            finally:
-                # Explicit close is required: `with sqlite3.connect() as c:`
-                # is a transaction context manager, not a connection closer.
-                # Leaving the connection open keeps a fd on the iso9660 mount
-                # and prevents `umount /media` during disc swaps.
-                conn.close()
+            labels, known, _n, _newest = self._query_catalog(
+                self.catalog_path, pack_id,
+            )
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog: treat as "no
             # catalog" so the heir at least sees the legacy prompt.
@@ -1401,6 +1455,11 @@ class PurePythonRestorer:
             if was_auto_discovered:
                 self.catalog_path = None
             return None
+        if labels:
+            return labels, ""
+        # Pack ID present in the catalog but no volume mapping?
+        # Disambiguate that from "pack ID absent from catalog".
+        return [], self._CATALOG_HIT_NO_VOLS if known else self._CATALOG_MISS
 
     @staticmethod
     def _frame_indented(text: str) -> str:
@@ -1561,6 +1620,9 @@ class PurePythonRestorer:
         Returns:
             Raw blob content (file data or tree JSON).
         """
+        cached = self._tree_cache.get(blob_id)
+        if cached is not None:
+            return cached  # a tree the count pass read and checked (#602)
         assert self._blob_index is not None
         if blob_id not in self._blob_index:
             raise KeyError(f"Blob not found in index: {blob_id}")
@@ -1887,6 +1949,9 @@ class PurePythonRestorer:
         Only tree blobs are read (which are typically a small
         fraction of total bytes), so this is cheap even on large
         repositories.  Used to provide N/M-style progress reporting.
+
+        The trees read are kept, up to ``_TREE_CACHE_MAX_BYTES``, so the
+        restore pass does not read them (and ask for their disc) again.
         """
         total = 0
         # Iterative DFS to avoid recursion-depth limits on deep trees.
@@ -1906,6 +1971,9 @@ class PurePythonRestorer:
                 # records the failure.  Missing OSError here aborted the
                 # whole restore before the tolerant pass began (#481).
                 return total
+            if self._tree_cache_bytes + len(tree_data) <= _TREE_CACHE_MAX_BYTES:
+                self._tree_cache[tid] = tree_data
+                self._tree_cache_bytes += len(tree_data)
             for node in tree_doc.get("nodes", []):
                 ntype = node.get("type", "file")
                 if ntype == "file":
@@ -2073,7 +2141,7 @@ class PurePythonRestorer:
         if config_path.is_file():
             import contextlib
             with contextlib.suppress(Exception):
-                config_doc = json.loads(self._decrypt_file(config_path))
+                config_doc = self._read_json_file(config_path)
 
         assert self._snapshots is not None
         assert self._blob_index is not None
