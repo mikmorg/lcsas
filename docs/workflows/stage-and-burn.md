@@ -282,7 +282,14 @@ A disc carries a snapshot only when every pack the snapshot needs is on
 a burned disc or on one of the discs of the session being staged.
 Before it builds the discs, `lcsas stage` reads each repository's
 snapshot trees with the repository's `password_file` (tree data only,
-never file content) and leaves out every other snapshot (#657).
+never file content) and leaves out every other snapshot (#657).  Every
+disc of a session carries the same snapshots, so any of them is a
+starting point.
+
+When a stage stops part-way (an error, Ctrl-C), the volumes it keeps
+are mastered again without the snapshots whose packs were only on the
+volumes it never staged; a kept volume that cannot be mastered again is
+removed (#813).
 
 Why: someone restoring "latest" from the discs gets the newest snapshot
 on the discs.  If that snapshot needed a pack that is on no disc, the

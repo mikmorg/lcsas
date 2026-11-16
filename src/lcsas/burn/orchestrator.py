@@ -7,6 +7,7 @@ prepare()/execute()/abort() path was removed in #699.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -82,7 +83,7 @@ from lcsas.staging.metadata import (
     pack_disc_bytes,
 )
 from lcsas.staging.repo_marker import repo_markers
-from lcsas.utils.fs import ensure_dir, safe_remove_tree
+from lcsas.utils.fs import dir_size_bytes, ensure_dir, safe_remove_tree
 from lcsas.utils.hashing import sha256_file
 from lcsas.utils.labels import (
     generate_session_id,
@@ -160,6 +161,24 @@ def _burn_unknown_refusal(
         f"you are sure no disc of {'it' if one else 'them'} was ever "
         f"burned, run '{abort_cmd} --never-burned'."
     )
+
+
+def _complete_snapshots(
+    snapshot_needs: dict[str, dict[str, frozenset[str]]], held: set[str],
+) -> dict[str, set[str]]:
+    """Per repo_id, the snapshots whose needed packs are all in *held*."""
+    return {
+        repo_id: {sid for sid, need in needs.items() if need <= held}
+        for repo_id, needs in snapshot_needs.items()
+    }
+
+
+def _snapshot_files(staging_root: Path, repo_id: str) -> list[Path]:
+    """The snapshot files of a repository in a volume's staging tree."""
+    snaps = staging_root / "metadata" / repo_id / "snapshots"
+    if not snaps.is_dir():
+        return []
+    return sorted(p for p in snaps.iterdir() if p.is_file())
 
 
 def unfinished_iso_path(iso_path: Path) -> Path:
@@ -497,85 +516,12 @@ class BurnOrchestrator:
             injector.write_config_summary(self._config)
             injector.write_disc_care(self._config)
 
-            # 6. Create ISO + ECC
-            # Pre-flight: verify staging dir fits in the target media.
-            from lcsas.utils.fs import dir_size_bytes
-            estimated_bytes = dir_size_bytes(staging_root)
-            # #674: the content must leave the medium's ECC share free.
-            # Packs are planned against usable_bytes minus the measured
-            # metadata reserve (#811), so this is a last check.  Checked
-            # before mastering.
-            if (estimated_bytes > media_type.usable_bytes
-                    and not self._allow_low_redundancy):
-                raise LowRedundancyError(
-                    f"Staging directory for {vol_label} is "
-                    f"{estimated_bytes:,} bytes, more than the "
-                    f"{media_type.usable_bytes:,} usable bytes of "
-                    f"{media_type.name} (its capacity less the "
-                    f"{media_type.ecc_overhead_pct}% kept for error "
-                    f"correction). The disc metadata is larger than "
-                    f"measured.",
-                    recovery_hint=(
-                        "Raise metadata_reserve_mb in lcsas.toml and "
-                        "stage again, or pass --allow-low-redundancy "
-                        "to stage it anyway (NOT recommended)."
-                    ),
-                )
-            if estimated_bytes > media_type.capacity_bytes:
-                raise ValueError(
-                    f"Staging directory for {vol_label} is too large: "
-                    f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
-                    f"capacity ({media_type.name}). Reduce pack count or use larger media."
-                )
-            # #665: master and augment under a working name.  The ISO
-            # gets its final name <label>.iso only once ECC and the
-            # size check have passed and its hash is recorded, so a
-            # stage killed part-way (SIGTERM, power loss) never leaves
-            # a finished-looking ISO without RS03 data.
-            work_iso = unfinished_iso_path(iso_output)
-            self._xorriso.create_iso(
-                staging_root, work_iso, vol_label,
-                expected_bytes=estimated_bytes,
+            # 6-8. Master the ISO, apply ECC, record its hash, give it
+            # its final name.
+            iso_sha256, iso_size_bytes = self._master_volume(
+                staging_root, iso_output, vol_label, volume.volume_id,
+                media_type, session_id,
             )
-
-            if media_type.ecc_overhead_pct > 0:
-                self._check_redundancy(
-                    work_iso, vol_label, volume.volume_id,
-                )
-                self._dvdisaster.augment_iso(
-                    work_iso, self._config.default_ecc_redundancy_pct,
-                )
-
-            # 7. Validate ISO size against media capacity  [O4]
-            if not work_iso.exists():
-                raise FileNotFoundError(
-                    f"ISO not created by xorriso: {work_iso}. "
-                    f"Check xorriso output for errors."
-                )
-            iso_size = work_iso.stat().st_size
-            if iso_size > media_type.capacity_bytes:
-                raise ValueError(
-                    f"ISO {iso_output.name} is {iso_size:,} bytes, exceeds "
-                    f"{media_type.name} capacity of "
-                    f"{media_type.capacity_bytes:,} bytes"
-                )
-
-            # 8. Record the hash and length, THEN give the ISO its
-            # final name: a <label>.iso on disk always has its hash
-            # on record (an empty hash means staging never finished).
-            # The length is what device read-back verification hashes
-            # against once the ISO itself is cleaned up (BURN-04).
-            iso_sha256 = sha256_file(work_iso)
-            iso_size_bytes = iso_size
-            update_session_volume_iso(
-                self._conn,
-                session_id=session_id,
-                volume_id=volume.volume_id,
-                iso_path=str(iso_output),
-                iso_sha256=iso_sha256,
-                iso_size_bytes=iso_size_bytes,
-            )
-            os.replace(work_iso, iso_output)
         except BaseException:
             self._conn.rollback()  # drop any uncommitted partial state
             # Removes volume_packs links and the session_volumes row too,
@@ -599,6 +545,102 @@ class BurnOrchestrator:
             iso_sha256=iso_sha256,
             iso_size_bytes=iso_size_bytes,
         )
+
+    def _master_volume(
+        self,
+        staging_root: Path,
+        iso_output: Path,
+        vol_label: str,
+        volume_id: int,
+        media_type: MediaType,
+        session_id: str,
+    ) -> tuple[str, int]:
+        """Master a volume's staging tree into its ISO (steps 6-8 of
+        :meth:`_stage_single_volume`; also :meth:`_refinalise_kept`).
+
+        Checks the tree's size, masters it under the working name, applies
+        RS03 on ECC media, checks the ISO's size, records its hash and
+        length on the session volume, then gives it its final name.
+        Returns ``(sha256, size)``.  The caller cleans up on failure.
+        """
+        # 6. Create ISO + ECC
+        # Pre-flight: verify staging dir fits in the target media.
+        estimated_bytes = dir_size_bytes(staging_root)
+        # #674: the content must leave the medium's ECC share free.
+        # Packs are planned against usable_bytes minus the measured
+        # metadata reserve (#811), so this is a last check.  Checked
+        # before mastering.
+        if (estimated_bytes > media_type.usable_bytes
+                and not self._allow_low_redundancy):
+            raise LowRedundancyError(
+                f"Staging directory for {vol_label} is "
+                f"{estimated_bytes:,} bytes, more than the "
+                f"{media_type.usable_bytes:,} usable bytes of "
+                f"{media_type.name} (its capacity less the "
+                f"{media_type.ecc_overhead_pct}% kept for error "
+                f"correction). The disc metadata is larger than "
+                f"measured.",
+                recovery_hint=(
+                    "Raise metadata_reserve_mb in lcsas.toml and "
+                    "stage again, or pass --allow-low-redundancy "
+                    "to stage it anyway (NOT recommended)."
+                ),
+            )
+        if estimated_bytes > media_type.capacity_bytes:
+            raise ValueError(
+                f"Staging directory for {vol_label} is too large: "
+                f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
+                f"capacity ({media_type.name}). Reduce pack count or use larger media."
+            )
+        # #665: master and augment under a working name.  The ISO
+        # gets its final name <label>.iso only once ECC and the
+        # size check have passed and its hash is recorded, so a
+        # stage killed part-way (SIGTERM, power loss) never leaves
+        # a finished-looking ISO without RS03 data.
+        work_iso = unfinished_iso_path(iso_output)
+        self._xorriso.create_iso(
+            staging_root, work_iso, vol_label,
+            expected_bytes=estimated_bytes,
+        )
+
+        if media_type.ecc_overhead_pct > 0:
+            self._check_redundancy(
+                work_iso, vol_label, volume_id,
+            )
+            self._dvdisaster.augment_iso(
+                work_iso, self._config.default_ecc_redundancy_pct,
+            )
+
+        # 7. Validate ISO size against media capacity  [O4]
+        if not work_iso.exists():
+            raise FileNotFoundError(
+                f"ISO not created by xorriso: {work_iso}. "
+                f"Check xorriso output for errors."
+            )
+        iso_size = work_iso.stat().st_size
+        if iso_size > media_type.capacity_bytes:
+            raise ValueError(
+                f"ISO {iso_output.name} is {iso_size:,} bytes, exceeds "
+                f"{media_type.name} capacity of "
+                f"{media_type.capacity_bytes:,} bytes"
+            )
+
+        # 8. Record the hash and length, THEN give the ISO its
+        # final name: a <label>.iso on disk always has its hash
+        # on record (an empty hash means staging never finished).
+        # The length is what device read-back verification hashes
+        # against once the ISO itself is cleaned up (BURN-04).
+        iso_sha256 = sha256_file(work_iso)
+        update_session_volume_iso(
+            self._conn,
+            session_id=session_id,
+            volume_id=volume_id,
+            iso_path=str(iso_output),
+            iso_sha256=iso_sha256,
+            iso_size_bytes=iso_size,
+        )
+        os.replace(work_iso, iso_output)
+        return iso_sha256, iso_size
 
     def _check_redundancy(
         self, iso: Path, vol_label: str, volume_id: int,
@@ -955,10 +997,12 @@ class BurnOrchestrator:
 
         # #657: only snapshots whose packs are all on discs (durable
         # volumes, or this session's volumes) go onto this session's
-        # discs.  Computed once, before any side effect.
+        # discs.  Walked once, before any side effect; each volume then
+        # takes the snapshots that the packs staged up to it complete
+        # (#813).
         session_packs = {p.sha256 for _packs, _b in volume_plans
                          for p in _packs}
-        snapshot_allow, left_out, unchecked = self._snapshot_coverage(
+        snapshot_needs, left_out, unchecked = self._snapshot_coverage(
             session_packs)
 
         # #753: every repository of the plan has its mirror data, checked
@@ -1028,12 +1072,13 @@ class BurnOrchestrator:
             ensure_dir(session_dir)
             self._stage_volumes(
                 volume_plans, mt, session_id, session_dir, for_location,
-                snapshot_allow, manifests, iso_paths,
+                snapshot_needs, manifests, iso_paths,
             )
         except BaseException:
             self._snapshot_allow = None
             self._after_failed_stage(
                 session_id, session_dir, manifests, len(volume_plans),
+                snapshot_needs, mt,
             )
             raise
 
@@ -1057,7 +1102,7 @@ class BurnOrchestrator:
         session_id: str,
         session_dir: Path,
         for_location: str | None,
-        snapshot_allow: dict[str, set[str]],
+        snapshot_needs: dict[str, dict[str, frozenset[str]]],
         manifests: list[BurnManifest],
         iso_paths: list[Path],
     ) -> None:
@@ -1066,13 +1111,23 @@ class BurnOrchestrator:
         Appends each finished volume to *manifests* and *iso_paths* as it
         is done, so a caller that catches a failure knows which volumes
         were kept.
+
+        *snapshot_needs* is, per repo_id, each snapshot's packs that are
+        on no durable volume (:meth:`_snapshot_coverage`).  Every volume
+        carries the snapshots whose needed packs are all in this session
+        (#657), so any disc of the session is a starting point.  When the
+        stage stops part-way, :meth:`_after_failed_stage` takes off the
+        kept volumes the snapshots that need a volume that was never
+        staged (#813).
         """
         # #676: above every label number ever issued, not only those of
         # the volumes still in the catalog.
         seq = next_label_seq(self._conn, self._config.label_prefix)
 
         # #657: _stage_single_volume reads this for the whole session.
-        self._snapshot_allow = snapshot_allow
+        session_packs = {p.sha256 for packs, _b in volume_plans for p in packs}
+        self._snapshot_allow = _complete_snapshots(snapshot_needs,
+                                                   session_packs)
 
         for i, (selected_packs, total_bytes) in enumerate(volume_plans):
             vol_label = generate_volume_label(
@@ -1152,8 +1207,15 @@ class BurnOrchestrator:
         session_dir: Path,
         manifests: list[BurnManifest],
         planned: int,
+        snapshot_needs: dict[str, dict[str, frozenset[str]]],
+        media_type: MediaType,
     ) -> None:
         """Clean up after :meth:`stage` failed inside its session (#753).
+
+        Each kept volume carries the snapshots the whole planned session
+        would complete (#657).  It is re-finalised first (#813,
+        :meth:`_refinalise_kept`) so it carries only those its kept
+        volumes and the durable ones complete.
 
         With no finished volume the session is removed: its staging
         directory first, then its row (a row with no directory is the
@@ -1165,6 +1227,8 @@ class BurnOrchestrator:
         """
         try:
             self._conn.rollback()
+            self._refinalise_kept(session_id, session_dir, snapshot_needs,
+                                  media_type)
             kept = [
                 str(r[0]) for r in self._conn.execute(
                     "SELECT v.label FROM session_volumes sv "
@@ -1184,8 +1248,10 @@ class BurnOrchestrator:
                 return
             import contextlib
             with contextlib.suppress(OSError):
-                self._write_session_manifest(session_id, session_dir,
-                                             manifests)
+                self._write_session_manifest(
+                    session_id, session_dir,
+                    [m for m in manifests if m.volume_label in kept],
+                )
             _logger.error(
                 "Staging stopped after %d of %d volume(s). Burn session %s "
                 "keeps the volume(s) staged before the failure: %s. Burn "
@@ -1200,25 +1266,108 @@ class BurnOrchestrator:
                 "%s. See 'lcsas session list'.", session_id, exc,
             )
 
+    def _refinalise_kept(
+        self,
+        session_id: str,
+        session_dir: Path,
+        snapshot_needs: dict[str, dict[str, frozenset[str]]],
+        media_type: MediaType,
+    ) -> None:
+        """Take off the kept volumes of a stopped stage the snapshots they
+        cannot restore (#813).
+
+        The volumes were staged with every snapshot the whole planned
+        session completes (#657).  When the stage stops part-way, a
+        snapshot that needs a volume that was never staged would be
+        "latest" on those discs and could not be restored.  For each kept
+        volume carrying such a snapshot file: its recorded ISO hash is
+        blanked first (an interrupted re-master is then refused by the
+        burn, #665), the snapshot files are removed from its staging
+        tree, and the ISO is mastered again.  A volume that cannot be
+        mastered again is deleted, as a failed volume is.  A repository
+        that was not filtered (no entry in *snapshot_needs*) is left as
+        it is.
+        """
+        if not snapshot_needs:
+            return
+        rows = self._conn.execute(
+            "SELECT sv.volume_id, sv.iso_path, v.label FROM session_volumes sv "
+            "JOIN volumes v USING (volume_id) "
+            "WHERE sv.session_id = ? ORDER BY v.label",
+            (session_id,),
+        ).fetchall()
+        if not rows:
+            return
+        placeholders = ",".join("?" * len(rows))
+        kept_packs = {
+            str(r[0]) for r in self._conn.execute(
+                f"SELECT p.sha256 FROM volume_packs vp JOIN packs p "
+                f"USING (pack_id) WHERE vp.volume_id IN ({placeholders})",
+                [r[0] for r in rows],
+            )
+        }
+        allow = _complete_snapshots(snapshot_needs, kept_packs)
+        for volume_id, iso_path, label in rows:
+            staging_root = session_dir / str(label)
+            extra = [
+                snap
+                for repo_id, keep in allow.items()
+                for snap in _snapshot_files(staging_root, repo_id)
+                if snap.name not in keep
+            ]
+            if not extra:
+                continue
+            iso_output = Path(iso_path)
+            update_session_volume_iso(
+                self._conn, session_id=session_id, volume_id=volume_id,
+                iso_path=str(iso_output), iso_sha256="", iso_size_bytes=None,
+            )
+            try:
+                iso_output.unlink(missing_ok=True)
+                for snap in extra:
+                    snap.unlink()
+                self._master_volume(
+                    staging_root, iso_output, str(label), volume_id,
+                    media_type, session_id,
+                )
+            except Exception as exc:
+                self._conn.rollback()
+                delete_volume(self._conn, volume_id)
+                with contextlib.suppress(OSError):
+                    unfinished_iso_path(iso_output).unlink(missing_ok=True)
+                _logger.error(
+                    "Volume %s carried %d snapshot(s) whose packs are not "
+                    "all on the kept volumes, and could not be mastered "
+                    "again without them (%s); it was removed.",
+                    label, len(extra), exc,
+                )
+                continue
+            _logger.warning(
+                "Volume %s was mastered again without %d snapshot(s) whose "
+                "packs are not all on the kept volumes.", label, len(extra),
+            )
+
     def _snapshot_coverage(
         self, session_packs: set[str],
-    ) -> tuple[dict[str, set[str]], dict[str, list[LeftOutSnapshot]],
-               dict[str, str]]:
+    ) -> tuple[dict[str, dict[str, frozenset[str]]],
+               dict[str, list[LeftOutSnapshot]], dict[str, str]]:
         """#657: which snapshot files may go on this session's discs.
 
-        For every repository with a mirror, walk its snapshots with the
-        tier-3 reader and keep those whose packs are all held: on a
-        durable volume, or in *session_packs*.  Returns
-        ``(allow by repo_id, left out by repo name, unchecked by repo
-        name with the reason)``.  A repository that cannot be checked
-        (no password_file, or the walk fails) is not filtered — every
+        For every repository with a mirror, walk its snapshots once with
+        the tier-3 reader and find, per snapshot, the packs it needs that
+        are on no durable volume.  Returns ``(needs by repo_id: snapshot
+        id -> those packs, left out by repo name, unchecked by repo name
+        with the reason)``.  A snapshot is left out when *session_packs*
+        do not hold all its needed packs; :meth:`_stage_volumes` decides
+        per volume (#813).  A repository that cannot be checked (no
+        password_file, or the walk fails) is not filtered — every
         snapshot is copied, as before — and is reported as unchecked.
         """
         from lcsas.db.queries import get_archived_pack_ids
         from lcsas.db.repos import get_repo
         from lcsas.restore.restic_fallback import IntegrityError
 
-        allow: dict[str, set[str]] = {}
+        needs: dict[str, dict[str, frozenset[str]]] = {}
         left_out: dict[str, list[LeftOutSnapshot]] = {}
         unchecked: dict[str, str] = {}
         for repo_id, mirror in sorted(self._get_mirror_paths().items()):
@@ -1230,7 +1379,7 @@ class BurnOrchestrator:
             if password_file is None or not password_file.is_file():
                 unchecked[repo.name] = "no password_file configured"
                 continue
-            held = get_archived_pack_ids(self._conn, repo_id) | session_packs
+            held = get_archived_pack_ids(self._conn, repo_id)
             try:
                 cov = snapshot_coverage(mirror, password_file, held)
             except (IntegrityError, OSError, ValueError, KeyError) as exc:
@@ -1241,10 +1390,16 @@ class BurnOrchestrator:
                     repo.name, exc,
                 )
                 continue
-            allow[repo_id] = cov.complete
-            if cov.left_out:
-                left_out[repo.name] = cov.left_out
-        return allow, left_out, unchecked
+            needs[repo_id] = dict(cov.missing)
+            rest = [
+                LeftOutSnapshot(snapshot_id=sid, time=cov.times.get(sid, ""),
+                                missing_packs=len(need - session_packs))
+                for sid, need in cov.missing.items()
+                if not need <= session_packs
+            ]
+            if rest:
+                left_out[repo.name] = rest
+        return needs, left_out, unchecked
 
     def burn_session(
         self,
