@@ -29,7 +29,8 @@ def _two_receipts(env) -> tuple[Path, Path]:  # noqa: F811
     first = _burn(env, skip_burn=False)
     older = first.parent.parent / "older.json"
     shutil.move(first, older)
-    second = _burn(env, skip_burn=False)
+    # #814: a second disc at the same location needs --reburn.
+    second = _burn(env, skip_burn=False, reburn=True)
     newer = second.parent.parent / "newer.json"
     shutil.move(second, newer)
     return older, newer
@@ -123,7 +124,8 @@ def test_older_failed_receipt_does_not_ask_for_a_reburn(
     older = first.parent.parent / "older.json"
     shutil.move(first, older)
     assert json.loads(older.read_text())["verify_passed"] is False
-    second = _burn(env, skip_burn=False)
+    # #814: a second disc at the same location needs --reburn.
+    second = _burn(env, skip_burn=False, reburn=True)
     cfg = _rebuilt(env, tmp_path)
     _import(cfg, second, caplog)
 

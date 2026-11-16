@@ -239,6 +239,7 @@ class ToolBundler:
                     "lib2to3",      # Python 2→3 converter
                     "config-*",     # build artifacts (~25 MB)
                     "*.pyc",        # recompiled on import
+                    "*.pyo",
                     "__pycache__",
                 ),
                 dirs_exist_ok=True,
@@ -286,6 +287,7 @@ class ToolBundler:
                 ignore=shutil.ignore_patterns(
                     "__pycache__",
                     "*.pyc",
+                    "*.pyo",
                     "tests",
                     "test",
                 ),

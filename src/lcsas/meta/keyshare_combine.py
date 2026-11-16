@@ -26,8 +26,7 @@
 #    python3 keyshare_combine.py ~/card1.txt ~/card2.txt > ~/repo.key
 #    sh /mnt/restore.sh --key ~/repo.key --target ~/restored
 #
-#  Give --key a full path: restore.sh moves to another folder before
-#  it reads the file, so a short name such as repo.key is not found.
+#  Give each file by its full path, as above (~/repo.key).
 #
 #  ...or paste the printed password at restore.sh's "Password:" prompt.
 #

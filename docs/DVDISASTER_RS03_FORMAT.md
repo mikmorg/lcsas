@@ -71,17 +71,62 @@ In augmented-image mode (what LCSAS uses) the redundancy is **not
 configurable** — per the dvdisaster manual, "Setting the redundancy is
 not possible due to constraints in the format. The codec will
 automatically choose the size of the smallest fitting medium." The
-image is padded up to the smallest medium on the ladder
+image is padded up to a medium on the ladder
 CD → DVD → DVD9 → BD25 → BD50 → BDXL100 and the padding is filled with
 parity, so the *effective* redundancy is `(padded − data) / data`
 (LCSAS logs it after each augmentation).
+
+Which medium? The smallest one that still leaves at least 8 parity
+roots (§4.1). So an image moves up a rung once it fills about 96.5 % of
+the smaller medium, not when it stops fitting. The medium sizes, in
+2048-byte sectors (`src/dvdisaster.h`):
+
+| Medium | Sectors | Augmented image (bytes) |
+|--------|---------|-------------------------|
+| CD | 359,424 | 735,836,160 |
+| DVD | 2,295,104 | 4,700,160,000 |
+| DVD9 | 4,171,712 | 8,543,324,160 |
+| BD | 11,826,176 | 24,219,924,480 |
+| BD dual layer | 23,652,352 | 48,439,848,960 |
+| BDXL triple layer | 47,305,728 | 96,881,786,880 |
+
+The augmented image is `255 × floor(sectors / 255)` sectors. The BD
+sizes are the BD-R sizes with defect management. The installed
+dvdisaster 0.79.10 has only these (its binary holds 11,826,176 and not
+the 12,219,392 no-defect-management size); newer patch-level builds add
+`--no-bdr-defect-management` for the larger size, which LCSAS does not
+pass. The CD and DVD rows were measured; the others follow from the
+same formula and the sizes in the binary.
+
+Measured with dvdisaster 0.79.10 (#732), at the CD → DVD edge
+(`dataSectors + 2 > 246 × 1409`):
+
+- a 346,612-sector ISO stays on the CD rung: 735,836,160 bytes,
+  8 roots (3.7 % effective redundancy);
+- a 346,613-sector ISO moves to the DVD rung: 4,700,160,000 bytes.
+
+**Thin band and padding (#732).** Just under the 8-root edge an image
+gets only 3.7–5 % parity. LCSAS refuses less than 5 %, so a
+part-filled last volume there is mastered again with zero padding
+inside the ISO volume (xorriso `-padding`), just enough to cross the
+edge; dvdisaster then puts it on the next rung with ample parity. The
+padding must be *inside* the ISO volume: dvdisaster looks for its ECC
+header right after the volume size in the ISO's primary volume
+descriptor (`FindRS03HeaderInImage`, `src/rs03-recognize.c`), so zeros
+appended after the volume would hide the header. The padded image
+verifies and repairs like any other
+(`tests/integration/test_ecc_repair.py`).
 
 - More slack between the data size and the next medium size = more
   parity = more tolerance for unreadable sectors
 - The ECC data is appended to the end of the ISO, so the ISO
   remains a valid (readable) ISO 9660 image
 - (Only the separate *error-correction-file* mode accepts `-n`; there
-  a bare number means Reed-Solomon roots, and `%` means percent.)
+  a bare number means Reed-Solomon roots, and `%` means percent.
+  dvdisaster 0.79.10 also takes `--debug -n <sectors>` to force the
+  medium size of an augmented image; LCSAS does not use it, because
+  `lcsas-ecc augment` has no such option and dvdisaster itself warns
+  that a forced size can make a damaged image harder to recover.)
 
 ### 2.3 Interleaving
 
@@ -268,7 +313,7 @@ interleaving (§2.3).
 ### 4.3 Worked example (verify by hand)
 
 A 3 000 000-byte payload masters to a **1648-sector** ISO.  Augmented to
-the smallest fitting medium it lands on the BDXL ladder with these
+the smallest fitting medium it lands on the CD rung with these
 header values (parsed from a real augmented image — see the conformance
 test):
 
@@ -354,8 +399,8 @@ lcsas-ecc augment <image> [--out F]   # dvdisaster equivalent: dvdisaster -i ima
 ```
 
 Computes RS03 parity data and appends it to the ISO file, padding the
-image up to the smallest fitting medium size (no redundancy knob:
-augmented-image redundancy is not settable — see §2.2).  This is what
+image up to the smallest medium that leaves at least 8 roots (no
+redundancy knob: augmented-image redundancy is not settable — see §2.2).  This is what
 the burn pipeline (`src/lcsas/ecc/dvdisaster.py`) calls to ECC-protect
 each volume.
 
@@ -434,7 +479,9 @@ dvdisaster's parity.
 ## 7. Practical Notes for LCSAS
 
 - LCSAS uses RS03 augmented images; the redundancy is whatever padding
-  the smallest fitting medium leaves (not configurable — see §2.2)
+  the chosen medium leaves (not configurable — see §2.2). A volume that
+  would get less than 5 % is padded up one rung when that still fits
+  the disc (#732), or refused
 - ECC is applied at the ISO level, AFTER all data is packed
 - The augmented ISO is still a valid ISO 9660 filesystem — the ECC
   data appears after the filesystem boundary

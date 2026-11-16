@@ -73,20 +73,10 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
             if args.volume:
                 orch.abort_volume(args.volume, never_burned=never_burned)
             else:
-                from lcsas.consolidate.merger import (
-                    release_consolidation_sources,
-                )
-                from lcsas.db.sessions import resolve_session_id
-                session_id = resolve_session_id(conn, args.ref)
-                orch.abort_session(session_id, never_burned=never_burned)
                 # #677: a consolidation session's sources go back to
-                # VERIFIED; nothing is left to finish them.
-                released = release_consolidation_sources(conn, session_id)
-                if released:
-                    logger.info(
-                        "Returned %d consolidation source volume(s) to "
-                        "VERIFIED: %s", len(released), ", ".join(released),
-                    )
+                # VERIFIED inside abort_session (clean_session, #817), and
+                # it logs their labels.
+                orch.abort_session(args.ref, never_burned=never_burned)
         except ValueError as e:
             logger.error("%s", e)
             return 1

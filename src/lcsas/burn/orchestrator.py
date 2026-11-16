@@ -69,10 +69,17 @@ from lcsas.db.volumes import (
 from lcsas.ecc.dvdisaster import (
     MIN_EFFECTIVE_REDUNDANCY_PCT,
     DVDisasterRunner,
+    rs03_pad_target_bytes,
+    rs03_redundancy_pct,
+    rs03_staged_image_bytes,
     smallest_fitting_medium_bytes,
 )
 from lcsas.exceptions import StagingError
-from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
+from lcsas.iso.xorriso import (
+    XORRISO_DEFAULT_PADDING_BYTES,
+    MediaStatus,
+    XorrisoRunner,
+)
 from lcsas.packs.snapshot_coverage import LeftOutSnapshot, snapshot_coverage
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
@@ -229,6 +236,8 @@ class AbortSummary:
     packs_reclaimed: int
     bytes_reclaimed: int
     labels: list[str] = field(default_factory=list)
+    # Consolidation sources returned to VERIFIED (#677, #817).
+    sources_released: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -524,6 +533,10 @@ class BurnOrchestrator:
             )
 
             if media_type.ecc_overhead_pct > 0:
+                self._pad_for_rs03(
+                    staging_root, work_iso, vol_label, volume.volume_id,
+                    media_type,
+                )
                 self._check_redundancy(
                     work_iso, vol_label, volume.volume_id,
                 )
@@ -584,6 +597,46 @@ class BurnOrchestrator:
             iso_sha256=iso_sha256,
             iso_size_bytes=iso_size_bytes,
         )
+
+    def _pad_for_rs03(
+        self, staging_root: Path, iso: Path, vol_label: str,
+        volume_id: int, media_type: MediaType,
+    ) -> None:
+        """Pad a part-filled ISO so its RS03 parity clears the floor (#732).
+
+        An ISO just under a lower rung of dvdisaster's ladder (say 4.5 GB
+        on a BD25 volume) would get only a few percent of parity.  Master
+        it again with enough zero padding inside the ISO volume that
+        dvdisaster moves it up a rung, where the parity is large.  Nothing
+        changes when the ISO already clears the floor, or when no rung
+        that fits the medium would (then _check_redundancy decides).
+        """
+        iso_size = iso.stat().st_size
+        if iso_size <= 0:
+            return
+        try:
+            target = rs03_pad_target_bytes(iso_size, media_type.capacity_bytes)
+        except ValueError:
+            return  # too large for any medium: augment_iso reports it
+        if target is None or target <= iso_size:
+            return
+        self._xorriso.create_iso(
+            staging_root, iso, vol_label, expected_bytes=target,
+            padding_bytes=target - iso_size + XORRISO_DEFAULT_PADDING_BYTES,
+        )
+        padded = iso.stat().st_size
+        if padded < target:
+            raise RuntimeError(
+                f"Padding the ISO of {vol_label} for RS03 left it at "
+                f"{padded:,} bytes, short of the {target:,} needed."
+            )
+        detail = (
+            f"ISO padded from {iso_size:,} to {padded:,} bytes so RS03 "
+            f"parity is {rs03_redundancy_pct(padded):.0f}%, not "
+            f"{rs03_redundancy_pct(iso_size):.1f}% (#732)"
+        )
+        _logger.info("Volume %s: %s.", vol_label, detail)
+        add_event(self._conn, volume_id, "NOTE", detail=detail)
 
     def _check_redundancy(
         self, iso: Path, vol_label: str, volume_id: int,
@@ -946,10 +999,11 @@ class BurnOrchestrator:
         # repository metadata) AND its ISO — ISOs persist for the whole
         # burn session (BURN-06), so the padded ISO sizes are SUMMED, not
         # maxed.  On ECC media (ecc_overhead_pct > 0) dvdisaster's RS03
-        # augmented mode pads each ISO up to the smallest fitting medium (a 1 GB
-        # ISO becomes a 4.7 GB DVD image), and augment_iso additionally
-        # duplicates the ISO while augmenting — budget one extra copy of
-        # the largest padded ISO.
+        # augmented mode pads each ISO up to a full medium (a 1 GB ISO
+        # becomes a 4.7 GB DVD image; #732 padding may move a thin one up
+        # a rung, which rs03_staged_image_bytes counts), and augment_iso
+        # additionally duplicates the ISO while augmenting — budget one
+        # extra copy of the largest padded ISO.
         apply_ecc = mt.ecc_overhead_pct > 0
         metadata_reserve = self._config.metadata_reserve_bytes
         required_bytes = 0
@@ -958,7 +1012,8 @@ class BurnOrchestrator:
             # ~5% ISO 9660 filesystem overhead on top of the staged tree.
             est_iso = int(vol_bytes * 1.05) + metadata_reserve
             padded_iso = (
-                smallest_fitting_medium_bytes(est_iso) if apply_ecc else est_iso
+                rs03_staged_image_bytes(est_iso, mt.capacity_bytes)
+                if apply_ecc else est_iso
             )
             required_bytes += vol_bytes + metadata_reserve + padded_iso
             max_padded_iso = max(max_padded_iso, padded_iso)
@@ -1228,8 +1283,14 @@ class BurnOrchestrator:
         device: str | None = None,
         skip_burn: bool = False,
         interactive: bool = True,
+        reburn: bool = False,
     ) -> list[BurnReceipt]:
-        """Burn all ISOs in a burn session to disc, tagged with a location.
+        """Burn the ISOs of a burn session to disc, tagged with a location.
+
+        A volume that already has a verified disc in service at *location*
+        is skipped (#814): re-running a PARTIAL burn session burns only
+        the volumes that still need a disc there.  *reburn* burns those
+        volumes again too (a new disc replaces the one recorded there).
 
         Args:
             session_ref: Burn session ID or 'latest'.
@@ -1260,6 +1321,29 @@ class BurnOrchestrator:
 
         # Check every volume BEFORE the first prompt for a blank disc.
         self._burn_preflight(session_id, session_vols)
+
+        # #814: a volume with a verified disc at this location is done.
+        if not reburn:
+            from lcsas.db.volume_copies import has_verified_disc_at
+
+            done = [
+                sv for sv in session_vols
+                if has_verified_disc_at(self._conn, sv.volume_id, location)
+            ]
+            for sv in done:
+                _logger.info(
+                    "Volume %s already has a verified disc at %s; not "
+                    "burning it again (use --reburn to replace that disc).",
+                    get_volume_by_id(self._conn, sv.volume_id).label,
+                    location,
+                )
+            session_vols = [sv for sv in session_vols if sv not in done]
+            if not session_vols:
+                _logger.info(
+                    "Every volume of burn session %s already has a verified "
+                    "disc at %s. Nothing to burn.", session_id, location,
+                )
+                return []
 
         receipts: list[BurnReceipt] = []
         total = len(session_vols)
@@ -1297,9 +1381,19 @@ class BurnOrchestrator:
                 vol.status == "DEPRECATED"
                 and deprecated_by_loss(self._conn, sv.volume_id)
             )
+            # #810: a BURNED volume (a disc of it exists, but none is
+            # recorded: a catalog rebuilt from discs) stays BURNED for the
+            # whole burn.  It becomes VERIFIED when this disc passes, and
+            # stays BURNED when the disc fails or the burn is stopped.  It
+            # never goes through BURNING, so neither a failure nor a hard
+            # kill can turn it into a STAGING volume that 'session abort'
+            # or 'catalog reconcile --fix' would delete.
+            was_burned = vol.status == "BURNED"
+            # Only a never-burned (STAGING) volume enters BURNING, and
+            # only it goes back to STAGING when the burn fails.
+            marks_burning = not is_reburn and not was_burned
 
-            if not is_reburn:
-                # Update status
+            if marks_burning:
                 update_status(self._conn, sv.volume_id, "BURNING", commit=False)
                 self._conn.commit()
 
@@ -1332,7 +1426,15 @@ class BurnOrchestrator:
                     if verify_passed:
                         verified_at = datetime.now(UTC).isoformat()
 
-                if not is_reburn:
+                if was_burned:
+                    # #810: VERIFIED once a disc passes; a failed disc
+                    # leaves it BURNED (the VERIFY_FAIL event above keeps
+                    # the attempt).  No VERIFY_FAIL_REBURN: that event
+                    # says an earlier disc was recorded, and none is.
+                    if verify_passed:
+                        update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
+                        mark_closed(self._conn, sv.volume_id, commit=False)
+                elif not is_reburn:
                     if verify_passed:
                         # Finalize volume status (atomic: status + close + disc row)
                         update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
@@ -1419,9 +1521,11 @@ class BurnOrchestrator:
             except BaseException as original_exc:
                 # BaseException: Ctrl-C during a burn must also return the
                 # volume to STAGING, or the next run finds it BURNING (#668).
+                # Only a volume this run moved to BURNING goes back; a
+                # BURNED one never left BURNED (#810).
                 try:
                     self._conn.rollback()
-                    if not is_reburn:
+                    if marks_burning:
                         update_status(self._conn, sv.volume_id, "STAGING")
                 except Exception as cleanup_exc:
                     _logger.error(
@@ -1505,11 +1609,13 @@ class BurnOrchestrator:
             )
 
         # #668: a burn interrupted hard (killed, power loss) leaves its
-        # volume in BURNING.  With no disc recorded it was never burned
-        # as far as the catalog knows: put it back to STAGING so this run
-        # burns it.  BURNING with a disc recorded is not a state the burn
-        # writes; refuse it rather than guess.
+        # volume in BURNING.  With no disc recorded it goes back to the
+        # status it had before that burn, so this run burns it: STAGING,
+        # or BURNED when an older LCSAS moved a BURNED volume to BURNING
+        # (#810, status_before_burning).  BURNING with a disc recorded is
+        # not a state the burn writes; refuse it rather than guess.
         from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volumes import status_before_burning
 
         for sv in session_vols:
             vol = get_volume_by_id(self._conn, sv.volume_id)
@@ -1526,11 +1632,13 @@ class BurnOrchestrator:
                         f"'lcsas verify {vol.label} --disc'."
                     ),
                 )
+            before = status_before_burning(self._conn, sv.volume_id)
             _logger.warning(
                 "Volume %s was left BURNING by an interrupted burn; "
-                "resetting it to STAGING and burning it again.", vol.label,
+                "resetting it to %s and burning it again.", vol.label,
+                before,
             )
-            update_status(self._conn, sv.volume_id, "STAGING")
+            update_status(self._conn, sv.volume_id, before)
 
     def _assert_blank_media(self, device: str, label: str) -> None:
         """Refuse to burn onto a disc that already carries data (FUP-01).
@@ -1705,7 +1813,7 @@ class BurnOrchestrator:
         *,
         force: bool = False,
         never_burned: bool = False,
-    ) -> None:
+    ) -> list[str]:
         """Remove staged ISOs and staging directories for a burn session.
 
         Refuses to clean a burn session whose volumes were never burned: the
@@ -1725,6 +1833,13 @@ class BurnOrchestrator:
         #758) is refused the same way, unless *never_burned*: the owner
         confirms no disc of it was burned, and it is then deleted like a
         never-burned volume.
+
+        With ``force=True`` the burn session is aborted, so when it is a
+        consolidation session its CONSOLIDATING sources go back to
+        VERIFIED, as ``session abort`` always did (#677, #817).  Returns
+        their labels (empty for any other session, and without *force*:
+        a plain clean after the burn keeps them CONSOLIDATING for
+        ``consolidate --deprecate``).
 
         The burn receipts inside the staging tree die here too — that is
         fine: they are duplicates of the durable files under
@@ -1792,6 +1907,21 @@ class BurnOrchestrator:
         # ABORTED value); the log carries the distinction.
         update_session_status(self._conn, session_id, "CLEANED")
 
+        if not force:
+            return []
+        # #817: 'stage --clean --force' aborts the session as 'session
+        # abort' does, so a consolidation's sources go back to VERIFIED
+        # in both; nothing is left to finish them.
+        from lcsas.consolidate.merger import release_consolidation_sources
+
+        released = release_consolidation_sources(self._conn, session_id)
+        if released:
+            _logger.info(
+                "Returned %d consolidation source volume(s) to VERIFIED: %s",
+                len(released), ", ".join(released),
+            )
+        return released
+
     def abort_session(
         self, session_ref: str = "latest", *, never_burned: bool = False,
     ) -> AbortSummary:
@@ -1815,7 +1945,9 @@ class BurnOrchestrator:
         summary = self._reclaim_summary([vid for vid, _label in strandable])
         summary.labels = [label for _vid, label in strandable]
 
-        self.clean_session(session_id, force=True, never_burned=never_burned)
+        summary.sources_released = self.clean_session(
+            session_id, force=True, never_burned=never_burned,
+        )
 
         logger.info(
             "Aborted session %s: deleted %d volume(s)%s, reclaimed %d "

@@ -98,11 +98,24 @@ The end-to-end flow inside a single session:
      only fails when the disc metadata outgrew `metadata_reserve_mb`
      (#674).
    - Before ECC, the RS03 redundancy is computed from the ISO size: RS03
-     pads the image to the smallest fitting medium, and the padding is
-     the parity. Below 5 % (`MIN_EFFECTIVE_REDUNDANCY_PCT`) the stage
-     fails and names the volume and the percentage (#674). This also
-     catches a small last volume that lands just under a smaller rung
-     (a 4.6 GB ISO pads to a DVD, not to a BD).
+     pads the image up to a medium on dvdisaster's ladder, and the
+     padding is the parity. dvdisaster moves an image up a rung once the
+     smaller medium would leave it fewer than 8 parity roots (about
+     96.5 % full), so the parity on a rung never drops below about 3.7 %.
+   - A part-filled last volume can still land in the thin band just
+     under a smaller rung (a 4.5 GB ISO on a BD25 volume gets about 4.4 %
+     on the DVD rung). Stage then masters the ISO again with zero padding
+     inside the ISO volume (xorriso `-padding`), just enough that
+     dvdisaster moves it up one rung (4.5 GB becomes 4.53 GB and lands on
+     DVD9 with about 88 % parity), as long as that rung still fits the
+     medium. The padding is recorded as a `NOTE` event on the volume
+     (#732). It pads to the next rung only, not to the medium's own rung:
+     the parity there is already far above the floor, and a full pad
+     would turn a tiny last volume into a 24 GB image.
+   - When no rung that fits the medium clears 5 %
+     (`MIN_EFFECTIVE_REDUNDANCY_PCT`), the stage fails and names the
+     volume and the percentage (#674). That happens only on the medium's
+     own rung (an over-full volume).
      `lcsas stage --allow-low-redundancy` stages it anyway and records
      the percentage as a `NOTE` event on the volume. Not recommended.
    - Post-ECC validation: rejects an ISO larger than
@@ -321,16 +334,22 @@ the same volumes to a different location.
 5. `--no-prompt` — do not pause between discs (scripted/cdemu runs). Without
    it, a multi-disc burn pauses before each disc to load a blank and after
    each to write the label.
-6. Internally: `orch.burn_session(session_ref=..., location=..., device=...,
-   interactive=not --no-prompt)` (`cmd_burn_session`,
+6. `--reburn` — also burn the volumes that already have a verified disc at
+   `--location`. Without it they are skipped (#814).
+7. Internally: `orch.burn_session(session_ref=..., location=..., device=...,
+   interactive=not --no-prompt, reburn=--reburn)` (`cmd_burn_session`,
    `BurnOrchestrator.burn_session`).
 
-**Expected outcome:** Each volume in the session is burned + verified +
-recorded as a disc at the requested location. Re-burns (a volume already
-`VERIFIED`) skip the status transitions and simply add another
-`volume_copies` row (`BurnOrchestrator.burn_session`). Verify
-failures on re-burns emit `VERIFY_FAIL_REBURN` events without rolling the
-volume backward (`BurnOrchestrator.burn_session`).
+**Expected outcome:** Each volume in the session that has no verified disc
+at the requested location is burned + verified + recorded as a disc there.
+A volume that already has one is skipped unless `--reburn` (#814). Re-burns
+(a volume already `VERIFIED`, here at another location or with `--reburn`)
+skip the status transitions and record the disc at this location: a new
+`volume_copies` row at a new location, or, at a location that already has
+one, the same row updated with the new disc's burn date and verification
+(one row per volume and location) (`BurnOrchestrator.burn_session`,
+`add_volume_copy`). Verify failures on re-burns emit `VERIFY_FAIL_REBURN`
+events without rolling the volume backward (`BurnOrchestrator.burn_session`).
 
 **Variant axes that apply:**
 
@@ -547,9 +566,11 @@ The orchestrator's media handling rules:
 | `MDISC100` | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Same geometry as `BDXL100`; longevity-rated. |
 
 Every production capacity above is a rung on dvdisaster's RS03 medium ladder
-(`RS03_MEDIUM_LADDER_BYTES`). Media types must not be added off the ladder: an
-off-rung capacity pads up to the next rung, burning a disc mostly full of
-padding. Same-capacity media types (M-Disc vs BD-R) must also differ in the enum's
+(`RS03_MEDIUM_LADDER_BYTES`, the nominal capacities). Media types must not be
+added off the ladder: an off-rung capacity pads up to the next rung, burning a
+disc mostly full of padding. dvdisaster's own medium sizes
+(`RS03_MEDIUM_SECTORS`) are a little smaller: a BD image is 24,219,924,480
+bytes, because dvdisaster uses the BD-R size with defect management. Same-capacity media types (M-Disc vs BD-R) must also differ in the enum's
 `family` field, or `Enum` collapses them into aliases.
 
 ### Test media
@@ -573,12 +594,17 @@ the burn pipeline can run dvdisaster-free. See
 [`docs/DVDISASTER_RS03_FORMAT.md`](../DVDISASTER_RS03_FORMAT.md) for the
 on-disc RS03 layout. No `-n` is passed (BURN-07): RS03
 augmented images cannot take a redundancy setting — dvdisaster pads the
-image to the smallest fitting medium (CD → DVD → DVD9 → BD25 → BD50 →
-BDXL100) and the padding *is* the effective redundancy (logged per
-volume after augmentation). The `default_ecc_redundancy_pct` config
-knob is deprecated/ignored, and the staging disk-space pre-flight
-budgets the *padded* ISO size per volume
-(`smallest_fitting_medium_bytes`) plus one temp copy for augmentation.
+image to the smallest medium (CD → DVD → DVD9 → BD25 → BD50 →
+BDXL100) that leaves it at least 8 parity roots, and the padding *is*
+the effective redundancy (logged per volume after augmentation).
+dvdisaster 0.79.10 does take `--debug -n <sectors>` to force a medium
+size, but `lcsas-ecc augment` has no such option, and dvdisaster warns
+that a forced size can make a damaged image harder to recover; so
+LCSAS pads the ISO instead (#732, above). The `default_ecc_redundancy_pct`
+config knob is deprecated/ignored, and the staging disk-space pre-flight
+budgets the augmented size per volume, after any #732 padding
+(`rs03_staged_image_bytes`, which follows dvdisaster's own rule), plus one temp copy for
+augmentation.
 
 Test media (`TEST_TINY`, `ecc_overhead_pct == 0`) is **implicitly
 skipped**: `_stage_single_volume` only
@@ -610,8 +636,9 @@ Session statuses (set by `update_session_status` and
 - **`COMPLETE`** — `burn_session` finished all volumes successfully
   (`BurnOrchestrator.burn_session`).
 - **`PARTIAL`** — `burn_session` succeeded for at least one volume but
-  hit an exception on a later one; the failed volume is rolled back to
-  `STAGING`, others remain `VERIFIED`
+  a later one failed its post-burn verification or hit an exception; the
+  failed volume goes back to the status it had before the burn
+  (`STAGING`, or `BURNED`), others remain `VERIFIED`
   (`BurnOrchestrator.burn_session`).
 - **`CLEANED`** — `clean_session` removed ISOs and the staging directory
   (`BurnOrchestrator.clean_session`).
@@ -619,16 +646,23 @@ Session statuses (set by `update_session_status` and
 Volume statuses (set by `update_status` / `mark_closed`):
 
 - **`STAGING`** — set by `create_volume` during `_stage_single_volume`.
-  Also where a volume falls back if `execute` or `burn_session` raises
-  (`BurnOrchestrator._stage_single_volume`, `BurnOrchestrator.burn_session`).
-- **`BURNING`** — set immediately before `xorriso burn_iso`. A burn
-  killed outright (power loss, `kill -9`) leaves the volume here. The next
-  `lcsas burn --session` puts a BURNING volume with no disc recorded back
-  to `STAGING` and burns it, and it checks this before it asks for a
-  blank disc (#668).
-- **`BURNED`** — set when a burn completes but post-burn `verify_disc`
-  fails. The volume holds at `BURNED` so the owner can investigate
-  (`BurnOrchestrator.burn_session`).
+  Also where a never-burned volume falls back if its burn fails its
+  post-burn verification or raises (`BurnOrchestrator._stage_single_volume`,
+  `BurnOrchestrator.burn_session`, #483).
+- **`BURNING`** — set on a `STAGING` volume immediately before `xorriso
+  burn_iso`. A burn killed outright (power loss, `kill -9`) leaves the
+  volume here. The next `lcsas burn --session` puts a BURNING volume with
+  no disc recorded back to the status it had before that burn (`STAGING`,
+  or `BURNED` when an older LCSAS moved a `BURNED` volume to `BURNING`)
+  and burns it, and it checks this before it asks for a blank disc (#668,
+  #810).
+- **`BURNED`** — a disc of the volume exists, but no verified disc is
+  recorded: a catalog rebuilt from discs records the newest discs like
+  this (no disc record), and `catalog import-receipts` records a disc
+  burned with `burn-iso --no-verify` like this. `burn --session` burns a `BURNED` volume without
+  changing its status: a disc that passes makes it `VERIFIED`; a failed or
+  interrupted burn leaves it `BURNED`. A `BURNED` volume never goes back
+  to `STAGING` (#810).
 - **`VERIFIED`** — burn + verify passed; volume is closed via `mark_closed`
   (`BurnOrchestrator.burn_session`).
 - **`DEPRECATED`** / **`DESTROYED`** — not reached by the burn pipeline;
@@ -658,18 +692,21 @@ The pipeline is interrupt-safe in three places:
 2. **Inside `burn_session()` between volumes** — if volume 3 of 5 fails,
    volumes 1-2 are `VERIFIED`, volume 3 is back to `STAGING`, volumes 4-5
    are still `STAGING`, session is `PARTIAL`. **Resume** by re-running
-   `lcsas burn --session <id> --location <name>`. `burn_session` iterates
-   all `session_volumes` rows and the orchestrator's re-burn logic
-   (`BurnOrchestrator.burn_session`) treats `VERIFIED` volumes as
-   "already done, just add another disc" — so the second invocation will
-   re-burn volumes 1-2 to the same location (recording a second disc,
-   which is harmless) and complete 3-5. To avoid re-burning 1-2, the
-   owner currently has to manually identify the failed volume and
-   re-stage just that volume; this is a documented sharp edge.
+   `lcsas burn --session <id> --location <name>`. It skips every volume
+   that already has a verified disc at that location (here volumes 1-2;
+   the log names each) and burns only 3-5 (#814). When all of them pass,
+   the session is `COMPLETE`. If every volume already has a verified disc
+   there, it burns nothing and says so. To burn a volume there again
+   anyway (to replace a disc), add `--reburn`. The catalog keeps one disc
+   record per volume and location, so the new disc's burn date and
+   verification replace the old record; no second disc is recorded at
+   that location. A different `--location` is a new disc record (the
+   multi-copy flow), and nothing is skipped there until it has discs.
 3. **Inside a single volume's burn** — if `xorriso burn_iso` or
-   `verify_disc` raises, or the owner presses Ctrl-C, the volume
-   transitions back to `STAGING` and the exception propagates
-   (`BurnOrchestrator.burn_session`, #668). The
+   `verify_disc` raises, or the owner presses Ctrl-C, a never-burned
+   volume transitions back to `STAGING` (a `BURNED` one stays `BURNED`)
+   and the exception propagates (`BurnOrchestrator.burn_session`, #668,
+   #810). The
    ISO file is **not** deleted unless verify passed
    (`BurnOrchestrator.burn_session`), so re-running
    `lcsas burn --session <id>` will retry that volume with the same ISO.
@@ -690,7 +727,10 @@ the staging directory and marks the session `CLEANED`
 (`cmd_stage`, `BurnOrchestrator.clean_session`). Add `--force` to also abort
 a never-burned session, deleting its volumes and returning their packs to the
 unarchived pool. Volumes that already reached `VERIFIED` keep their catalog
-rows; the disc remains the source of truth.
+rows; the disc remains the source of truth. On a consolidation session,
+`--force` also returns the source volumes from `CONSOLIDATING` to `VERIFIED`,
+as `lcsas session abort` does (#817); a plain `--clean` leaves them
+`CONSOLIDATING` for `lcsas consolidate --deprecate`.
 
 A volume that was burned but has no disc recorded is never deleted, even with
 `--force`. A catalog rebuilt from discs records the newest discs like this

@@ -546,9 +546,11 @@ LCSAS_TIER3_AES
             backend that fails its test falls back to pure).
   Why:      Pure Python decrypts at about 0.15 MB/s (2 hours per GB);
             the native backends run at tens to hundreds of MB/s.  The
-            `openssl` command takes the key on its command line, which
-            other local users can read in /proc on a shared machine:
-            set LCSAS_TIER3_AES=pure there.
+            `openssl` command takes the repository's data key (not the
+            password) on its command line.  Other local users can read
+            it in /proc while it runs, and a host with process
+            accounting or an exec audit log keeps it in that log.  Set
+            LCSAS_TIER3_AES=pure on a shared or audited machine.
 
 LCSAS_PROGRESS
   Default:  unset → ON (opt-out / default ON)

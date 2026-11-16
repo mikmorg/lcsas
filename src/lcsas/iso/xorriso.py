@@ -79,6 +79,11 @@ def _translate_burn_error(stderr: str, device: str) -> None:
         )
 
 
+# xorriso's default padding under ``-as mkisofs`` (its ``-pad`` option):
+# 300 KiB of zeros, counted as part of the ISO volume.
+XORRISO_DEFAULT_PADDING_BYTES = 300 * 1024
+
+
 class XorrisoRunner(Protocol):
     """Abstract interface for ISO mastering and burning."""
 
@@ -90,6 +95,7 @@ class XorrisoRunner(Protocol):
         timeout: int = 7200,
         expected_bytes: int = 0,
         progress_interval: int = 30,
+        padding_bytes: int | None = None,
     ) -> Path: ...
 
     def burn_iso(
@@ -155,8 +161,17 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         timeout: int = 7200,
         expected_bytes: int = 0,
         progress_interval: int = 30,
+        padding_bytes: int | None = None,
     ) -> Path:
         """Create an ISO 9660 image with Rock Ridge and Joliet extensions.
+
+        ``padding_bytes`` sets the zero padding at the end of the image
+        (xorriso ``-padding``), in place of the default
+        :data:`XORRISO_DEFAULT_PADDING_BYTES`.  Under ``-as mkisofs`` the
+        padding is part of the ISO volume, so the volume size in the
+        primary volume descriptor grows with it.  That matters for RS03:
+        dvdisaster looks for its ECC header right after the volume, so
+        zeros simply appended to the file would hide the header (#732).
 
         Writes to a temporary ``.iso.tmp`` file first, then renames to
         the final path on success.  If the subprocess fails the partial
@@ -180,6 +195,10 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
             "-o", str(tmp_iso),      # Temp output ISO file
             str(source_dir),         # Source directory
         ]
+        if padding_bytes is not None:
+            # After "--" (end of mkisofs emulation); placed before
+            # "-as mkisofs" it is overridden by the emulation's -pad.
+            cmd += ["--", "-padding", str(padding_bytes)]
 
         stop_event = threading.Event()
 
