@@ -6,7 +6,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-RUN_DIR="${RUN_DIR:-/tmp/lcsas-blind-run-$(date +%s)}"
+# Run folders live in $LCSAS_BLIND_TMPDIR, else $TMPDIR, else /tmp (#840).
+RUN_DIR="${RUN_DIR:-$(python3 "$HERE/blind_runs.py" base)/lcsas-blind-run-$(date +%s)}"
 mkdir -p "$RUN_DIR"
 
 # Prevent overlapping runs — only one blind-restore at a time.  The lock
@@ -39,6 +40,13 @@ elif { [ "${LCSAS_VARIANT:-}" = "split-key-docs" ] \
     PROMPT_SRC="$HERE/agent_prompt_split_docs.txt"
 fi
 cp "$PROMPT_SRC" "$RUN_DIR/prompt.txt"
+
+# #840: a passing run removes its own folder, a failing one keeps it; drop
+# kept folders older than LCSAS_BLIND_KEEP_DAYS (default 14) so they do not
+# pile up on a small /tmp.  Never fatal: a folder this user cannot remove
+# (a root run's) is reported and left.
+python3 "$HERE/blind_runs.py" prune --keep "$RUN_DIR" \
+    || echo "WARNING: pruning old blind run folders failed" >&2
 
 # Clean stale state inside the agent's playground so each run starts
 # from a known-empty world. The agent typically scratches in /tmp and
@@ -150,10 +158,16 @@ sudo -u lcsas-blind -H bash -lc "
 " > "$RUN_DIR/transcript.jsonl" 2> "$RUN_DIR/agent-stderr.log" \
     || echo "claude exited non-zero (see agent-stderr.log)" >&2
 
-python3 "$HERE/merge_timeline.py" \
-    "$RUN_DIR/transcript.jsonl" \
-    "$RUN_DIR/disc-loader.log" \
-    > "$RUN_DIR/timeline.txt" 2>/dev/null || true
+# The merged timeline is a diagnostic: its failure is reported, never
+# fatal (#835).  The disc-loader log is root-owned 0640, so it is read
+# through sudo, as verify.sh does.
+if ! sudo cat "$RUN_DIR/disc-loader.log" \
+     | python3 "$HERE/merge_timeline.py" \
+         "$RUN_DIR/transcript.jsonl" /dev/stdin \
+         > "$RUN_DIR/timeline.txt" 2> "$RUN_DIR/timeline-errors.log"; then
+    echo "WARNING: the merged timeline could not be built; the run goes on." >&2
+    echo "         See $RUN_DIR/timeline-errors.log" >&2
+fi
 
 echo "run artifacts: $RUN_DIR"
 echo "  transcript:  $RUN_DIR/transcript.jsonl"
