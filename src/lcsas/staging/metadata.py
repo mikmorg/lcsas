@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 import sqlite3
 import textwrap
@@ -425,6 +424,36 @@ def _share_card_section(
         "",
         *(f"  {line}" if line else "" for line in body),
     ]
+
+
+#: START_HERE.txt on a data disc is at most this wide (#854).
+START_HERE_WIDTH = 78
+
+
+def _wrap_text(
+    text: str, indent: str, *, first: str | None = None,
+    width: int = START_HERE_WIDTH,
+) -> list[str]:
+    """*text* as lines no wider than *width*, each starting with *indent*.
+
+    Keeps the text's own line breaks, and the indent of its lines
+    relative to each other; a blank line stays blank.  *first*, when
+    given, starts the first line in place of *indent* (a label such as
+    ``"  Contents: "``).  A word longer than a line is broken.
+    """
+    out: list[str] = []
+    for raw in textwrap.dedent(text.expandtabs(4)).splitlines():
+        if not raw.strip():
+            out.append("")
+            continue
+        own = raw[: len(raw) - len(raw.lstrip())]
+        start = first if first is not None else indent + own
+        first = None
+        out += textwrap.wrap(
+            raw.strip(), width=width, initial_indent=start,
+            subsequent_indent=indent + own, break_on_hyphens=False,
+        )
+    return out
 
 
 def share_recovery_lines(
@@ -1078,7 +1107,11 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 
         This file is written in simple English for a non-technical
         person (e.g. a family member who finds these discs after the
-        owner's death).
+        owner's death).  It is built line by line (#854): headings at
+        column 0, text at column 2 or deeper, nothing past column
+        :data:`START_HERE_WIDTH`.  The owner's own text (name,
+        description, password hint, contact) is wrapped to fit, keeping
+        its line breaks.
 
         Args:
             config: LCSAS configuration with survivability fields.
@@ -1093,122 +1126,112 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         )
         key_hints = config.key_storage_hints or (
             "The archive's owner should have stored the password in a safe place.\n"
-            "  Check for a USB drive, paper printout, or password manager entry\n"
-            "  labeled 'LCSAS', 'backup password', or 'archive password'."
+            "Check for a USB drive, paper printout, or password manager entry\n"
+            "labeled 'LCSAS', 'backup password', or 'archive password'."
         )
         contact = config.technical_contact or (
             "Any Linux system administrator or IT professional should be\n"
-            "  able to follow the instructions in RESTORE_INSTRUCTIONS.txt."
+            "able to follow the instructions in RESTORE_INSTRUCTIONS.txt."
         )
 
-        # Build repo section if available
-        repo_lines = ""
+        bar = "═" * 58
+        lines = [
+            f"╔{bar}╗",
+            f"║{'START HERE':^58}║",
+            f"╚{bar}╝",
+            "",
+            "WHAT ARE THESE DISCS?",
+            "---------------------",
+            "",
+            "  These discs contain backup copies of digital files created",
+            *_wrap_text(f"by {owner}.", "  "),
+            "",
+            *_wrap_text(description, "  ", first="  Contents: "),
+            "",
+        ]
         if config.repositories:
-            repo_names = ", ".join(sorted(config.repositories.keys()))
-            repo_lines = f"\n  Repositories on these discs: {repo_names}\n"
+            names = ", ".join(sorted(config.repositories))
+            lines += [
+                *_wrap_text(names, "    ",
+                            first="  Repositories on these discs: "),
+                "",
+            ]
+        lines += [
+            "  VOLUME_INFO.txt on this disc gives this disc's label,",
+            "  when it was prepared, and what it holds.",
+            "",
+        ]
 
         # Archives with a split password need an extra "rebuild the password
         # first" pre-step: the same section as PASSWORD_INFO.txt, under
         # this file's own heading (#819).  Archives whose password is not
         # split must NOT show share instructions.
-        split_block = ""
         view = split_view(config, escrow_override, recorded)
         if view is not None:
-            section = "\n".join(_share_card_section(view, start_here=True))
-            # Indent to match the surrounding START_HERE section headers;
-            # a blank line separates it from the next section.
-            split_block = (
-                "\n" + textwrap.indent(section, "          ") + "\n\n"
-            )
+            lines += [*_share_card_section(view, start_here=True), ""]
 
-        text = textwrap.dedent(f"""\
-            ╔══════════════════════════════════════════════════════════╗
-            ║                    START HERE                           ║
-            ╚══════════════════════════════════════════════════════════╝
-
-            WHAT ARE THESE DISCS?
-            ---------------------
-
-              These discs contain backup copies of digital files created
-              by {owner}.
-
-              Contents: {description}
-            {repo_lines}
-              VOLUME_INFO.txt on this disc gives this disc's label,
-              when it was prepared, and what it holds.
-
-            {{SPLIT_BLOCK}}
-            HOW TO GET YOUR FILES BACK
-            --------------------------
-
-              1. You need the ENCRYPTION PASSWORD to unlock the data on
-                 these discs.  Your password is NOT written on any disc.
-                 The discs DO carry password-locked key files — that is
-                 what your password opens.  Anyone who holds a disc can
-                 try password guesses against it forever, so the password
-                 must be long and random.  (For the full stolen-disc
-                 threat model, see docs/DISC_CONFIDENTIALITY.md on the
-                 META disc.)
-
-                 Where to find the password:
-                 {key_hints}
-
-              2. You need ALL of the discs (or at least the ones containing
-                 the files you want).
-
-              3. You need a computer running Windows, macOS, or Linux
-                 (or someone who can help you use one).
-
-            IMPORTANT: If this is confusing, take ALL the discs and the
-            password to a computer professional.  They do NOT need
-            to understand this system — the instructions are on the discs.
-
-              Who can help:
-              {contact}
-
-            WARNING: WITHOUT THE PASSWORD, THE DATA ON THESE DISCS
-            CANNOT BE RESTORED.  EVER.  BY ANYONE.  Keep the password safe.
-
-            WHAT TO DO NEXT
-            ----------------
-
-              - Look for a disc labeled "META" — it contains the recovery
-                tools and a script called restore.sh that automates
-                everything.  If you find more than one, use the newest.
-
-              - If you cannot find the meta disc, the file
-                RESTORE_INSTRUCTIONS.txt on this disc has step-by-step
-                manual restore instructions.
-
-            ABOUT THIS DISC'S CATALOG
-            -------------------------
-
-              NOTE: this disc's catalog was written BEFORE this disc
-              was burned.  It cannot list where the discs burned with
-              this one are kept.  Check the printed receipt filed with
-              the discs, or the catalog on any NEWER disc (one whose
-              label has a later year or a higher number).
-
-            DISC CARE
-            ---------
-
-              - Store discs vertically (like books), not stacked flat.
-              - Keep in a cool, dry, dark place.
-              - Handle by the edges — do not touch the data surface.
-              - No kind of disc is proven to last 100 years, M-DISC
-                included.  See DISC_CARE.txt for how to check them.
-        """)
-        # Drop the entire placeholder line (incl. any leading indent that
-        # textwrap.dedent left behind) and substitute the (possibly empty)
-        # zero-indented split block in its place.
-        text = re.sub(
-            r"^[ \t]*\{SPLIT_BLOCK\}\n",
-            lambda _m: split_block,
-            text,
-            flags=re.MULTILINE,
-        )
-
-        self._write_text("START_HERE.txt", text)
+        lines += [
+            "HOW TO GET YOUR FILES BACK",
+            "--------------------------",
+            "",
+            "  1. You need the ENCRYPTION PASSWORD to unlock the data on",
+            "     these discs.  Your password is NOT written on any disc.",
+            "     The discs DO carry password-locked key files — that is",
+            "     what your password opens.  Anyone who holds a disc can",
+            "     try password guesses against it forever, so the password",
+            "     must be long and random.  (For the full stolen-disc",
+            "     threat model, see docs/DISC_CONFIDENTIALITY.md on the",
+            "     META disc.)",
+            "",
+            "     Where to find the password:",
+            *_wrap_text(key_hints, "     "),
+            "",
+            "  2. You need ALL of the discs (or at least the ones containing",
+            "     the files you want).",
+            "",
+            "  3. You need a computer running Windows, macOS, or Linux",
+            "     (or someone who can help you use one).",
+            "",
+            "IMPORTANT: If this is confusing, take ALL the discs and the",
+            "password to a computer professional.  They do NOT need",
+            "to understand this system — the instructions are on the discs.",
+            "",
+            "  Who can help:",
+            *_wrap_text(contact, "  "),
+            "",
+            "WARNING: WITHOUT THE PASSWORD, THE DATA ON THESE DISCS",
+            "CANNOT BE RESTORED.  EVER.  BY ANYONE.  Keep the password safe.",
+            "",
+            "WHAT TO DO NEXT",
+            "----------------",
+            "",
+            "  - Look for a disc labeled \"META\" — it contains the recovery",
+            "    tools and a script called restore.sh that automates",
+            "    everything.  If you find more than one, use the newest.",
+            "",
+            "  - If you cannot find the meta disc, the file",
+            "    RESTORE_INSTRUCTIONS.txt on this disc has step-by-step",
+            "    manual restore instructions.",
+            "",
+            "ABOUT THIS DISC'S CATALOG",
+            "-------------------------",
+            "",
+            "  NOTE: this disc's catalog was written BEFORE this disc",
+            "  was burned.  It cannot list where the discs burned with",
+            "  this one are kept.  Check the printed receipt filed with",
+            "  the discs, or the catalog on any NEWER disc (one whose",
+            "  label has a later year or a higher number).",
+            "",
+            "DISC CARE",
+            "---------",
+            "",
+            "  - Store discs vertically (like books), not stacked flat.",
+            "  - Keep in a cool, dry, dark place.",
+            "  - Handle by the edges — do not touch the data surface.",
+            "  - No kind of disc is proven to last 100 years, M-DISC",
+            "    included.  See DISC_CARE.txt for how to check them.",
+        ]
+        self._write_text("START_HERE.txt", "\n".join(lines) + "\n")
 
     def write_key_info(
         self,
