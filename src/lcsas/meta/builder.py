@@ -44,7 +44,19 @@ from lcsas.meta.required_contents import (
     musl_loader_name,
     required_meta_paths,
 )
+from lcsas.meta.upstream import (
+    PYTHON_TRIPLE_OVERRIDE,
+    UpstreamError,
+    default_cache_root,
+    pin_for,
+    read_upstream_pins,
+    read_verified_archive,
+    stale_cache_copies,
+    write_payload,
+)
+from lcsas.meta.upstream import payload as upstream_payload
 from lcsas.utils.fs import PYTHON_BYTECODE
+from lcsas.utils.hashing import sha256_file
 
 _logger = logging.getLogger(__name__)
 
@@ -274,6 +286,33 @@ _RETIRED_META_FILES = (
 # itself), so neither counts as a file the manifest is missing.
 UNLISTED_MANIFESTS = frozenset({"MANIFEST.sha256", "docs/MANIFEST.sha256"})
 
+# Developer-process records an heir does not need (#724).  The audit-gate
+# family stays in recovery/docs/, where recovery/Makefile,
+# recovery/scripts/exemptions_check.py and the tests read it, so the
+# builder leaves it out of the copy and out of both on-disc manifests.
+# The owner's other recovery records live in docs/development/recovery/,
+# which _bundle_docs skips.  Paths are relative to recovery/ and docs/.
+DEV_ONLY_RECOVERY_FILES = frozenset({
+    "docs/AUDIT.md",
+    "docs/EXEMPTIONS.md",
+    "docs/SANITIZER_SUPPRESSIONS.txt",
+    "docs/STATUS_LEDGER.md",
+})
+DEV_ONLY_DOC_DIRS = frozenset({"development/recovery"})
+
+
+def _skip_relpaths(
+    src_root: Path, skipped: Collection[str],
+) -> Callable[[str, list[str]], set[str]]:
+    """``copytree`` ignore callable: skip *skipped* (paths under *src_root*)."""
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        rel_dir = PurePosixPath(Path(directory).relative_to(src_root).as_posix())
+        return {n for n in names if (rel_dir / n).as_posix() in skipped}
+
+    return ignore
+
+
 # Build debris that never belongs on a meta disc (recovery/.gitignore).
 # Applied to bin/, which is copied as it stands, and to the whole tree
 # when git cannot say which files are tracked.
@@ -317,9 +356,10 @@ def _fallback_recovery_ignore(
     as ``tests/fixtures/repo/index/<sha256>`` are hex-named too.
     """
     debris = shutil.ignore_patterns(*_RECOVERY_DEBRIS)
+    dev_only = _skip_relpaths(src_root, DEV_ONLY_RECOVERY_FILES)
 
     def ignore(directory: str, names: list[str]) -> set[str]:
-        skipped = set(debris(directory, names))
+        skipped = set(debris(directory, names)) | dev_only(directory, names)
         rel_dir = PurePosixPath(Path(directory).relative_to(src_root).as_posix())
         skipped.update(n for n in names if _is_fuzz_output(rel_dir / n))
         return skipped
@@ -546,15 +586,12 @@ class MetaVolumeBuilder:
     # iterates rust triples keyed to rustic; this override remaps ONLY
     # the python cache lookup so the Windows python is actually found
     # on a freshly-fetched cache (#404).
-    PYTHON_TRIPLE_OVERRIDE = {
-        "x86_64-pc-windows-gnu": "x86_64-pc-windows-msvc",
-    }
+    PYTHON_TRIPLE_OVERRIDE = PYTHON_TRIPLE_OVERRIDE
 
     def __init__(
         self,
         output_dir: Path,
         project_root: Path | None = None,
-        static_rustic_path: Path | None = None,
         config: LCSASConfig | None = None,
         catalog_db_path: Path | None = None,
         recovery_dir: Path | None = None,
@@ -568,15 +605,11 @@ class MetaVolumeBuilder:
             output_dir: Where to build the meta disc directory tree.
             project_root: Root of the LCSAS project (containing ``src/``).
                 If *None*, auto-detected from this module's path.
-            static_rustic_path: Optional path to a statically-linked
-                (musl) rustic binary.  Bundled as ``tools/bin/rustic-static``
-                to provide a glibc-independent fallback.
             config: Optional LCSAS configuration.  When provided,
                 START_HERE.txt and PASSWORD_INFO.txt are generated on the
                 meta disc using the survivability fields.
         """
         self._output = output_dir
-        self._static_rustic_path = static_rustic_path
         self._config = config
         self._catalog_db_path = catalog_db_path
         self._bundle_recovery_toolchain = bundle_recovery_toolchain
@@ -699,8 +732,9 @@ class MetaVolumeBuilder:
         """Bundle rustic, xorriso, and Python with shared libs.
 
         Also bundles optional tools (dvdisaster) if available on PATH,
-        a statically-linked rustic binary if provided, and the
-        ``zstandard`` Python package for zstd-compressed repo support.
+        a copy of rustic as ``rustic-static`` when the host's rustic is
+        statically linked, and the ``zstandard`` Python package for
+        zstd-compressed repo support.
         """
         tools_dir = self._output / "tools"
         bundler = ToolBundler(tools_dir)
@@ -709,8 +743,7 @@ class MetaVolumeBuilder:
             bundler.bundle_binary(tool)
 
         for tool in _OPTIONAL_TOOLS:
-            import shutil as _shutil
-            if _shutil.which(tool):
+            if shutil.which(tool):
                 bundler.bundle_binary(tool)
 
         bundler.bundle_python()
@@ -745,29 +778,15 @@ class MetaVolumeBuilder:
         # bundled stdlib (importlib resolves it to .../lcsas/keyshare).
         bundler.bundle_python_package("lcsas.keyshare")
 
-        # Bundle static rustic binary (glibc-independent fallback).
-        # If an explicit path was provided, use it.  Otherwise,
-        # auto-detect: if the bundled rustic is already statically
-        # linked, copy it as rustic-static too.
-        static_src: Path | None = None
-        if self._static_rustic_path is not None:
-            static_src = Path(self._static_rustic_path).resolve()
-            if not static_src.is_file():
-                raise FileNotFoundError(
-                    f"Static rustic binary not found: {static_src}"
-                )
-        elif (bundler.bin_dir / "rustic").is_file():
-            # Auto-detect: check if the bundled rustic has no shared deps
+        # Glibc-independent fallback: if the bundled rustic is statically
+        # linked (no shared deps), copy it as tools/bin/rustic-static too.
+        bundled_rustic = bundler.bin_dir / "rustic"
+        if bundled_rustic.is_file():
             from lcsas.meta.bundler import get_shared_libs
 
-            bundled_rustic = bundler.bin_dir / "rustic"
-            if not get_shared_libs(bundled_rustic):
-                static_src = bundled_rustic
-
-        if static_src is not None:
             dst = bundler.bin_dir / "rustic-static"
-            if not dst.exists():
-                shutil.copy2(str(static_src), str(dst))
+            if not get_shared_libs(bundled_rustic) and not dst.exists():
+                shutil.copy2(str(bundled_rustic), str(dst))
                 os.chmod(str(dst), 0o755)
 
     # ── Source bundling ──────────────────────────────────────────
@@ -798,17 +817,24 @@ class MetaVolumeBuilder:
                 shutil.copy2(str(src), str(dst))
 
     def _bundle_docs(self) -> None:
-        """Copy documentation into the meta disc tree."""
+        """Copy documentation into the meta disc tree.
+
+        ``docs/development/recovery/`` (the owner's recovery records,
+        #724) stays in the repository.
+        """
         for item_name in _DOC_ITEMS:
             src = self._project_root / item_name
             dst = self._output / item_name
             if src.is_dir():
                 if dst.exists():
                     shutil.rmtree(str(dst))
+                dev_only = _skip_relpaths(src, DEV_ONLY_DOC_DIRS)
                 shutil.copytree(
                     str(src),
                     str(dst),
-                    ignore=PYTHON_BYTECODE,
+                    ignore=lambda d, n, x=dev_only: (
+                        set(PYTHON_BYTECODE(d, n)) | x(d, n)
+                    ),
                 )
             elif src.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
@@ -843,11 +869,7 @@ class MetaVolumeBuilder:
                 "or pass --allow-no-dvdisaster-source."
             )
 
-        cache_root_env = os.environ.get("LCSAS_RECOVERY_CACHE")
-        if cache_root_env:
-            cache_root = Path(cache_root_env)
-        else:
-            cache_root = Path.home() / ".cache" / "lcsas" / "recovery-binaries"
+        cache_root = default_cache_root()
         src = cache_root / "dvdisaster" / "src" / name
 
         if not src.is_file():
@@ -950,6 +972,7 @@ class MetaVolumeBuilder:
         if dst.exists():
             shutil.rmtree(str(dst))
         self._copy_recovery_tree(src, dst)
+        self._drop_dev_only_manifest_rows(dst)
 
         # _write_restore_script copies scripts/restore.sh to the disc
         # root as restore.sh, the disc's one restore driver (#689).
@@ -1022,6 +1045,8 @@ class MetaVolumeBuilder:
         for rel in tracked:
             if rel.split("/", 1)[0] == "bin":
                 continue  # copied whole below
+            if rel in DEV_ONLY_RECOVERY_FILES:
+                continue  # stays in the repository (#724)
             src_file = src / rel
             if not src_file.is_file():
                 gone.append(rel)  # in the index, deleted from the work tree
@@ -1042,6 +1067,34 @@ class MetaVolumeBuilder:
                 str(bin_src), str(dst / "bin"),
                 ignore=shutil.ignore_patterns(*_RECOVERY_DEBRIS),
             )
+
+    @staticmethod
+    def _drop_dev_only_manifest_rows(dst: Path) -> None:
+        """Remove the rows of the files left off the disc (#724).
+
+        The source manifests list every authored file, the developer
+        records too; on the disc a row for an absent file would make
+        ``meta verify`` and an heir's ``sha256sum -c`` fail.
+        """
+        manifests = {
+            dst / "MANIFEST.sha256": {
+                f"./{rel}" for rel in DEV_ONLY_RECOVERY_FILES
+            },
+            dst / "docs" / "MANIFEST.sha256": {
+                f"./{rel.removeprefix('docs/')}"
+                for rel in DEV_ONLY_RECOVERY_FILES if rel.startswith("docs/")
+            },
+        }
+        for manifest, gone in manifests.items():
+            if not manifest.is_file():
+                continue
+            lines = manifest.read_text(encoding="utf-8").splitlines()
+            kept = [
+                ln for ln in lines
+                if ln.strip().split("  ", 1)[-1] not in gone
+            ]
+            if len(kept) != len(lines):
+                manifest.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
     def unlisted_recovery_files(self) -> list[str]:
         """Files under the built recovery/ that its MANIFEST.sha256 omits.
@@ -1065,35 +1118,22 @@ class MetaVolumeBuilder:
         recovery/UPSTREAM.sha256 before copying (issue #372).
 
         fetch_upstream.sh verifies on download, but a cache entry can rot or
-        be tampered with between fetch and burn.  Raise MetaBuildError on the
-        first hash mismatch so a corrupted rustic/restic/python never reaches
+        be tampered with between fetch and burn.  Raise MetaBuildError on
+        any hash mismatch so a corrupted rustic/restic/python never reaches
         a burned disc.  Absent archives are skipped — a partial cache is a
-        legitimate single-arch build, and the per-target copy loop already
+        legitimate single-arch build, and the per-target loop already
         skips absent targets — so this fails only on genuine corruption.
         """
-        import hashlib
-        manifest = self._recovery_dir / "UPSTREAM.sha256"
-        if not manifest.is_file():
-            return
         mismatches: list[str] = []
-        for line in manifest.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            expected, relpath = parts[0], parts[1]
-            cached = cache_root / relpath
+        for pin in read_upstream_pins(self._recovery_dir / "UPSTREAM.sha256"):
+            cached = cache_root / pin.relpath
             if not cached.is_file():
                 continue  # partial cache — the copy loop skips it too
-            digest = hashlib.sha256()
-            with cached.open("rb") as fh:
-                for chunk in iter(lambda: fh.read(1 << 20), b""):
-                    digest.update(chunk)
-            got = digest.hexdigest()
-            if got != expected:
-                mismatches.append(f"{relpath}: expected {expected}, got {got}")
+            got = sha256_file(cached)
+            if got != pin.sha256:
+                mismatches.append(
+                    f"{pin.relpath}: expected {pin.sha256}, got {got}"
+                )
         if mismatches:
             raise MetaBuildError(
                 "cached upstream artifact(s) FAILED re-verification against "
@@ -1103,150 +1143,97 @@ class MetaVolumeBuilder:
             )
 
     def _bundle_upstream_binaries(self, recovery_dst: Path) -> None:
-        """Copy cached upstream rustic + python tarball contents per target.
+        """Unpack the pinned upstream archives onto the disc, per target.
 
-        Reads from ``$LCSAS_RECOVERY_CACHE`` (default
+        Reads the archives pinned in ``recovery/UPSTREAM.sha256`` from
+        ``$LCSAS_RECOVERY_CACHE`` (default
         ``~/.cache/lcsas/recovery-binaries``).  For every approved target
-        present in the cache, writes:
+        whose archives are in the cache, writes:
 
-            recovery_dst/bin/<target>/rustic-static          (from rustic/<target>/rustic)
-            recovery_dst/bin/<target>/python/                (from python/<target>/python/)
+            recovery_dst/bin/<target>/rustic-static[.exe]   (rustic archive)
+            recovery_dst/bin/<target>/restic[.exe]          (restic archive)
+            recovery_dst/bin/<target>/python/               (CPython archive)
             recovery_dst/bin/<target>/python/lib/ld-musl-<arch>.so.1
-                                     (from musl/<target>/; Linux musl only, #714)
+                                     (Alpine minirootfs; Linux musl only, #714)
 
-        Targets with no rustic binary AND no python tree are skipped
-        silently — the recovery cascade in ``restore.sh`` handles the
-        empty case (falls through tier 2 → tier 3 → fatal).
+        #832: the bytes come from the archive itself, checked against its
+        pin in the same read, never from the copy fetch_upstream.sh
+        unpacks beside it.  If that unpacked copy differs from the
+        archive, the build fails and names the file: the cache was
+        changed after the fetch.
+
+        Archives absent from the cache are skipped silently — the
+        recovery cascade in ``restore.sh`` handles the empty case, and
+        the required-contents gate in ``cmd_meta_build`` reports what a
+        full build lacks.
         """
-        cache_root_env = os.environ.get("LCSAS_RECOVERY_CACHE")
-        if cache_root_env:
-            cache_root = Path(cache_root_env)
-        else:
-            cache_root = Path.home() / ".cache" / "lcsas" / "recovery-binaries"
-
+        cache_root = default_cache_root()
         if not cache_root.is_dir():
             return  # No cache → meta build still works for single-arch path.
 
-        # Issue #372 — supply-chain: re-verify the cached upstream archives
-        # against recovery/UPSTREAM.sha256 BEFORE copying anything onto the
-        # disc.  fetch_upstream.sh verifies on download, but a cache entry
-        # could rot or be tampered with between fetch and burn; catch that
-        # here rather than shipping a corrupted rustic/restic/python.  Only
-        # PRESENT archives are checked (a partial cache is legitimate — the
-        # per-target loop below already skips absent targets), so this fails
-        # only on genuine corruption, never on incompleteness.
+        # Issue #372 — supply-chain: re-verify every present archive
+        # (dvdisaster source included) before anything is unpacked, so
+        # one bad archive stops the build whatever target it serves.
         self._verify_cached_upstream_archives(cache_root)
+        pins = read_upstream_pins(self._recovery_dir / "UPSTREAM.sha256")
 
-        # Approved targets per docs/history/CROSS_PLATFORM_META_RFC.md §3.  We
-        # iterate this list rather than `os.listdir(cache_root)` so a
-        # corrupted/extra directory in the cache can't silently extend
-        # what we ship.
-        for target in (
-            "x86_64-unknown-linux-musl",
-            "aarch64-unknown-linux-musl",
-            "armv7-unknown-linux-gnueabihf",
-            "aarch64-apple-darwin",
-            "x86_64-apple-darwin",
-            "x86_64-pc-windows-gnu",
-        ):
+        stale: list[str] = []
+        # Approved targets per docs/history/CROSS_PLATFORM_META_RFC.md §3.
+        # The pins name the archives, so an extra folder in the cache can
+        # never extend what we ship.
+        for target in APPROVED_TARGETS:
             bin_dst = recovery_dst / "bin" / target
-            staged_any = False
-
-            # ── rustic ─────────────────────────────────────────────
-            # The fetch script extracts the tarball next to itself; the
-            # binary is named "rustic" (or "rustic.exe" on Windows).
-            rustic_cache = cache_root / "rustic" / target
-            for cand in (rustic_cache / "rustic", rustic_cache / "rustic.exe"):
-                if cand.is_file():
-                    bin_dst.mkdir(parents=True, exist_ok=True)
-                    out_name = "rustic-static.exe" if cand.suffix == ".exe" else "rustic-static"
-                    shutil.copy2(str(cand), str(bin_dst / out_name))
-                    os.chmod(str(bin_dst / out_name), 0o755)
-                    staged_any = True
-                    break
-
-            # ── restic ─────────────────────────────────────────────
-            # Stock upstream restic (the audited Go original), bundled so the
-            # "standard tools" recovery tier works fully offline.  The fetch
-            # script decompresses the per-platform asset to "restic" (or
-            # "restic.exe" on Windows).  Kept under its own name (not
-            # rustic-static) so the heir runbook can point at it explicitly.
-            restic_cache = cache_root / "restic" / target
-            for cand in (restic_cache / "restic", restic_cache / "restic.exe"):
-                if cand.is_file():
-                    bin_dst.mkdir(parents=True, exist_ok=True)
-                    out_name = "restic.exe" if cand.suffix == ".exe" else "restic"
-                    shutil.copy2(str(cand), str(bin_dst / out_name))
-                    os.chmod(str(bin_dst / out_name), 0o755)
-                    staged_any = True
-                    break
-
-            # ── python ─────────────────────────────────────────────
-            # python-build-standalone tarballs extract to a "python/"
-            # tree (Linux/macOS) or a flat install tree (Windows;
-            # python.exe sits at the top).  Copy the whole tree.
-            # The Windows python is cached under the msvc triple (PBS
-            # ships no windows-gnu build) — remap the lookup (#404).
-            py_target = self.PYTHON_TRIPLE_OVERRIDE.get(target, target)
-            python_cache = cache_root / "python" / py_target / "python"
-            if python_cache.is_dir():
-                py_dst = bin_dst / "python"
-                bin_dst.mkdir(parents=True, exist_ok=True)
-                if py_dst.exists():
-                    shutil.rmtree(str(py_dst))
-                # No bytecode (#815): the cache's .pyc files were compiled
-                # on the build machine and name its folders.
-                shutil.copytree(
-                    str(python_cache), str(py_dst), symlinks=True,
-                    ignore=PYTHON_BYTECODE,
-                )
-                staged_any = True
-            else:
-                # Windows PBS tarballs extract to "python/" directly or
-                # to the target root; try both.
-                python_alt = cache_root / "python" / py_target
-                python_exe = python_alt / "python.exe"
-                if python_exe.is_file():
-                    py_dst = bin_dst / "python"
-                    bin_dst.mkdir(parents=True, exist_ok=True)
-                    if py_dst.exists():
-                        shutil.rmtree(str(py_dst))
-                    # Copy everything in python_alt EXCEPT the tarball.
-                    py_dst.mkdir(parents=True)
-                    for entry in python_alt.iterdir():
-                        if entry.name.endswith(".tar.gz") or entry.name == ".extracted":
-                            continue
-                        if PYTHON_BYTECODE(str(python_alt), [entry.name]):
-                            continue
-                        if entry.is_dir():
-                            shutil.copytree(
-                                str(entry), str(py_dst / entry.name), symlinks=True,
-                                ignore=PYTHON_BYTECODE,
+            # Rustic and restic first, then python (which replaces the whole
+            # python/ tree), then the musl loader into that tree.
+            for category in ("rustic", "restic", "python", "musl"):
+                pin = pin_for(pins, category, target)
+                if pin is None:
+                    continue
+                loader = musl_loader_name(target)
+                if category == "musl" and (
+                    loader is None or not (bin_dst / "python").is_dir()
+                ):
+                    continue
+                try:
+                    data = read_verified_archive(cache_root, pin)
+                    if data is None:  # partial cache
+                        unpacked = cache_root / pin.category / pin.target
+                        if unpacked.is_dir() and any(unpacked.iterdir()):
+                            _logger.warning(
+                                "Meta disc: %s is not in the recovery "
+                                "cache, so nothing from %s was bundled; "
+                                "only the pinned archive is used (#832). "
+                                "Run `make fetch-recovery` to fetch it.",
+                                pin.relpath, unpacked,
                             )
-                        else:
-                            shutil.copy2(str(entry), str(py_dst / entry.name))
-                    staged_any = True
+                        continue
+                    entries = upstream_payload(pin, data, musl_loader=loader)
+                except UpstreamError as exc:
+                    raise MetaBuildError(
+                        f"cannot bundle {pin.relpath} from the recovery "
+                        f"cache: {exc}"
+                    ) from exc
+                if category == "python" and (bin_dst / "python").exists():
+                    shutil.rmtree(bin_dst / "python")
+                bin_dst.mkdir(parents=True, exist_ok=True)
+                write_payload(entries, bin_dst)
+                stale.extend(stale_cache_copies(
+                    entries, cache_root / pin.category / pin.target,
+                ))
 
-            # ── musl loader (#714) ─────────────────────────────────
-            # The Linux CPython needs /lib/ld-musl-<arch>.so.1, which
-            # glibc hosts lack.  fetch_upstream.sh extracts the pinned
-            # loader to musl/<target>/; put it in the python tree's lib/
-            # (after the copytree above, which replaces that tree) so
-            # restore.sh can run `ld-musl-<arch>.so.1 python3 ...`.
-            loader_name = musl_loader_name(target)
-            py_tree = bin_dst / "python"
-            if loader_name is not None and py_tree.is_dir():
-                loader_cache = cache_root / "musl" / target / loader_name
-                if loader_cache.is_file():
-                    loader_dst = py_tree / "lib" / loader_name
-                    loader_dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(str(loader_cache), str(loader_dst))
-                    os.chmod(str(loader_dst), 0o755)
-
-            if staged_any:
-                # No-op: directory already created by the per-binary
-                # branches; documenting intent.
-                pass
+        if stale:
+            shown = stale[:10]
+            more = len(stale) - len(shown)
+            raise MetaBuildError(
+                "the recovery cache was changed after it was fetched: its "
+                "unpacked copy of a pinned upstream archive differs from "
+                "the archive (#832). The disc gets only the archive's "
+                "bytes, but find out why before you burn anything. Then "
+                f"delete {cache_root} and run `make fetch-recovery` again. "
+                "Changed files:\n  "
+                + "\n  ".join(shown)
+                + (f"\n  ... and {more} more" if more > 0 else "")
+            )
 
     def _bundle_tier1_binaries(self, recovery_dst: Path) -> None:
         """Copy cross-built lcsas-restore binaries into per-target dirs.
@@ -1354,8 +1341,6 @@ class MetaVolumeBuilder:
         recovery tree (some older builds didn't ship it) — there's
         nothing to merge into.
         """
-        import hashlib
-
         manifest_path = recovery_dst / "MANIFEST.sha256"
         if not manifest_path.is_file():
             return
@@ -1387,16 +1372,7 @@ class MetaVolumeBuilder:
                     continue
                 # Path inside recovery/ — manifest format is "./relative/path".
                 rel = path.relative_to(recovery_dst).as_posix()
-                # Compute SHA-256 streaming so this scales to the ~30 MB
-                # python tarballs without slurping into memory.
-                h = hashlib.sha256()
-                with path.open("rb") as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        h.update(chunk)
-                bin_entries.append(f"{h.hexdigest()}  ./{rel}")
+                bin_entries.append(f"{sha256_file(path)}  ./{rel}")
 
         merged = "\n".join(existing_lines + bin_entries) + "\n"
         manifest_path.write_text(merged)
@@ -1726,19 +1702,10 @@ class MetaVolumeBuilder:
         reject any file there that has no row).  Keeps every other row
         untouched.
         """
-        import hashlib
-
         manifest = self._output / "recovery" / "MANIFEST.sha256"
         if not manifest.is_file():
             return
-        h = hashlib.sha256()
-        with on_disc.open("rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
-        new_row = f"{h.hexdigest()}  {rel}"
+        new_row = f"{sha256_file(on_disc)}  {rel}"
         out: list[str] = []
         replaced = False
         for line in manifest.read_text(encoding="utf-8").splitlines():

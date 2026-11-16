@@ -115,7 +115,9 @@ def one(tmp_path, monkeypatch):
 @pytest.fixture
 def two(tmp_path, monkeypatch):
     """Two staged volumes of one burn session (TEST_TINY is 2 MB)."""
-    env = _setup(tmp_path, monkeypatch, num_packs=3, pack_size=800_000)
+    # 450 KB packs: two fit a TEST_TINY volume beside its disc metadata
+    # (#811), three do not.
+    env = _setup(tmp_path, monkeypatch, num_packs=3, pack_size=450_000)
     assert len(env["manifests"]) == 2
     yield env
     env["conn"].close()

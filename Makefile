@@ -141,7 +141,7 @@ blind-restore:
 # product-UX change "shipped".  Cost: ~5× normal blind-restore.
 blind-restore-x5:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-x5 costs USD ~25 per invocation." >&2; \
+		echo "ERROR: blind-restore-x5 runs 5 blind agents (about USD 1-4 in all)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi

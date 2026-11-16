@@ -37,6 +37,7 @@ pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOCS_DIR = REPO_ROOT / "recovery" / "docs"
+_DEV_DOCS_DIR = REPO_ROOT / "docs" / "development" / "recovery"
 
 # An invocation starts at a word-boundary `lcsas` (not lcsas-restore, not a
 # path component) followed by at least one argument token.
@@ -135,7 +136,10 @@ def _validate(tokens: list[str]) -> list[str]:
 def _doc_files() -> list[Path]:
     files = sorted(_DOCS_DIR.glob("*.txt"))
     assert files, f"no .txt docs found under {_DOCS_DIR}"
-    return files
+    # The owner's recovery docs moved off the disc (#724); still checked.
+    dev = sorted(_DEV_DOCS_DIR.glob("*.txt"))
+    assert dev, f"no .txt docs found under {_DEV_DOCS_DIR}"
+    return files + dev
 
 
 def test_recovery_docs_lcsas_invocations_exist_in_argparse_tree():

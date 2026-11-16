@@ -71,6 +71,8 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_meta_bundles_dvdisaster_source.py` | Hardening test (FMT-02): the dvdisaster RS03 source must be pinned, |
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
 | `test_meta_completeness_367.py` | test_meta_completeness_367.py -- tiered meta completeness (issue #367). |
+| `test_meta_dev_docs_off_disc.py` | test_meta_dev_docs_off_disc.py -- developer-process records stay off the meta disc (#724). |
+| `test_meta_upstream_provenance.py` | test_meta_upstream_provenance.py -- bundled upstream bytes come from the pinned archives (#832). |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
 | `test_multidisc_cases.py` | Run recovery/tests/test_multidisc.py's cases inside the hardening tier (#465). |
 | `test_name_escaping_differential.py` | Issue #781: tiers 1, 2 and 3 restore escaped file names alike. |
@@ -182,6 +184,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier_fallback.py` | Hardening test #10: restore.sh tier fallback under |
 | `test_tiers_contract.py` | test_tiers_contract.py -- docs-vs-reality contract gate for TIERS.txt. |
 | `test_timeout_scaling.py` | #453: hang-guard timeouts are stretched; deliberate waits are not. |
+| `test_verify_outcome_conduct.py` | verify.sh scores OUTCOME and CONDUCT apart, and CONDUCT ignores files |
 | `test_verify_self.py` | Hardening test #6 + #9: verify.sh must fail closed on every known |
 | `test_windows_doc_multiextent_caveat.py` | Hardening doc-pin: RECOVER_WINDOWS.txt documents the >4 GiB CDFS trap (FMT-04). |
 | `test_workflow_contracts.py` | Hardening: every CI pytest run has a passed-test floor, and triggers stay sane (#831, #837). |

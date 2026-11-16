@@ -116,11 +116,11 @@ SPLIT_KEY_DOCS_K, SPLIT_KEY_DOCS_N = 2, 5
 SPLIT_CARDS = SECRETS / "split-cards"
 SPLIT_VARIANTS = ("mixed-split", "split-key-docs")
 
-# File sizing: each TEST_TINY volume has ~1.25 MB usable after the
-# holographic-metadata reserve (#142: TEST_TINY = 2 MB; reserve 850 KB
-# since rc9 for SQLite catalog + per-repo Rustic index/snapshots/keys +
-# the tier-3 reader).  With
-# ALPHA ≈ 30 × 130 KB ≈ 3.9 MB of pack data, alpha spans ~3-4 volumes —
+# File sizing: each TEST_TINY volume (2 MB, #142) has ~1.0-1.1 MB for
+# packs after the disc metadata that stage measures and keeps free (#811:
+# catalog + each tenant's Rustic index/snapshots/keys + the tier-3 reader
+# + ISO overhead, 0.95-1.1 MB with its margin for 1-5 tenants).  With
+# ALPHA ≈ 30 × 130 KB ≈ 3.9 MB of pack data, alpha spans 5 volumes —
 # enough disc-swap loops to exercise the agent's multi-disc reasoning
 # without thrashing.  When you change TEST_TINY's capacity, keep ALPHA
 # proportionally large or you silently regress the multi-disc test.
@@ -130,8 +130,9 @@ ALPHA_FILE_BYTES = 130 * 1024  # 130 KB × 30 = ~3.9 MB (≈ 3 TEST_TINY volumes
 # the others exist to populate the multi-tenant prompt.  Their discs come
 # after alpha's (see main), and together they must fill at least two discs,
 # or verify.sh's thrash check cannot fail (#836, _thrash_layout_problem).
-# ~1.8 MB is two discs at 2 tenants (~1.1 MB usable each after the
-# reserve) and three at 5 tenants (~0.7 MB usable).
+# ~1.8 MB is two discs at 2 tenants and three at 5 tenants (each tenant's
+# metadata is on every disc).  Measured 2026-11-16: 7 data discs (alpha
+# 1-5) by default, 8 at 5 tenants, 5 at 1 tenant.
 SECONDARY_FILES = 15
 SECONDARY_TOTAL_BYTES = 1_800_000
 
@@ -403,26 +404,11 @@ def _fixture_config():
             key_shares=MIXED_SPLIT_N,
         )
 
-    # Phase 21.3 fix: use the canonical empirical reserve constant
-    # (SQLite catalog + per-repo Rustic metadata + ISO 9660 overhead
-    # ≈ 700 KB for a single-repo fixture).  The previous 150_000
-    # under-reserved by ~5×, causing ISOs to overflow TEST_TINY's
-    # 1 MB capacity after staging.
-    #
-    # Each additional tenant injects another ~150 KB of Rustic
-    # metadata (index/snapshots/keys) into every disc.  Scale the
-    # reserve so multi-tenant variants (#217 ships 5 repos) don't
-    # overflow the 2 MB TEST_TINY capacity after ECC.
-    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
-    # 127.5 KB since rc9: with the 850 KB single-tenant floor, 150 KB per
-    # extra tenant grew the 5-tenant fixture from 12 to 17 discs and the
-    # agent's disc sweep tripped the thrash check (16 inserted, 10
-    # needed).  This keeps 5 tenants at the 1.36 MB that passed.
-    per_extra_tenant_bytes = 127_500
-    reserve = (
-        MIN_HOLOGRAPHIC_RESERVE_BYTES
-        + max(0, len(repos) - 1) * per_extra_tenant_bytes
-    )
+    # No fixed reserve: stage measures the disc metadata (catalog, each
+    # tenant's index/snapshot/key files, the tier-3 reader, ISO overhead)
+    # and keeps that much free on every disc (#811).  The 850 KB floor
+    # and the 127.5 KB per extra tenant this fixture used to need are
+    # gone.
     return LCSASConfig(
         mirror_base_path=MIRROR,
         staging_path=STAGING,
@@ -430,7 +416,7 @@ def _fixture_config():
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
-        metadata_reserve_bytes=reserve,
+        metadata_reserve_bytes=0,
         repositories=repos,
         **split_defaults,
     )
@@ -585,24 +571,31 @@ def _check_burned_fixture(conn, iso_files: list[Path]) -> None:
         )
 
 
+def _thrash_allowance(alpha_labels: list[str], data_labels: list[str]) -> int:
+    """How many distinct data discs a correct restore inserts (#836).
+
+    The prompts' disc-swap loop (``restore-shell swap-loop``) cycles
+    through the discs in label order, so a correct restore inserts every
+    disc up to the last alpha disc, plus the newest data disc, which
+    restore.sh offers for its catalog.  verify.sh's thrash check allows
+    exactly that many; setup writes it to thrash_allowance.txt.
+    """
+    data = sorted(data_labels)
+    last_alpha = max(data.index(label) for label in alpha_labels)
+    return len(set(data[: last_alpha + 1]) | {data[-1]})
+
+
 def _thrash_layout_problem(
     alpha_labels: list[str], data_labels: list[str], tenant_count: int,
 ) -> str | None:
     """Why verify.sh's thrash check would be meaningless on this fixture
     (#836), or None.
 
-    verify.sh allows the agent ``needed + 1`` distinct data discs, where
-    ``needed`` is the number of discs holding alpha packs (the +1 is the
-    newest data disc, which restore.sh offers for its catalog).  The
-    prompts tell the agent to cycle through the discs in label order, so a
-    correct restore inserts every disc up to the last alpha disc, plus the
-    newest.  Two layouts make the check meaningless:
-
-    * unfair: that correct sweep already inserts more than ``needed + 1``
-      discs (rc9: alpha on discs 1-9 and 16 of 16), so a correct restore
-      fails and the API spend is wasted;
-    * toothless: there are no more than ``needed + 1`` data discs in all,
-      so no agent can ever fail it (every rc9 layout but that one).
+    The check allows the agent ``_thrash_allowance()`` distinct data discs.
+    It is meaningless when there are no more data discs than that, so no
+    agent can ever fail it (every rc9 layout).  setup.py burns alpha's
+    discs first, so the allowance is ``needed + 1`` and the other tenants'
+    discs, after it, are the ones a thrashing agent would insert.
 
     A single-tenant archive has only alpha discs, so the check cannot fail
     there whatever the layout; that is the variant, not the layout, and is
@@ -612,25 +605,20 @@ def _thrash_layout_problem(
     alpha = set(alpha_labels)
     if not alpha or not alpha <= set(data):
         return f"the alpha discs {sorted(alpha)} are not all data discs {data}"
-    needed = len(alpha)
-    allowed = needed + 1
-    if needed < 2:
+    if len(alpha) < 2:
         return ("alpha fits on one disc, so the agent never swaps discs; "
                 "the multi-disc journey is not tested")
-    last_alpha = max(data.index(label) for label in alpha)
-    sweep = set(data[: last_alpha + 1]) | {data[-1]}
-    if len(sweep) > allowed:
-        return (f"a correct restore that cycles the discs in label order "
-                f"inserts {len(sweep)} discs, more than the {allowed} "
-                f"verify.sh allows (alpha is on {sorted(alpha)} of "
-                f"{len(data)} data discs): it would fail a correct run")
+    allowed = _thrash_allowance(alpha_labels, data_labels)
     if tenant_count > 1 and len(data) <= allowed:
-        return (f"only {len(data)} data discs for {allowed} allowed: the "
-                f"thrash check can never fail")
+        return (f"a correct restore that cycles the discs in label order "
+                f"inserts {allowed} of the {len(data)} data discs (alpha is "
+                f"on {sorted(alpha)}): the thrash check can never fail")
     return None
 
 
 def _check_thrash_layout(alpha_labels: list[str], iso_files: list[Path]) -> None:
+    """Stop the setup on a layout that makes the thrash check meaningless,
+    else write the allowance verify.sh reads (thrash_allowance.txt)."""
     data_labels = [p.stem for p in iso_files]
     problem = _thrash_layout_problem(alpha_labels, data_labels, len(_tenants()))
     if problem is not None:
@@ -639,8 +627,10 @@ def _check_thrash_layout(alpha_labels: list[str], iso_files: list[Path]) -> None
             f"check meaningless: {problem}.  The setup stops here, before "
             f"any agent runs."
         )
+    allowed = _thrash_allowance(alpha_labels, data_labels)
+    (FIXTURE / "thrash_allowance.txt").write_text(f"{allowed}\n")
     print(f"  thrash check: {len(alpha_labels)} alpha discs, "
-          f"{len(alpha_labels) + 1} allowed, {len(data_labels)} data discs")
+          f"{allowed} allowed, {len(data_labels)} data discs")
 
 
 # ---------------------------------------------------------------------------

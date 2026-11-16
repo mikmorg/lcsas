@@ -30,7 +30,12 @@ from lcsas.db.sessions import create_session, get_latest_session
 from lcsas.db.volume_copies import add_volume_copy, find_stale_copies
 from lcsas.db.volume_events import add_event, get_events_for_volume
 from lcsas.db.volumes import create_volume
-from lcsas.utils.timestamps import parse_utc, same_instant, to_utc_iso
+from lcsas.utils.timestamps import (
+    parse_utc,
+    same_instant,
+    to_utc_iso,
+    utc_now,
+)
 
 UTC_ISO = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3}|\.\d{6})?\+00:00")
 
@@ -49,6 +54,22 @@ def test_parse_utc_reads_both_forms_and_offsets():
     assert parse_utc("") is None
     assert parse_utc("yesterday") is None
     assert parse_utc(None) is None
+
+
+def test_to_utc_iso_keeps_the_precision_of_its_input():
+    """#826: a burn date written by utc_now() (milliseconds) reaches the
+    disc record as the same text that the burn receipt carries."""
+    for text in ("2026-11-11T10:00:00.123+00:00",
+                 "2026-11-11T10:00:00.000+00:00",
+                 "2026-11-11T10:00:00.123456+00:00",
+                 "2026-11-11T10:00:00.120000+00:00",
+                 "2026-11-11T10:00:00.000000+00:00",
+                 "2026-11-11T10:00:00+00:00"):
+        assert to_utc_iso(text) == text
+    assert to_utc_iso("2026-11-11T12:00:00.250+02:00") == (
+        "2026-11-11T10:00:00.250+00:00")
+    now = utc_now()
+    assert to_utc_iso(now) == now
 
 
 def test_to_utc_iso_and_same_instant():

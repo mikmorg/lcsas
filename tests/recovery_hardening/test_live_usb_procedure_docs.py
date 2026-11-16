@@ -38,7 +38,7 @@ pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _BOOT_TXT = REPO_ROOT / "recovery" / "docs" / "BOOT.txt"
 _WORKFLOW_MD = REPO_ROOT / "docs" / "workflows" / "restore-live-usb.md"
-_UX_CONCERNS_TXT = REPO_ROOT / "recovery" / "docs" / "UX_CONCERNS.txt"
+_UX_CONCERNS_TXT = REPO_ROOT / "docs" / "development" / "recovery" / "UX_CONCERNS.txt"
 
 # Read once at module level; compare case-insensitively throughout.
 _BOOT_TEXT = _BOOT_TXT.read_text(encoding="utf-8").lower()
@@ -147,7 +147,7 @@ def test_ux_concerns_tracks_secure_boot_rationale():
     the permanent on-disc ledger (acceptance: `grep -rni secureboot
     recovery/docs/` hits), not only in repo-side plan files."""
     assert "secureboot" in _UX_CONCERNS_TEXT.lower(), (
-        "recovery/docs/UX_CONCERNS.txt lost the SecureBoot rationale "
+        "docs/development/recovery/UX_CONCERNS.txt lost the SecureBoot rationale "
         "(ID 007). The reason the no-OS path rides current signed live "
         "images -- UEFI Secure Boot default-on + driver churn -- must "
         "stay recorded on-disc."

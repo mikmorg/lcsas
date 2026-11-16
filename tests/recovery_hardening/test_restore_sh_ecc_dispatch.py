@@ -264,7 +264,8 @@ def test_tiers_txt_names_lcsas_ecc() -> None:
 
 
 def test_no_jcea_mirror_anywhere_in_recovery_docs() -> None:
-    for doc in _DOCS.glob("*.txt"):
+    dev_docs = REPO_ROOT / "docs" / "development" / "recovery"  # #724
+    for doc in [*_DOCS.glob("*.txt"), *dev_docs.glob("*.txt")]:
         assert "jcea.es" not in doc.read_text(encoding="utf-8").lower(), (
             f"{doc.name} still references the abandoned jcea.es fan mirror"
         )

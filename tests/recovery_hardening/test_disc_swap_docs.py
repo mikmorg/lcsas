@@ -29,7 +29,7 @@ pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _RECOVER_TXT = REPO_ROOT / "recovery" / "docs" / "RECOVER.txt"
-_UX_CONCERNS_TXT = REPO_ROOT / "recovery" / "docs" / "UX_CONCERNS.txt"
+_UX_CONCERNS_TXT = REPO_ROOT / "docs" / "development" / "recovery" / "UX_CONCERNS.txt"
 
 # Read each file once at module level — tests are static string checks only.
 _RECOVER_TEXT = _RECOVER_TXT.read_text(encoding="utf-8")

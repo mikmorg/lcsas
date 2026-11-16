@@ -866,8 +866,7 @@ Automated tests use a setuid C wrapper called disc-loader to simulate
 disc swaps without human interaction.  In a real restore you must do
 the eject/insert step by hand.  A passing test therefore does NOT
 guarantee that the UX is smooth for a real heir — this section exists
-because the test rig hid the gap for some time (see UX_CONCERNS.txt
-ID 011).
+because the test rig hid the gap for some time.
 
 EXPECTED SWAP COUNT (FIRST-CONTACT COST)
 

@@ -224,7 +224,7 @@ EMERGENCY DRILL  (annually)
     environment, mount the meta disc, physically swap data discs,
     and restore files.  A passing CI
     gate does not substitute for a real drill.  See also
-    recovery/docs/UX_CONCERNS.txt for known UX gaps, and
+    docs/development/recovery/UX_CONCERNS.txt for known UX gaps, and
     recovery/docs/PHYSICAL_DISC_VALIDATION.txt for the physical-media
     burn + blind-restore + ECC-damage-and-repair runbook (the
     hardware-only complement to the software ECC tests).

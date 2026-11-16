@@ -36,7 +36,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOCS = _REPO_ROOT / "recovery" / "docs"
-_CHECKLIST = _DOCS / "READINESS_CHECKLIST.txt"
+_CHECKLIST = _REPO_ROOT / "docs" / "development" / "recovery" / "READINESS_CHECKLIST.txt"
 
 _REVIVAL = (
     "No LCSAS disc is bootable.  The dropped boot stack and the QEMU "
