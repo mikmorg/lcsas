@@ -1623,6 +1623,22 @@ class TestMetaStartHereVariants:
             assert marker in bare, f"no-config variant missing {marker!r}"
         assert "Alice Archivist" not in bare
 
+    def test_start_here_windows_block_warns_about_a_click(self, meta_tree):
+        """#613: a click inside the console window pauses the restore
+        (QuickEdit: the title starts with "Select"), and the Windows block
+        of START_HERE.txt, the first thing a reader reads, said nothing.
+        It now says not to click and how to go on, in both variants."""
+        out, builder = meta_tree
+        content = (out / "START_HERE.txt").read_text(encoding="utf-8")
+        bare = builder._render_meta_start_here(None)
+        for text in (content, bare):
+            block = text[text.index(">>> Windows 10 or 11 <<<"):text.index(">>> macOS <<<")]
+            flat = " ".join(block.split())
+            assert "Do not click inside its black window: a click pauses the restore" in flat
+            assert '(the title starts with "Select")' in flat
+            assert "Press Esc to let it go on." in flat
+            assert flat.index("restore.bat") < flat.index("Do not click")
+
     def test_start_here_tells_heir_what_to_do_when_blocked(self, meta_tree):
         """UX_CONCERNS 004 (#490): a quarantined macOS copy or a noexec /
         FAT copy on Linux refuses to run the binaries.  Both variants carry

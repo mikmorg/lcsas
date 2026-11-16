@@ -134,9 +134,11 @@ in this order.  Each one says how to answer.
      the restore then asks for a disc that does not exist.  Skip only
      when you have no data disc at hand.  Q then ENTER stops (exit
      code 65).
-     Only a run off the META disc itself asks this: a copy of the
-     disc in a folder on this computer, run where it is, does not
-     (set LCSAS_META_DISC to that folder to have it asked).
+     A run off the META disc asks this, and so does a copy of the
+     disc that can be written to (a USB stick, or a folder on this
+     computer) run where it is, as restore.bat does.  A run from the
+     META disc itself that does not move off it (LCSAS_NO_RELOCATE=1)
+     does not ask: that disc cannot come out of the drive.
 
   2. The backup set, when the discs hold more than one.  The sets are
      listed by name, with a note when a set's password is split into
@@ -153,7 +155,9 @@ in this order.  Each one says how to answer.
      accept: it is checked before the restore starts.  Q then ENTER
      stops (exit code 77).  A password that is just the letter q
      cannot be typed here: put it in a file and use --key FILE,
-     with FILE as a full path such as ~/pw.txt.
+     with FILE as a full path such as ~/pw.txt.  A wrong password
+     from --key FILE, LCSAS_PWFILE or LCSAS_PASSWORD is caught the
+     same way: restore.sh says so and asks for it here.
      When the set's password is split, restore.sh asks for the share
      cards instead (see "SHARE CARDS (SPLIT PASSWORDS)").
 
@@ -439,17 +443,22 @@ carry on; delete it yourself when you no longer need it:
 The copies are made writable even though a disc is read-only, so the
 folder can always be removed.  A folder left by another restore.sh, or
 holding the backup sets of another archive, is emptied and used again.
-A folder that holds files of your own is never used or deleted.
-Run off the META disc, restore.sh then says "cannot use ... for the
-recovery tools; trying a temporary folder", and that temporary
-folder (in /tmp, or another place with room) becomes the tools
-folder: a stopped restore carries on with the resume.sh command the
-script prints, until the folder is cleared (most computers empty
-/tmp when they are turned off).  Run where it is (a copy of the META
-disc on this computer), it says "cannot use ... as the tools folder;
-using a temporary one": the run's own files go to a temporary folder
-that is deleted when it ends, so a stopped restore cannot be carried
-on.
+A folder that holds files of your own is never used or deleted:
+restore.sh stops at once with "ERROR: the tools folder ... already
+holds other files" (exit code 1), before anything in it changes, as
+restore.bat does.  Set LCSAS_TOOLS_DIR to a new or empty folder, or
+leave it unset.
+When the tools folder cannot be made (no home folder, say), or run
+off the META disc it has no room or cannot run programs, restore.sh
+says "cannot use ... for the recovery tools; trying a temporary
+folder", and that temporary folder (in /tmp, or another place with
+room) becomes the tools folder: a stopped restore carries on with the
+resume.sh command the script prints, until the folder is cleared
+(most computers empty /tmp when they are turned off).  Run where it
+is (a copy of the META disc on this computer), it says "cannot use
+... as the tools folder; using a temporary one": the run's own files
+go to a temporary folder that is deleted when it ends, so a stopped
+restore cannot be carried on.
 Never restore INTO the tools folder: it is deleted at the end, so
 restore.sh refuses such a target (exit code 65).
 
@@ -570,11 +579,12 @@ folder, and name that folder:
 
 A card file with a mistake in it is named and left out, and the other
 cards are combined if enough of them are left.  If they cannot be
-combined, restore.sh stops with exit code 77.  If lcsas-keyshare
-itself does not work on this computer, restore.sh says so (the cards
-are not to blame): with LCSAS_SHARES_DIR it stops with exit code 77,
-and with typed cards it asks for the password instead.  Rebuild the
-password as below.
+combined, or the password they rebuild is not accepted, restore.sh
+says so and asks for the cards (or P and the password) instead; run
+from a script, with nobody to answer, it stops with exit code 77.  If
+lcsas-keyshare itself does not work on this computer, restore.sh says
+so (the cards are not to blame), and asks for the password instead
+(a script stops with exit code 77).  Rebuild the password as below.
 
 Discs made by an older LCSAS have no marker, and a set whose split was
 never recorded says it is not split: restore.sh then asks for the
@@ -730,8 +740,11 @@ before invoking restore.sh.
 
   LCSAS_PASSWORD=<password>   LCSAS_PWFILE=<file>
       The password, or a file holding it (--key FILE is the same as
-      LCSAS_PWFILE); skips the password prompt.  A wrong one is not
-      asked for again: the run stops with exit code 77.
+      LCSAS_PWFILE); skips the password prompt.  A wrong one is
+      caught before the restore starts and asked for on the keyboard
+      when someone can answer (see LCSAS_INTERACTIVE); run from a
+      script, the run stops with exit code 77.  The file itself is
+      never changed.
 
   LCSAS_SHARES_DIR=<folder>
       A folder of share card files, one card per file: the password
