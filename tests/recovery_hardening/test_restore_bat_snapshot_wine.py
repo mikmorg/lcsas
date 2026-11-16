@@ -14,14 +14,16 @@ uses); the truth source is windows-e2e on a real runner.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from tests.recovery_hardening._diff_helpers import non_marker_files
 from tests.recovery_hardening.test_restore_bat_wine_smoke import (
     REPO_ROOT,
+    RESTORE_EXE,
     TIMEOUT,
-    _fixture_meta,
     _init_prefix,
     _make_meta_tree,
     _map_drive,
@@ -29,8 +31,6 @@ from tests.recovery_hardening.test_restore_bat_wine_smoke import (
     _stop_test_wineserver,  # noqa: F401  (autouse: remove each prefix)
     pytestmark,  # noqa: F401  (the wine/skip marks apply here too)
 )
-
-FIXTURE_SNAPSHOTS = REPO_ROOT / "recovery" / "tests" / "fixtures" / "repo" / "snapshots"
 
 
 def _run(env: dict[str, str], args: list[str], stdin_data: str,
@@ -49,31 +49,44 @@ def _run(env: dict[str, str], args: list[str], stdin_data: str,
     )
 
 
-def _a_snapshot_id() -> str:
-    ids = sorted(p.name for p in FIXTURE_SNAPSHOTS.iterdir()) if FIXTURE_SNAPSHOTS.is_dir() else []
-    if not ids:
-        pytest.skip("fixture repo not generated; run gen_fixture.py")
-    return ids[0]
+def _built_meta(tmp_path: Path) -> tuple[dict[str, str], Path, str]:
+    """E: = a meta tree whose set holds one snapshot of proof.txt
+    (password "test"); returns the env, the tree and the snapshot id."""
+    if not RESTORE_EXE.is_file():
+        pytest.skip(f"{RESTORE_EXE} not present")
+    sys.path.insert(0, str(REPO_ROOT / "recovery" / "tests"))
+    import test_e2e  # sibling fixture builder
+
+    repo = tmp_path / "repo-src"
+    snap = test_e2e.build_repo(repo, "test", {"proof.txt": b"snapshot proof\n"})
+    prefix = tmp_path / "wineprefix"
+    env = _init_prefix(prefix)
+    meta = tmp_path / "meta"
+    _make_meta_tree(meta, repo_src=repo)
+    _map_drive(prefix, "e", meta)
+    return env, meta, snap
 
 
 def test_snapshot_flag_restores_that_snapshot(tmp_path: Path) -> None:
-    env, meta = _fixture_meta(tmp_path)
-    snap = _a_snapshot_id()[:8]
-    res = _run(env, ["--snapshot", snap], "E:\\restored\n", LCSAS_PW="test")
+    env, meta, snap = _built_meta(tmp_path)
+    res = _run(env, ["--snapshot", snap[:8]], "E:\\restored\n", LCSAS_PW="test")
     out = res.stdout + res.stderr
     assert res.returncode == 0, f"rc={res.returncode}\n{out}"
-    assert "Files restored to: E:\\restored" in out, out
+    assert "proof.txt" in {p.name for p in non_marker_files(meta / "restored")}, out
 
 
 def test_snapshot_flag_reaches_tier_1(tmp_path: Path) -> None:
-    """An id no snapshot has: tier 1 is asked for it and fails, so the
-    restore does not finish (with `latest` it would)."""
-    env, _meta = _fixture_meta(tmp_path)
-    res = _run(env, ["--snapshot", "0000aaaa"], "E:\\restored\n\n\n\n", LCSAS_PW="test")
+    """An id the set has no snapshot for: tier 1 is asked for it and
+    fails, so the restore does not finish (with latest it would)."""
+    env, meta, snap = _built_meta(tmp_path)
+    assert not snap.startswith("0000aaaa")
+    res = _run(env, ["--snapshot", "0000aaaa"], "E:\\restored\n", LCSAS_PW="test")
     out = res.stdout + res.stderr
     assert "[tier 1] running" in out, out
     assert res.returncode != 0, out
     assert "Files restored to" not in out, out
+    restored = meta / "restored"
+    assert not restored.exists() or not non_marker_files(restored), out
 
 
 @pytest.mark.parametrize("snap", ["a1b2&echo HACKED", "not-hex", ""])

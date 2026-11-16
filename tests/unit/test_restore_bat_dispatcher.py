@@ -594,8 +594,10 @@ def test_restore_bat_snapshot_flag_reaches_both_tiers_and_the_resume():
     assert code.index("call :parse_args %*") < code.index(":resume_loaded")
     start = code.index(":parse_args")
     parse = code[start:start + 25]
-    assert ('for /f "delims=0123456789abcdefABCDEF" %%C in ("!SNAP!") '
-            'do set "SNAP_BAD=1"') in parse, parse
+    assert ("for %%H in (0 1 2 3 4 5 6 7 8 9 a b c d e f) "
+            "do call :strip_hex %%H") in parse, parse
+    assert 'if defined SNAP_LEFT set "SNAP_BAD=1"' in parse, parse
+    assert 'if defined SNAP_LEFT set "SNAP_LEFT=!SNAP_LEFT:%~1=!"' in code
     assert [ln for ln in code if "--snapshot %SNAP% " in ln], "tier 1 must get SNAP"
     assert [ln for ln in code if ' restore %SNAP% "%TARGET%"' in ln], "tier 2 must get SNAP"
     assert not [ln for ln in code if ln.startswith('"%BIN%"')

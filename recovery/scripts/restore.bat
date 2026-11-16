@@ -1599,9 +1599,18 @@ if /i "!SNAP!"=="latest" (
     set "SNAP=latest"
     goto :parse_args
 )
-if not "!SNAP:~64!"=="" set "SNAP_BAD=1"
-for /f "delims=0123456789abcdefABCDEF" %%C in ("!SNAP!") do set "SNAP_BAD=1"
+REM What is left once every 0-9 and a-f (any case) is taken out must be
+REM nothing.  One letter at a time, in a call: wine's cmd neither
+REM expands !SNAP! in a for /f string nor !VAR:x=! in a for body.
+set "SNAP_LEFT=!SNAP!"
+for %%H in (0 1 2 3 4 5 6 7 8 9 a b c d e f) do call :strip_hex %%H
+if defined SNAP_LEFT set "SNAP_BAD=1"
 goto :parse_args
+
+:strip_hex
+REM %~1 = one hex letter: take it out of SNAP_LEFT.
+if defined SNAP_LEFT set "SNAP_LEFT=!SNAP_LEFT:%~1=!"
+goto :eof
 
 :write_pw
 REM Write PW_VALUE into PWFILE, then forget it.  `echo !PW_VALUE!` runs
