@@ -242,8 +242,9 @@ def test_thin_image_padded_moves_up_a_rung(tmp_path: Path) -> None:
     parity; padded, dvdisaster puts it on the DVD rung.  Checks the
     size and that the ECC header sits right after the ISO volume, where
     dvdisaster looks for it.  A full dvdisaster -t of a 4.7 GB image
-    takes over 10 minutes, so it is not run here; the experiment in
-    #732 ran it (exit 0).  Needs ~5.5 GB of temp space.
+    takes well over 10 minutes, so it is not run here; in the #732
+    experiment, -t on such an image recognised the RS03 header and found
+    every data sector good.  Needs ~5.5 GB of temp space.
     """
     runner = SubprocessDVDisasterRunner()
     src, _manifest = _padded_fixture(tmp_path, RNG_SEED + 5)
