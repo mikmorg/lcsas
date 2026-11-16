@@ -10,12 +10,12 @@ import argparse
 
 from lcsas.cli.common import (
     _load_config_opt,
-    _open_existing_catalog,
-    _resolve_db_path,
+    _open_catalog,
     _validate_config_or_exit,
 )
 from lcsas.log import get_logger
 from lcsas.restore.orchestrator import (
+    PlannedRestore,
     plan_restore,
     prepare_restore,
     restore_from_disc,
@@ -33,17 +33,17 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
         return 1
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    conn = _open_existing_catalog(_resolve_db_path(args, config))
-    try:
+    with _open_catalog(args, config, mode="read") as conn:
         planned = plan_restore(
             config, conn, repo_name=args.repo, snapshot_id=args.snapshot_id,
         )
-    finally:
-        conn.close()
     if planned is None:
         return 1
+    return _log_pick_list(args, planned)
 
-    # Display results
+
+def _log_pick_list(args: argparse.Namespace, planned: PlannedRestore) -> int:
+    """Print the ``restore plan`` pick list; 1 when packs are missing."""
     pick_list = planned.pick_list
     logger.info(f"Restore Pick List for snapshot {args.snapshot_id}")
     logger.info(f"  Repository: {args.repo}")
@@ -118,16 +118,13 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         return 1
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    conn = _open_existing_catalog(_resolve_db_path(args, config))
-    try:
+    with _open_catalog(args, config, mode="read") as conn:
         planned = prepare_restore(
             config, conn,
             repo_name=args.repo,
             snapshot_id=args.snapshot_id,
             password_file=args.password_file,
         )
-    finally:
-        conn.close()
     if planned is None:
         return 1
 
