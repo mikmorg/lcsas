@@ -1,5 +1,4 @@
-r"""Hardening (#807, #802): restore.bat --snapshot ID, and LCSAS_REPO with
-one backup set, under wine's cmd.
+r"""restore.bat --snapshot ID, and LCSAS_REPO with one set, under wine (#807, #802).
 
 * ``restore.bat --snapshot ID`` restores that snapshot (tier 1 gets
   ``--snapshot ID``, not ``latest``); an ID with anything but 0-9 and

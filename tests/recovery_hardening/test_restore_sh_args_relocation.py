@@ -1,5 +1,6 @@
-"""Hardening (#800, #625, #807, #802, #806): restore.sh reads its
-arguments before it copies anything off the META disc.
+"""restore.sh reads its arguments before it copies anything off the META disc (#800).
+
+Hardening for #800, #625, #807, #802 and #806.
 
 * #800: run from the META disc, ``--help``, ``--version`` and
   ``--check-disc IMAGE`` copied about 130 MB of tools first and left the
