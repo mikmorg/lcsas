@@ -913,7 +913,7 @@ def retry_from_alternates_batch(
     Returns list of packs that could not be retrieved.
 
     Phase 21.7: ``iso_shas`` is the same per-label SHA-256 dict
-    computed once in cmd_restore_exec from the catalog.  When
+    computed once in prepare_restore from the catalog.  When
     supplied, each alternate volume's ISO is integrity-checked
     (against the sibling .iso file, if present) before its packs
     are read — so a corrupt alternate that would otherwise silently
