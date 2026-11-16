@@ -188,9 +188,9 @@ def test_macos_e2e_names_the_fixture_set_by_its_name() -> None:
     """macos-e2e.yml's LCSAS_REPO legs pass the set's name, which must be
     the name fixture_lib gives it (the id is a fresh UUID each build).
 
-    The macOS fixture has ONE set, and restore.sh takes a lone set without
-    reading LCSAS_REPO, so these legs do not test name matching (that is
-    test_restore_sh_journey's job).  No step may claim they do."""
+    The macOS fixture has ONE set.  restore.sh checks that LCSAS_REPO
+    names even a lone set (#802), but picking one set among several is
+    test_restore_sh_journey's job: no step may claim these legs test it."""
     yml = (REPO_ROOT / ".github" / "workflows" / "macos-e2e.yml").read_text(
         encoding="utf-8"
     )
