@@ -12,6 +12,10 @@ test cannot complete the restore with the unmodified production meta
 disc, the blind rig won't either.
 
 Run as:  sudo python3 scripts/smoke_single_drive.py  (root: mount, cdemu)
+
+A drill aid run by hand on the lab VM (CDEmu is shared: take a broker
+window), not a CI gate.  CI runs the same restore.sh loop and driver
+without root or cdemu in tests/integration/test_interactive_restore.py.
 """
 
 from __future__ import annotations
@@ -210,12 +214,30 @@ def build_meta_disc() -> None:
 # ---------------------------------------------------------------------------
 
 
+def cdemu_cmd(*args: str) -> list[str]:
+    """``bash cdemu_drive.sh ARGS``, as the user who ran sudo when root.
+
+    cdemu_drive.sh refuses root: cdemu-daemon is that user's systemd
+    --user service on their session bus (as cdr-robotctl runs it).
+    """
+    cmd = ["bash", str(CDEMU), *args]
+    user = os.environ.get("SUDO_USER")
+    if os.geteuid() != 0 or not user or user == "root":
+        return cmd
+    uid = subprocess.run(["id", "-u", user], check=True, capture_output=True,
+                         text=True).stdout.strip()
+    return ["sudo", "-u", user,
+            f"XDG_RUNTIME_DIR=/run/user/{uid}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+            *cmd]
+
+
 def cdemu(*args: str) -> None:
-    sh(["bash", str(CDEMU), *args], stdout=subprocess.DEVNULL)
+    sh(cdemu_cmd(*args), stdout=subprocess.DEVNULL)
 
 
 def cdemu_device() -> str:
-    out = subprocess.run(["bash", str(CDEMU), "device"], check=True,
+    out = subprocess.run(cdemu_cmd("device"), check=True,
                          capture_output=True, text=True).stdout.strip()
     return out or "/dev/sr0"
 

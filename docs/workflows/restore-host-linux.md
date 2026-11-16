@@ -281,12 +281,13 @@ assembling required packs into a local cache and running
   `execute_restore`, `verify_cache_completeness`.
 - `tests/unit/test_multi_copy_restore.py` — alternate-volume retry,
   partial-volume ingest, full multi-disc workflows.
-- `tests/integration/test_interactive_restore.py` — TTY prompt loop
-  (skipped without root and binaries). Ported to the current
-  `restore.sh` interface (#756), but not yet run as root, so it is not
-  counted as working coverage. `tests/unit/test_restore_sh_driver.py`
-  checks its command line and prompts against `restore.sh` and tier 1
-  on every run.
+- `tests/integration/test_interactive_restore.py` — `restore.sh`'s
+  TTY prompt loop with one drive: disc swaps, the wrong disc, an empty
+  drive, `q` (exit 75). No root: the discs are unpacked folders renamed
+  in and out of the drive folder. Skipped without `rustic` and
+  `xorriso`; CI's integration job has both.
+  `tests/unit/test_restore_sh_driver.py` checks its command line and
+  prompts against `restore.sh` and tier 1 on every run.
 
   **Gaps:**
   - No test asserts behaviour when `--volume-dir` exists but is empty
@@ -372,10 +373,11 @@ every required pack; ingestion logs `ingested N packs` per volume.
   drive, swap discs" pattern is covered for tier 1's prompt by
   `recovery/tests/test_multidisc.py::case_interactive_swap` and for
   `restore exec`'s alternate-disc prompts by the mocked-`input()` tests
-  in `tests/unit/test_cli_restore.py`. The `restore.sh` path is not
-  covered yet: `tests/integration/test_interactive_restore.py` was
-  ported to the current flags and prompts (#756) but has not been run
-  as root.
+  in `tests/unit/test_cli_restore.py`. The `restore.sh` path is
+  covered by `tests/integration/test_interactive_restore.py` (no root;
+  run by CI's integration job). A real optical device node is swapped
+  only by `scripts/smoke_single_drive.py` (cdemu, root), a drill aid
+  run by hand.
 
 **Source refs:**
 - Ingest entry: `RestoreExecutor.ingest_volume()` in
