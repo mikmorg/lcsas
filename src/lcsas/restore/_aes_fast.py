@@ -32,12 +32,19 @@ uses it when it is safe and proven correct, else the pure code:
    as a command-line argument (``-K <hex>``): ``-pass`` and ``-kfile``
    feed a password through a key-derivation function and cannot carry a
    raw key, and OpenSSL 3 has no interactive mode that would read the
-   command from stdin.  While the process runs, its command line is
-   readable by other users of the same computer (on Linux,
+   command from stdin.  The key there is the repository's data key
+   (restic's master ``encrypt`` key, the same for every blob), not the
+   password; with it and the discs anyone can decrypt the whole
+   repository.  While the process runs, its command line is readable
+   by other users of the same computer (on Linux,
    ``/proc/<pid>/cmdline`` is world-readable unless /proc is mounted
-   with ``hidepid``).  Starting a process costs about 7 ms, so inputs
-   under ``_AESF_CLI_MIN_BYTES`` go to the pure code, which is faster
-   there; that also keeps the small key-file decryption out of argv.
+   with ``hidepid``), and a host with process accounting or an exec
+   audit log (auditd, for example) writes it to that log, where it
+   stays.  ``LCSAS_TIER3_AES=pure`` (below) keeps it off the command
+   line.  Starting a process costs about 7 ms, so inputs under
+   ``_AESF_CLI_MIN_BYTES`` go to the pure code, which is faster there;
+   that also keeps the small key-file decryption (under the
+   password-derived key) out of argv.
 
 3. Pure Python (``_aes_pure.aes_ctr``), always available.
 
@@ -126,8 +133,12 @@ def _aesf_bind(path):
     return lib
 
 
-def _aesf_lib_ctr(lib, key, iv, data):
-    """AES-256-CTR of *data* (CTR: encrypt == decrypt) through EVP."""
+def _aesf_lib_ctr(lib, key, iv, data, step=1 << 30):
+    """AES-256-CTR of *data* (CTR: encrypt == decrypt) through EVP.
+
+    EVP_EncryptUpdate takes an int length, so *data* goes in pieces of
+    *step* bytes (a test sets a small one).
+    """
     if len(key) != 32 or len(iv) != 16:
         raise ValueError("AES-256-CTR needs a 32-byte key and a 16-byte IV")
     ctx = lib.EVP_CIPHER_CTX_new()
@@ -140,7 +151,6 @@ def _aesf_lib_ctr(lib, key, iv, data):
         out = ctypes.create_string_buffer(n + 32)
         outl = ctypes.c_int(0)
         done = 0
-        step = 1 << 30
         for start in range(0, n, step):
             piece = data if n <= step else data[start:start + step]
             if not isinstance(piece, bytes):

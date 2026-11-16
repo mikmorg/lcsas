@@ -32,6 +32,9 @@ from lcsas.db.schema import create_all
 from lcsas.db.volumes import list_volumes
 from lcsas.ecc.dvdisaster import (
     MIN_EFFECTIVE_REDUNDANCY_PCT,
+    rs03_pad_target_bytes,
+    rs03_redundancy_pct,
+    rs03_staged_image_bytes,
     smallest_fitting_medium_bytes,
 )
 from lcsas.iso.xorriso import SubprocessXorrisoRunner
@@ -190,9 +193,12 @@ def test_production_plan_keeps_its_rs03_rung(tmp_path, monkeypatch):
     for vol_packs, _bytes in plans:
         image = reserve + sum(pack_disc_bytes(p.size_bytes) for p in vol_packs)
         assert image <= media.usable_bytes
-        padded = smallest_fitting_medium_bytes(image)
-        assert padded == media.capacity_bytes
-        assert (padded - image) / image * 100 >= MIN_EFFECTIVE_REDUNDANCY_PCT
+        # After any #732 padding, the augmented image fits the medium and
+        # its parity clears the floor.
+        target = rs03_pad_target_bytes(image, media.capacity_bytes) or image
+        assert rs03_staged_image_bytes(image, media.capacity_bytes) \
+            == smallest_fitting_medium_bytes(target) <= media.capacity_bytes
+        assert rs03_redundancy_pct(target) >= MIN_EFFECTIVE_REDUNDANCY_PCT
 
 
 def test_metadata_too_large_stops_before_staging(tmp_path, monkeypatch):

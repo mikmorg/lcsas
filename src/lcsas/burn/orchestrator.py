@@ -70,10 +70,17 @@ from lcsas.db.volumes import (
 from lcsas.ecc.dvdisaster import (
     MIN_EFFECTIVE_REDUNDANCY_PCT,
     DVDisasterRunner,
+    rs03_pad_target_bytes,
+    rs03_redundancy_pct,
+    rs03_staged_image_bytes,
     smallest_fitting_medium_bytes,
 )
 from lcsas.exceptions import StagingError
-from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
+from lcsas.iso.xorriso import (
+    XORRISO_DEFAULT_PADDING_BYTES,
+    MediaStatus,
+    XorrisoRunner,
+)
 from lcsas.packs.snapshot_coverage import LeftOutSnapshot, snapshot_coverage
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import (
@@ -557,8 +564,9 @@ class BurnOrchestrator:
         """Master a volume's staging tree into its ISO (steps 6-8 of
         :meth:`_stage_single_volume`; also :meth:`_refinalise_kept`).
 
-        Checks the tree's size, masters it under the working name, applies
-        RS03 on ECC media, checks the ISO's size, records its hash and
+        Checks the tree's size, masters it under the working name, pads a
+        thin part-filled ISO up an RS03 rung (#732) and applies RS03 on ECC
+        media, checks the ISO's size, records its hash and
         length on the session volume, then gives it its final name.
         Returns ``(sha256, size)``.  The caller cleans up on failure.
         """
@@ -603,6 +611,9 @@ class BurnOrchestrator:
         )
 
         if media_type.ecc_overhead_pct > 0:
+            self._pad_for_rs03(
+                staging_root, work_iso, vol_label, volume_id, media_type,
+            )
             self._check_redundancy(
                 work_iso, vol_label, volume_id,
             )
@@ -640,6 +651,46 @@ class BurnOrchestrator:
         )
         os.replace(work_iso, iso_output)
         return iso_sha256, iso_size
+
+    def _pad_for_rs03(
+        self, staging_root: Path, iso: Path, vol_label: str,
+        volume_id: int, media_type: MediaType,
+    ) -> None:
+        """Pad a part-filled ISO so its RS03 parity clears the floor (#732).
+
+        An ISO just under a lower rung of dvdisaster's ladder (say 4.5 GB
+        on a BD25 volume) would get only a few percent of parity.  Master
+        it again with enough zero padding inside the ISO volume that
+        dvdisaster moves it up a rung, where the parity is large.  Nothing
+        changes when the ISO already clears the floor, or when no rung
+        that fits the medium would (then _check_redundancy decides).
+        """
+        iso_size = iso.stat().st_size
+        if iso_size <= 0:
+            return
+        try:
+            target = rs03_pad_target_bytes(iso_size, media_type.capacity_bytes)
+        except ValueError:
+            return  # too large for any medium: augment_iso reports it
+        if target is None or target <= iso_size:
+            return
+        self._xorriso.create_iso(
+            staging_root, iso, vol_label, expected_bytes=target,
+            padding_bytes=target - iso_size + XORRISO_DEFAULT_PADDING_BYTES,
+        )
+        padded = iso.stat().st_size
+        if padded < target:
+            raise RuntimeError(
+                f"Padding the ISO of {vol_label} for RS03 left it at "
+                f"{padded:,} bytes, short of the {target:,} needed."
+            )
+        detail = (
+            f"ISO padded from {iso_size:,} to {padded:,} bytes so RS03 "
+            f"parity is {rs03_redundancy_pct(padded):.0f}%, not "
+            f"{rs03_redundancy_pct(iso_size):.1f}% (#732)"
+        )
+        _logger.info("Volume %s: %s.", vol_label, detail)
+        add_event(self._conn, volume_id, "NOTE", detail=detail)
 
     def _check_redundancy(
         self, iso: Path, vol_label: str, volume_id: int,
@@ -1011,10 +1062,11 @@ class BurnOrchestrator:
         # repository metadata) AND its ISO — ISOs persist for the whole
         # burn session (BURN-06), so the padded ISO sizes are SUMMED, not
         # maxed.  On ECC media (ecc_overhead_pct > 0) dvdisaster's RS03
-        # augmented mode pads each ISO up to the smallest fitting medium (a 1 GB
-        # ISO becomes a 4.7 GB DVD image), and augment_iso additionally
-        # duplicates the ISO while augmenting — budget one extra copy of
-        # the largest padded ISO.
+        # augmented mode pads each ISO up to a full medium (a 1 GB ISO
+        # becomes a 4.7 GB DVD image; #732 padding may move a thin one up
+        # a rung, which rs03_staged_image_bytes counts), and augment_iso
+        # additionally duplicates the ISO while augmenting — budget one
+        # extra copy of the largest padded ISO.
         apply_ecc = mt.ecc_overhead_pct > 0
         metadata_reserve = reserve
         required_bytes = 0
@@ -1023,7 +1075,8 @@ class BurnOrchestrator:
             # ~5% ISO 9660 filesystem overhead on top of the staged tree.
             est_iso = int(vol_bytes * 1.05) + metadata_reserve
             padded_iso = (
-                smallest_fitting_medium_bytes(est_iso) if apply_ecc else est_iso
+                rs03_staged_image_bytes(est_iso, mt.capacity_bytes)
+                if apply_ecc else est_iso
             )
             required_bytes += vol_bytes + metadata_reserve + padded_iso
             max_padded_iso = max(max_padded_iso, padded_iso)
