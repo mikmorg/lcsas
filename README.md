@@ -842,7 +842,8 @@ backports on the host if containers fail in unexplained ways.
 
 ### Continuous integration
 
-`.github/workflows/test.yml` runs on every push and pull request:
+`.github/workflows/test.yml` runs once on every pull request commit and on every
+push to master (a tag push starts no workflow):
 
 1. Installs rustic from the pinned release tarball above
 2. `apt-get install`s xorriso + dvdisaster

@@ -29,7 +29,11 @@ name: bin-parity
 # the schedule.  test_schedule_only_workflows.py keeps it that way.
 
 on:
+  # push: master only (#837).  Without `branches:`, a tag push started
+  # this workflow (paths filters do not apply to tags), and a PR branch
+  # push ran it a second time beside pull_request.
   push:
+    branches: [master]
     paths:
       - 'recovery/src/**'
       - 'recovery/vendored/**'

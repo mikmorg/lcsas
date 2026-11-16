@@ -11,8 +11,11 @@ on:
   # and the path relevance moves into the `changes` job, so the always-
   # reporting `audit-gate-required` job can be a required status check
   # without blocking PRs that never touch gate paths ("Expected" forever).
-  # push keeps its filter for master monitoring.
+  # push keeps its filter for master monitoring, and names master (#837):
+  # without `branches:` a tag push started the gate (paths filters do not
+  # apply to tags) and a PR branch push ran it beside pull_request.
   push:
+    branches: [master]
     paths:
       - "recovery/src/**"
       - "recovery/tests/**"
