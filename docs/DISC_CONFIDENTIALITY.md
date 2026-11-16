@@ -50,6 +50,20 @@ following in the clear. The meta disc carries the same key files and
 - **`START_HERE.txt` and `CONFIG_SUMMARY.txt`**: the archive owner,
   description and technical contact when the config sets them, and every
   configured repository's name and key id. Filesystem paths are left out.
+- **`PASSWORD_INFO.txt`**: every configured repository's name and key id,
+  and the **base name of its password file** (`family.key`, not the
+  folder it is in). This is by decision (#816): the name stays. So do
+  not put the password, or a hint to it, in that file name.
+- **File modification times.** The pack files and each repository's
+  index, snapshot and key files keep the times they were written on the
+  mirror, and the disc records them. They show when each backup ran,
+  much as the catalog's snapshot times do.
+- **On discs made before v1.0.0-rc10 only: Python `.pyc` files.** The
+  LCSAS source copied to a data disc (`lcsas_src/`), and the bundled
+  Python on a meta disc, could carry `__pycache__/*.pyc` files. Each one
+  records the full path of the file it was compiled from on the computer
+  that made the disc, which shows a user name and a folder layout.
+  Discs made since leave all `.pyc` files out (#815).
 
 In short: a single disc reveals your whole backup *topology* — what
 repositories exist, how big they are, when they were backed up, from which

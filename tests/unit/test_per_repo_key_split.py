@@ -256,6 +256,30 @@ def test_recorded_kn_wins_per_repository(tmp_path: Path) -> None:
         assert "any 2 of 3" not in text
 
 
+def test_unrecorded_set_never_borrows_another_sets_record(
+    tmp_path: Path,
+) -> None:
+    """#626: two split sets, only photos has a record (3 of 4).  The burn
+    passes that record as ``escrow_override`` too (the first record on
+    the volume).  videos has no record: its text gives its config K/N
+    (3 of 5), never photos' 3 of 4."""
+    config = _mixed_config(tmp_path)
+    config.repositories["videos"] = _repo(
+        tmp_path, "videos", key_split=True, key_threshold=3, key_shares=5,
+    )
+    kw = {"recorded": {"photos": (3, 4)}, "escrow_override": (3, 4)}
+    view = split_view(config, **kw)
+    assert view is not None
+    assert view.by_repo == {"photos": (3, 4), "videos": (3, 5)}
+    texts = _render(tmp_path, config, "borrow", **kw)
+    info = texts["PASSWORD_INFO.txt"]
+    for text in texts.values():
+        assert "photos : any 3 of 4 share cards" in text
+        assert "videos : any 3 of 5 share cards" in text
+    videos = info[info.index("Repository: videos"):]
+    assert "Password: SPLIT into 5 share cards (any 3 rebuild it)" in videos
+
+
 def test_repositories_split_differently_get_the_list(tmp_path: Path) -> None:
     config = LCSASConfig(
         mirror_base_path=tmp_path, staging_path=tmp_path,
