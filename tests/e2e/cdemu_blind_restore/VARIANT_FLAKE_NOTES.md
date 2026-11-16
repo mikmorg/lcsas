@@ -3,10 +3,15 @@
 Tracks the residual variance in blind-restore variants and the
 historical flakes we have since closed.
 
+Scores: verify.sh runs 16 checks today, 9 OUTCOME and 7 CONDUCT
+(#827), and a run passes only when every one of them runs and passes.
+Scores dated before 2026-06 were on the 15-check scale of the time
+(11/15, 15/15); they are kept as recorded.
+
 The full variant set driven by `run_variant.sh` is: `default`
 (== `single-key`), `single-tenant`, `5-tenant`, `no-catalog`,
 `tier1-missing`, `tier1-tier2-missing`, `split-key-2of5`,
-`split-key-docs`, and `windows`. Every variant is cost-gated behind
+`split-key-docs`, `mixed-split`, and `windows`. Every variant is cost-gated behind
 `LCSAS_BLIND_ACK_COST=1` (it spawns a real headless Claude agent and
 burns API credits — see the `make blind-restore*` targets).
 
@@ -14,21 +19,23 @@ burns API credits — see the `make blind-restore*` targets).
 
 | Variant | Status | Notes |
 |---|---|---|
-| `default` / `single-key` | stable 15/15 | the gate that runs in PM cycles; plaintext password, standard flow |
-| `single-tenant` | stable 15/15 | promoted cycle 8 (PR #277, closes #256) — no-prompt fast path |
-| `5-tenant` | stable 15/15 | promoted cycle 7 (2026-05-27) — multi-tenant prompt stress |
-| `no-catalog` | stable 15/15 | promoted cycle 7 (2026-05-27) — hash-only swap-prompt path |
+| `default` / `single-key` | stable | the gate that runs in PM cycles; plaintext password, standard flow |
+| `single-tenant` | stable | promoted cycle 8 (PR #277, closes #256) — no-prompt fast path |
+| `5-tenant` | stable | promoted cycle 7 (2026-05-27) — multi-tenant prompt stress |
+| `no-catalog` | stable | promoted cycle 7 (2026-05-27) — hash-only swap-prompt path |
 | `tier1-missing` | **stable, promoted 2026-06-15** | tier-1 binary absent → restore.sh rides the fallback path; scored 16/16 on two consecutive runs (issue #227) |
-| `tier1-tier2-missing` | **stable 15/15** | promoted cycle 9 2026-05-28 (PR #285 + #286); root cause + fix recorded below |
+| `tier1-tier2-missing` | **stable** | promoted cycle 9 2026-05-28 (PR #285 + #286); root cause + fix recorded below |
 | `split-key-2of5` | tooling smoke | scripted prompt spoon-feeds the combiner + restore commands; cheap regression catcher for the share-reconstruction tools |
-| `split-key-docs` | acceptance gate | KEY-04 docs-driven; scenario-only prompt + 2 production `-card.txt` artifacts, agent derives every command from on-disc text. Must score 15/15 twice consecutively before any heir-contract change merges |
-| `mixed-split` | new 2026-11 (#587) | one archive: alpha split 2-of-3 in `[repos.alpha]`, bravo ordinary; split-key-docs' prompt and 2 cards, but the data discs and a config-built meta disc carry the per-repository split text |
-| `windows` | BLOCKED | UX-08 layer-3 restore.bat-under-wine journey; hard-blocked on UX-01 (restore.bat repo discovery) + INFRA-01 (windows fixture builder). Fails loud with that reason rather than scoring a meaningless run |
+| `split-key-docs` | acceptance gate | KEY-04 docs-driven; scenario-only prompt + 2 production `-card.txt` artifacts, agent derives every command from on-disc text. Must pass every check (16/16 today) twice consecutively before any heir-contract change merges |
+| `mixed-split` | stable | added 2026-11 (#587); one archive: alpha split 2-of-3 in `[repos.alpha]`, bravo ordinary; split-key-docs' prompt and 2 cards, but the data discs and a config-built meta disc carry the per-repository split text |
+| `windows` | NOT BUILT | UX-08 layer-3 restore.bat-under-wine journey. Its blockers (UX-01, INFRA-01) landed, and the owner decided (2026-10-30, #479) to retire it once the manual Windows drill (#476) passes. Fails loud, spending nothing, until then |
 
 The XFAIL ledger (`XFAIL.list`, enforced by
 `tests/recovery_hardening/test_blind_variant_xfail_ledger.py`) is
-**currently empty** — every runnable variant above either passes or is
-hard-blocked on a tracked dependency (`windows`), not flaking. Add a
+**currently empty** — every runnable variant above passed every check
+in the rc9 sweep (2026-11-14; the drill log is in
+`docs/development/recovery/READINESS_CHECKLIST.txt`), and `windows` is
+not built (above), not flaking. Add a
 line to `XFAIL.list` only when a new variant has a tracked,
 expected-fail bug; an expired entry fails the hardening suite.
 
@@ -39,7 +46,7 @@ expected-fail bug; an expired entry fails the hardening suite.
 > Recorded for posterity. This was fixed by PR #285 (bundled zstandard
 > reachable in a RAM dir) + PR #286 (iso9660 catalog opened
 > `immutable=1` with `conn.close()`, fixing the EBUSY that blocked disc
-> swaps). The variant has scored 15/15 every run since and was promoted
+> swaps). The variant has scored full marks every run since and was promoted
 > out of xfail on 2026-05-28. Kept here because the failure mode is a
 > realistic tier-3 trap worth understanding.
 
@@ -85,7 +92,7 @@ genuinely unactionable from inside the framed protocol.
 The `agent_prompt.txt` Step 3 / Step 4 protocol is unambiguous and
 the verify.sh `restore_complete_check`, `script_invoke_check`, and
 `no_authoring_check` regexes work correctly on a successful run
-(the `default` variant scores 15/15 every run).
+(the `default` variant scored 15/15, full marks then, every run).
 
 Tightening the prompt could not rescue a silent process death:
 
