@@ -775,16 +775,19 @@ at the catalog layer.  The full transition table is the
 ```text
 STAGING       → BURNING, DEPRECATED, DESTROYED
 BURNING       → BURNED, VERIFIED, STAGING, DESTROYED
-BURNED        → BURNING, VERIFIED, STAGING, DESTROYED
+BURNED        → VERIFIED, DESTROYED
 VERIFIED      → DEPRECATED, DESTROYED, CONSOLIDATING
 CONSOLIDATING → DEPRECATED, VERIFIED
 DEPRECATED    → DESTROYED
 DESTROYED     → (terminal)
 ```
 
-(`BURNED → BURNING` is the re-burn of a BURNED volume with no disc recorded,
-which a failed post-burn verify left behind before #483.  Since #483 a
-failed verify returns the volume to `STAGING`.)  The CHECK constraint in the schema (currently v10) enumerates
+(A `BURNED` volume never goes back to `BURNING` or `STAGING` (#810): a
+disc of it exists, and `STAGING` would let `session abort` or `catalog
+reconcile --fix` delete it.  `burn --session` burns a `BURNED` volume
+without changing its status, then makes it `VERIFIED` when the new disc
+passes.  A failed verify returns a never-burned volume to `STAGING`
+(#483).)  The CHECK constraint in the schema (currently v10) enumerates
 the legal statuses (`src/lcsas/db/schema.py`).  The `CONSOLIDATING`
 status was added by the v4→v5 migration in the same module.
 
@@ -794,10 +797,10 @@ status was added by the v4→v5 migration in the same module.
 | ------------------------------ | -------------------------------------------------- | ----------------------------------------------- |
 | `STAGING`/`BURNING`/`BURNED → VERIFIED` | `catalog import-receipts` w/ `verify_passed=true` and a hash matching the staged ISO (offline-burn receipt; #669, #670) | `cmd_catalog_import`   |
 | `STAGING`/`BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=null` (`burn-iso --no-verify`) | `cmd_catalog_import`   |
-| `BURNING`/`BURNED → STAGING`, or stays `STAGING` | `catalog import-receipts` w/ `verify_passed=false`, volume with no disc (#483, #670) | `cmd_catalog_import`                     |
+| `BURNING → STAGING` (or back to `BURNED` when it was `BURNED` before that burn), or stays `STAGING`/`BURNED` | `catalog import-receipts` w/ `verify_passed=false`, volume with no disc (#483, #670, #810) | `cmd_catalog_import`                     |
 | `BURNED → VERIFIED`            | `lcsas verify --mark-verified`                     | `cmd_verify` in `src/lcsas/cli/commands/verify.py`         |
 | `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just after staging succeeds) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
-| `CONSOLIDATING → VERIFIED`     | `lcsas session abort` of the consolidation's burn session | `cmd_session_abort`, `src/lcsas/consolidate/merger.py` |
+| `CONSOLIDATING → VERIFIED`     | `lcsas session abort` or `lcsas stage --clean --force` of the consolidation's burn session (#817) | `BurnOrchestrator.clean_session`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → DEPRECATED`   | `lcsas consolidate --deprecate` (post-verification) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
 | `VERIFIED → DEPRECATED`        | `lcsas consolidate --deprecate` (no `--execute` first) | Same as above (also legal per `VALID_TRANSITIONS`). |
 | `DEPRECATED → DESTROYED`       | No first-class CLI command yet — see *Gaps*       | `VALID_TRANSITIONS` in `src/lcsas/db/volumes.py` |

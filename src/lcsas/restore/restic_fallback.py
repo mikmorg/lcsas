@@ -2138,16 +2138,22 @@ def _parse_timestamp(ts: str) -> float:
     return _parse_instant(ts).timestamp()
 
 
-def _snapshot_sort_key(snap: SnapshotMeta) -> tuple[int, float]:
-    """Sort key for snapshots: the instant of ``snap.time`` (#663).
+def time_sort_key(ts: str) -> tuple[int, float]:
+    """Sort key for a snapshot time: its instant, not its text (#663).
 
     A time that does not parse gives ``(0, 0.0)``, before every real
     time, so a damaged snapshot file is never chosen as "latest".
+    Shared with ``lcsas restore standalone latest`` (#821).
     """
     try:
-        return (1, _parse_timestamp(snap.time))
+        return (1, _parse_timestamp(ts))
     except ValueError:
         return (0, 0.0)
+
+
+def _snapshot_sort_key(snap: SnapshotMeta) -> tuple[int, float]:
+    """Sort key for snapshots: :func:`time_sort_key` of ``snap.time``."""
+    return time_sort_key(snap.time)
 
 
 _QUIET = False

@@ -929,6 +929,53 @@ class TestBundleUpstreamBinaries:
             assert (recovery_dst / "bin" / t / rustic).is_file(), t
             assert (recovery_dst / "bin" / t / "python" / python).is_file(), t
 
+    def test_python_trees_carry_no_bytecode(self, tmp_path, monkeypatch):
+        """#815: a .pyc file names the folder it was compiled in, so the
+        CPython trees must reach the meta disc without __pycache__, .pyc
+        or .pyo, even when the pinned archive itself carries them (#832:
+        the disc gets the archive's members, not the cache's copy).
+        Both layouts: a python/ tree, and the flat Windows tree."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        cache_root = tmp_path / "cache"
+        pins = tmp_path / "pins"
+        add_upstream(
+            cache_root, pins, "x86_64-unknown-linux-musl", rustic=False,
+            python_extra=(
+                ("lib/__pycache__", None, 0o755),
+                ("lib/__pycache__/os.cpython-312.pyc", b"pyc", 0o644),
+                ("lib/old.pyo", b"pyo", 0o644),
+            ),
+        )
+        add_upstream(
+            cache_root, pins, "x86_64-pc-windows-gnu", rustic=False,
+            python_flat=True,
+            python_extra=(
+                ("Lib/__pycache__", None, 0o755),
+                ("Lib/__pycache__/os.cpython-312.pyc", b"pyc", 0o644),
+                ("stray.pyc", b"pyc", 0o644),
+            ),
+        )
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        MetaVolumeBuilder(
+            tmp_path / "meta", recovery_dir=pins,
+        )._bundle_upstream_binaries(recovery_dst)
+
+        bin_dir = recovery_dst / "bin"
+        linux_py = bin_dir / "x86_64-unknown-linux-musl" / "python"
+        win_py = bin_dir / "x86_64-pc-windows-gnu" / "python"
+        assert (linux_py / "lib" / "os.py").is_file()
+        assert (win_py / "Lib" / "os.py").is_file()
+        assert (win_py / "python.exe").is_file()
+        bytecode = [
+            p.relative_to(bin_dir).as_posix()
+            for p in bin_dir.rglob("*")
+            if p.name == "__pycache__" or p.suffix in (".pyc", ".pyo")
+        ]
+        assert bytecode == []
+
     def test_musl_loader_lands_in_the_python_tree(self, tmp_path, monkeypatch):
         """#714: the cached musl loader (fetch_upstream.sh extracts it to
         musl/<target>/ld-musl-<arch>.so.1) lands executable in the Linux

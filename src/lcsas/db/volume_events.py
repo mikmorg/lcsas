@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
 
 from lcsas.db.models import VolumeEvent
+from lcsas.utils.timestamps import utc_now
 
 
 def _row_to_event(row: sqlite3.Row) -> VolumeEvent:
@@ -67,7 +67,7 @@ def add_event(
             f"must be one of {sorted(VALID_EVENT_TYPES)}"
         )
     if event_date is None:
-        event_date = datetime.now(UTC).isoformat()
+        event_date = utc_now()
     else:
         from lcsas.utils.timestamps import to_utc_iso
 

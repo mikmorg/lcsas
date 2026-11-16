@@ -280,6 +280,11 @@ def _musl_payload(loader_name: str, data: bytes) -> list[PayloadEntry]:
     raise UpstreamError(f"no lib/{loader_name} in the musl archive")
 
 
+def _is_bytecode(rel: PurePosixPath) -> bool:
+    """True for __pycache__ content and .pyc/.pyo files (#815)."""
+    return "__pycache__" in rel.parts or rel.suffix in (".pyc", ".pyo")
+
+
 def payload(
     pin: UpstreamPin, data: bytes, *, musl_loader: str | None = None
 ) -> list[PayloadEntry]:
@@ -295,7 +300,12 @@ def payload(
         if pin.category == "restic":
             return _restic_payload(pin.filename, data)
         if pin.category == "python":
-            return _python_payload(data)
+            # No bytecode on the disc (#815): Python rebuilds .pyc files
+            # when it needs them, and they only add size.
+            return [
+                e for e in _python_payload(data)
+                if not _is_bytecode(e.disc_rel)
+            ]
         if pin.category == "musl":
             if musl_loader is None:
                 raise UpstreamError("no musl loader name for this target")

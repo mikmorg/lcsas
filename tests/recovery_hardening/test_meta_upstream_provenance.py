@@ -125,7 +125,8 @@ def test_rewritten_bytecode_in_the_unpacked_copy_is_tolerated(
 ) -> None:
     """Running the cached CPython rewrites the .pyc files the archive
     ships (seen on the lab cache's Windows python).  That is not a sign
-    of tampering, and the disc gets the archive's .pyc regardless."""
+    of tampering: the build goes on.  The disc gets no bytecode at all
+    (#815), neither the archive's nor the cache's."""
     import tarfile as _tarfile
 
     cache = tmp_path / "cache"
@@ -152,8 +153,9 @@ def test_rewritten_bytecode_in_the_unpacked_copy_is_tolerated(
     (cached_pyc / "os.cpython-312.pyc").write_bytes(b"recompiled locally")
 
     bin_dir = _bundle(tmp_path, monkeypatch) / "bin" / LINUX
-    on_disc = bin_dir / "python" / "lib" / "__pycache__" / "os.cpython-312.pyc"
-    assert on_disc.read_bytes() == pyc
+    assert (bin_dir / "python" / "bin" / "python3").is_file()
+    assert pyc != b"recompiled locally"
+    assert not (bin_dir / "python" / "lib" / "__pycache__").exists()
 
 
 def test_unpacked_copy_without_pinned_archive_bundles_nothing(

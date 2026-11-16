@@ -270,6 +270,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "(for scripted/cdemu runs). Without this, a "
                              "multi-disc burn pauses before each disc to load "
                              "a blank and after each to write the label.")
+    burn_p.add_argument("--reburn", action="store_true", default=False,
+                        help="Also burn the volumes that already have a "
+                             "verified disc at --location (the new disc "
+                             "replaces that disc's record). Without this, "
+                             "they are skipped.")
     burn_p.add_argument("--dry-run", "-n", action="store_true", default=False,
                         help="Show burn plan without making changes.")
 

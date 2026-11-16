@@ -366,7 +366,7 @@ def test_restore_bat_target_cannot_end_in_a_backslash():
     assert "goto :ask_target" in refusal, refusal
     assert not any(ln.startswith("set ") for ln in refusal), refusal
     targets = [ln for ln in code if ln.startswith('"%BIN%"')
-               and ("--target " in ln or "restore latest " in ln)]
+               and ("--target " in ln or "restore %SNAP% " in ln)]
     assert len(targets) == 2 and all('"%TARGET%"' in ln for ln in targets), targets
 
 
@@ -581,9 +581,38 @@ def test_restore_bat_q_at_the_disc_prompt_is_terminal():
     assert body[-1] == "exit /b %RC%"
 
 
+def test_restore_bat_snapshot_flag_reaches_both_tiers_and_the_resume():
+    """#807: restore.bat --snapshot ID restores that snapshot.  The ID is
+    checked (0-9, a-f, or latest) before it goes on a command line; tier 1
+    and tier 2 get it; a stopped restore carries on with it (resume.cfg);
+    the next backup set goes back to latest.  Functional proof:
+    test_restore_bat_snapshot_wine.py."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert 'set "SNAP=latest"' in code
+    assert "call :parse_args %*" in code
+    assert code.index("call :parse_args %*") < code.index(":resume_loaded")
+    start = code.index(":parse_args")
+    parse = code[start:start + 25]
+    assert ("for %%H in (0 1 2 3 4 5 6 7 8 9 a b c d e f) "
+            "do call :strip_hex %%H") in parse, parse
+    assert 'if defined SNAP_LEFT set "SNAP_BAD=1"' in parse, parse
+    assert 'if defined SNAP_LEFT set "SNAP_LEFT=!SNAP_LEFT:%~1=!"' in code
+    assert [ln for ln in code if "--snapshot %SNAP% " in ln], "tier 1 must get SNAP"
+    assert [ln for ln in code if ' restore %SNAP% "%TARGET%"' in ln], "tier 2 must get SNAP"
+    assert not [ln for ln in code if ln.startswith('"%BIN%"')
+                and ("--snapshot latest" in ln or " restore latest " in ln)]
+    assert 'if defined RS_snapshot set "SNAP=!RS_snapshot!"' in code
+    assert 'if not "!RS_snapshot!"=="!SNAP!" goto :resume_unsaved' in code
+    start = code.index(":another_set")
+    another = code[start:code.index("goto :choose_set", start)]
+    assert 'set "SNAP=latest"' in another, another
+
+
 def test_restore_bat_resume_cfg_never_holds_the_password():
     """#609 (C6): resume.cfg keeps the set, the folder, the META disc's
-    letter and the letters searched -- NEVER the password.  It is written
+    letter, the letters searched and the snapshot (#807) -- NEVER the
+    password.  It is written
     before the password prompt, so every stop after it can be carried on.
     Functional proof: test_restore_bat_tools_folder_wine.py reads the file
     for the password."""
@@ -594,7 +623,7 @@ def test_restore_bat_resume_cfg_never_holds_the_password():
             assert word not in ln, f"resume.cfg/launcher writer touches {word}: {ln}"
     cfg = [ln[ln.index("echo ") + 5:] for ln in body if '"%CFG%" echo ' in ln]
     keys = [c.split("=", 1)[0] for c in cfg if not c.startswith("#")]
-    assert keys == ["set", "target", "meta", "letters"], cfg
+    assert keys == ["set", "target", "meta", "letters", "snapshot"], cfg
     code = _code(content)
     assert code.index("if defined LCSAS_RELOCATED call :save_resume") < code.index(
         'set /p "LCSAS_PW=Password: "')
@@ -717,7 +746,7 @@ def test_restore_bat_tries_the_password_before_tier1():
     head = '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" '
     assert check == [head + "--list-snapshots >nul 2>nul <nul"], check
     tier1 = [i for i, ln in enumerate(code)
-             if ln.startswith(head + '--target "%TARGET%" --snapshot latest ')]
+             if ln.startswith(head + '--target "%TARGET%" --snapshot %SNAP% ')]
     assert len(tier1) == 1, tier1
     assert code.index(check[0]) < tier1[0]
     assert code.index('set "LCSAS_PW="') < code.index('set /p "LCSAS_PW=Password: "')

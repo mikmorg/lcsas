@@ -84,6 +84,7 @@ def add_upstream(
     python_flat: bool = False,
     extract: bool = True,
     rustic_body: bytes = b"#!/bin/sh\necho fake rustic\n",
+    python_extra: tuple[tuple[str, bytes | str | None, int], ...] = (),
 ) -> None:
     """Pin and cache fake upstream archives for one disc *target*."""
     win = target == WINDOWS
@@ -127,6 +128,7 @@ def add_upstream(
                 ("lib", None, 0o755),
                 ("lib/os.py", b"# stdlib\n", 0o644),
             ]
+        files = files + list(python_extra)
         if not python_flat:
             files = [("python", None, 0o755)] + [
                 (f"python/{n}", b, m) for n, b, m in files

@@ -137,7 +137,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # Persist snapshots (unless --no-snapshots)
         if not getattr(args, "no_snapshots", False):
             from lcsas.db.models import Snapshot
-            from lcsas.db.snapshots import bulk_upsert_snapshots, delete_blank_snapshots
+            from lcsas.db.snapshots import (
+                bulk_upsert_snapshots,
+                delete_blank_snapshots,
+                sync_forgotten_snapshots,
+            )
             from lcsas.exceptions import BinaryError
             from lcsas.rustic.wrapper import SubprocessRusticRunner
             from lcsas.utils.subprocess import check_binary_version
@@ -199,6 +203,36 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 ]
                 count = bulk_upsert_snapshots(conn, db_snaps)
                 total_snaps += count
+
+                # #824: rows of snapshots rustic no longer lists (rustic
+                # forget).  Only after a listing that succeeded; an empty
+                # listing against rows in the catalog is more likely a
+                # wrong or half-mounted mirror than a forget of everything.
+                listed = {si.snapshot_id for si in snap_infos}
+                if not listed:
+                    (known,) = conn.execute(
+                        "SELECT COUNT(*) FROM snapshots WHERE repo_id = ?",
+                        (repo_id,),
+                    ).fetchone()
+                    if known:
+                        logger.warning(
+                            f"  {repo_name}: rustic listed no snapshots, but "
+                            f"the catalog has {known}. Left them as they are; "
+                            "check the mirror."
+                        )
+                        continue
+                deleted, noted = sync_forgotten_snapshots(conn, repo_id, listed)
+                if deleted:
+                    logger.info(
+                        f"  {repo_name}: removed {len(deleted)} snapshot "
+                        "row(s) no longer in the mirror (on no disc)."
+                    )
+                if noted:
+                    logger.info(
+                        f"  {repo_name}: {len(noted)} snapshot(s) are no "
+                        "longer in the mirror but a disc may hold them; "
+                        "their catalog rows now say so."
+                    )
 
             if total_snaps:
                 logger.info(f"  Snapshots persisted: {total_snaps}")

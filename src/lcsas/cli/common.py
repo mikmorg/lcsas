@@ -338,13 +338,19 @@ def _reburn_hint(
     for that location (:func:`_restage_hint`).
     """
     from lcsas.db.sessions import retained_iso_session
+    from lcsas.db.volume_copies import has_verified_disc_at
 
     session_id = retained_iso_session(conn, volume_id)
     if session_id is None:
         return _restage_hint(location)
+    # #814: the burn skips a volume whose earlier disc there is still
+    # recorded as verified, unless --reburn.
+    reburn = (" --reburn" if has_verified_disc_at(conn, volume_id, location)
+              else "")
     return (
         f"Its ISO is still in the staging area: burn it again with "
-        f"'lcsas burn --session {session_id} --location {location}'."
+        f"'lcsas burn --session {session_id} --location {location}"
+        f"{reburn}'."
     )
 
 

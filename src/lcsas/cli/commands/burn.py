@@ -59,35 +59,46 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
         if getattr(args, "dry_run", False):
             from lcsas.db.queries import get_lost_volume_ids, volume_display_status
             from lcsas.db.sessions import get_session_volumes, resolve_session_id
+            from lcsas.db.volume_copies import has_verified_disc_at
             from lcsas.db.volumes import get_volume_by_id
             sid = resolve_session_id(conn, args.session or "latest")
             vols = get_session_volumes(conn, sid)
             lost_ids = get_lost_volume_ids(conn)
             logger.info(f"[DRY RUN] Session {sid}: {len(vols)} volume(s)")
+            reburn = getattr(args, "reburn", False)
             for sv in vols:
                 vol = get_volume_by_id(conn, sv.volume_id)
                 shown = volume_display_status(vol, lost_ids)
-                logger.info(f"  {vol.label}  status={shown}")
+                # #814: what a real run would skip.
+                skip = (
+                    "" if reburn
+                    or not has_verified_disc_at(conn, sv.volume_id, location)
+                    else f"  (verified disc at {location}: skipped)"
+                )
+                logger.info(f"  {vol.label}  status={shown}{skip}")
             return 0
 
         device = _resolve_device(args, config)
-        if not getattr(args, "skip_burn", False):
-            import os
-            if not os.path.exists(device):
-                logger.error(
-                    "Optical device '%s' not found.\n"
-                    "Insert a disc or specify the correct device with --device.",
-                    device,
-                )
-                return 1
+        import os
+        if not os.path.exists(device):
+            logger.error(
+                "Optical device '%s' not found.\n"
+                "Insert a disc or specify the correct device with --device.",
+                device,
+            )
+            return 1
 
         receipts = orch.burn_session(
             session_ref=args.session,
             location=location,
             device=device,
             interactive=not getattr(args, "no_prompt", False),
+            reburn=getattr(args, "reburn", False),
         )
 
+    if not receipts:
+        # #814: every volume already has a verified disc there.
+        return 0
     logger.info(f"Burned {len(receipts)} volume(s) to {location}:")
     for r in receipts:
         if r.verify_passed:
@@ -224,6 +235,9 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             "session_id": args.session,
             "location": args.location,
             "device": device,
+            # A receipt is a file, not the catalog: its burn date keeps the
+            # format receipts always had (microseconds), and import copies
+            # it to the disc record through to_utc_iso, as it always did.
             "burn_date": datetime.now(UTC).isoformat(),
             "iso_sha256": iso_sha256,
             "iso_size_bytes": iso_size_bytes,

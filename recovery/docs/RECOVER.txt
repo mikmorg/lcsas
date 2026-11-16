@@ -286,7 +286,13 @@ RESTORE A SPECIFIC SNAPSHOT
 
   sh /mnt/restore.sh ~/restored a1b2c3d4
 
-The snapshot argument may be 'latest', an exact ID, or a unique prefix.
+or, naming each part:
+
+  sh /mnt/restore.sh --target ~/restored --snapshot a1b2c3d4
+
+When you use --target, use --snapshot for the snapshot too:
+"--target ~/restored a1b2c3d4" is refused.  The snapshot may be
+'latest', an exact ID, or the first few characters of one.
 restore.sh handles the disc cascade, password prompt, and pack-cache
 setup automatically.  To run the underlying binary directly without
 restore.sh, see the --repo / --password-file / --target / --snapshot
@@ -601,9 +607,7 @@ password.  Rebuild it first, by hand:
 
   4. Continue with the normal cascade above.  Type the
      rebuilt password at the  Password:  prompt, or pass the
-     saved password file by its full path (restore.sh moves to its
-     tools folder before it reads it, so a short name such as
-     repo.key is not found):
+     saved password file:
 
          sh /mnt/restore.sh --key ~/repo.key --target ~/restored
 

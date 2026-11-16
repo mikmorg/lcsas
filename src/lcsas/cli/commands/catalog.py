@@ -24,19 +24,15 @@ def _receipt_verified_at(burn_date: object) -> str:
     string ``volume_copies.last_verified_at`` is compared in (#646): the
     receipt's ``burn_date`` (burn-iso verifies straight after burning),
     normalised to UTC, or the import time when it is missing or unreadable.
-    A time in the future is clamped to now."""
-    from datetime import UTC, datetime
+    A time in the future is clamped to now (written by utc_now(), #826)."""
+    from lcsas.utils.timestamps import parse_utc, utc_now
 
-    now = datetime.now(UTC)
-    if isinstance(burn_date, str) and burn_date.strip():
-        try:
-            when = datetime.fromisoformat(burn_date.strip())
-        except ValueError:
-            return now.isoformat()
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=UTC)
-        return min(when.astimezone(UTC), now).isoformat()
-    return now.isoformat()
+    now_text = utc_now()
+    when = parse_utc(burn_date)
+    now = parse_utc(now_text)
+    if when is None or now is None or when >= now:
+        return now_text
+    return when.isoformat()
 
 
 def _receipt_timestamp(value: object) -> float | None:
@@ -149,7 +145,12 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         get_disc_retired_at,
     )
     from lcsas.db.volume_events import add_event, get_events_for_volume
-    from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
+    from lcsas.db.volumes import (
+        get_volume_by_label,
+        mark_closed,
+        status_before_burning,
+        update_status,
+    )
 
     config = _load_config_opt(args)
     if config is None:
@@ -506,13 +507,18 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             event_detail = f"Offline burn receipt: {name}"
             if verify_failed:
                 if first_disc and not get_copies_for_volume(conn, vol.volume_id):
-                    # #483: a disc that failed verification returns the
-                    # volume to STAGING, as burn_session does, so its packs
-                    # go back to the unarchived pool.  The event records the
-                    # attempt.
-                    if vol.status != "STAGING":
-                        update_status(conn, vol.volume_id, "STAGING",
-                                      commit=False)
+                    # #483: a disc that failed verification returns a
+                    # never-burned volume to STAGING, as burn_session does,
+                    # so its packs go back to the unarchived pool.  A BURNED
+                    # volume stays BURNED (#810): a disc of it exists.  A
+                    # BURNING one goes back to the status it had before its
+                    # burn.  The event records the attempt.
+                    if vol.status == "BURNING":
+                        update_status(
+                            conn, vol.volume_id,
+                            status_before_burning(conn, vol.volume_id),
+                            commit=False,
+                        )
                     add_event(conn, vol.volume_id, "VERIFY_FAIL",
                               location=location, detail=event_detail,
                               commit=False)

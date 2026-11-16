@@ -109,6 +109,30 @@ class TestCmdStagingClean:
         out = capsys.readouterr().out
         assert "Removed 1" in out
 
+    def test_staging_clean_without_terminal_removes_nothing(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """#826: EOF at the prompt (input redirected) refuses, exit 1."""
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        conn.close()
+        orphan = tmp_path / "staging" / "2025-01-01T00-00-00.000000+00-00-deadbeef"
+        orphan.mkdir(parents=True)
+
+        def _eof(_prompt):
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", _eof)
+
+        result = main(["--config", str(cfg), "staging", "clean"])
+        assert result == 1
+        assert orphan.exists()
+        out = capsys.readouterr().out
+        assert "No terminal available" in out
+        assert "Unexpected error" not in out
+
     def test_staging_clean_reports_but_keeps_unmanaged(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
         conn = get_connection(tmp_path / "archive.db")

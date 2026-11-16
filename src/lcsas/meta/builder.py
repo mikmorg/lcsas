@@ -55,6 +55,7 @@ from lcsas.meta.upstream import (
     write_payload,
 )
 from lcsas.meta.upstream import payload as upstream_payload
+from lcsas.utils.fs import PYTHON_BYTECODE
 from lcsas.utils.hashing import sha256_file
 
 _logger = logging.getLogger(__name__)
@@ -316,7 +317,7 @@ def _skip_relpaths(
 # Applied to bin/, which is copied as it stands, and to the whole tree
 # when git cannot say which files are tracked.
 _RECOVERY_DEBRIS = (
-    "build", "build-*", "dist", "__pycache__", "*.pyc", "*.o", "*.a",
+    "build", "build-*", "dist", "__pycache__", "*.pyc", "*.pyo", "*.o", "*.a",
 )
 
 # Fuzzer output that recovery/fuzz/.gitignore keeps out of git, by the
@@ -806,6 +807,7 @@ class MetaVolumeBuilder:
                     ignore=shutil.ignore_patterns(
                         "__pycache__",
                         "*.pyc",
+                        "*.pyo",
                         "*.egg-info",
                         ".git",
                     ),
@@ -826,13 +828,12 @@ class MetaVolumeBuilder:
             if src.is_dir():
                 if dst.exists():
                     shutil.rmtree(str(dst))
-                cache_files = shutil.ignore_patterns("__pycache__", "*.pyc")
                 dev_only = _skip_relpaths(src, DEV_ONLY_DOC_DIRS)
                 shutil.copytree(
                     str(src),
                     str(dst),
-                    ignore=lambda d, n, c=cache_files, x=dev_only: (
-                        set(c(d, n)) | x(d, n)
+                    ignore=lambda d, n, x=dev_only: (
+                        set(PYTHON_BYTECODE(d, n)) | x(d, n)
                     ),
                 )
             elif src.is_file():

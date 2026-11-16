@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import sqlite3
-from datetime import UTC, datetime
 
 from lcsas.constants import (
     STATUS_BURNED,
@@ -17,6 +16,7 @@ from lcsas.constants import (
     STATUS_VERIFIED,
 )
 from lcsas.db.models import Volume
+from lcsas.utils.timestamps import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +25,12 @@ logger = logging.getLogger(__name__)
 VALID_TRANSITIONS: dict[str, set[str]] = {
     STATUS_STAGING:         {STATUS_BURNING, STATUS_DEPRECATED, STATUS_DESTROYED},
     STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
-    # BURNED → BURNING: re-burn of a BURNED volume with no disc, which a
-    # failed post-burn verify left behind before #483 (BURN-05); since
-    # #483 a failed verify returns the volume to STAGING instead.
-    STATUS_BURNED:          {STATUS_BURNING, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
+    # A BURNED volume never goes back to BURNING or STAGING (#810): a
+    # disc of it exists (a catalog rebuilt from discs records the newest
+    # ones as BURNED with no disc row), and STAGING would let 'session
+    # abort' or 'reconcile --fix' delete it.  'burn --session' burns a
+    # BURNED volume without leaving BURNED, then makes it VERIFIED.
+    STATUS_BURNED:          {STATUS_VERIFIED, STATUS_DESTROYED},
     STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_DESTROYED, STATUS_CONSOLIDATING},
     STATUS_CONSOLIDATING:   {STATUS_DEPRECATED, STATUS_VERIFIED},
     STATUS_DEPRECATED:      {STATUS_DESTROYED},
@@ -161,7 +163,7 @@ def update_status(
         )
 
     if status == "VERIFIED":
-        now = datetime.now(UTC).isoformat()
+        now = utc_now()
         conn.execute(
             "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",
             (status, now, volume_id),
@@ -183,11 +185,34 @@ def update_status(
         conn.commit()
 
 
+def status_before_burning(conn: sqlite3.Connection, volume_id: int) -> str:
+    """The status a BURNING volume had before its burn started (#810).
+
+    A burn killed outright (power loss, ``kill -9``) leaves its volume
+    BURNING; the status it came from is only in the NOTE that
+    :func:`update_status` wrote ("Status changed: X → BURNING").
+    Returns ``BURNED`` when the newest such note says it was BURNED (an
+    older LCSAS moved a BURNED volume to BURNING for its burn), else
+    ``STAGING``, also when there is no note.
+    """
+    row = conn.execute(
+        """SELECT detail FROM volume_events
+           WHERE volume_id = ? AND event_type = 'NOTE'
+             AND detail LIKE 'Status changed: % → BURNING'
+           ORDER BY event_id DESC LIMIT 1""",
+        (volume_id,),
+    ).fetchone()
+    if row is not None and str(row[0]).startswith(
+            f"Status changed: {STATUS_BURNED} →"):
+        return STATUS_BURNED
+    return STATUS_STAGING
+
+
 def mark_closed(
     conn: sqlite3.Connection, volume_id: int, *, commit: bool = True,
 ) -> None:
     """Set the closed_at timestamp on a volume (finalization)."""
-    now = datetime.now(UTC).isoformat()
+    now = utc_now()
     conn.execute(
         "UPDATE volumes SET closed_at = ? WHERE volume_id = ?",
         (now, volume_id),

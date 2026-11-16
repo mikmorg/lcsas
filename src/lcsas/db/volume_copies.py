@@ -8,6 +8,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from lcsas.db.models import VolumeCopy
+from lcsas.utils.timestamps import utc_now
 
 _logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def add_volume_copy(
     from lcsas.utils.timestamps import to_utc_iso
 
     if burn_date is None:
-        burn_date = datetime.now(UTC).isoformat()
+        burn_date = utc_now()
     # #730: one format (UTC ISO-8601) for new values; a receipt's burn
     # date may carry another offset.  Unreadable text is kept as given.
     burn_date = to_utc_iso(burn_date) or burn_date
@@ -141,6 +142,21 @@ def get_copy_at_location(
         (volume_id, location),
     ).fetchone()
     return _row_to_copy(row) if row is not None else None
+
+
+def has_verified_disc_at(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+) -> bool:
+    """True when the volume has a disc in service at *location* that passed
+    verification: an ACTIVE row with a ``last_verified_at``.
+
+    ``burn --session`` skips such a volume unless ``--reburn`` (#814).
+    """
+    copy = get_copy_at_location(conn, volume_id, location)
+    return (copy is not None and copy.status == "ACTIVE"
+            and copy.last_verified_at is not None)
 
 
 def get_disc_retired_at(
@@ -237,8 +253,24 @@ def move_volume_copy(
     Also emits a LOCATION_MOVE row in ``volume_events`` so the audit trail
     captures every physical move (issue #16). The update and the event
     insert share a single transaction so they commit atomically.
+
+    Raises:
+        ValueError: *to_location* is not registered (#823), a disc of the
+            volume is already recorded there, or no in-service disc of
+            the volume is at *from_location*.
     """
-    now = datetime.now(UTC).isoformat()
+    # #823: an unregistered target trips the foreign key, which used to
+    # be reported as "already recorded" (the UNIQUE case).  Say what is
+    # wrong and how to fix it.
+    registered = conn.execute(
+        "SELECT 1 FROM locations WHERE name = ?", (to_location,)
+    ).fetchone()
+    if registered is None:
+        raise ValueError(
+            f"Location '{to_location}' is not registered. Add it with "
+            f"'lcsas location add {to_location}', then run the move again."
+        )
+    now = utc_now()
     try:
         result = conn.execute(
             """UPDATE volume_copies
@@ -289,7 +321,7 @@ def touch_last_verified(
     :func:`_revive_lost_volume`).  A volume deprecated by consolidation
     stays DEPRECATED.
     """
-    now = datetime.now(UTC).isoformat()
+    now = utc_now()
     result = conn.execute(
         """UPDATE volume_copies SET last_verified_at = ?
            WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
@@ -423,7 +455,7 @@ def _revive_lost_volume(
     if not deprecated_by_loss(conn, volume_id):
         return None
     status = "VERIFIED" if verified else "BURNED"
-    now = datetime.now(UTC).isoformat()
+    now = utc_now()
     if verified:
         conn.execute(
             "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",

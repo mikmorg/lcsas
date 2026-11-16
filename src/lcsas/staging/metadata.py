@@ -25,8 +25,9 @@ from lcsas.db.snapshots import DISC_BLANKED_SNAPSHOT_COLUMNS
 from lcsas.restore.standalone_builder import build_standalone
 from lcsas.staging.builder import MirrorUnavailableError
 from lcsas.staging.repo_marker import RepoMarker, write_repo_marker
-from lcsas.utils.fs import copy_file, copy_tree, ensure_dir
+from lcsas.utils.fs import PYTHON_BYTECODE, copy_file, copy_tree, ensure_dir
 from lcsas.utils.pack_layout import METADATA_SUBDIRS
+from lcsas.utils.timestamps import parse_utc
 
 # restore.standalone_builder is a stdlib-only leaf that generates the tier-3 reader
 # copied onto every disc; staging depends on nothing else in restore/
@@ -83,8 +84,13 @@ def split_view(
     A repository is split when ``config.repo_split`` says so (its
     ``[repos.<name>]`` table, else ``[defaults]``).  Its K/N come from
     *recorded* (the catalog's split records by repository name: KEY-08, the
-    split actually performed), else *escrow_override* (one recorded K/N for
-    the whole archive), else the config.
+    split actually performed), else the config.
+
+    *escrow_override* is one recorded K/N for the whole archive (the
+    burn passes the first record among the volume's repositories).  It
+    stands in for the config only when the config names at most one
+    repository: with several, it may be another set's record, and a set
+    with no record of its own shows its config K/N instead (#626).
     """
     if not config.repositories:
         if not config.key_split:
@@ -94,11 +100,12 @@ def split_view(
         )
         return SplitView(by_repo={}, unsplit=(), uniform=kn)
     recorded = recorded or {}
+    fallback = escrow_override if len(config.repositories) == 1 else None
     by_repo: dict[str, tuple[int, int]] = {}
     for name in sorted(config.repositories):
         split, k, n = config.repo_split(name)
         if split:
-            by_repo[name] = recorded.get(name) or escrow_override or (k, n)
+            by_repo[name] = recorded.get(name) or fallback or (k, n)
     if not by_repo:
         return None
     unsplit = tuple(sorted(set(config.repositories) - set(by_repo)))
@@ -116,46 +123,40 @@ def _split_repo_list(view: SplitView, indent: str) -> list[str]:
     ]
 
 
-def share_recovery_lines(
-    config: LCSASConfig,
-    escrow_override: tuple[int, int] | None = None,
-    recorded: Mapping[str, tuple[int, int]] | None = None,
+def _share_card_section(
+    view: SplitView, *, start_here: bool = False,
 ) -> list[str]:
-    """Plain-language steps for the heir to rebuild a split password.
+    """The share-card section of the heir text: one source (#819).
 
-    Only emitted when a password is actually split (``split_view``).  Names
-    the K/N in effect and points at the standalone share combiner pre-step
-    bundled on the meta disc.  An archive split alike throughout gets the
-    archive-wide text; a mixed archive (#587) gets a list of the split
-    repositories, each with its own K/N.
-
-    ``escrow_override`` is the (K, N) of the recorded split (KEY-08); when
-    present it overrides the config values so disc text reflects the split
-    that was actually performed.  ``recorded`` does the same per repository.
+    PASSWORD_INFO.txt and the meta disc's START_HERE.txt show it under a
+    ``SPLIT PASSWORD(S) — ...`` heading; a data disc's START_HERE.txt
+    (*start_here*) under ``YOUR PASSWORD IS SPLIT INTO N SHARE CARDS``
+    or ``SOME PASSWORDS ARE SPLIT INTO SHARE CARDS``.  The rest is the
+    same text: the K/N, how a newer restore script asks for the cards,
+    and the by-hand steps for a script that asks for a password.  The
+    heading is at column 0, the text below it at column 2.
     """
-    view = split_view(config, escrow_override, recorded)
-    uniform = (
-        (config.key_threshold, config.key_shares) if view is None
-        else view.uniform
-    )
-    if view is None or uniform is not None:
-        k, n = uniform or (config.key_threshold, config.key_shares)
-        head = [
-            "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS",
-            "------------------------------------------------",
-            f"This archive's password is SPLIT into {n} share cards.  You need",
-            f"any {k} of them.  Fewer than {k} cards reveal nothing.",
-            "",
-            "Reconstruct the password in TWO steps:",
-            "",
-            f"  STEP 1 (pre-step): gather any {k} share cards.  On the",
-            "  META disc, run the share combiner for your machine:",
+    if view.uniform is not None:
+        k, n = view.uniform
+        heading = (
+            f"YOUR PASSWORD IS SPLIT INTO {n} SHARE CARDS" if start_here
+            else "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS"
+        )
+        intro = [
+            f"This archive's password is SPLIT into {n} share cards.",
+            f"You need ANY {k} of them.  Fewer than {k} cards reveal nothing.",
         ]
-        pass_cards = f"  (pass any {k} card files; or pipe the share words on stdin)."
+        gather = [
+            f"STEP 1: gather any {k} share cards.  On the META disc, run",
+            "  the share combiner for your machine:",
+        ]
+        which_cards = f"any {k} card files"
     else:
-        head = [
-            "SPLIT PASSWORDS — SOME PASSWORDS ARE IN SHARE CARDS",
-            "---------------------------------------------------",
+        heading = (
+            "SOME PASSWORDS ARE SPLIT INTO SHARE CARDS" if start_here
+            else "SPLIT PASSWORDS — SOME PASSWORDS ARE IN SHARE CARDS"
+        )
+        intro = [
             "The password of each repository listed here is SPLIT into",
             "share cards:",
             "",
@@ -163,74 +164,107 @@ def share_recovery_lines(
             "",
         ]
         if view.unsplit:
-            head.append(
+            intro.append(
                 f"Every other repository ({', '.join(view.unsplit)}) has an "
                 "ordinary password."
             )
-        head += [
+        intro += [
             "Each share card names its repository: use the cards of the",
             "repository you are restoring.  Fewer cards than it needs",
             "reveal nothing.",
-            "",
-            "Reconstruct a split password in TWO steps:",
-            "",
-            "  STEP 1 (pre-step): gather enough share cards of that",
-            "  repository (the list above says how many).  On the",
-            "  META disc, run the share combiner for your machine:",
         ]
-        pass_cards = "  (pass the card files; or pipe the share words on stdin)."
-    return [
-        *head,
+        gather = [
+            "STEP 1: gather enough share cards of that repository (the",
+            "  list above says how many).  On the META disc, run the",
+            "  share combiner for your machine:",
+        ]
+        which_cards = "the card files"
+    body = [
+        *intro,
+        "",
+        "A newer restore.sh or restore.bat asks for the share cards",
+        "itself: type the words of each card when it asks.  If it asks",
+        "for a password instead (an older disc, or a split that was",
+        "never recorded), rebuild the password from the cards first,",
+        "in two steps.",
+        "",
+        *gather,
         "",
         "      /mnt/recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
         "",
-        "  <machine> is the folder under recovery/bin/ that names your",
-        "  computer: x86_64-unknown-linux-musl for most PCs,",
+        f"  Give {which_cards}, each by its full path, e.g.",
+        "  ~/card1.txt (or pipe the share words in).  <machine> is the",
+        "  folder under recovery/bin/ that names your computer:",
+        "  x86_64-unknown-linux-musl for most PCs,",
         "  aarch64-unknown-linux-musl for 64-bit ARM, aarch64-apple-darwin",
         "  for an Apple Silicon Mac (on Windows: x86_64-pc-windows-gnu,",
         "  and the program is lcsas-keyshare.exe).",
+        "",
         "  If that program will not run, the fallback is:",
         "",
         "      python3 /mnt/keyshare_combine.py <card1> <card2>",
         "",
         "  If python3 is not installed, use the copy bundled on the",
-        "  META disc — <platform> is the folder under",
-        "  recovery/bin/ that names your machine (for most PCs that is",
-        "  x86_64-unknown-linux-musl):",
+        "  META disc.  <platform> is the same folder as <machine> above",
+        "  (for most PCs that is x86_64-unknown-linux-musl):",
         "",
         "      /mnt/recovery/bin/<platform>/python/bin/python3 \\",
         "          /mnt/keyshare_combine.py <card1> <card2>",
         "",
-        pass_cards,
-        "  Give each card file by its full path, e.g. ~/card1.txt.",
         "  Either combiner prints the password and nothing else.  Save",
         "  it in your home folder (the disc cannot be written to), e.g.:",
         "",
         "      /mnt/recovery/bin/<machine>/lcsas-keyshare \\",
         "          <card1> <card2> > ~/repo.key",
         "",
-        "  STEP 2: run the normal restore and use that password:",
+        "STEP 2: run the normal restore and use that password:",
         "",
         "      sh /mnt/restore.sh --target ~/restored",
         "",
-        "  When restore.sh shows the  Password:  prompt, type the password",
-        "  from STEP 1, or pass the saved file by its full path:",
-        "  sh /mnt/restore.sh --key ~/repo.key --target ~/restored",
-        "  (restore.sh moves to another folder before it reads the file,",
-        "  so a short name such as repo.key is not found).",
+        "  When restore.sh shows the  Password:  prompt, type the",
+        "  password from STEP 1, or give the saved file by its full",
+        "  path:",
         "",
-        "  The restore itself is UNCHANGED — the only extra work",
-        "  is the STEP 1 pre-step that turns your share cards back into the",
+        "      sh /mnt/restore.sh --key ~/repo.key --target ~/restored",
+        "",
+        "  If it asks for the share cards instead, type P, then the",
         "  password.",
         "",
-        "  A newer restore.sh or restore.bat asks for the share cards",
-        "  itself when a set's password is split: then type the words of",
-        "  each card when it asks, and skip STEP 1.  If you rebuilt the",
-        "  password already, type P there and then the password.",
-        "",
-        "  Format + re-implementation details: docs/SHARE_FORMAT.md.",
-        "",
+        "How the share cards work, for a programmer:",
+        "docs/SHARE_FORMAT.md on the META disc.",
     ]
+    return [
+        heading,
+        "-" * len(heading),
+        "",
+        *(f"  {line}" if line else "" for line in body),
+    ]
+
+
+def share_recovery_lines(
+    config: LCSASConfig,
+    escrow_override: tuple[int, int] | None = None,
+    recorded: Mapping[str, tuple[int, int]] | None = None,
+) -> list[str]:
+    """Plain-language steps for the heir to rebuild a split password.
+
+    The share-card section (``_share_card_section``) of PASSWORD_INFO.txt
+    and of the meta disc's START_HERE.txt, then a blank line.  Only
+    emitted when a password is actually split (``split_view``); called
+    without a split it shows the config's archive-wide K/N.  An archive
+    split alike throughout gets the archive-wide text; a mixed archive
+    (#587) gets a list of the split repositories, each with its own K/N.
+
+    ``escrow_override`` is the (K, N) of the recorded split (KEY-08); when
+    it applies (``split_view``) it overrides the config values so disc
+    text reflects the split that was actually performed.  ``recorded``
+    does the same per repository.
+    """
+    view = split_view(config, escrow_override, recorded) or SplitView(
+        by_repo={}, unsplit=(),
+        uniform=(config.key_threshold, config.key_shares),
+    )
+    return [*_share_card_section(view), ""]
 
 
 def _human_bytes(n: int) -> str:
@@ -252,6 +286,23 @@ def _media_type_text(name: str) -> str:
     except KeyError:
         return name
     return f"{name} ({_human_bytes(media.capacity_bytes)} {media.family})"
+
+
+def _prepared_text(created_at: str | None) -> str:
+    """A volume's ``created_at`` as a person writes it (#818).
+
+    The catalog holds ``2026-11-16T14:17:11.996+00:00`` (or, before #730,
+    ``2026-11-16 14:17:11``, which is UTC too); the disc shows
+    ``2026-11-16 14:17 UTC``.  A value with no time of day, or one that
+    cannot be read, is shown as it is.  Nothing reads this line back:
+    programs read ``created_at`` in volume_info.json.
+    """
+    if not created_at:
+        return "(not recorded)"
+    when = parse_utc(created_at) if ":" in created_at else None
+    if when is None:
+        return created_at
+    return when.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def render_volume_info_txt(
@@ -286,10 +337,7 @@ def render_volume_info_txt(
         n, m = burn_session_position
         place_line = f"  Volume:        {n} of {m} in its burn session\n"
 
-    prepared = volume.created_at or "(not recorded)"
-    # The catalog stamps rows with SQLite CURRENT_TIMESTAMP, which is UTC.
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", prepared):
-        prepared += " UTC"
+    prepared = _prepared_text(volume.created_at)
 
     pad = " " * 17
     if packs:
@@ -451,6 +499,13 @@ class HolographicInjector:
     def __init__(self, staging_root: Path) -> None:
         self._root = staging_root
         self._metadata_dir = staging_root / "metadata"
+
+    def _write_text(self, name: str, text: str) -> None:
+        """Write *text* to the staging root's file *name*, fsync'd."""
+        with open(self._root / name, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
 
     def inject_metadata(
         self,
@@ -614,19 +669,12 @@ class HolographicInjector:
             )
             info["sha256_manifest"] = sorted(p.sha256 for p in packs)
 
-        info_path = self._root / "volume_info.json"
-        with open(info_path, "w", encoding="utf-8") as f:
-            json.dump(info, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("volume_info.json", json.dumps(info, indent=2))
 
         text = render_volume_info_txt(
             volume, packs, burn_session_position, repo_names
         )
-        with open(self._root / "VOLUME_INFO.txt", "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("VOLUME_INFO.txt", text)
 
     def write_lcsas_source(self) -> None:
         """Copy the LCSAS restore subpackage source onto the disc.
@@ -646,10 +694,12 @@ class HolographicInjector:
             if src.is_dir():
                 dst = dst_root / subpkg
                 if not dst.exists():
-                    shutil.copytree(str(src), str(dst), symlinks=True)
+                    shutil.copytree(
+                        str(src), str(dst), symlinks=True,
+                        ignore=PYTHON_BYTECODE,
+                    )
             else:
-                import logging
-                logging.getLogger(__name__).warning(
+                _logger.warning(
                     "LCSAS source subpackage not found at %s — "
                     "source will not be bundled on this disc.",
                     src,
@@ -664,11 +714,7 @@ class HolographicInjector:
         that works with nothing but Python 3.10+ stdlib.
         """
         text = build_standalone()
-        path = self._root / "standalone_restorer.py"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("standalone_restorer.py", text)
 
     def write_restore_instructions(self) -> None:
         """Write a human-readable RESTORE_INSTRUCTIONS.txt to the staging root.
@@ -796,11 +842,7 @@ DISC CONTENTS
 For the encryption/pack file format specification, see
 docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 """
-        path = self._root / "RESTORE_INSTRUCTIONS.txt"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("RESTORE_INSTRUCTIONS.txt", text)
 
     def write_start_here(
         self,
@@ -842,101 +884,18 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             repo_lines = f"\n  Repositories on these discs: {repo_names}\n"
 
         # Archives with a split password need an extra "rebuild the password
-        # first" pre-step.  Archives whose password is not split must NOT
-        # show share instructions.
+        # first" pre-step: the same section as PASSWORD_INFO.txt, under
+        # this file's own heading (#819).  Archives whose password is not
+        # split must NOT show share instructions.
         split_block = ""
         view = split_view(config, escrow_override, recorded)
         if view is not None:
-            if view.uniform is not None:
-                k, n = view.uniform
-                intro = textwrap.dedent(f"""\
-
-                    YOUR PASSWORD IS SPLIT INTO {n} SHARE CARDS
-                    -------------------------------------------
-
-                      The password for this archive was split into {n} share
-                      cards.  You need ANY {k} of them.  A newer restore.sh or
-                      restore.bat asks for the cards itself: type the words of
-                      each card when it asks.  If it asks for a password
-                      instead (an older disc, or a split that was never
-                      recorded), rebuild the password from the cards first:
-
-                        STEP 1: gather any {k} share cards.  On the META disc,
-                          run the share combiner for your machine:
-                    """)
-                pass_cards = f"pass any {k} card files"
-                fewer = f"Fewer than {k} cards reveal nothing."
-            else:
-                # Same column layout as the archive-wide intro above: the
-                # heading at column 0, body text at 2, STEP lines at 4.
-                intro_lines = [
-                    "",
-                    "SOME PASSWORDS ARE SPLIT INTO SHARE CARDS",
-                    "-----------------------------------------",
-                    "",
-                    "  The password of each repository below was split into",
-                    "  share cards.  A newer restore.sh or restore.bat asks for",
-                    "  the cards itself: type the words of each card when it",
-                    "  asks.  If it asks for a password instead (an older",
-                    "  disc, or a split that was never recorded), rebuild the",
-                    "  password from the cards first:",
-                    "",
-                    *_split_repo_list(view, "      "),
-                    "",
-                ]
-                if view.unsplit:
-                    intro_lines.append(
-                        f"  Every other repository ({', '.join(view.unsplit)})"
-                        " has an ordinary password."
-                    )
-                intro_lines += [
-                    "  Each share card names its repository.",
-                    "",
-                    "    STEP 1: gather enough share cards of that repository",
-                    "      (the list above says how many).  On the META disc,",
-                    "      run the share combiner for your machine:",
-                ]
-                intro = "\n".join(intro_lines) + "\n"
-                pass_cards = "pass the card files"
-                fewer = "Too few cards reveal nothing."
-            # The rest is shared.  Its least-indented line ("Fewer ...") sits
-            # at column 2 under the heading, so put back those two columns.
-            split_block = intro + textwrap.indent(textwrap.dedent(f"""\
-
-                        /mnt/recovery/bin/<machine>/lcsas-keyshare \\
-                            <card1> <card2>
-
-                      ({pass_cards}, each by its full path, e.g.
-                      ~/card1.txt.  <machine> is the folder under
-                      recovery/bin/ that names your computer:
-                      x86_64-unknown-linux-musl for most PCs,
-                      aarch64-unknown-linux-musl for 64-bit ARM,
-                      aarch64-apple-darwin for an Apple Silicon Mac; on
-                      Windows x86_64-pc-windows-gnu, and the program is
-                      lcsas-keyshare.exe.)  It prints the password.  If
-                      that program will not run, the fallback is:
-
-                        python3 /mnt/keyshare_combine.py <card1> <card2>
-
-                      ...and if python3 is not installed either, use
-                      the copy bundled on the META disc (<platform> is
-                      the folder under recovery/bin/ naming your
-                      machine, e.g. x86_64-unknown-linux-musl):
-
-                        /mnt/recovery/bin/<platform>/python/bin/python3 \\
-                            /mnt/keyshare_combine.py <card1> <card2>
-
-                    STEP 2: run the normal restore and enter that password
-                      at the  Password:  prompt (if a newer script asks for
-                      the share cards instead, type P, then the password):
-
-                        sh /mnt/restore.sh --target ~/restored
-
-                  {fewer}  Details are in
-                  PASSWORD_INFO.txt and docs/SHARE_FORMAT.md.
-                """), "  ")
-            # Indent to match the surrounding START_HERE section headers.
-            split_block = textwrap.indent(split_block, "          ")
+            section = "\n".join(_share_card_section(view, start_here=True))
+            # Indent to match the surrounding START_HERE section headers;
+            # a blank line separates it from the next section.
+            split_block = (
+                "\n" + textwrap.indent(section, "          ") + "\n\n"
+            )
 
         text = textwrap.dedent(f"""\
             ╔══════════════════════════════════════════════════════════╗
@@ -1025,11 +984,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             flags=re.MULTILINE,
         )
 
-        path = self._root / "START_HERE.txt"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("START_HERE.txt", text)
 
     def write_key_info(
         self,
@@ -1110,11 +1065,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         if view is not None:
             lines.extend(share_recovery_lines(config, escrow_override, recorded))
 
-        path = self._root / "PASSWORD_INFO.txt"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("PASSWORD_INFO.txt", "\n".join(lines))
 
     def write_config_summary(self, config: LCSASConfig) -> None:
         """Write a sanitized config summary to the staging root.
@@ -1160,11 +1111,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         lines.append("restoration. See RESTORE_INSTRUCTIONS.txt instead.")
         lines.append("")
 
-        path = self._root / "CONFIG_SUMMARY.txt"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("CONFIG_SUMMARY.txt", "\n".join(lines))
 
     def write_disc_care(self, config: LCSASConfig | None = None) -> None:
         """Write DISC_CARE.txt with media storage guidance.
@@ -1295,8 +1242,4 @@ DRIVE AVAILABILITY
   - Standard USB interface ensures future compatibility.
   - Internal SATA BD drives with a USB-SATA adapter also work.
 """
-        path = self._root / "DISC_CARE.txt"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        self._write_text("DISC_CARE.txt", text)

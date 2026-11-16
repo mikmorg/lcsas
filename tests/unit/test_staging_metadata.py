@@ -187,3 +187,82 @@ def test_restore_instructions_follow_the_rc6_journey(tmp_path: Path) -> None:
     assert "NEWEST data disc" in text
     assert "share cards" in text
     assert "~/lcsas-restore-tools/resume.sh" in text
+
+
+def test_lcsas_source_on_disc_has_no_bytecode(tmp_path: Path, monkeypatch) -> None:
+    """#815: the LCSAS source copied to a data disc must leave out
+    __pycache__, .pyc and .pyo.  A .pyc file records the full path of
+    the machine that compiled it (a user name, a folder layout)."""
+    import lcsas.staging.metadata as metadata_mod
+
+    pkg = tmp_path / "pkg" / "lcsas"
+    for sub in ("restore", "utils", "db"):
+        (pkg / sub / "__pycache__").mkdir(parents=True)
+        (pkg / sub / "__init__.py").write_text("")
+        (pkg / sub / "__pycache__" / "__init__.cpython-312.pyc").write_bytes(
+            b"/home/someone/src/lcsas"
+        )
+        (pkg / sub / "stale.pyc").write_bytes(b"pyc")
+        (pkg / sub / "old.pyo").write_bytes(b"pyo")
+    (pkg / "staging").mkdir()
+    # write_lcsas_source finds the package from this module's own path.
+    monkeypatch.setattr(
+        metadata_mod, "__file__", str(pkg / "staging" / "metadata.py")
+    )
+
+    root = tmp_path / "disc"
+    root.mkdir()
+    HolographicInjector(root).write_lcsas_source()
+
+    src = root / "lcsas_src"
+    for sub in ("restore", "utils", "db"):
+        assert (src / sub / "__init__.py").is_file(), sub
+    bytecode = [
+        p.relative_to(src).as_posix()
+        for p in src.rglob("*")
+        if p.name == "__pycache__" or p.suffix in (".pyc", ".pyo")
+    ]
+    assert bytecode == []
+
+
+def _share_section(text: str, heading: str) -> list[str]:
+    """The share-card section under *heading*, dedented, heading dropped."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == heading)
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    body: list[str] = []
+    for line in lines[start + 2:]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break  # the next section's heading
+        body.append(line[indent:])
+    while body and not body[-1]:
+        body.pop()
+    return body
+
+
+def test_share_card_steps_have_one_source(tmp_path: Path) -> None:
+    """#819: START_HERE.txt and PASSWORD_INFO.txt wrote the share-card
+    steps twice, with different wording.  Under their own headings both
+    now carry the same text, for an archive split alike and a mixed one.
+    The saved-password advice keeps the full path, which works with
+    restore.sh on master and with #849, and drops the claim that a short
+    name "is not found" (#849 makes restore.sh resolve it)."""
+    cases = {
+        "uniform": (
+            _render(tmp_path, key_split=True),
+            "YOUR PASSWORD IS SPLIT INTO 5 SHARE CARDS",
+            "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS",
+        ),
+        "mixed": (
+            _render_mixed(tmp_path),
+            "SOME PASSWORDS ARE SPLIT INTO SHARE CARDS",
+            "SPLIT PASSWORDS — SOME PASSWORDS ARE IN SHARE CARDS",
+        ),
+    }
+    for kind, (texts, start_heading, info_heading) in cases.items():
+        start = _share_section(texts["START_HERE.txt"], start_heading)
+        info = _share_section(texts["PASSWORD_INFO.txt"], info_heading)
+        assert start == info, kind
+        joined = "\n".join(info)
+        assert "sh /mnt/restore.sh --key ~/repo.key --target ~/restored" in joined
+        assert "not found" not in joined, kind

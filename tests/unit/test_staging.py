@@ -751,7 +751,8 @@ class TestVolumeInfoTxt:
 
         assert "Label:         LCSAS_BD25_2026_0003" in text
         assert "Volume:        2 of 3 in its burn session" in text
-        assert "Prepared on:   2026-10-30 12:34:56 UTC" in text
+        # #818: a date and time as a person writes them, in minutes.
+        assert "Prepared on:   2026-10-30 12:34 UTC\n" in text
         assert f"Made with:     LCSAS version {__version__}" in text
         assert "Media type:    BD25 (25.0 GB BD-R)" in text
         assert "family (2 packs, 2.5 GB)" in text
@@ -772,6 +773,37 @@ class TestVolumeInfoTxt:
         assert "burn session" not in text
         # The lines around it are still there.
         assert "Label:         LCSAS_BD25_2026_0003\n  Prepared on:" in text
+
+    @pytest.mark.parametrize(
+        ("created_at", "shown"),
+        [
+            # What the catalog writes since #730.
+            ("2026-11-16T14:17:11.996+00:00", "2026-11-16 14:17 UTC"),
+            # Another offset is shown in UTC.
+            ("2026-11-16T16:17:11.996+02:00", "2026-11-16 14:17 UTC"),
+            # SQLite CURRENT_TIMESTAMP (before #730): naive UTC.
+            ("2026-11-16 14:17:11", "2026-11-16 14:17 UTC"),
+            # Unreadable: shown as it is, never made up.
+            ("sometime: soon", "sometime: soon"),
+            ("", "(not recorded)"),
+        ],
+    )
+    def test_prepared_on_is_written_for_a_person(
+        self, tmp_path, created_at, shown,
+    ):
+        """#818: "Prepared on" was the raw catalog timestamp
+        (2026-11-16T14:17:11.996+00:00).  The heir reads this line; no
+        program does (they read created_at in volume_info.json, which
+        keeps the catalog's text)."""
+        root = tmp_path / "staging"
+        root.mkdir()
+        HolographicInjector(root).write_volume_info(
+            _volume(created_at=created_at)
+        )
+        text = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
+        assert f"  Prepared on:   {shown}\n" in text
+        info = json.loads((root / "volume_info.json").read_text())
+        assert info["created_at"] == created_at
 
     def test_no_packs_and_unknown_media(self, tmp_path):
         """Callers that pass no packs still get a readable file."""

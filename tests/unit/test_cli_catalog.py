@@ -1891,9 +1891,15 @@ class TestFirstDiscStates:
         finally:
             conn.close()
 
-    @pytest.mark.parametrize("start", ["BURNING", "BURNED"])
+    # #810: a BURNED volume (a disc of it exists, e.g. a rebuilt catalog)
+    # stays BURNED; it used to go back to STAGING here, which let
+    # 'session abort' delete it.  BURNING with no note of its earlier
+    # status was a STAGING volume.
+    @pytest.mark.parametrize(("start", "after"), [
+        ("BURNING", "STAGING"), ("BURNED", "BURNED"),
+    ])
     def test_failed_receipt_without_a_disc_returns_the_volume_to_staging(
-        self, tmp_path, start,
+        self, tmp_path, start, after,
     ):
         cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
@@ -1902,13 +1908,34 @@ class TestFirstDiscStates:
 
         assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
 
-        assert _status(db, "VOL_NEW") == "STAGING"
+        assert _status(db, "VOL_NEW") == after
         conn = get_connection(db)
         try:
             vol = get_volume_by_label(conn, "VOL_NEW")
             assert len(get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")) == 1
         finally:
             conn.close()
+
+    def test_failed_receipt_returns_a_burning_volume_to_burned(self, tmp_path):
+        """#810: an older LCSAS moved a BURNED volume to BURNING for its
+        burn; the NOTE update_status wrote says so, and a failed receipt
+        puts it back to BURNED, not STAGING."""
+        from lcsas.db.volumes import update_status
+
+        cfg = _write_config_receipts(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_NEW": "BURNED"}, staged_for="Bank_Box")
+        _stage_record(db, "VOL_NEW", "a" * 64, 2048)
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, "VOL_NEW")
+            update_status(conn, vol.volume_id, "BURNING", force=True)
+        finally:
+            conn.close()
+        body = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)
+
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+
+        assert _status(db, "VOL_NEW") == "BURNED"
 
     def test_unverified_receipt_for_a_burned_volume_keeps_it_burned(self, tmp_path):
         cfg = _write_config_receipts(tmp_path)

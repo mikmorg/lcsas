@@ -11,6 +11,12 @@ from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
+# ``copytree`` ignore for Python bytecode.  A .pyc file records the full
+# path of its source on the machine that compiled it (a user name and a
+# folder layout), and is of no use to another Python version, so none
+# goes on a disc (#815).  Python compiles the .py files again as needed.
+PYTHON_BYTECODE = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
+
 
 def ensure_dir(path: Path) -> Path:
     """Create a directory (and parents) if it doesn't exist. Returns the path."""

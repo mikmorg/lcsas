@@ -239,3 +239,74 @@ def test_aborting_another_session_leaves_the_sources_alone(archive, caplog):
         ) == ["OLD_0", "OLD_1"]
     finally:
         conn.close()
+
+
+def _clean(cfg: str, *extra: str) -> int:
+    return main(["--config", cfg, "stage", "--clean", "--session", "latest",
+                 *extra])
+
+
+def _statuses(db) -> dict[str, str]:
+    conn = get_connection(db)
+    try:
+        return {
+            str(r[0]): str(r[1]) for r in conn.execute(
+                "SELECT label, status FROM volumes ORDER BY label")
+        }
+    finally:
+        conn.close()
+
+
+def test_stage_clean_force_returns_the_sources_to_verified(archive, caplog):
+    """#817: 'stage --clean --force' aborts the session as 'session abort'
+    does, so the sources go back to VERIFIED in both."""
+    cfg, db = archive
+    rc, _prompt = _consolidate(cfg)
+    assert rc == 0, caplog.text
+
+    caplog.clear()
+    assert _clean(cfg, "--force") == 0, caplog.text
+    assert "OLD_0, OLD_1" in caplog.text
+    assert _statuses(db) == {"OLD_0": "VERIFIED", "OLD_1": "VERIFIED"}
+
+    # A second consolidation can then run again.
+    rc, _prompt = _consolidate(cfg)
+    assert rc == 0, caplog.text
+
+
+def test_refused_stage_clean_leaves_the_sources_consolidating(archive, caplog):
+    """Without --force the never-burned session is refused: nothing
+    changes."""
+    cfg, db = archive
+    rc, _prompt = _consolidate(cfg)
+    assert rc == 0, caplog.text
+
+    assert _clean(cfg) == 1
+    statuses = _statuses(db)
+    assert statuses["OLD_0"] == statuses["OLD_1"] == "CONSOLIDATING"
+    assert len(statuses) == 3
+
+
+def test_plain_clean_after_the_burn_keeps_the_sources_consolidating(
+    archive, caplog,
+):
+    """The clean after the burn, before 'consolidate --deprecate', must not
+    undo the consolidation."""
+    cfg, db = archive
+    rc, _prompt = _consolidate(cfg)
+    assert rc == 0, caplog.text
+    conn = get_connection(db)
+    try:
+        (vid,) = conn.execute(
+            "SELECT volume_id FROM volumes WHERE label LIKE 'NEW%'"
+        ).fetchone()
+        conn.execute("UPDATE volumes SET status = 'VERIFIED' "
+                     "WHERE volume_id = ?", (vid,))
+        add_volume_copy(conn, vid, "Home", commit=False)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert _clean(cfg) == 0, caplog.text
+    statuses = _statuses(db)
+    assert statuses["OLD_0"] == statuses["OLD_1"] == "CONSOLIDATING"
