@@ -92,11 +92,13 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_bat_journey_wine.py` | restore.bat's questions under wine: disc, set, password, cards (#605-#608). |
 | `test_restore_bat_password_lifetime.py` | restore.bat temp-password-file lifetime (issue #384 review finding). |
 | `test_restore_bat_single_drive_wine.py` | restore.bat finishes a one-drive, two-disc restore under wine (#604, #615). |
+| `test_restore_bat_snapshot_wine.py` | Hardening (#807, #802): restore.bat --snapshot ID, and LCSAS_REPO with |
 | `test_restore_bat_tools_folder_wine.py` | restore.bat's tools folder under wine (#609, #611, #612, #613, #615). |
 | `test_restore_bat_wine_smoke.py` | INFRA-01: local wine smoke loop for recovery/scripts/restore.bat. |
 | `test_restore_discovery.py` | Hardening test #3: restore.sh repo discovery on canonical layouts. |
 | `test_restore_no_recovery_binaries.py` | Hardening test (issue #225): restore.sh terminal error UX when |
 | `test_restore_platform_detect.py` | Shell-coverage tests for OS/arch detection branches in restore.sh. |
+| `test_restore_sh_args_relocation.py` | Hardening (#800, #625, #807, #802, #806): restore.sh reads its |
 | `test_restore_sh_binary_corrupt.py` | Issue #223 — restore.sh detects present-but-corrupted tier binaries. |
 | `test_restore_sh_catalog_invalidation.py` | Hardening test: mtime-based locator-catalog cache invalidation in restore.sh (Issue #108). |
 | `test_restore_sh_catalog_pick.py` | restore.sh: which catalog.db it picks, and from where (#517 gaps). |
