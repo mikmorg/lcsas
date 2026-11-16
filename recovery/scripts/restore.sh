@@ -245,6 +245,15 @@ tools_dir_claim() {
     return 0
 }
 
+# tools_dir_foreign DIR: 0 when DIR is a folder that holds files and was
+# not made by this script (no marker): the reader's own folder, which is
+# never used, emptied or deleted (#627 item 4).
+tools_dir_foreign() {
+    [ -d "$1" ] || return 1
+    [ ! -f "$1/$TOOLS_MARK" ] || return 1
+    [ -n "$(ls -A "$1" 2>/dev/null)" ]
+}
+
 # dir_runs_programs DIR: 0 when a program in DIR can be run (#496: a
 # "noexec" mount refuses them).
 dir_runs_programs() {
@@ -1123,6 +1132,30 @@ relocate_with_args() {
     relocate_to_ram "$_rw_mount" "$@"
 }
 
+# ── The tools folder must be a new or empty folder, or our own ────
+#
+# The tools folder is emptied and deleted once the restore has finished,
+# so a folder that holds other files (LCSAS_TOOLS_DIR=$HOME, or a copy of
+# the META disc on a USB stick) is refused here, before anything changes,
+# whether this run relocates or not.  restore.bat refuses it the same way
+# (#627 item 4).  Up to rc9 the script used a temporary folder instead,
+# and in a run that did not relocate that folder went at the end, so a
+# stop there could not be carried on.  A folder that cannot be made, has
+# no room or cannot run programs still falls back to a temporary folder.
+_tools_want="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
+case "$_tools_want" in ''|/*) ;; *) _tools_want="$(pwd)/$_tools_want" ;; esac
+if [ -n "$_tools_want" ] && tools_dir_foreign "$_tools_want"; then
+    cat >&2 <<EOF
+ERROR: the tools folder $_tools_want
+already holds other files.  The restore copies its programs there and
+deletes the folder once it has finished, so it uses only a new or empty
+folder, or one it made itself.  Set LCSAS_TOOLS_DIR to a new or empty
+folder, or leave it unset to use the usual one, ~/lcsas-restore-tools.
+EOF
+    exit 1
+fi
+unset _tools_want
+
 # ── Single-drive guard: relocate (see relocate_to_ram above) ──────
 #
 # Only now, with the arguments read: --help, --version, --check-disc
@@ -1371,6 +1404,21 @@ else
 fi
 STATE_DIR="${TOOLS:-$RUN_TMP}"
 unset _tools_want
+
+# tmp_file NAME: make a new private file NAME.XXXXXX and print its path:
+# in $TMPDIR (else /tmp), else /tmp, else this run's own folder.  1 when
+# none can be made.  TMPDIR is honoured as for every other temporary
+# file (#806): /tmp may be read-only or missing on a rescue system.
+tmp_file() {
+    for _tf_dir in "${TMPDIR:-/tmp}" /tmp "${STATE_DIR:-}"; do
+        [ -n "$_tf_dir" ] || continue
+        _tf="$(mktemp "$_tf_dir/$1.XXXXXX" 2>/dev/null)" || continue
+        chmod 600 "$_tf" 2>/dev/null || true
+        printf '%s\n' "$_tf"
+        return 0
+    done
+    return 1
+}
 
 # ── Mount directories, the meta disc and the newest data disc ─────
 #
@@ -1640,7 +1688,12 @@ merge_set_metadata() {
     mkdir -p "$_ms_new/keys" "$TOOLS/metadata/.from" || _ms_ok=0
     # Everything the copy has but its index/ and snapshots/, then the
     # disc's index/, snapshots/ and top-level files, and its keys/ added.
-    for _ms_e in "$_ms_dst"/*; do
+    # A run that does not relocate has no copy yet: it starts from the
+    # META copy's (keys are named by their content, so a key only the
+    # META copy holds is kept).
+    _ms_base="$_ms_dst"
+    [ -d "$_ms_base" ] || _ms_base="$META_ROOT/metadata/$_ms_id"
+    for _ms_e in "$_ms_base"/*; do
         [ -e "$_ms_e" ] || continue
         case "${_ms_e##*/}" in index|snapshots) continue ;; esac
         cp -R "$_ms_e" "$_ms_new/" 2>/dev/null || _ms_ok=0
@@ -1683,25 +1736,52 @@ merge_set_metadata() {
 # is_interactive), never for a pipe or a script; LCSAS_NEWEST_DISC_PROMPT=0
 # skips it.  POSIX sh cannot wait with a timeout, so the reader presses
 # ENTER once the disc is in.
+#
+# "Run off the META disc": relocated off it (META_DISC), or run where it
+# is from a copy of it that can be written to, such as a USB stick or a
+# folder (LCSAS_NO_RELOCATE=1), whose drive is free for the data discs.
+# restore.bat does the same (#627 item 6); up to rc9 restore.sh needed
+# META_DISC.  Not from the META disc itself without relocating: that
+# disc cannot come out of the drive while the script runs from it.
+META_HERE=0
+if [ -n "${META_DISC:-}" ]; then
+    META_HERE=1
+elif is_meta_root "$META_ROOT" && [ -w "$META_ROOT" ]; then
+    META_HERE=1
+fi
 newest_disc_wanted() {
     [ "${LCSAS_NEWEST_DISC_PROMPT:-1}" != 0 ] || return 1
-    [ -n "${META_DISC:-}" ] || return 1
+    [ "$META_HERE" = 1 ] || return 1
     is_interactive || return 1
     [ -z "$(data_discs)" ]
 }
 if newest_disc_wanted; then
+    printf '\n========================================================================\n' >&2
+    if [ -n "${META_DISC:-}" ]; then
+        printf '  Take the META disc out and put in your NEWEST data disc: the one\n' >&2
+    else
+        printf '  Put your NEWEST data disc in the drive: the one\n' >&2
+    fi
     cat >&2 <<'EOF'
-
-========================================================================
-  Take the META disc out and put in your NEWEST data disc: the one
   with the latest year, and then the highest number, for example
   LCSAS_CD700_2026_0002.  The name the computer shows for a disc may
   be cut short; the full label is printed on the disc.
 
+EOF
+    if [ -n "${META_DISC:-}" ]; then
+        cat >&2 <<'EOF'
   To take the META disc out, eject it: use your file manager's Eject,
   or type  sudo eject /dev/sr0  in another terminal (on a Mac:
   drutil eject).  If the data disc does not open by itself, mount it:
   sudo mount /dev/sr0 /mnt
+EOF
+    else
+        cat >&2 <<'EOF'
+  If the data disc does not open by itself, mount it:
+  sudo mount /dev/sr0 /mnt
+EOF
+    fi
+    cat >&2 <<'EOF'
 
   Press ENTER when it is in; S then ENTER to skip (use the copies on
   the META disc); Q then ENTER to quit.
@@ -1748,11 +1828,12 @@ fi
 # The newest data disc mounted now refreshes the tools folder's copy of
 # every set it holds (C2): its snapshots/ and index/ replace the META
 # disc's, keys/ are added, and sets it does not hold keep the META
-# disc's copy.  Only on the single-drive journey (a META disc is known),
-# where that disc may come out of the drive before the next set or a
-# resumed run needs the copy.  Never in a resumed run (LCSAS_RESUME,
-# set by resume.sh): it carries on with the copy the stopped run used.
-if [ -n "$TOOLS" ] && [ -n "${META_DISC:-}" ] && [ "${LCSAS_RESUME:-0}" != 1 ]; then
+# disc's copy.  Only on the single-drive journey (run off a META disc,
+# META_HERE above), where that disc may come out of the drive before the
+# next set or a resumed run needs the copy.  Never in a resumed run
+# (LCSAS_RESUME, set by resume.sh): it carries on with the copy the
+# stopped run used.
+if [ -n "$TOOLS" ] && [ "$META_HERE" = 1 ] && [ "${LCSAS_RESUME:-0}" != 1 ]; then
     _nd_top="$(data_discs | sed -n 1p)"
     _nd_dir="${_nd_top#*"$TAB"}"
     _nd_lab=""
@@ -2644,8 +2725,12 @@ fi
 # for the password.  An empty answer asks again, and Q (or the end of
 # the input) stops with exit 77.  Asked on a terminal, a password that a
 # repository key rejects is caught before tier 1 starts and asked for
-# again (C7); a password given in the environment or a file is not
-# asked again.
+# again (C7).  So is one given in LCSAS_PWFILE, LCSAS_PASSWORD or
+# LCSAS_SHARES_DIR (#627 item 2, as restore.bat): when a person is there
+# (is_interactive) the script says so and asks; in a script it is not
+# checked, tier 1 rejects it and the run ends with 77.  Cards in
+# LCSAS_SHARES_DIR that do not rebuild a password end the same way: the
+# questions when a person is there, 77 in a script (#627 item 3).
 
 # bin_preflight_ok PATH -- see "Issue #223" at the tier dispatch below:
 # 0 iff PATH is non-empty and a `--help` dry-run does not fail with an
@@ -2912,27 +2997,63 @@ shares_from_dir() {
     return 1
 }
 
-PWFILE="${LCSAS_PWFILE:-}"
-if [ -z "$PWFILE" ]; then
-    PWFILE_TMP="$(mktemp /tmp/lcsas-pw.XXXXXX)"
-    chmod 600 "$PWFILE_TMP"
+# new_pwfile: PWFILE becomes a new private temporary file (removed on
+# every exit), never the reader's own LCSAS_PWFILE.
+new_pwfile() {
+    if ! PWFILE_TMP="$(tmp_file lcsas-pw)"; then
+        printf 'Cannot make a private temporary file for the password in %s or /tmp.\n' \
+               "${TMPDIR:-/tmp}" >&2
+        exit 1
+    fi
     PWFILE="$PWFILE_TMP"
-    _pw_split="$(set_split "$REPO")"
+}
+
+# ask_typed: the questions: the share cards when the set's password is
+# split and the combiner is here, else (or after P) the password.
+ask_typed() {
+    if [ -n "$_pw_split" ] && [ -n "$KEYSHARE_BIN" ]; then
+        ask_shares "$_pw_split" || ask_password
+        return 0
+    fi
+    if [ -n "$_pw_split" ]; then
+        printf 'The password for %s is split into share cards, but the share\n' "$SET_NAME" >&2
+        printf 'combiner (lcsas-keyshare) is missing here.  Rebuild the password\n' >&2
+        printf 'as RECOVER.txt "SHARE CARDS" says, then type it.\n' >&2
+    fi
+    ask_password
+}
+
+_pw_split="$(set_split "$REPO")"
+# Where a password that was not typed came from, for the line that says
+# it was not accepted.
+_pw_given=""
+PWFILE="${LCSAS_PWFILE:-}"
+if [ -n "$PWFILE" ]; then
+    _pw_given="the password file $PWFILE"
+else
+    new_pwfile
     if [ -n "${LCSAS_PASSWORD:-}" ]; then
         printf '%s\n' "$LCSAS_PASSWORD" > "$PWFILE"
+        _pw_given="LCSAS_PASSWORD"
     elif [ -n "${LCSAS_SHARES_DIR:-}" ]; then
-        shares_from_dir || exit 77
-    elif [ -n "$_pw_split" ] && [ -n "$KEYSHARE_BIN" ]; then
-        ask_shares "$_pw_split" || ask_password
-    else
-        if [ -n "$_pw_split" ]; then
-            printf 'The password for %s is split into share cards, but the share\n' "$SET_NAME" >&2
-            printf 'combiner (lcsas-keyshare) is missing here.  Rebuild the password\n' >&2
-            printf 'as RECOVER.txt "SHARE CARDS" says, then type it.\n' >&2
+        if shares_from_dir; then
+            _pw_given="the share cards in LCSAS_SHARES_DIR"
+        elif is_interactive; then
+            printf 'Type the cards or the password instead.\n' >&2
+            ask_typed
+        else
+            exit 77
         fi
-        ask_password
+    else
+        ask_typed
     fi
 fi
+if [ -n "$_pw_given" ] && ! password_ok; then
+    printf 'The password from %s was not accepted for %s.\n' "$_pw_given" "$SET_NAME" >&2
+    [ -n "$PWFILE_TMP" ] || new_pwfile
+    ask_typed
+fi
+unset _pw_given
 
 mkdir -p "$TARGET_DIR"
 
@@ -3606,8 +3727,16 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         #  * stdin is NOT touched -- the heir's disc-swap prompt
         #    (`restic_fallback.py::_print_swap_prompt`) still blocks
         #    on stdin in real time; `tee` only sits in front of stderr.
-        TIER3_ERR=$(mktemp /tmp/lcsas-tier3-err.XXXXXX)
-        TIER3_RC_FILE=$(mktemp /tmp/lcsas-tier3-rc.XXXXXX)
+        #  * The two files honour TMPDIR (tmp_file): /tmp may be
+        #    read-only or missing on a rescue system (#806).
+        TIER3_ERR="$(tmp_file lcsas-tier3-err)" || TIER3_ERR=""
+        TIER3_RC_FILE="$(tmp_file lcsas-tier3-rc)" || TIER3_RC_FILE=""
+        if [ -z "$TIER3_ERR" ] || [ -z "$TIER3_RC_FILE" ]; then
+            printf '[tier 3] cannot make a temporary file in %s or /tmp; set TMPDIR\n' \
+                   "${TMPDIR:-/tmp}" >&2
+            printf '         to a folder that can be written to and run this again.\n' >&2
+            exit 1
+        fi
         # Build the catalog / mount-point / snapshot flag list as positional
         # params, splitting the newline-delimited lists so spaced paths
         # survive intact (issue #364).  Done before the redirect block so
