@@ -27,7 +27,10 @@
 #   split-key-docs       — KEY-04 docs-driven acceptance gate: agent gets a
 #                          scenario-only prompt (no command spoon-feed) plus 2
 #                          production -card.txt artifacts, and must derive
-#                          every command from the on-disc instructions.
+#                          every command from the on-disc instructions.  The
+#                          archive splits every password 2-of-5 in its
+#                          config; the discs and a config-built meta disc
+#                          carry PASSWORD_INFO.txt (#828).
 #   mixed-split          — #587: one archive, alpha's password split 2-of-3
 #                          in its own config table, bravo on an ordinary
 #                          password.  The discs and a config-built meta disc
@@ -42,8 +45,22 @@
 #                          once the manual Windows drill (#476) passes.  It
 #                          fails loud, spending nothing, until then.
 #
-# Exits 0 with `SCORE: 15/15 (variant=<name>)` on full pass.
+# Exits 0 with `SCORE: 16/16 (variant=<name>)` on full pass.
 # Exits non-zero on any failure; the score line still prints.
+#
+# The run is scored on its OWN run folder ($RUN_DIR), never "the newest
+# /tmp/lcsas-blind-* folder" (#830).  A pass needs all 16 of verify.sh's
+# checks to run and pass; a run that cannot be scored (no folder, no
+# transcript, a 0/0 score) fails, XFAIL-listed or not.  Besides the
+# SCORE line it prints `RUN_DIR: <path>` before the agent starts and one
+# `RESULT: {json}` line (run folder, score, cost, turns) at the end, for
+# sweep scripts to read from the log (#830).
+#
+# Run folders (#840): $LCSAS_BLIND_TMPDIR, else $TMPDIR, else /tmp (sudo -E
+# drops TMPDIR, so set LCSAS_BLIND_TMPDIR to move them).  A passing run
+# removes its folder (LCSAS_BLIND_KEEP_RUN=1 keeps it); a failing one keeps
+# it, and run.sh prunes kept folders older than LCSAS_BLIND_KEEP_DAYS
+# (default 14).
 
 set -euo pipefail
 
@@ -111,8 +128,13 @@ esac
 
 "$HERE/setup.py"
 
-RUN_DIR="/tmp/lcsas-blind-variant-${VARIANT}-$$"
+RUN_BASE="$(python3 "$HERE/blind_runs.py" base)"
+mkdir -p "$RUN_BASE"
+RUN_DIR="$RUN_BASE/lcsas-blind-variant-${VARIANT}-$$"
+# A leftover folder of the same name (pid reuse) would be scored as ours.
+rm -rf "$RUN_DIR"
 mkdir -p "$RUN_DIR"
+echo "RUN_DIR: $RUN_DIR"
 
 # 45-minute wall-clock cap, matching make blind-restore.
 timeout --foreground 2700 \
@@ -122,14 +144,31 @@ timeout --foreground 2700 \
         ${LCSAS_TIER_FALLBACK:+LCSAS_TIER_FALLBACK=$LCSAS_TIER_FALLBACK} \
     "$HERE/run.sh"
 
-last="$(ls -1dt /tmp/lcsas-blind-* 2>/dev/null | head -1)"
-verify_out="$("$HERE/verify.sh" "$last" || true)"
-echo "$verify_out"
-pass_count="$(printf '%s\n' "$verify_out" | grep -c '^PASS' || true)"
-fail_count="$(printf '%s\n' "$verify_out" | grep -c '^FAIL' || true)"
-total=$((pass_count + fail_count))
-echo
-echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
+# Score THIS run's folder.  blind_runs.py prints verify.sh's output, the
+# SCORE line and the RESULT line; exit 0 = 16/16, 1 = scored and failed,
+# 2 = could not be scored.
+score_rc=0
+python3 "$HERE/blind_runs.py" score "$RUN_DIR" --variant "$VARIANT" \
+    || score_rc=$?
+
+# A passing run removes its folder (#840); a failing one keeps it for the
+# post-mortem.  LCSAS_BLIND_KEEP_RUN=1 keeps a passing one too.
+finish() {
+    local rc="$1"
+    if [ "$rc" -eq 0 ] && [ "${LCSAS_BLIND_KEEP_RUN:-0}" != "1" ]; then
+        rm -rf "$RUN_DIR"
+        echo "run folder removed (passed): $RUN_DIR"
+    else
+        echo "run folder kept: $RUN_DIR"
+    fi
+    exit "$rc"
+}
+
+if [ "$score_rc" -ne 0 ] && [ "$score_rc" -ne 1 ]; then
+    # Not scored at all: never an XFAIL, never a pass.
+    echo "ERROR: variant=$VARIANT could not be scored (see above)" >&2
+    finish 2
+fi
 
 # Variants that are expected to fail until a tracked bug lands are
 # recorded in the XFAIL ledger (GATE-06): tests/e2e/cdemu_blind_restore/
@@ -180,20 +219,21 @@ case ",$XFAIL," in
     *)                is_xfail=0 ;;
 esac
 
-if [ "$pass_count" -eq "$total" ]; then
+if [ "$score_rc" -eq 0 ]; then
     if [ "$is_xfail" -eq 1 ]; then
-        # Strict XPASS: a listed variant that scores 15/15 must force
+        # Strict XPASS: a listed variant that scores 16/16 must force
         # the ledger cleanup NOW, not whenever someone reads the log.
-        echo "XPASS: variant=$VARIANT scored ${pass_count}/${total} (was expected to fail)"
+        echo "XPASS: variant=$VARIANT passed every check (was expected to fail)"
         echo "       Promote it: remove the '$VARIANT' line from $XFAIL_LIST" >&2
-        echo "       and record the 15/15 in run_variant.sh's promotion log." >&2
-        exit 1
+        echo "       and record the 16/16 in run_variant.sh's promotion log." >&2
+        finish 1
     fi
-    exit 0
+    finish 0
 fi
 
 if [ "$is_xfail" -eq 1 ]; then
-    echo "XFAIL: variant=$VARIANT scored ${pass_count}/${total} (expected)"
-    exit 0
+    echo "XFAIL: variant=$VARIANT failed a check (expected)"
+    # Expected, but still a failed run: keep its folder.
+    LCSAS_BLIND_KEEP_RUN=1 finish 0
 fi
-exit 1
+finish 1

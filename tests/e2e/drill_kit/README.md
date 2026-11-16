@@ -71,4 +71,7 @@ python3 tests/e2e/drill_kit/verify_restore.py /scratch/lcsas-drill-kit/manifest.
 
 Each manifest entry is matched by its `<repo>/<file>` tail, so it doesn't
 matter how deep the restore nested the files. Add `--repo photos` to check one
-repository only.
+repository only. Files in the folder that are not in the manifest are listed
+as `EXTRA` but do not fail the check. A wrong or empty folder, or a `--repo`
+the manifest does not have, is an error (exit 2): nothing was compared, so it
+is never a pass.

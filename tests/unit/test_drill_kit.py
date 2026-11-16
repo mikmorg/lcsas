@@ -114,3 +114,54 @@ def test_verify_restore_catches_missing_and_changed(restored) -> None:
     one = _verify(manifest, root, "--repo", "photos")
     assert "MISSING  photos/scan-002.dat" in one.stdout
     assert "documents/" not in one.stdout
+
+
+def test_verify_restore_lists_extra_files_without_failing(restored) -> None:
+    manifest, root = restored
+    (root / ".lcsas-restore-marker").write_text("marker")
+    (root / "snapshot" / "photos" / "stray.dat").write_text("stray")
+    proc = _verify(manifest, root)
+    assert proc.returncode == 0, proc.stdout
+    assert "EXTRA    .lcsas-restore-marker" in proc.stdout
+    assert "EXTRA    snapshot/photos/stray.dat" in proc.stdout
+    assert "5/5 files restored intact" in proc.stdout
+
+
+@pytest.mark.parametrize("case", ["missing", "empty", "wrong_repo",
+                                  "wrong_folder", "empty_manifest"])
+def test_verify_restore_refuses_when_nothing_is_compared(
+    restored, tmp_path: Path, case: str,
+) -> None:
+    """#833: a mistyped or empty folder, or a manifest/--repo that selects
+    nothing, used to print "0/0 files restored intact" and exit 0."""
+    manifest, root = restored
+    extra: tuple[str, ...] = ()
+    if case == "missing":
+        root = tmp_path / "no-such-folder"
+    elif case == "empty":
+        root = tmp_path / "empty"
+        root.mkdir()
+    elif case == "wrong_repo":
+        extra = ("--repo", "nosuchrepo")
+    elif case == "wrong_folder":
+        root = tmp_path / "other"
+        (root / "a").mkdir(parents=True)
+        (root / "a" / "unrelated.txt").write_text("x")
+    elif case == "empty_manifest":
+        manifest = tmp_path / "empty.sha256"
+        manifest.write_text("")
+    proc = _verify(manifest, root, *extra)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "ERROR:" in proc.stderr
+    assert "not a pass" in proc.stderr
+    assert "0/0" not in proc.stdout
+
+
+def test_verify_restore_counts_every_missing_file(restored) -> None:
+    manifest, root = restored
+    for f in (root / "snapshot" / "photos").iterdir():
+        f.unlink()
+    proc = _verify(manifest, root)
+    assert proc.returncode == 1
+    assert proc.stdout.count("MISSING  photos/") == 3
+    assert "2/5 files restored intact" in proc.stdout

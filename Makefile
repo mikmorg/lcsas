@@ -122,11 +122,19 @@ blind-restore:
 	@# 45-minute wall-clock cap.  A correct run on TEST_TINY finishes
 	@# in ~15-25 min; anything beyond 45 means the agent is looping
 	@# and we'd rather burn 1× max-budget than open-ended hours.
-	timeout --foreground 2700 \
-		env RUN_DIR=/tmp/lcsas-blind-run-$$$$ \
-		tests/e2e/cdemu_blind_restore/run.sh
-	@last=$$(ls -1dt /tmp/lcsas-blind-run-* 2>/dev/null | head -1); \
-		tests/e2e/cdemu_blind_restore/verify.sh "$$last"
+	@# One shell, so the run is scored on its OWN folder, never the newest
+	@# one (#830).  A pass removes the folder, a failure keeps it (#840).
+	@run_dir="$$(python3 tests/e2e/cdemu_blind_restore/blind_runs.py base)/lcsas-blind-run-$$$$"; \
+		timeout --foreground 2700 env RUN_DIR="$$run_dir" \
+			tests/e2e/cdemu_blind_restore/run.sh; \
+		rc=0; python3 tests/e2e/cdemu_blind_restore/blind_runs.py score \
+			"$$run_dir" --variant default || rc=$$?; \
+		if [ $$rc -eq 0 ] && [ "$${LCSAS_BLIND_KEEP_RUN:-0}" != 1 ]; then \
+			rm -rf -- "$$run_dir"; \
+		else \
+			echo "run folder kept: $$run_dir"; \
+		fi; \
+		exit $$rc
 
 # Stress / flakiness gate.  Runs the blind agent N times in
 # sequence; fails if any run fails.  Use before declaring a

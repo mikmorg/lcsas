@@ -11,10 +11,13 @@ Responsibilities (see PLAN.md § setup.py responsibilities):
   2. Generate alpha + bravo synthetic data, SHA-256 manifests.
   3. Two rustic repos, distinct passwords, small packs for a realistic
      disc count.
-  4. LCSAS burn pipeline against TEST_TINY media.
+  4. LCSAS burn pipeline against TEST_TINY media: alpha's discs first,
+     then (after the meta disc) the other tenants'.  A failed burn, or a
+     burn that makes fewer discs than planned, stops the setup (#829).
   5. Production meta disc + ISO.
   6. Vault the ISOs in /var/lib/disc-vault (root-only, 0700).
-  7. Pre-compute expected_alpha_volumes.txt from the catalog.
+  7. Pre-compute expected_alpha_volumes.txt from the catalog, and refuse
+     a disc layout that makes verify.sh's thrash check meaningless (#836).
   8. Compile disc-loader.c, install setuid. Install cdr-robotctl to
      /opt/disc-robot/libexec/.
   9. Ensure cdemu is running and the drive is empty.
@@ -36,6 +39,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
@@ -96,14 +100,21 @@ AGENT_CLAUDE_CFG = Path("/scratch/lcsas-blind-claude-cfg")
 # /home/lcsas-blind.  A reboot drops the bind mount; setup.py remounts it.
 SCRATCH_STORE = Path("/scratch/lcsas-blind-store")
 
-# mixed-split variant (#587): one archive, alpha's password split 2-of-3 in
-# its own [repos.alpha] table (recorded in the catalog, so the burn's drift
-# guard passes), bravo on an ordinary password.  Unlike split-key-docs, the
-# discs themselves carry the per-repository split text, and the meta disc is
-# built from the archive's config (owner decision Q19) so its START_HERE
-# carries it too.  The agent gets 2 of the 3 printed cards.
+# Password-split variants.  Each is set up as an owner's split archive is:
+# the split is in the archive's config, it is recorded in the catalog under
+# the printed cards' own SLIP-0039 identifier (so the burn's drift guard
+# passes), and the meta disc is built from the config (owner decision Q19),
+# so the discs carry START_HERE / PASSWORD_INFO.txt split text.  The agent
+# gets alpha's quorum of the printed cards.
+#   mixed-split (#587): alpha's password split 2-of-3 in its own
+#     [repos.alpha] table, bravo on an ordinary password.
+#   split-key-docs (KEY-04, #828): every password split 2-of-5 under
+#     [defaults].  Its meta disc used to be built without a config, so the
+#     PASSWORD_INFO.txt its prompt points at was missing.
 MIXED_SPLIT_K, MIXED_SPLIT_N = 2, 3
-MIXED_SPLIT_CARDS = SECRETS / "mixed-split-cards"
+SPLIT_KEY_DOCS_K, SPLIT_KEY_DOCS_N = 2, 5
+SPLIT_CARDS = SECRETS / "split-cards"
+SPLIT_VARIANTS = ("mixed-split", "split-key-docs")
 
 # File sizing: each TEST_TINY volume has ~1.25 MB usable after the
 # holographic-metadata reserve (#142: TEST_TINY = 2 MB; reserve 850 KB
@@ -115,11 +126,21 @@ MIXED_SPLIT_CARDS = SECRETS / "mixed-split-cards"
 # proportionally large or you silently regress the multi-disc test.
 ALPHA_FILES = 30
 ALPHA_FILE_BYTES = 130 * 1024  # 130 KB × 30 = ~3.9 MB (≈ 3 TEST_TINY volumes)
-# Non-alpha tenants get a smaller footprint — only alpha is restored, the
-# others exist to populate the multi-tenant prompt and exercise pack
-# dedup across repos.  ~900 KB each ≈ 1 TEST_TINY volume per tenant.
+# Non-alpha tenants share SECONDARY_TOTAL_BYTES — only alpha is restored,
+# the others exist to populate the multi-tenant prompt.  Their discs come
+# after alpha's (see main), and together they must fill at least two discs,
+# or verify.sh's thrash check cannot fail (#836, _thrash_layout_problem).
+# ~1.8 MB is two discs at 2 tenants (~1.1 MB usable each after the
+# reserve) and three at 5 tenants (~0.7 MB usable).
 SECONDARY_FILES = 15
-SECONDARY_FILE_BYTES = 60 * 1024   # 60 KB × 15 = ~900 KB
+SECONDARY_TOTAL_BYTES = 1_800_000
+
+
+def _secondary_file_bytes(tenant_count: int) -> int:
+    """Size of each file of a non-alpha tenant, so that all of them
+    together hold about SECONDARY_TOTAL_BYTES."""
+    others = max(1, tenant_count - 1)
+    return max(1024, SECONDARY_TOTAL_BYTES // others // SECONDARY_FILES)
 
 # Tenant list — parametrised by LCSAS_TENANT_COUNT (issues #216 #217).
 # Default = 2 (alpha + bravo) preserves the historical fixture.
@@ -364,7 +385,15 @@ def _fixture_config():
         )
         for name in _tenants()
     }
-    if os.environ.get("LCSAS_VARIANT", "") == "mixed-split":
+    variant = os.environ.get("LCSAS_VARIANT", "")
+    split_defaults: dict[str, Any] = {}
+    if variant == "split-key-docs":
+        split_defaults = {
+            "key_split": True,
+            "key_threshold": SPLIT_KEY_DOCS_K,
+            "key_shares": SPLIT_KEY_DOCS_N,
+        }
+    if variant == "mixed-split":
         repos["alpha"] = RepositoryConfig(
             name="alpha",
             mirror_path=MIRROR / "alpha",
@@ -403,42 +432,59 @@ def _fixture_config():
         label_prefix="LCSAS",
         metadata_reserve_bytes=reserve,
         repositories=repos,
+        **split_defaults,
     )
 
 
-def _record_mixed_split(conn) -> None:
-    """mixed-split: print alpha's 2-of-3 cards now and record the split.
+def _variant_splits() -> dict[str, tuple[int, int]]:
+    """The (K, N) password split of each tenant, for this variant."""
+    variant = os.environ.get("LCSAS_VARIANT", "")
+    if variant == "mixed-split":
+        return {"alpha": (MIXED_SPLIT_K, MIXED_SPLIT_N)}
+    if variant == "split-key-docs":
+        return {t: (SPLIT_KEY_DOCS_K, SPLIT_KEY_DOCS_N) for t in _tenants()}
+    return {}
 
-    The cards go to MIXED_SPLIT_CARDS (inside the locked fixture);
-    _create_agent_user hands the agent the quorum.  Recording the split
-    under the cards' own SLIP-0039 identifier keeps catalog and cards
-    consistent, and lets the burn's drift guard pass.
+
+def _record_splits(conn) -> None:
+    """Print each split tenant's cards now and record its split.
+
+    The cards go to SPLIT_CARDS (inside the locked fixture);
+    _create_agent_user hands the agent alpha's quorum.  Recording each
+    split under its cards' own SLIP-0039 identifier keeps catalog and
+    cards consistent, and lets the burn's drift guard pass.
     """
+    splits = _variant_splits()
+    if not splits:
+        return
     sys.path.insert(0, str(REPO_ROOT / "src"))
     from lcsas.db.key_escrow import record_split
     from lcsas.keyshare import extract_mnemonic, share_identifier
 
-    if MIXED_SPLIT_CARDS.exists():
-        shutil.rmtree(MIXED_SPLIT_CARDS)
-    MIXED_SPLIT_CARDS.mkdir(parents=True)
-    os.chmod(MIXED_SPLIT_CARDS, 0o700)
-    cards = _stage_split_key_cards(
-        "alpha", threshold=MIXED_SPLIT_K, count=MIXED_SPLIT_N,
-        out_dir=MIXED_SPLIT_CARDS,
-    )
-    ident = share_identifier(extract_mnemonic(cards[0].read_text()))
-    record_split(
-        conn, _repo_id(conn, "alpha"), MIXED_SPLIT_K, MIXED_SPLIT_N, ident,
-    )
+    if SPLIT_CARDS.exists():
+        shutil.rmtree(SPLIT_CARDS)
+    SPLIT_CARDS.mkdir(parents=True)
+    os.chmod(SPLIT_CARDS, 0o700)
+    for repo, (k, n) in sorted(splits.items()):
+        cards = _stage_split_key_cards(
+            repo, threshold=k, count=n, out_dir=SPLIT_CARDS,
+        )
+        ident = share_identifier(extract_mnemonic(cards[0].read_text()))
+        record_split(conn, _repo_id(conn, repo), k, n, ident)
 
 
-def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
+def _run_burn_pipeline(conn, *, repo: str | None = None) -> list[Path]:
     """Stage and finish (skip_burn) one burn session of data discs.
 
     The owner's flow, as ``burn_to_isos`` runs it: stage() masters every
     ISO of the session, then burn_session(skip_burn=True) marks the
-    volumes VERIFIED.  *max_volumes* caps this batch at that many discs
-    (the rest wait for the next call).
+    volumes VERIFIED.  *repo* limits this session to that tenant's
+    unarchived packs; None takes every unarchived pack.
+
+    #829: a failed burn stops the setup here, with the burn's message
+    (it used to print "burned 0 data ISOs" and go on to build and vault a
+    broken fixture).  The session must also make exactly as many discs as
+    the bin-packer planned for its packs.
     """
     sys.path.insert(0, str(REPO_ROOT / "src"))
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -480,28 +526,121 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
     )
     media = MediaType.TEST_TINY
 
-    unarchived = get_unarchived_packs(conn)
+    unarchived = get_unarchived_packs(
+        conn, repo_id=_repo_id(conn, repo) if repo is not None else None,
+    )
     if not unarchived:
         return []
-    pack_sha256s = None
-    if max_volumes is not None:
-        # The packs of stage()'s own first max_volumes bins.  Kept in the
-        # unarchived order, so stage() packs exactly those bins again.
-        plans = orchestrator._multi_bin_pack(unarchived, media)
-        if len(plans) > max_volumes:
-            keep = {p.sha256 for packs, _ in plans[:max_volumes] for p in packs}
-            pack_sha256s = [p.sha256 for p in unarchived if p.sha256 in keep]
+    pack_sha256s = [p.sha256 for p in unarchived]
+    # The plan stage() makes for exactly these packs, in the same order.
+    planned = len(orchestrator._multi_bin_pack(
+        orchestrator._packs_by_sha256(pack_sha256s), media,
+    ))
+    what = f"{repo}'s packs" if repo is not None else "the remaining packs"
 
     try:
         iso_files = burn_to_isos(
             orchestrator, ISO_OUT, media_type=media, pack_sha256s=pack_sha256s,
         )
-    except ValueError as exc:
-        print(f"  burn stopped: {exc}", file=sys.stderr)
-        return []
+    except Exception as exc:
+        raise SystemExit(
+            f"setup.py: the fixture burn of {what} failed: {exc}\n"
+            "  The setup stops here, before any agent runs.  Fix the "
+            "fixture (file sizes, TEST_TINY capacity, metadata reserve) and "
+            "run it again."
+        ) from exc
     for iso_path in iso_files:
         print(f"    → {iso_path.name} ({iso_path.stat().st_size:,} bytes)")
+    if len(iso_files) != planned:
+        raise SystemExit(
+            f"setup.py: the burn of {what} made {len(iso_files)} data "
+            f"ISOs, but the bin-packer planned {planned}: the fixture is "
+            "broken."
+        )
     return iso_files
+
+
+def _check_burned_fixture(conn, iso_files: list[Path]) -> None:
+    """#829: every pack is on a disc, and the data ISOs are exactly the
+    volumes the catalog recorded, before anything is handed to an agent."""
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from lcsas.db.queries import get_unarchived_packs
+
+    left = get_unarchived_packs(conn)
+    if left:
+        raise SystemExit(
+            f"setup.py: {len(left)} pack(s) are on no disc after the burn: "
+            "the fixture is broken."
+        )
+    labels = {
+        r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()
+    }
+    isos = {p.stem for p in iso_files}
+    missing = sorted(p for p in iso_files if not p.is_file())
+    if not iso_files or labels != isos or missing:
+        raise SystemExit(
+            "setup.py: the data ISOs do not match the catalog's volumes: "
+            f"catalog {sorted(labels)}, ISOs {sorted(isos)}, "
+            f"missing files {[str(p) for p in missing]}"
+        )
+
+
+def _thrash_layout_problem(
+    alpha_labels: list[str], data_labels: list[str], tenant_count: int,
+) -> str | None:
+    """Why verify.sh's thrash check would be meaningless on this fixture
+    (#836), or None.
+
+    verify.sh allows the agent ``needed + 1`` distinct data discs, where
+    ``needed`` is the number of discs holding alpha packs (the +1 is the
+    newest data disc, which restore.sh offers for its catalog).  The
+    prompts tell the agent to cycle through the discs in label order, so a
+    correct restore inserts every disc up to the last alpha disc, plus the
+    newest.  Two layouts make the check meaningless:
+
+    * unfair: that correct sweep already inserts more than ``needed + 1``
+      discs (rc9: alpha on discs 1-9 and 16 of 16), so a correct restore
+      fails and the API spend is wasted;
+    * toothless: there are no more than ``needed + 1`` data discs in all,
+      so no agent can ever fail it (every rc9 layout but that one).
+
+    A single-tenant archive has only alpha discs, so the check cannot fail
+    there whatever the layout; that is the variant, not the layout, and is
+    allowed.
+    """
+    data = sorted(data_labels)
+    alpha = set(alpha_labels)
+    if not alpha or not alpha <= set(data):
+        return f"the alpha discs {sorted(alpha)} are not all data discs {data}"
+    needed = len(alpha)
+    allowed = needed + 1
+    if needed < 2:
+        return ("alpha fits on one disc, so the agent never swaps discs; "
+                "the multi-disc journey is not tested")
+    last_alpha = max(data.index(label) for label in alpha)
+    sweep = set(data[: last_alpha + 1]) | {data[-1]}
+    if len(sweep) > allowed:
+        return (f"a correct restore that cycles the discs in label order "
+                f"inserts {len(sweep)} discs, more than the {allowed} "
+                f"verify.sh allows (alpha is on {sorted(alpha)} of "
+                f"{len(data)} data discs): it would fail a correct run")
+    if tenant_count > 1 and len(data) <= allowed:
+        return (f"only {len(data)} data discs for {allowed} allowed: the "
+                f"thrash check can never fail")
+    return None
+
+
+def _check_thrash_layout(alpha_labels: list[str], iso_files: list[Path]) -> None:
+    data_labels = [p.stem for p in iso_files]
+    problem = _thrash_layout_problem(alpha_labels, data_labels, len(_tenants()))
+    if problem is not None:
+        raise SystemExit(
+            f"setup.py: the fixture's disc layout makes verify.sh's thrash "
+            f"check meaningless: {problem}.  The setup stops here, before "
+            f"any agent runs."
+        )
+    print(f"  thrash check: {len(alpha_labels)} alpha discs, "
+          f"{len(alpha_labels) + 1} allowed, {len(data_labels)} data discs")
 
 
 # ---------------------------------------------------------------------------
@@ -521,13 +660,14 @@ def _build_meta_iso() -> Path:
     # so the blind-restore fixture skips it rather than depend on a populated
     # recovery cache / network fetch.  Meta-bundle completeness is covered by
     # its own gate, not this restore-journey drill.
-    # mixed-split: built from the archive's config (owner decision Q19), so
-    # the meta START_HERE.txt / PASSWORD_INFO.txt carry the per-repository
-    # split.  Every other variant keeps the generic no-config meta disc.
-    mixed = os.environ.get("LCSAS_VARIANT", "") == "mixed-split"
+    # The split variants: built from the archive's config (owner decision
+    # Q19), as an owner's split archive is, so the meta START_HERE.txt /
+    # PASSWORD_INFO.txt carry the split (#587, #828).  Every other variant
+    # keeps the generic no-config meta disc.
+    split = os.environ.get("LCSAS_VARIANT", "") in SPLIT_VARIANTS
     MetaVolumeBuilder(
         META_STAGE,
-        config=_fixture_config() if mixed else None,
+        config=_fixture_config() if split else None,
         catalog_db_path=DB_PATH,
         allow_no_dvdisaster_source=True,
     ).build()
@@ -559,6 +699,12 @@ def _build_meta_iso() -> Path:
 
     _apply_variant_mutations(META_STAGE)
     _check_set_markers(META_STAGE, require_all=True)
+    if split and not (META_STAGE / "PASSWORD_INFO.txt").is_file():
+        # The split-key prompts send the agent to this file (#828).
+        raise SystemExit(
+            "setup.py: the split variant's meta disc has no "
+            "PASSWORD_INFO.txt: the fixture is broken."
+        )
 
     # Shared ISO mastering (INFRA-01).
     return master_iso(
@@ -862,12 +1008,16 @@ def _create_agent_user(labels: list[str]) -> None:
             share_dst.write_text(mnemonic + "\n")
             os.chmod(share_dst, 0o600)
             secret_files.append(share_dst)
-    elif variant == "split-key-docs":
-        for card_dst in _stage_split_key_cards("alpha", threshold=2, count=5):
-            secret_files.append(card_dst)
-    elif variant == "mixed-split":
-        # The quorum of the cards whose split the catalog records.
-        for card in sorted(MIXED_SPLIT_CARDS.glob("alpha-share-*-card.txt")):
+    elif variant in SPLIT_VARIANTS:
+        # Alpha's quorum of the cards whose split the catalog records
+        # (_record_splits): 2 of 5 for split-key-docs, 2 of 3 for
+        # mixed-split.
+        cards = sorted(SPLIT_CARDS.glob("alpha-share-*-card.txt"))
+        if len(cards) < 2:
+            raise SystemExit(
+                f"setup.py: no printed alpha cards in {SPLIT_CARDS}"
+            )
+        for card in cards:
             card_dst = AGENT_HOME / card.name
             shutil.copy2(card, card_dst)
             os.chmod(card_dst, 0o600)
@@ -1015,26 +1165,18 @@ def _lock_fixture_dir() -> None:
         vhba_rule.rename(vhba_hidden)
 
 
-def main() -> int:
-    require_root()
-    require_binaries()
-
-    banner("1. clean fixture root")
-    _scratch_backed_dir(FIXTURE, "fixture")
-    for d in (SOURCES, MIRROR, STAGING, SECRETS, ISO_OUT, META_STAGE):
-        d.mkdir(parents=True, exist_ok=True)
-
-    banner("2. generate synthetic source data")
+def _generate_sources() -> None:
+    """Step 2: each tenant's synthetic files and SHA-256 manifest."""
     tenants = _tenants()
     print(f"  tenants: {', '.join(tenants)}")
     for tenant in tenants:
         if tenant == "alpha":
             count, size = ALPHA_FILES, ALPHA_FILE_BYTES
         else:
-            count, size = SECONDARY_FILES, SECONDARY_FILE_BYTES
+            count, size = SECONDARY_FILES, _secondary_file_bytes(len(tenants))
         manifest = _generate_repo(tenant, count, size)
         _write_manifest(FIXTURE / f"{tenant}_manifest.sha256", manifest)
-        print(f"  {tenant}: {len(manifest)} files")
+        print(f"  {tenant}: {len(manifest)} files of {size:,} bytes")
     # verify.sh hard-requires a non-empty bravo_manifest.sha256 (line 25
     # of verify.sh: `sudo test -s`).  When the variant skips bravo,
     # write a single comment so the file is non-empty and the leak-check
@@ -1046,8 +1188,56 @@ def main() -> int:
         )
         print("  bravo: 0 files (placeholder for verify.sh)")
 
+
+def _burn_fixture() -> tuple[list[Path], Path, list[str]]:
+    """Steps 4-7: the data discs, the meta disc, and the checks that stop
+    the setup before any agent runs when the fixture is broken (#829) or
+    its layout makes the thrash check meaningless (#836).
+
+    Alpha's packs are burned first, in a session of their own, so alpha's
+    discs are the first labels and a correct in-order disc sweep stays
+    within verify.sh's allowance; the other tenants' discs follow the meta
+    disc.  Returns (data ISOs, meta ISO, alpha's disc labels).
+    """
+    banner("4a. LCSAS burn — alpha's discs")
+    conn = _init_burn_db()
+    _record_splits(conn)
+    iso_files_alpha = _run_burn_pipeline(conn, repo="alpha")
+    print(f"  burned {len(iso_files_alpha)} data ISOs (alpha)")
+
+    banner("5. build production meta disc (no catalog)")
+    meta_iso = _build_meta_iso()
+    print(f"  meta ISO: {meta_iso}")
+
+    banner("4b. LCSAS burn — the other tenants' discs")
+    iso_files_rest = _run_burn_pipeline(conn)
+    print(f"  burned {len(iso_files_rest)} data ISOs (other tenants)")
+    iso_files = iso_files_alpha + iso_files_rest
+    _check_burned_fixture(conn, iso_files)
+    conn.close()
+    print(f"  total: {len(iso_files)} data ISOs, as planned")
+
+    banner("7. compute expected alpha volumes")
+    alpha_labels = _write_expected_alpha_volumes()
+    print(f"  alpha needs {len(alpha_labels)} discs")
+    _check_thrash_layout(alpha_labels, iso_files)
+    return iso_files, meta_iso, alpha_labels
+
+
+def main() -> int:
+    require_root()
+    require_binaries()
+
+    banner("1. clean fixture root")
+    _scratch_backed_dir(FIXTURE, "fixture")
+    for d in (SOURCES, MIRROR, STAGING, SECRETS, ISO_OUT, META_STAGE):
+        d.mkdir(parents=True, exist_ok=True)
+
+    banner("2. generate synthetic source data")
+    _generate_sources()
+
     banner("3. init rustic repos + backup")
-    for tenant in tenants:
+    for tenant in _tenants():
         _init_rustic_repo(tenant)
 
     # Lock the source tree from the blind agent.  A physical user
@@ -1064,31 +1254,11 @@ def main() -> int:
     os.chmod(SOURCES, 0o700)
     print(f"  {SOURCES} now root:root 0700 (agent cannot read)")
 
-    banner("4a. LCSAS burn — first batch")
-    conn = _init_burn_db()
-    if os.environ.get("LCSAS_VARIANT", "") == "mixed-split":
-        _record_mixed_split(conn)
-    iso_files_batch1 = _run_burn_pipeline(conn, max_volumes=6)
-    print(f"  burned {len(iso_files_batch1)} data ISOs (batch 1)")
-
-    banner("5. build production meta disc (no catalog)")
-    meta_iso = _build_meta_iso()
-    print(f"  meta ISO: {meta_iso}")
-
-    banner("4b. LCSAS burn — remaining volumes")
-    iso_files_batch2 = _run_burn_pipeline(conn)
-    print(f"  burned {len(iso_files_batch2)} data ISOs (batch 2)")
-    conn.close()
-    iso_files = iso_files_batch1 + iso_files_batch2
-    print(f"  total: {len(iso_files)} data ISOs")
+    iso_files, meta_iso, alpha_labels = _burn_fixture()
 
     banner("6. vault ISOs")
     mapping = _vault_isos(iso_files, meta_iso)
     print(f"  vaulted {len(mapping)} ISOs in {VAULT}")
-
-    banner("7. compute expected alpha volumes")
-    alpha_labels = _write_expected_alpha_volumes()
-    print(f"  alpha needs {len(alpha_labels)} discs")
 
     banner("8. install disc-loader + cdr-robotctl")
     _install_disc_loader()

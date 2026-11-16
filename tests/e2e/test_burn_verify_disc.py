@@ -76,13 +76,40 @@ def _cdemu(*args: str) -> str:
     return result.stdout
 
 
-def _device_node() -> str:
-    """Return the SCSI CD-ROM node for cdemu device 0 (e.g. /dev/sr0)."""
+CDEMU_DRIVE_SH = Path(__file__).resolve().parents[2] / "scripts" / "cdemu_drive.sh"
+
+
+def _mapped_node() -> str | None:
+    """The SCSI CD-ROM node of cdemu device 0 (e.g. /dev/sr0), or None."""
     for line in _cdemu("device-mapping").splitlines():
         fields = line.split()
         if len(fields) >= 2 and fields[0] == "0" and fields[1].startswith("/dev/"):
             return fields[1]
-    raise RuntimeError("cdemu device 0 not found in device-mapping output")
+    return None
+
+
+def _device_node() -> str:
+    """Return the SCSI CD-ROM node for cdemu device 0 (e.g. /dev/sr0).
+
+    The daemon can stay up with device 0 unmapped after a run of
+    blind-restore teardowns (#768).  Then ``cdemu_drive.sh start``
+    restarts it once; if device 0 is still unmapped, fail naming it.
+    """
+    node = _mapped_node()
+    if node is not None:
+        return node
+    started = subprocess.run(
+        ["bash", str(CDEMU_DRIVE_SH), "start"],
+        capture_output=True, text=True, timeout=120,
+    )
+    node = _mapped_node()
+    if node is None:
+        raise RuntimeError(
+            "cdemu device 0 is not mapped to a /dev/srN, even after "
+            f"`{CDEMU_DRIVE_SH.name} start` (rc={started.returncode}):\n"
+            f"{started.stdout}{started.stderr}"
+        )
+    return node
 
 
 def _loaded_image() -> str | None:
