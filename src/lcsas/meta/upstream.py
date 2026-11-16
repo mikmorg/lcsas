@@ -332,10 +332,15 @@ def stale_cache_copies(
     *cache_dir* is the cache's <category>/<cache target>/ folder.  A file
     the cache does not hold is fine (``fetch_upstream.sh --no-extract``);
     extra files in the cache are ignored, since nothing reads them.
+    Compiled ``__pycache__`` files are skipped too: running the cached
+    CPython (the tier-3 and wine tests do) rewrites them, and the disc
+    gets the archive's copy either way.
     """
     bad: list[str] = []
     for entry in entries:
         if entry.cache_rel is None or entry.kind == "dir":
+            continue
+        if "__pycache__" in entry.cache_rel.parts:
             continue
         path = cache_dir / entry.cache_rel
         if entry.kind == "symlink":

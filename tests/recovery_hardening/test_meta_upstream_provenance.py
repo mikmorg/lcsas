@@ -120,6 +120,42 @@ def test_extra_files_in_the_unpacked_copy_are_ignored(
     assert not (bin_dir / "python" / "lib" / "__pycache__").exists()
 
 
+def test_rewritten_bytecode_in_the_unpacked_copy_is_tolerated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running the cached CPython rewrites the .pyc files the archive
+    ships (seen on the lab cache's Windows python).  That is not a sign
+    of tampering, and the disc gets the archive's .pyc regardless."""
+    import tarfile as _tarfile
+
+    cache = tmp_path / "cache"
+    add_upstream(cache, tmp_path / "pins", LINUX, rustic=False)
+    # Re-pin a python archive that ships a .pyc, as the real ones do.
+    pyc = b"\x00archive pyc"
+    buf = io.BytesIO()
+    with _tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, body in (("python/bin/python3",
+                            b"#!/bin/sh\necho fake python3\n"),
+                           ("python/lib/__pycache__/os.cpython-312.pyc", pyc)):
+            info = _tarfile.TarInfo(name)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+    data = buf.getvalue()
+    archive = next((cache / "python" / LINUX).glob("*.tar.gz"))
+    archive.write_bytes(data)
+    rel = archive.relative_to(cache).as_posix()
+    (tmp_path / "pins" / "UPSTREAM.sha256").write_text(
+        f"{hashlib.sha256(data).hexdigest()}  {rel}\n"
+    )
+    cached_pyc = cache / "python" / LINUX / "python" / "lib" / "__pycache__"
+    cached_pyc.mkdir(parents=True)
+    (cached_pyc / "os.cpython-312.pyc").write_bytes(b"recompiled locally")
+
+    bin_dir = _bundle(tmp_path, monkeypatch) / "bin" / LINUX
+    on_disc = bin_dir / "python" / "lib" / "__pycache__" / "os.cpython-312.pyc"
+    assert on_disc.read_bytes() == pyc
+
+
 def test_unpacked_copy_without_pinned_archive_bundles_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
