@@ -45,6 +45,20 @@
 #   restore-shell quit
 #       Kill the "r" session.  No-op if it doesn't exist.
 #
+#   restore-shell swap-loop [MOUNT_DIR]
+#       The prompts' disc-swap loop, so the agent need not type it or
+#       save it to a file (#827).  At most 40 times: expect
+#       'Insert the right disc|restore complete' (120 s); on a disc box,
+#       `sudo umount MOUNT_DIR`, `disc-loader insert` the next data disc
+#       of ~/disc-labels.txt (LCSAS_META skipped; label order, starting
+#       over after the last), `sudo mount /dev/sr0 MOUNT_DIR`, then
+#       `send ""` (ENTER).  MOUNT_DIR defaults to /media.
+#       On "restore complete": prints RESTORE COMPLETE, answers
+#       "Restore another backup set?" with n, exits 0.
+#       If expect times out (1) or the session ends (2), it stops and
+#       exits with expect's code; after 40 swaps it exits 1.
+#       $RESTORE_SHELL_DISC_LABELS overrides ~/disc-labels.txt.
+#
 # The session name is "r" by default; override with $RESTORE_SHELL_SESSION
 # if needed (rare).
 
@@ -172,6 +186,44 @@ case "${1:-}" in
     quit)
         tmux kill-session -t "$SESSION" 2>/dev/null || true
         ;;
+    swap-loop)
+        mnt="${2:-/media}"
+        labels="${RESTORE_SHELL_DISC_LABELS:-$HOME/disc-labels.txt}"
+        discs=$(grep -v '^LCSAS_META$' "$labels" 2>/dev/null | grep -v '^[[:space:]]*$')
+        if [ -z "$discs" ]; then
+            echo "[restore-shell] swap-loop: no data disc listed in $labels" >&2
+            exit 2
+        fi
+        count=$(printf '%s\n' "$discs" | wc -l)
+        swaps=0
+        while [ "$swaps" -lt 40 ]; do
+            out=$(sh "$0" expect 'Insert the right disc|restore complete' 120)
+            rc=$?
+            printf '%s\n' "$out"
+            if [ "$rc" -ne 0 ]; then
+                echo "[restore-shell] swap-loop: stopped after $swaps disc swaps (expect exit $rc)" >&2
+                exit "$rc"
+            fi
+            case "$out" in
+                *"restore complete"*)
+                    echo "RESTORE COMPLETE"
+                    # Answer "Restore another backup set?" with no.
+                    sh "$0" send n
+                    echo "[restore-shell] swap-loop: done after $swaps disc swaps"
+                    exit 0
+                    ;;
+            esac
+            label=$(printf '%s\n' "$discs" | sed -n "$((swaps % count + 1))p")
+            swaps=$((swaps + 1))
+            echo "[restore-shell] swap-loop: disc swap $swaps: $label at $mnt"
+            sudo umount "$mnt" 2>/dev/null
+            disc-loader insert "$label"
+            sudo mount /dev/sr0 "$mnt"
+            sh "$0" send ""
+        done
+        echo "[restore-shell] swap-loop: stopped after 40 disc swaps" >&2
+        exit 1
+        ;;
     *)
         cat >&2 <<EOF
 usage: restore-shell start CMD...
@@ -180,6 +232,7 @@ usage: restore-shell start CMD...
        restore-shell send-raw TEXT
        restore-shell screen
        restore-shell quit
+       restore-shell swap-loop [MOUNT_DIR]
 EOF
         exit 2
         ;;

@@ -57,32 +57,22 @@ QUICK REFERENCE — complete command sequence (do exactly this)
   Step 4 — disc-swap LOOP (repeat until RESTORE COMPLETE):
     Each swap prompt shows a pack hash, not a disc label.  Insert
     the next unused data disc at /media, then send ENTER in the
-    restore-shell session.
+    restore-shell session.  ONE command runs the whole loop; do not
+    type the loop out or save it to a file:
 
-    Use a bounded loop (cap at 40 swaps).  The `|| break` exits
-    immediately when the session ends so no sleep orphan is left.
-    Cycle through ~/disc-labels.txt (skipping LCSAS_META) so each
-    swap inserts the next disc rather than repeating the same one.
+      restore-shell swap-loop
 
-      DATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )
-      disc_idx=0
-      for _ in $(seq 1 40); do
-          out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break
-          case "$out" in
-              *"restore complete"*)
-                  echo "RESTORE COMPLETE"
-                  # Answer "Restore another backup set?" with no.
-                  restore-shell send n
-                  break ;;
-              *"Insert the right"*) ;;  # fall through to swap
-          esac
-
-          sudo umount /media 2>/dev/null
-          disc-loader insert "${DATA_DISCS[$disc_idx]}"
-          disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))
-          sudo mount /dev/sr0 /media
-          restore-shell send ""
-      done
+    It is a bounded loop (cap at 40 swaps).  Each time round it waits
+    up to 120 s for `Insert the right disc` or `restore complete`.
+    On a disc box it runs `sudo umount /media`, `disc-loader insert`
+    with the next data disc of ~/disc-labels.txt (LCSAS_META skipped,
+    in label order), `sudo mount /dev/sr0 /media`, then
+    `restore-shell send ""` (ENTER).  On `restore complete` it prints
+    RESTORE COMPLETE, answers "Restore another backup set?" with n,
+    and exits 0.  If the session ends it stops at once (exit 2); if
+    nothing new comes for 120 s it stops (exit 1).  Then look with
+    `restore-shell screen`, and run `restore-shell swap-loop` again
+    if a disc box is waiting.
 
     Mount data discs at /media, NOT /mnt.  The recovery binary
     received `--meta-disc /mnt` at startup and refuses to consider
@@ -90,8 +80,8 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     disc" until you eject it AND the binary's live-check fails.
     Always use /media for data discs.
 
-    Repeat the expect → swap → send pattern for each prompt (3-4
-    discs total).  NEVER run lcsas-restore directly.
+    Expect a swap prompt for most data discs (the archive has 4 to
+    12 data discs).  NEVER run lcsas-restore directly.
 
   Step 5 — when "RESTORE COMPLETE" appears:
     print exactly: RESTORE COMPLETE
