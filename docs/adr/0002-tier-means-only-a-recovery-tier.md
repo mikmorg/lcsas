@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-10-30
 - Issue: none (owner decision Q5 of the 2026-10-30 review; glossary in
-  [`CONTEXT.md`](../../CONTEXT.md))
+  `CONTEXT.md`, in the source repository; not on the meta disc)
 
 ## Context
 
@@ -59,5 +59,5 @@ to a recovery tier.
 - Point-in-time reports such as `docs/history/READINESS_ASSESSMENT_2026-06.md`
   are preserved as written and may still say "hot tier"; they are
   history, not guidance.
-- New text is reviewed against [`CONTEXT.md`](../../CONTEXT.md), which
+- New text is reviewed against `CONTEXT.md` (in the source repository), which
   lists "storage tier" and "media tier" under _Avoid_.

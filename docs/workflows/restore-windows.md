@@ -56,7 +56,7 @@ combiner) and `lcsas-ecc.exe` (the disc repair tool for
 dir); the meta disc builder bundles them onto the disc under the rust
 target triple `recovery\bin\x86_64-pc-windows-gnu\`, next to the
 upstream `rustic-static.exe` (tier 2). On-disc paths always use the
-triple (see `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` for the design
+triple (see `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository for the design
 rationale). Sizes in the source tree: `lcsas-restore.exe` about 1.4 MB,
 `lcsas-keyshare.exe` and `lcsas-ecc.exe` about 0.1 MB each.
 
@@ -110,7 +110,7 @@ Windows version floor is **Windows 10 1709 / October 2017** (or Windows
 7 SP1 / 8 / 8.1 with KB2999226), because UCRT
 (`api-ms-win-crt-*.dll`) is a load-time dependency
 (`recovery/docs/RECOVER_WINDOWS.txt`, "WHY 1709?";
-`docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt`, target platforms).
+`docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository, target platforms).
 
 ## The restore, step by step
 
@@ -572,7 +572,7 @@ still apply.
 Linux-side pytest suite (`src/lcsas/restore/restic_fallback.py`); there is
 no automated Wine/Windows test of the manual invocation path. The
 `Phase W5 — legacy msvcrt build` in
-`docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` (a native binary for XP/Vista)
+`docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository (a native binary for XP/Vista)
 is not planned: it was decided against in #491. This path does not
 replace it, because Python 3.10 does not install on Windows 7 or older.
 Heirs on those systems move the discs to a newer machine, or on
@@ -603,7 +603,7 @@ Windows workflow inherits. Source refs in parentheses.
 - **Path separators:** the C source always passes forward slashes; the
   Win32 runtime accepts them transparently, so no path translation is
   needed (`recovery/src/lcsas-restore/posix_compat.h`;
-  `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt`).
+  `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository).
 - **Backslash quoting in CMD:** the .bat quotes every path passed to
   binaries (`"%REPO%"`, `"%TARGET%"`, `"%PWFILE%"`) so spaces and
   embedded `&`/`(`/`)` survive. A path that ends in `\` must not be
@@ -630,11 +630,11 @@ Windows workflow inherits. Source refs in parentheses.
   contains both `foo.txt` and `FOO.TXT` will lose one on restore.
 - **Owner/group/UID/GID/xattrs:** Windows has no equivalent and the
   binary silently skips them; hardlinks across drives silently
-  degrade to copies (`docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt`).
+  degrade to copies (`docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository).
 - **UTF-8 / code page:** the binary has no application manifest (no
   `<activeCodePage>UTF8</activeCodePage>`; the exes carry no resources
   at all), so file names outside the console's code page may be mangled
-  on restore (#619). `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` describes
+  on restore (#619). `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository describes
   the manifest as a plan only. The menu shows only a set's `name_cmd`
   (plain letters), because cmd reads marker files in the console's code
   page.
@@ -757,7 +757,7 @@ LEFT"):
   windows-e2e leg that proves it (for example with a `subst` drive).
 - **Older Windows / msvcrt (intentional: Windows 10 1709+ is the stated
   support floor).** Windows XP/Vista/unpatched 7 are listed as REJECTED
-  platforms in `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt`; Phase W5 there
+  platforms in `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository; Phase W5 there
   (an msvcrt-linked binary and a Wine-with-UCRT-disabled harness) was
   decided against (#491). Heirs on those systems move the discs to a
   newer host. The
@@ -768,7 +768,7 @@ LEFT"):
   CI-tested).** The "Run anyway" / quarantine-restore steps in
   `recovery/docs/RECOVER_WINDOWS.txt` are manual, and Authenticode
   signing is a documented NON-GOAL in
-  `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt`. The manual double-click
+  `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository. The manual double-click
   drill is a release gate in #476.
 - **UAC (intentional: manual gate #476).** The restore path is designed
   to need no elevation; no test runs `restore.bat` from an elevated CMD.
@@ -789,7 +789,7 @@ LEFT"):
   `restore.bat` does with it.
 - `recovery/docs/MULTI_DISC_DESIGN.txt` — the swap design, the newest
   data disc, the tools folder and carrying on, for both scripts.
-- `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` — design rationale, target
+- `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository — design rationale, target
   platforms, source portability plan, cross-compile (zig cc), testing
   strategy, Phase W5 msvcrt plan, out-of-scope/non-goals.
 - `recovery/src/lcsas-restore/posix_compat.h` — POSIX/Win32 shim

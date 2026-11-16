@@ -49,7 +49,7 @@ If the host is alive and the master catalog is intact, **start here**.
   ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
 - A populated master catalog at `config.db_path` (the same SQLite file
   the burn pipeline writes to). Schema v10
-  ([`CLAUDE.md`](../../CLAUDE.md), Catalog schema section).
+  ([`recovery/docs/FORMAT.txt`](../../recovery/docs/FORMAT.txt), LCSAS CATALOG section).
 - A live rustic mirror for the repository at `repo_cfg.mirror_path` — the
   planner *and* the executor both call `rustic restore --dry-run`
   against the mirror to enumerate required pack IDs
@@ -146,7 +146,7 @@ copied and `rustic` is invoked only for `--dry-run`.
 
   **Gaps:** No end-to-end test exercises `plan` against a real
   `rustic` binary; the integration tests skip when `rustic` is absent
-  ([`CLAUDE.md`](../../CLAUDE.md), "Pytest writes temp files…" line).
+  (`CLAUDE.md` in the source repository, "Pytest writes temp files…" line).
   No test asserts the pretty-printed output format used for
   scripting.
 
