@@ -25,7 +25,8 @@ Crypto stack (all self-contained — no pip packages required):
     AES-128-ECB (Poly1305)    ``lcsas.restore._aes_pure``
     Poly1305-AES (MAC)        Implemented below
     SHA-256                   ``hashlib`` (stdlib)
-    zstd (optional decomp.)   ``zstandard`` if installed
+    zstd decompression        ``zstandard`` if importable, else
+                              ``lcsas.restore._zstd_pure``
     ========================  ================================
 
 Usage::
@@ -135,8 +136,9 @@ except ImportError:
         if not _warned_pure_zstd:
             _warned_pure_zstd = True
             _log(
-                "using slow built-in zstd decoder — install 'zstandard' "
-                "for ~100x faster restore"
+                "zstd: using the slow built-in zstd decoder (about "
+                "1.2 MB/s of text); the 'zstandard' package is not "
+                "available to this Python"
             )
         return _pure_zstd_decompress(data, max_output_size)
 
@@ -1238,29 +1240,15 @@ class PurePythonRestorer:
         heir inserts a data disc -- restore.sh's one-shot startup scan
         cannot, because no data disc is mounted yet at that point.
         """
-        seen: set[Path] = set()
-        for root in self._pack_search_paths:
-            for candidate in (
-                root / "catalog.db",
-                root.parent / "catalog.db",
-                root / "recovery" / "catalog.db",
-            ):
-                # Resolve only the parent to keep symlinks under control
-                # without forcing the file itself to exist (resolve(strict=False)
-                # may not be portable on every libc).
-                try:
-                    key = candidate.resolve(strict=False)
-                except OSError:
-                    key = candidate
-                if key in seen:
-                    continue
-                seen.add(key)
-                if candidate.is_file():
-                    return candidate
-        return None
+        found = self._discover_catalogs()
+        return found[0] if found else None
 
     def _discover_catalogs(self) -> list[Path]:
-        """Every ``catalog.db`` reachable now, in ``_discover_catalog`` order."""
+        """Every ``catalog.db`` reachable now, in ``_discover_catalog`` order.
+
+        A path reached twice (the same root listed twice, or a root and
+        its ``data/`` subdirectory) is listed once.
+        """
         found: list[Path] = []
         seen: set[Path] = set()
         for root in self._pack_search_paths:
@@ -1269,6 +1257,7 @@ class PurePythonRestorer:
                 root.parent / "catalog.db",
                 root / "recovery" / "catalog.db",
             ):
+                # resolve(strict=False): the file itself need not exist.
                 try:
                     key = candidate.resolve(strict=False)
                 except OSError:
@@ -1310,10 +1299,21 @@ class PurePythonRestorer:
     ) -> tuple[list[str], bool, int, str | None]:
         """(labels, pack known, number of discs listed, newest disc listed).
 
-        Raises sqlite3.Error on an unreadable catalog.
+        The one place the catalog is queried.  Raises sqlite3.Error on an
+        unreadable catalog.
         """
+        # immutable=1: ISO 9660 is read-only so SQLite must not try to
+        # create WAL/shm sidecar files.  Without this, sqlite3.connect()
+        # with mode=ro raises OperationalError on iso9660 mounts AND
+        # (critically) leaves a kernel reference on the mount point that
+        # makes `umount /media` fail with EBUSY, preventing disc swaps.
+        # Issue #284 root cause 2.
         conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
         try:
+            # Three-table join: volume_packs.pack_id is the INT FK, not
+            # the sha256 hex we have in hand -- so we go through
+            # packs.sha256.  ORDER BY label keeps the output stable
+            # across SQLite query-planner versions.
             labels = [row[0] for row in conn.execute(
                 "SELECT v.label FROM volumes v "
                 "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
@@ -1330,6 +1330,10 @@ class PurePythonRestorer:
             ).fetchone()
             return labels, known, int(n_vols), newest[0] if newest else None
         finally:
+            # Explicit close is required: `with sqlite3.connect() as c:`
+            # is a transaction context manager, not a connection closer.
+            # Leaving the connection open keeps a fd on the iso9660 mount
+            # and prevents `umount /media` during disc swaps.
             conn.close()
 
     def _lookup_volume_labels(
@@ -1421,46 +1425,9 @@ class PurePythonRestorer:
                 f"[lcsas-restore] auto-discovered catalog at {discovered}\n"
             )
         try:
-            # immutable=1: ISO 9660 is read-only so SQLite must not try to
-            # create WAL/shm sidecar files.  Without this, sqlite3.connect()
-            # with mode=ro raises OperationalError on iso9660 mounts AND
-            # (critically) leaves a kernel reference on the mount point that
-            # makes `umount /media` fail with EBUSY, preventing disc swaps.
-            # Issue #284 root cause 2.
-            uri = f"file:{self.catalog_path}?mode=ro&immutable=1"
-            conn = sqlite3.connect(uri, uri=True)
-            try:
-                # Three-table join: volume_packs.pack_id is the INT FK,
-                # not the sha256 hex we have in hand -- so we go through
-                # packs.sha256.  ORDER BY label keeps the output stable
-                # across SQLite query-planner versions.
-                cur = conn.execute(
-                    "SELECT v.label "
-                    "FROM volumes v "
-                    "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
-                    "JOIN packs p ON p.pack_id = vp.pack_id "
-                    "WHERE p.sha256 = ? "
-                    "ORDER BY v.label",
-                    (pack_id,),
-                )
-                labels = [row[0] for row in cur.fetchall()]
-                if labels:
-                    return labels, ""
-                # Pack ID present in the catalog but no volume mapping?
-                # Disambiguate that from "pack ID absent from catalog".
-                cur = conn.execute(
-                    "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1",
-                    (pack_id,),
-                )
-                if cur.fetchone() is not None:
-                    return [], self._CATALOG_HIT_NO_VOLS
-                return [], self._CATALOG_MISS
-            finally:
-                # Explicit close is required: `with sqlite3.connect() as c:`
-                # is a transaction context manager, not a connection closer.
-                # Leaving the connection open keeps a fd on the iso9660 mount
-                # and prevents `umount /media` during disc swaps.
-                conn.close()
+            labels, known, _n, _newest = self._query_catalog(
+                self.catalog_path, pack_id,
+            )
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog: treat as "no
             # catalog" so the heir at least sees the legacy prompt.
@@ -1474,6 +1441,11 @@ class PurePythonRestorer:
             if was_auto_discovered:
                 self.catalog_path = None
             return None
+        if labels:
+            return labels, ""
+        # Pack ID present in the catalog but no volume mapping?
+        # Disambiguate that from "pack ID absent from catalog".
+        return [], self._CATALOG_HIT_NO_VOLS if known else self._CATALOG_MISS
 
     @staticmethod
     def _frame_indented(text: str) -> str:

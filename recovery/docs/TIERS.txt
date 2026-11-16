@@ -335,8 +335,7 @@ be able to decompress zstd to be useful.  Two backends, fast-path first:
     inlined into the per-disc standalone_restorer.py, so it works under
     ANY of the bundled per-target CPython interpreters (all six approved
     targets) and on any future CPython -- slower, but always available.
-    A startup log line notes the slow path; install 'zstandard' for the
-    fast one.
+    The reader prints one line when it uses the slow decoder.
 
 The build records native-zstd capability per meta disc in
 volume_info.json ("zstd_support"); ``lcsas meta build`` fails loud if
