@@ -20,7 +20,8 @@
 # Each set gets its own tools folder, <tools folder>-<id> (the tools
 # folder is $LCSAS_TOOLS_DIR, default $HOME/lcsas-restore-tools).  So a
 # set that stopped keeps its resume.sh and pack cache when a later set
-# succeeds: only its own success removes them (#801).
+# succeeds: only its own success removes them (#801).  Run again, the
+# loop carries that set on with its resume.sh, on the same snapshot.
 #
 # Exit codes:
 #   0   -- all repositories restored
@@ -140,6 +141,27 @@ fi
 # disk counts as one more failed set.  tee and grep ignore Ctrl-C, so
 # what restore.sh prints as it stops (how to carry on) still shows.
 #
+# A set that stopped in an earlier run left resume.sh in its tools
+# folder.  When that resume.sh carries on this same set into this same
+# folder, it runs instead of restore.sh: it keeps the snapshot the
+# stopped run chose, where a fresh run could pick a newer one off a disc
+# mounted since and leave a mix of the two in the folder.
+#
+# restore_cmd ID OUT TOOLS: run restore.sh, or the set's resume.sh.
+restore_cmd() {
+    _rc_resume="$3/resume.sh"
+    if [ -n "$3" ] && [ -f "$_rc_resume" ] \
+       && grep -qF "LCSAS_REPO='$1'" "$_rc_resume" 2>/dev/null \
+       && grep -qF "'$(cd "$2" && pwd)'" "$_rc_resume" 2>/dev/null; then
+        printf '==> carrying on the restore of %s that stopped, with %s\n' \
+               "$1" "$_rc_resume" >&2
+        sh "$_rc_resume"
+    else
+        LCSAS_REPO="$1" LCSAS_TOOLS_DIR="$3" \
+            sh "$RECOVERY/scripts/restore.sh" "$RECOVERY" "$2" latest
+    fi
+}
+
 # run_set ID OUT TOOLS: sets set_rc to restore.sh's exit code and
 # set_full to 1 when its messages said the disk is full.
 exec 3>&1
@@ -147,8 +169,7 @@ run_set() {
     set_rc=0
     set_full=0
     if [ ! -d /dev/fd ]; then
-        LCSAS_REPO="$1" LCSAS_TOOLS_DIR="$3" \
-            sh "$RECOVERY/scripts/restore.sh" "$RECOVERY" "$2" latest || set_rc=$?
+        restore_cmd "$@" || set_rc=$?
         return 0
     fi
     _rs_out="$(
@@ -156,9 +177,7 @@ run_set() {
             {
                 trap ':' INT TERM HUP
                 _rc=0
-                LCSAS_REPO="$1" LCSAS_TOOLS_DIR="$3" \
-                    sh "$RECOVERY/scripts/restore.sh" "$RECOVERY" "$2" latest \
-                    2>&1 >&3 3>&- 4>&- || _rc=$?
+                restore_cmd "$@" 2>&1 >&3 3>&- 4>&- || _rc=$?
                 printf 'lcsas-auto-rc=%s\n' "$_rc" >&4
             } | ( trap '' INT TERM HUP; exec tee /dev/fd/5 5>&1 >&2 3>&- 4>&- ) \
               | ( trap '' INT TERM HUP
@@ -196,8 +215,8 @@ stop_loop() {
     if [ -n "$_ny" ]; then
         printf '    These backup sets were not restored: %s\n' "$_ny" >&2
     fi
-    printf '    To carry on, run this same command again.  Files that are\n' >&2
-    printf '    already restored are checked and skipped.\n' >&2
+    printf '    To carry on, run this same command again: %s carries on\n' "$1" >&2
+    printf '    where it stopped, and files already restored are skipped.\n' >&2
     exit "$2"
 }
 

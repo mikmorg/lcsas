@@ -412,6 +412,47 @@ class TestWithTheRealRestoreSh:
         assert SET_B not in res.stdout, "set B must not start"
         assert not (r.target / SET_B).exists()
 
+    def test_running_again_carries_the_stopped_set_on_with_its_snapshot(self, tmp_path):
+        """Set A stops at a disc prompt with only the meta disc in.  A
+        newer data disc holding A is mounted before the second run: a
+        fresh restore.sh would read A off that disc (perhaps a newer
+        snapshot, leaving a mix of two); the loop runs A's resume.sh
+        instead, which keeps the copy the stopped run used."""
+        r = _Real(tmp_path, (SET_A, SET_B))
+        first = r.run(**{f"STUB_RC_{_key(SET_A)}": "75"})
+        assert first.returncode == 75, first.stderr
+
+        media = tmp_path / "media"
+        disc = media / "LCSAS_CD700_2026_0002"
+        _set(disc / "metadata", SET_A)
+        _set(disc / "metadata", SET_B)
+        (disc / "data").mkdir()
+        (disc / "VOLUME_INFO.txt").write_text("  Label:  LCSAS_CD700_2026_0002\n")
+
+        res = r.run(LCSAS_MOUNT_DIRS=str(media))
+
+        assert res.returncode == 0, res.stderr
+        assert f"carrying on the restore of {SET_A} that stopped" in res.stderr
+        assert f"TIER1 {r.tools_of(SET_A)}/metadata/{SET_A}" in res.stdout, res.stdout
+        # Set B never ran before: a fresh run, off the newest disc.
+        assert f"TIER1 {disc}/metadata/{SET_B}" in res.stdout, res.stdout
+        assert (r.target / SET_A / "restored.txt").is_file()
+        assert not r.tools_of(SET_A).exists(), "A's success removes its tools folder"
+
+    def test_a_resume_sh_for_another_folder_is_not_used(self, tmp_path):
+        """resume.sh carries on into the folder it names; a run into
+        another TARGET_ROOT restores the set afresh."""
+        r = _Real(tmp_path, (SET_A,))
+        first = r.run(**{f"STUB_RC_{_key(SET_A)}": "75"})
+        assert first.returncode == 75, first.stderr
+        r.target = tmp_path / "elsewhere"
+
+        res = r.run()
+
+        assert res.returncode == 0, res.stderr
+        assert "carrying on" not in res.stderr
+        assert (r.target / SET_A / "restored.txt").is_file()
+
     def test_tier1_out_of_space_stops_the_loop(self, tmp_path):
         r = _Real(tmp_path, (SET_A, SET_B))
 
