@@ -1147,3 +1147,113 @@ def test_repo_remove_drops_its_split_record(tmp_path: Path, capsys) -> None:
     assert get_split(conn, "photos") is None
     assert get_split(conn, "other") is not None
     conn.close()
+
+
+class TestRebuildDamagedDisc:
+    """#820: one disc that fails to merge leaves no trace and blocks nothing.
+
+    Before the fix a failed merge left its transaction open, so DETACH
+    failed ("database src is locked"), every later disc failed with
+    "database src is already in use", and the failed disc's partial rows
+    were committed with the next disc's work.
+    """
+
+    @staticmethod
+    def _damage_table(disc_dir: Path, table: str) -> None:
+        """Overwrite the root page of *table* in the disc's catalog file.
+
+        The tables merged before it (repositories, packs, volumes,
+        snapshots, ...) still read, so the merge fails part way through:
+        the case that left partial rows behind.
+        """
+        catalog_db = disc_dir / "catalog.db"
+        conn = get_connection(catalog_db)
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        rootpage = conn.execute(
+            "SELECT rootpage FROM sqlite_master WHERE name = ?", (table,)
+        ).fetchone()[0]
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+        mtime = catalog_db.stat().st_mtime
+        data = bytearray(catalog_db.read_bytes())
+        offset = (rootpage - 1) * page_size
+        data[offset:offset + page_size] = b"\xff" * page_size
+        catalog_db.write_bytes(bytes(data))
+        os.utime(catalog_db, (mtime, mtime))
+
+    def _three_discs(self, tmp_path: Path) -> list[Path]:
+        # Row freshness orders the merge: good1, damaged, good2.
+        good1 = _build_disc(
+            tmp_path, "good1", FRESH_MTIME,
+            [("LCSAS_BD25_2026_0003", "uuid-g1", "VERIFIED",
+              "2026-03-01 00:00:00")],
+            (("a" * 64, 100, 0, "uuid-g1"),),
+        )
+        damaged = _build_disc(
+            tmp_path, "damaged", FRESH_MTIME,
+            [("LCSAS_BD25_2026_0002", "uuid-bad", "VERIFIED",
+              "2026-02-01 00:00:00")],
+            (("b" * 64, 100, 0, "uuid-bad"),),
+        )
+        (damaged / "volume_info.json").write_text(
+            '{"label": "LCSAS_BD25_2026_0002", "uuid": "uuid-bad"}',
+            encoding="utf-8",
+        )
+        self._damage_table(damaged, "volume_copies")
+        good2 = _build_disc(
+            tmp_path, "good2", FRESH_MTIME,
+            [("LCSAS_BD25_2026_0001", "uuid-g2", "VERIFIED",
+              "2026-01-01 00:00:00")],
+            (("c" * 64, 100, 0, "uuid-g2"),),
+        )
+        return [good1, damaged, good2]
+
+    def test_good_damaged_good(self, tmp_path: Path) -> None:
+        discs = self._three_discs(tmp_path)
+        output_db = tmp_path / "master.db"
+        # The damaged disc is merged second: a good disc follows it.
+        good1, damaged, good2 = (
+            rebuild._source_freshness(d / "catalog.db") for d in discs
+        )
+        assert good1 > damaged > good2
+
+        result = rebuild.rebuild_catalog(discs, output_db)
+
+        assert result.discs_processed == 2
+        assert result.discs_skipped == 1
+        assert len(result.errors) == 1
+        message = result.errors[0]
+        assert "\n" not in message
+        assert "LCSAS_BD25_2026_0002" in message
+        assert "malformed" in message
+        assert "locked" not in message and "in use" not in message
+
+        conn = get_connection(output_db)
+        labels = {r[0] for r in conn.execute("SELECT label FROM volumes")}
+        packs = {r[0] for r in conn.execute("SELECT sha256 FROM packs")}
+        conn.close()
+        # Both good discs merged; nothing at all from the damaged one,
+        # though its volumes and packs read before the damaged table.
+        assert labels == {"LCSAS_BD25_2026_0003", "LCSAS_BD25_2026_0001"}
+        assert packs == {"a" * 64, "c" * 64}
+
+    def test_cli_exits_one_with_one_line(self, tmp_path: Path, capsys) -> None:
+        from lcsas.cli.main import main
+
+        discs = self._three_discs(tmp_path)
+        output_db = tmp_path / "master.db"
+
+        code = main([
+            "catalog", "rebuild", "--output", str(output_db),
+            *[str(d) for d in discs],
+        ])
+
+        assert code == 1
+        captured = capsys.readouterr()
+        text = captured.out + captured.err
+        assert "Traceback" not in text
+        assert "Unexpected error" not in text
+        assert "Discs processed  : 2" in text
+        lines = [ln for ln in text.splitlines()
+                 if "LCSAS_BD25_2026_0002" in ln and "damaged" in ln]
+        assert lines
