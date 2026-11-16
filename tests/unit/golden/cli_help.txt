@@ -162,7 +162,7 @@ options:
 ===== lcsas burn --help =====
 usage: lcsas burn [-h] [--media MEDIA] [--repo [REPO ...]] --session SESSION
                   [--location LOCATION] [--create-location] [--device DEVICE]
-                  [--no-prompt] [--dry-run]
+                  [--no-prompt] [--reburn] [--dry-run]
 
 options:
   -h, --help           show this help message and exit
@@ -185,6 +185,9 @@ options:
                        scripted/cdemu runs). Without this, a multi-disc burn
                        pauses before each disc to load a blank and after each
                        to write the label.
+  --reburn             Also burn the volumes that already have a verified disc
+                       at --location (the new disc replaces that disc's
+                       record). Without this, they are skipped.
   --dry-run, -n        Show burn plan without making changes.
 ===== lcsas stage --help =====
 usage: lcsas stage [-h] [--media MEDIA] [--for-location FOR_LOCATION]

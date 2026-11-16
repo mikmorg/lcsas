@@ -144,6 +144,21 @@ def get_copy_at_location(
     return _row_to_copy(row) if row is not None else None
 
 
+def has_verified_disc_at(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+) -> bool:
+    """True when the volume has a disc in service at *location* that passed
+    verification: an ACTIVE row with a ``last_verified_at``.
+
+    ``burn --session`` skips such a volume unless ``--reburn`` (#814).
+    """
+    copy = get_copy_at_location(conn, volume_id, location)
+    return (copy is not None and copy.status == "ACTIVE"
+            and copy.last_verified_at is not None)
+
+
 def get_disc_retired_at(
     conn: sqlite3.Connection,
     volume_id: int,
