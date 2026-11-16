@@ -154,6 +154,14 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         logger.error("--verify-only checks the disc; it cannot be combined "
                      "with --no-verify.")
         return 1
+    if not verify_only:
+        # #862: an ISO still in the staging folder of a killed stage.
+        from lcsas.burn.orchestrator import unfinished_stage_refusal_for_iso
+
+        refusal = unfinished_stage_refusal_for_iso(iso_path)
+        if refusal is not None:
+            logger.error(refusal)
+            return 1
 
     runner = SubprocessXorrisoRunner()
     # burn-iso is the portable half of the split workflow: it needs no
