@@ -108,7 +108,13 @@ def cmd_location(args: argparse.Namespace) -> int:
             if vol is None:
                 logger.error(f"Volume '{args.volume_label}' not found.")
                 return 1
-            move_volume_copy(conn, vol.volume_id, args.from_location, args.to_location)
+            try:
+                move_volume_copy(
+                    conn, vol.volume_id, args.from_location, args.to_location
+                )
+            except ValueError as exc:
+                logger.error(str(exc))
+                return 1
             logger.info(f"Moved {args.volume_label}: {args.from_location} → {args.to_location}")
 
         else:
