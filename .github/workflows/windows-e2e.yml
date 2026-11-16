@@ -197,18 +197,13 @@ jobs:
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           $fixture = Join-Path $PWD "fixture"
 
-          # Mount every ISO; collect drive letters.  The meta ISO carries
-          # restore.bat + the tier-1 .exe; data ISOs carry pack data\.
-          $metaDrive = $null
-          $isos = Get-ChildItem -Path $fixture -Filter *.iso
-          foreach ($iso in $isos) {
-            $img = Mount-DiskImage -ImagePath $iso.FullName -PassThru
-            $vol = Get-Volume -DiskImage $img
-            $letter = $vol.DriveLetter
-            Write-Host "Mounted $($iso.Name) at ${letter}:"
-            if (Test-Path "${letter}:\restore.bat") { $metaDrive = $letter }
-          }
-          if (-not $metaDrive) { throw "no restore.bat found on any mounted ISO" }
+          # Mount every ISO, each at a drive letter of its own.  The meta
+          # ISO carries restore.bat + the tier-1 .exe; data ISOs carry pack
+          # data\.  Mount-FixtureIsos waits up to 30 s for every letter: a
+          # letter read right after Mount-DiskImage can still be empty (the
+          # mount race behind #640's red run).
+          $metaDrive = Mount-FixtureIsos -Fixture $fixture
+          Write-Host "META disc at ${metaDrive}:; data discs: $(@(Get-DataDiscs).Count)"
 
           $target = Join-Path $env:RUNNER_TEMP "restored"
           New-Item -ItemType Directory -Force -Path $target | Out-Null
