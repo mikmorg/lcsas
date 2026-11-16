@@ -233,9 +233,16 @@ cross-check against the built-in code:
      crash there cannot stop the restore.
   2. the openssl command (OpenSSL or LibreSSL), if it is on PATH.
      Linux and macOS hosts usually have it.  NOTE: openssl takes the
-     raw key only on its command line, so while it runs, other users
-     of the same computer can read that key (ps, /proc).  Restore on
-     a computer only you use, or set LCSAS_TIER3_AES=pure to skip it.
+     key only on its command line.  That key is the repository's data
+     key, not your password, but with it and the discs anyone can read
+     every file in that repository.  While openssl runs, other users
+     of the same computer can read it (ps, /proc).  A computer that
+     logs the commands it runs (process accounting, an audit log)
+     also writes it to that log, where it stays.  So restore on a
+     computer only you use and that keeps no such log, or skip the
+     openssl command with LCSAS_TIER3_AES=pure:
+       LCSAS_TIER3_AES=pure sh restore.sh ...
+     The pure-Python AES is slow (about 2 hours per GB).
   3. the built-in pure-Python AES (slow, always there).
 
 The reader prints one line saying which it uses, for example
@@ -328,8 +335,7 @@ be able to decompress zstd to be useful.  Two backends, fast-path first:
     inlined into the per-disc standalone_restorer.py, so it works under
     ANY of the bundled per-target CPython interpreters (all six approved
     targets) and on any future CPython -- slower, but always available.
-    A startup log line notes the slow path; install 'zstandard' for the
-    fast one.
+    The reader prints one line when it uses the slow decoder.
 
 The build records native-zstd capability per meta disc in
 volume_info.json ("zstd_support"); ``lcsas meta build`` fails loud if
