@@ -775,16 +775,9 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             # offsets sort wrongly as strings.  The same key as tier 3
             # (#663): a time that does not parse sorts first, so it is
             # never taken as "latest".
-            from lcsas.restore.restic_fallback import _parse_timestamp
-            from lcsas.rustic.types import SnapshotInfo
+            from lcsas.restore.restic_fallback import time_sort_key
 
-            def _instant(snap: SnapshotInfo) -> tuple[int, float]:
-                try:
-                    return (1, _parse_timestamp(snap.timestamp))
-                except ValueError:
-                    return (0, 0.0)
-
-            snap_list.sort(key=_instant)
+            snap_list.sort(key=lambda snap: time_sort_key(snap.timestamp))
             snapshot_id = snap_list[-1].snapshot_id
             logger.info(
                 "Resolved 'latest' to snapshot %s (%s)",
