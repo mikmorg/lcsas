@@ -27,7 +27,7 @@ pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_CARD = REPO_ROOT / "docs" / "PASSWORD_CARD.txt"
 ESTATE_PLANNING = REPO_ROOT / "docs" / "ESTATE_PLANNING.md"
-UX_CONCERNS = REPO_ROOT / "recovery" / "docs" / "UX_CONCERNS.txt"
+UX_CONCERNS = REPO_ROOT / "docs" / "development" / "recovery" / "UX_CONCERNS.txt"
 
 
 def test_recovery_card_exists() -> None:
@@ -92,7 +92,7 @@ def test_ux_concerns_id006_mitigation_implemented() -> None:
     """UX_CONCERNS ID 006's Recovery Card bullet must be marked implemented."""
     content = UX_CONCERNS.read_text()
     assert "IMPLEMENTED (KEY-09)" in content, (
-        "recovery/docs/UX_CONCERNS.txt ID 006 still describes the Recovery "
+        "docs/development/recovery/UX_CONCERNS.txt ID 006 still describes the Recovery "
         "Card as unimplemented homework. The mitigation now exists "
         "(docs/PASSWORD_CARD.txt + `lcsas key card`) and the ledger must "
         "say so, or the promise and reality drift apart."

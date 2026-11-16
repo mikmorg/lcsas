@@ -38,6 +38,7 @@ import pytest
 
 from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.meta.required_contents import APPROVED_TARGETS, required_meta_paths
+from tests.fixtures.upstream_cache import add_upstream
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_BIN = REPO_ROOT / "recovery" / "bin"
@@ -451,7 +452,11 @@ def test_built_meta_volume_satisfies_required_contents() -> None:
 
 
 def _make_builder(tmp_path: Path) -> MetaVolumeBuilder:
-    return MetaVolumeBuilder(output_dir=tmp_path / "meta-out")
+    # #832: the builder unpacks the archives pinned in this folder's
+    # UPSTREAM.sha256 (written by add_upstream).
+    return MetaVolumeBuilder(
+        output_dir=tmp_path / "meta-out", recovery_dir=tmp_path / "pins",
+    )
 
 
 def test_windows_python_staged_from_msvc_cache(
@@ -461,11 +466,10 @@ def test_windows_python_staged_from_msvc_cache(
     it (python under the MSVC triple), staging must place the python tree
     under the GNU triple's bin dir alongside rustic."""
     cache = tmp_path / "cache"
-    py_src = cache / "python" / "x86_64-pc-windows-msvc" / "python"
-    py_src.mkdir(parents=True)
-    (py_src / "python.exe").write_bytes(b"MZ fake-cpython")
-    # No *.tar.gz archives in the fake cache: the #372 re-verification
-    # checks only PRESENT archives, so it passes trivially here.
+    # Pins and caches the python archive under the msvc triple, like
+    # fetch_upstream.sh does for the real one.
+    add_upstream(cache, tmp_path / "pins", "x86_64-pc-windows-gnu", rustic=False)
+    assert (cache / "python" / "x86_64-pc-windows-msvc").is_dir()
     monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
 
     recovery_dst = tmp_path / "recovery_dst"
@@ -489,9 +493,7 @@ def test_python_triple_override_only_remaps_windows(
     """The override must not disturb non-Windows targets: a Linux python
     cached under its own (identical) triple still stages normally."""
     cache = tmp_path / "cache"
-    py_src = cache / "python" / "x86_64-unknown-linux-musl" / "python" / "bin"
-    py_src.mkdir(parents=True)
-    (py_src / "python3").write_bytes(b"\x7fELF fake-cpython")
+    add_upstream(cache, tmp_path / "pins", "x86_64-unknown-linux-musl", rustic=False)
     monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
 
     recovery_dst = tmp_path / "recovery_dst"

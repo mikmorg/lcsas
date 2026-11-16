@@ -27,7 +27,7 @@ run to *landed* or *escalated*, never to half-done.
   on 2026-10-31 and to rc5 and any later rc on 2026-11-02; not the
   standing rule): restore-path PRs in those batches may merge on green
   CI without a per-PR blind run; ONE combined haiku sweep of every
-  runnable variant (the nine in the `recovery/docs/READINESS_CHECKLIST.txt`
+  runnable variant (the nine in the `docs/development/recovery/READINESS_CHECKLIST.txt`
   drill log since rc5, with split-key-docs run twice) then runs on
   master before that rc is tagged, and a red sweep blocks the tag
   until fixed.
