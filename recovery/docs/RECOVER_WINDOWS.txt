@@ -789,11 +789,22 @@ Example, with the meta disc in D: and the newest data disc in E:
         --pack-search E:\ ^
         --verbose
 
+To restore an older snapshot instead of the latest one, list the
+snapshots as above (--list-snapshots) and give the ID, or the first
+eight characters of it, to restore.bat:
+
+    restore.bat --snapshot a1b2c3d4
+
+restore.bat then asks its questions as usual.  A restore that stopped
+carries on with the same snapshot.
+
 EXIT CODES of restore.bat (0, 65, 75 and 77 mean the same as for
 restore.sh; see RECOVER.txt):
 
     0   the restore finished: every backup set you chose
     1   a failure; the message above it says what
+    2   --snapshot was given without an ID, or with something that is
+        not one (an ID is made of the digits 0-9 and the letters a-f)
     65  you typed Q at a question restore.bat asked (the newest data
         disc, the backup set, the restore folder), or you did not
         type YES at the warning about a folder that is not empty

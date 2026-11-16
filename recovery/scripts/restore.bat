@@ -75,6 +75,20 @@ REM folder this way, to carry on a restore that stopped (#609).
 set "RESUME="
 if /i "%~1"=="--resume" set "RESUME=1"
 
+REM --snapshot ID: restore that snapshot, not the latest one (#807).  ID
+REM is a snapshot's id or the start of one, as lcsas-restore.exe
+REM --list-snapshots prints it (see RECOVER_WINDOWS.txt).  A restore that
+REM carries on takes it from resume.cfg.
+set "SNAP=latest"
+set "SNAP_BAD="
+call :parse_args %*
+if defined SNAP_BAD (
+    echo ERROR: --snapshot needs a snapshot id: the letters 0-9 and a-f,
+    echo as the list of snapshots shows it, or the word latest.
+    pause
+    exit /b 2
+)
+
 REM ----- Detect target (arch + OS) ----------------------------------
 REM
 REM Phase 21.1 aligned the bundled-binary path to a single rust-style
@@ -168,6 +182,7 @@ if not defined RS_set (
 set "LCSAS_RELOCATED=!RS_meta!"
 set "LCSAS_REPO=!RS_set!"
 set "RESUME_TARGET=!RS_target!"
+if defined RS_snapshot set "SNAP=!RS_snapshot!"
 set "RESUME_LETTERS=!RS_letters!"
 :resume_loaded
 
@@ -1430,7 +1445,7 @@ set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if exist "%BIN%" (
     echo.
     echo [tier 1] running !BIN!
-    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
+    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot %SNAP% %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
     set "RC=!ERRORLEVEL!"
     REM %PWFILE% is deleted only on the TERMINAL branches below -- the
     REM fall-through to tier 2 needs it alive or rustic-static.exe gets
@@ -1478,7 +1493,7 @@ set "BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe"
 if exist "%BIN%" (
     echo.
     echo [tier 2] running !BIN!
-    "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET%"
+    "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore %SNAP% "%TARGET%"
     set "RC=!ERRORLEVEL!"
     del /f /q "%PWFILE%" >nul 2>nul
     if !RC! equ 0 goto :restore_done
@@ -1557,11 +1572,36 @@ REM one asks for its folder and its password.
 :another_set
 set "ANOTHER_PASS=1"
 set "LCSAS_REPO="
+set "SNAP=latest"
 set "RESUME="
 set "RESUME_TARGET="
 goto :choose_set
 
 REM ----- Subroutines --------------------------------------------------
+
+:parse_args
+REM %* = this script's arguments.  SNAP = the ID of --snapshot ID (latest
+REM when none); SNAP_BAD = 1 when the ID is missing, or holds anything
+REM but 0-9 and a-f: it goes on the lcsas-restore.exe command line.
+if "%~1"=="" goto :eof
+if /i not "%~1"=="--snapshot" (
+    shift
+    goto :parse_args
+)
+set "SNAP=%~2"
+shift
+shift
+if not defined SNAP (
+    set "SNAP_BAD=1"
+    goto :eof
+)
+if /i "!SNAP!"=="latest" (
+    set "SNAP=latest"
+    goto :parse_args
+)
+if not "!SNAP:~64!"=="" set "SNAP_BAD=1"
+for /f "delims=0123456789abcdefABCDEF" %%C in ("!SNAP!") do set "SNAP_BAD=1"
+goto :parse_args
 
 :write_pw
 REM Write PW_VALUE into PWFILE, then forget it.  `echo !PW_VALUE!` runs
@@ -1976,15 +2016,16 @@ goto :eof
 
 :read_resume
 REM Read TOOLS\resume.cfg (key=value lines; # starts a comment) into
-REM RS_set, RS_target, RS_meta and RS_letters.
-for %%K in (set target meta letters) do set "RS_%%K="
+REM RS_set, RS_target, RS_meta, RS_letters and RS_snapshot.
+for %%K in (set target meta letters snapshot) do set "RS_%%K="
 if not exist "%TOOLS%\resume.cfg" goto :eof
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%TOOLS%\resume.cfg") do set "RS_%%A=%%B"
 goto :eof
 
 :save_resume
 REM resume.cfg: the backup set's folder name, the restore folder, the
-REM META disc's drive letter and the letters searched for discs.  NEVER
+REM META disc's drive letter, the letters searched for discs and the
+REM snapshot (--snapshot, else latest).  NEVER
 REM the password.  The letters are kept because a drive that is empty
 REM when the restore carries on is not seen at all.  Then the launcher,
 REM in TOOLS and on the Desktop.  All of it is written by echo, so it
@@ -2001,12 +2042,14 @@ set "CFG=%TOOLS%\resume.cfg"
 >>"%CFG%" echo target=!TARGET!
 >>"%CFG%" echo meta=!LCSAS_RELOCATED!
 >>"%CFG%" echo letters=!SAVE_LETTERS!
+>>"%CFG%" echo snapshot=!SNAP!
 REM Read it back: a folder name that cmd cannot carry through a file
 REM (one with a "!" in it) must not send a resumed restore elsewhere.
 call :read_resume
 if not "!RS_set!"=="!SAVE_SET!" goto :resume_unsaved
 if not "!RS_target!"=="!TARGET!" goto :resume_unsaved
 if not "!RS_meta!"=="!LCSAS_RELOCATED!" goto :resume_unsaved
+if not "!RS_snapshot!"=="!SNAP!" goto :resume_unsaved
 REM The launcher.  (goto) ends it before the restore runs, as the
 REM relaunch above, so this copy may delete the one on the Desktop at
 REM the end; it removes the tools folder once .done is there.

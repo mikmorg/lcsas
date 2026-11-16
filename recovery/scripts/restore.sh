@@ -83,7 +83,7 @@ SCRIPT="$(
 )/$(basename "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT")"
 
-# ── Single-drive guard: relocate to RAM before going further ──────
+# ── Single-drive guard: relocate to RAM once the arguments are read ─
 #
 # If this script is being interpreted off a read-only optical disc
 # (the meta disc), `sh` keeps an open file descriptor on it and the
@@ -91,7 +91,8 @@ SCRIPT_DIR="$(dirname "$SCRIPT")"
 # optical drive.  Detect that case and re-exec ourselves from a
 # writable directory after copying the script + the chosen binary
 # tier into RAM (or any host writable dir).  Subsequent disc swaps
-# then operate freely.
+# then operate freely.  The check runs after the arguments are read
+# (#800), below; these are its helpers.
 #
 # LCSAS_RELOCATED is the sentinel: when set, we are the in-RAM copy
 # and its value is the path of the original meta disc mount.
@@ -634,55 +635,6 @@ EOF
     exec "$ramdir/recovery/scripts/restore.sh" "$@"
 }
 
-# Detect read-only / iso9660 / udf / squashfs by writability of
-# SCRIPT_DIR.  When LCSAS_RELOCATED is already set (re-exec'd copy)
-# or LCSAS_NO_RELOCATE=1 (tests/dev), skip relocation entirely.
-if [ -z "${LCSAS_RELOCATED:-}" ] && [ "${LCSAS_NO_RELOCATE:-0}" != "1" ]; then
-    relocate_needed=0
-    # Strongest signal: the caller (a test harness, or by hand)
-    # explicitly named the meta disc and we are running inside it.
-    if [ -n "${LCSAS_META_DISC:-}" ]; then
-        case "$SCRIPT_DIR" in
-            "$LCSAS_META_DISC"|"$LCSAS_META_DISC"/*) relocate_needed=1 ;;
-        esac
-    fi
-    # Fallback: probe for read-only / optical filesystem types.
-    if [ "$relocate_needed" = "0" ] && [ ! -w "$SCRIPT_DIR" ]; then
-        relocate_needed=1
-    fi
-    # #496: tier binaries that exist but can't be run from here (a
-    # FAT/exFAT copy has no executable bits; a noexec mount refuses
-    # them).  The relocated copy gets its bits back and an exec-able home.
-    if [ "$relocate_needed" = "0" ]; then
-        for _nx_bin in "$SCRIPT_DIR"/recovery/bin/*/lcsas-restore \
-                       "$SCRIPT_DIR"/../bin/*/lcsas-restore; do
-            if [ -s "$_nx_bin" ] && [ ! -x "$_nx_bin" ]; then
-                relocate_needed=1
-                break
-            fi
-        done
-        unset _nx_bin
-    fi
-    if [ "$relocate_needed" = "0" ] && command -v findmnt >/dev/null 2>&1; then
-        fstype="$(findmnt -n -o FSTYPE --target "$SCRIPT_DIR" 2>/dev/null || true)"
-        case "$fstype" in
-            iso9660|udf|squashfs|cramfs|romfs) relocate_needed=1 ;;
-        esac
-    fi
-    if [ "$relocate_needed" = "1" ]; then
-        # Trust an explicit override from the caller (LCSAS_META_DISC,
-        # set by hand or by a test harness).  Otherwise probe.
-        if [ -n "${LCSAS_META_DISC:-}" ]; then
-            meta_mount="$LCSAS_META_DISC"
-        else
-            meta_mount="$(find_meta_mount "$SCRIPT_DIR")"
-        fi
-        relocate_to_ram "$meta_mount" "$@" || true
-        # If relocate_to_ram returned without exec, fall through and
-        # continue from the original location -- best effort.
-    fi
-fi
-
 # Record the meta disc mount so we can pass it on to lcsas-restore.
 # Prefer the post-relocation sentinel; fall back to an explicit env
 # var (set by hand or by a test harness); otherwise leave empty.
@@ -698,10 +650,16 @@ elif [ -d "$SCRIPT_DIR/recovery/scripts" ]; then
 fi
 
 RECOVERY=""
+# 1 when RECOVERY_ROOT was given (not auto-detected): the copy run from
+# the tools folder is given it again.
+RECOVERY_GIVEN=0
 TARGET=""
 TARGET_FLAG=""
 TARGET_FROM_POS=0
 SNAP="latest"
+# --snapshot ID, and the snapshot given as a positional argument.
+SNAP_FLAG=""
+SNAP_POS=""
 # --check-disc IMAGE: the heir-facing "my disc is scratched" path.  When
 # set, restore.sh runs the bundled in-house RS03 ECC tool (lcsas-ecc) on
 # IMAGE to check and, on damage, offer/perform a repair -- then exits.
@@ -720,8 +678,9 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
             cat <<EOF
-usage: $0 [--repo NAME] [--target DIR] [--key FILE] [--version]
-         [--check-disc IMAGE] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [--target DIR] [--snapshot ID] [--key FILE]
+         [--version] [--check-disc IMAGE]
+         [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
 
 SCRATCHED / DAMAGED DISC?
   sh restore.sh --check-disc /path/to/disc.iso
@@ -755,6 +714,11 @@ FLAGS AND ENVIRONMENT VARIABLES:
   --target DIR            Where to write restored files.  Equivalent to
                           the positional TARGET_DIR; give one or the
                           other, not both.
+  --snapshot ID           Which snapshot to restore: 'latest' (the
+                          default), an ID or the start of one.  Equivalent
+                          to the positional SNAPSHOT_ID, and the way to
+                          name a snapshot together with --target:
+                            sh restore.sh --target ~/restored --snapshot a1b2c3d4
   --key FILE              Path to a file whose contents are the password
                           (same as LCSAS_PWFILE=FILE).  Skips the
                           Password: prompt.
@@ -868,6 +832,9 @@ EOF
         --target)
             TARGET_FLAG="${2:?--target requires a DIR argument}"
             shift 2 ;;
+        --snapshot)
+            SNAP_FLAG="${2:?--snapshot requires an ID argument}"
+            shift 2 ;;
         --key)
             LCSAS_PWFILE="${2:?--key requires a FILE argument}"
             # Validate NOW -- before any password/disc prompts -- so a
@@ -889,7 +856,7 @@ EOF
         --) shift; break ;;
         -*)
             printf "restore.sh: unknown flag '%s'\n" "$1" >&2
-            printf 'valid flags: --repo NAME, --target DIR, --key FILE, --version, --check-disc IMAGE, --help\n' >&2
+            printf 'valid flags: --repo NAME, --target DIR, --snapshot ID, --key FILE, --version, --check-disc IMAGE, --help\n' >&2
             exit 2 ;;
         *) break ;;
     esac
@@ -962,6 +929,31 @@ if [ -n "$CHECK_DISC_IMG" ]; then
         "$cd_recovery/bin/lcsas-ecc"; do
         if [ -x "$cd_cand" ]; then cd_ecc_bin="$cd_cand"; break; fi
     done
+    # A disc check runs where it is, with no tools folder (#800).  A copy
+    # of the disc on a FAT stick has the tool without its run permission,
+    # and a "noexec" mount refuses to run it (#496): then that one file
+    # is copied to a temporary folder, removed when the check ends.
+    cd_tmp=""
+    if [ -z "$cd_ecc_bin" ]; then
+        for cd_cand in \
+            "$cd_recovery/bin/$cd_triple/lcsas-ecc" \
+            "$cd_recovery/bin/$cd_triple/lcsas-ecc.exe" \
+            "$cd_recovery/bin/lcsas-ecc"; do
+            [ -s "$cd_cand" ] || continue
+            cd_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lcsas-check-disc.XXXXXX" 2>/dev/null || true)"
+            [ -n "$cd_tmp" ] || break
+            trap 'rm -rf "$cd_tmp"' EXIT
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
+            trap 'exit 129' HUP
+            if dir_runs_programs "$cd_tmp" \
+               && cp "$cd_cand" "$cd_tmp/${cd_cand##*/}" 2>/dev/null \
+               && chmod u+x "$cd_tmp/${cd_cand##*/}" 2>/dev/null; then
+                cd_ecc_bin="$cd_tmp/${cd_cand##*/}"
+            fi
+            break
+        done
+    fi
     if [ -z "$cd_ecc_bin" ]; then
         printf 'restore.sh: --check-disc: no lcsas-ecc binary found under ' >&2
         printf '%s/bin/%s/ -- this meta disc cannot repair discs.\n' \
@@ -1033,31 +1025,34 @@ fi
 # Pattern 1: first arg looks like a recovery root (has bin/ or src/).
 if [ $# -ge 2 ] && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
     RECOVERY="$1"
+    RECOVERY_GIVEN=1
     TARGET="$2"
     TARGET_FROM_POS=1
-    SNAP="${3:-latest}"
+    SNAP_POS="${3:-}"
 elif [ $# -ge 1 ] && [ -n "$TARGET_FLAG" ] \
      && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
     # --target DIR already supplied the target; the sole positional is
     # the recovery root (optionally followed by a snapshot id).
     RECOVERY="$1"
-    SNAP="${2:-latest}"
+    RECOVERY_GIVEN=1
+    SNAP_POS="${2:-}"
 elif [ $# -ge 1 ] && [ -n "$AUTO_RECOVERY" ]; then
     RECOVERY="$AUTO_RECOVERY"
     TARGET="$1"
     TARGET_FROM_POS=1
-    SNAP="${2:-latest}"
+    SNAP_POS="${2:-}"
 elif [ -n "$AUTO_RECOVERY" ]; then
     RECOVERY="$AUTO_RECOVERY"
     TARGET="${TARGET:-/tmp/restored}"
 else
     cat >&2 <<EOF
-usage: $0 [--repo NAME] [--target DIR] [--key FILE] [--version] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [--target DIR] [--snapshot ID] [--key FILE] [--version] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
   TARGET_DIR is where to write restored files (default: /tmp/restored);
-  --target DIR is the equivalent named form.
+  --target DIR is the equivalent named form.  SNAPSHOT_ID is 'latest'
+  (the default) or a snapshot ID; --snapshot ID is the named form.
 
   Password is read from stdin, \$LCSAS_PASSWORD env, \$LCSAS_PWFILE,
   or --key FILE.
@@ -1071,9 +1066,20 @@ fi
 if [ -n "$TARGET_FLAG" ]; then
     if [ "$TARGET_FROM_POS" = "1" ]; then
         printf 'restore.sh: give the target once: either --target DIR or a positional TARGET_DIR\n' >&2
+        printf 'To choose a snapshot together with --target, use --snapshot ID.\n' >&2
         exit 2
     fi
     TARGET="$TARGET_FLAG"
+fi
+# The same for the snapshot (#807): --snapshot ID or a positional one.
+if [ -n "$SNAP_FLAG" ]; then
+    if [ -n "$SNAP_POS" ] && [ "$SNAP_POS" != "$SNAP_FLAG" ]; then
+        printf 'restore.sh: give the snapshot once: either --snapshot ID or a positional SNAPSHOT_ID\n' >&2
+        exit 2
+    fi
+    SNAP="$SNAP_FLAG"
+elif [ -n "$SNAP_POS" ]; then
+    SNAP="$SNAP_POS"
 fi
 
 # A recovery root given as a relative path is made absolute: resume.sh
@@ -1083,6 +1089,91 @@ case "$RECOVERY" in
     /*) ;;
     *) RECOVERY="$(cd "$RECOVERY" && pwd)" ;;
 esac
+
+# abs_path PATH: PATH as a full path, a relative one taken from the
+# folder this script was started in.  pwd, not pwd -P: a macOS /var
+# path keeps its form.  A Windows drive path (C:/..., C:\...) is full.
+abs_path() {
+    case "$1" in
+        /*|[A-Za-z]:[/\\]*) printf '%s\n' "$1" ;;
+        *)
+            _ap_cwd="$(pwd)"
+            printf '%s/%s\n' "${_ap_cwd%/}" "${1#./}" ;;
+    esac
+}
+
+# The folders and files the reader named are made full paths now
+# (#625): the copy that runs from the tools folder starts in /, where
+# "restored" would be /restored and a relative --key FILE would name
+# nothing.
+TARGET="$(abs_path "$TARGET")"
+if [ -n "${LCSAS_PWFILE:-}" ]; then LCSAS_PWFILE="$(abs_path "$LCSAS_PWFILE")"; fi
+if [ -n "${LCSAS_SHARES_DIR:-}" ]; then LCSAS_SHARES_DIR="$(abs_path "$LCSAS_SHARES_DIR")"; fi
+
+# relocate_with_args MOUNT: relocate_to_ram, handing the copy the
+# arguments as this run read them, every path in them full.
+relocate_with_args() {
+    _rw_mount="$1"
+    set -- --target "$TARGET" --snapshot "$SNAP"
+    if [ -n "${LCSAS_REPO:-}" ]; then set -- --repo "$LCSAS_REPO" "$@"; fi
+    if [ "$RECOVERY_GIVEN" = 1 ]; then set -- "$@" -- "$RECOVERY"; fi
+    relocate_to_ram "$_rw_mount" "$@"
+}
+
+# ── Single-drive guard: relocate (see relocate_to_ram above) ──────
+#
+# Only now, with the arguments read: --help, --version, --check-disc
+# and a mistyped command line have ended above without copying
+# anything off the disc (#800).
+#
+# Detect read-only / iso9660 / udf / squashfs by writability of
+# SCRIPT_DIR.  When LCSAS_RELOCATED is already set (re-exec'd copy)
+# or LCSAS_NO_RELOCATE=1 (tests/dev), skip relocation entirely.
+if [ -z "${LCSAS_RELOCATED:-}" ] && [ "${LCSAS_NO_RELOCATE:-0}" != "1" ]; then
+    relocate_needed=0
+    # Strongest signal: the caller (a test harness, or by hand)
+    # explicitly named the meta disc and we are running inside it.
+    if [ -n "${LCSAS_META_DISC:-}" ]; then
+        case "$SCRIPT_DIR" in
+            "$LCSAS_META_DISC"|"$LCSAS_META_DISC"/*) relocate_needed=1 ;;
+        esac
+    fi
+    # Fallback: probe for read-only / optical filesystem types.
+    if [ "$relocate_needed" = "0" ] && [ ! -w "$SCRIPT_DIR" ]; then
+        relocate_needed=1
+    fi
+    # #496: tier binaries that exist but can't be run from here (a
+    # FAT/exFAT copy has no executable bits; a noexec mount refuses
+    # them).  The relocated copy gets its bits back and an exec-able home.
+    if [ "$relocate_needed" = "0" ]; then
+        for _nx_bin in "$SCRIPT_DIR"/recovery/bin/*/lcsas-restore \
+                       "$SCRIPT_DIR"/../bin/*/lcsas-restore; do
+            if [ -s "$_nx_bin" ] && [ ! -x "$_nx_bin" ]; then
+                relocate_needed=1
+                break
+            fi
+        done
+        unset _nx_bin
+    fi
+    if [ "$relocate_needed" = "0" ] && command -v findmnt >/dev/null 2>&1; then
+        fstype="$(findmnt -n -o FSTYPE --target "$SCRIPT_DIR" 2>/dev/null || true)"
+        case "$fstype" in
+            iso9660|udf|squashfs|cramfs|romfs) relocate_needed=1 ;;
+        esac
+    fi
+    if [ "$relocate_needed" = "1" ]; then
+        # Trust an explicit override from the caller (LCSAS_META_DISC,
+        # set by hand or by a test harness).  Otherwise probe.
+        if [ -n "${LCSAS_META_DISC:-}" ]; then
+            meta_mount="$LCSAS_META_DISC"
+        else
+            meta_mount="$(find_meta_mount "$SCRIPT_DIR")"
+        fi
+        relocate_with_args "$meta_mount" || true
+        # If relocate_to_ram returned without exec, fall through and
+        # continue from the original location -- best effort.
+    fi
+fi
 
 # ── Target detection (arch + OS) ──────────────────────────────────
 #
@@ -1164,9 +1255,6 @@ _stty_saved=""
 # Tier-3 stderr capture files (issue #240); set if tier 3 fires.
 TIER3_ERR=""
 TIER3_RC_FILE=""
-# Persistent exit-diagnostic log (issue #259).  Written on non-zero exit so
-# the failure is visible even after the tmux session dies.
-_restore_exit_log="/tmp/lcsas-restore-exit.$(date +%Y%m%d-%H%M%S-$$)"
 # shellcheck disable=SC2317  # runs from the EXIT/INT/TERM trap below
 _restore_exit_handler() {
     rc=$?
@@ -1217,13 +1305,10 @@ EOF
             tools_dir_remove "$TOOLS"
         fi
     fi
+    # #806: a failure was logged to a file under /tmp that no run
+    # removed (#259); the exit code is said here instead.
     if [ "$rc" -ne 0 ]; then
-        printf '[restore.sh] EXIT rc=%d at line approx=%d\n' "$rc" "${LINENO:-0}" \
-            >> "$_restore_exit_log" 2>/dev/null
-        printf '[restore.sh] PYBIN=%s PYLOADER=%s PYREST=%s\n' "${PYBIN:-unset}" \
-            "${TIER3_PYLOADER:-none}" "${PYREST:-unset}" \
-            >> "$_restore_exit_log" 2>/dev/null
-        printf '[restore.sh] exit log: %s\n' "$_restore_exit_log" >&2
+        printf '[restore.sh] stopped with exit code %d\n' "$rc" >&2
     fi
     # Return 0 so the trap does not clobber the script's exit status
     # (POSIX traps inherit the trap action's return code under some
@@ -1866,13 +1951,12 @@ sudo mount /dev/sr0 /mnt), then re-run this script.
 EOF
         exit 1
         ;;
-    1)
-        REPO="$(printf '%s\n' "$REPO_CANDIDATES" | head -n 1)"
-        ;;
     *)
-        # Multi-repository archive.  Honour LCSAS_REPO if it matches a
-        # candidate's id or name; otherwise list the sets by name and
-        # ask the heir to pick one.
+        # Honour LCSAS_REPO (or --repo) if it matches a candidate's id or
+        # name, and stop, listing the sets, if it matches none -- with
+        # one set too (#802: that one was restored whatever the name).
+        # Otherwise one set is restored; more are listed by name and the
+        # heir picks one.
         #
         # REPO_CANDIDATES is newline-separated and a repository path can contain
         # spaces (e.g. a disc auto-mounted at /media/user/DISC LABEL 1), so
@@ -1896,6 +1980,8 @@ EOF
                        "$LCSAS_REPO" "$REPO_NAMES" >&2
                 exit 1
             fi
+        elif [ "$REPO_COUNT" = 1 ]; then
+            REPO="$REPO_CANDIDATES"
         else
             while :; do
                 printf 'Multiple repositories on this archive:\n' >&2
@@ -3388,9 +3474,6 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
             printf '[tier 3] the bundled Python cannot run on this host (%s); using the host %s\n' \
                    "$TIER3_PY_WHY" "$PYBIN" >&2
         fi
-        printf '[tier 3] dispatch: pybin=%s loader=%s pyrest=%s repo=%s\n' \
-            "$PYBIN" "${TIER3_PYLOADER:-none}" "$PYREST" "$REPO" \
-            >> "$_restore_exit_log" 2>/dev/null || true
         printf '[tier 3] falling back to Python (%s + %s)\n' \
                "$PYBIN" "$PYREST" >&2
         # standalone_restorer.py CLI is flag-based:
@@ -3553,7 +3636,6 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         tier3_rc=$(cat "$TIER3_RC_FILE" 2>/dev/null || echo 1)
         # Defensive: cat read an empty file?  Default to 1.
         [ -n "$tier3_rc" ] || tier3_rc=1
-        printf '[tier 3] rc=%d\n' "$tier3_rc" >> "$_restore_exit_log" 2>/dev/null || true
         if [ "$tier3_rc" -eq 75 ]; then
             # Exit 75: the reader typed q at tier 3's disc prompt, or its
             # input ended -- a pause, not a failure, as for tier 1's 75.
@@ -3566,7 +3648,6 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
             sed 's/^/[tier 3] /' "$TIER3_ERR" >&2
             printf '[tier 3] --------------------------------------------\n' >&2
         fi
-        printf '[tier 3] diagnostic log: %s\n' "$_restore_exit_log" >&2 2>/dev/null || true
         rm -f "$TIER3_ERR" "$TIER3_RC_FILE"
         if [ "$tier3_rc" -eq 0 ]; then
             restore_done
