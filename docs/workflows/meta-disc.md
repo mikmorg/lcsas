@@ -302,7 +302,7 @@ required-contents contract (`required_meta_paths`,
 | `lcsas/src/lcsas/` | `_bundle_source` | LCSAS Python package source (no external deps). |
 | `docs/`, `README.md`, `pyproject.toml` | `_bundle_docs` | Project docs including the restic-format spec for last-resort decoding. |
 | `restore.sh` (root), `recovery/scripts/restore.sh` (redirect stub) | `_write_restore_script` | The one restore driver: the tier dispatcher heirs run (single-drive default). |
-| `restore.bat`, `recovery/scripts/restore.bat`, `recovery/scripts/restore_auto.sh` | `_bundle_recovery_toolchain_artifacts` (copied from the source tree) | Windows dispatcher; POSIX-sh wrapper that runs `restore.sh` once per backup set it finds in the disc root's `metadata/`, with no questions (automation only). |
+| `restore.bat`, `recovery/scripts/restore.bat`, `recovery/scripts/restore_auto.sh` | `_bundle_recovery_toolchain_artifacts` (copied from the source tree) | Windows dispatcher; POSIX-sh wrapper that runs `restore.sh` once per backup set it finds in the disc root's `metadata/` and on the mounted discs, with no questions (automation only). |
 | `standalone_restorer.py` | `_bundle_standalone_restorer` | The Python reader (tier 3), for when no binary works. |
 | `keyshare_combine.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (heir pre-step when a password was split). |
 | `README_RESTORE.md` / `README_RESTORE.txt` | `_write_readme` / `_write_readme_txt` | Short pointer to the restore manuals, `recovery/docs/RECOVER.txt` and `RECOVER_WINDOWS.txt`. |
@@ -565,7 +565,8 @@ Therefore:
 4. Tier 1 never swaps to a catalog older than the one it started with.
    `recovery/scripts/restore_auto.sh` runs `restore.sh` per backup set
    with the newest-disc question off, so mount the newest data disc
-   before running it.
+   before running it.  It lists the sets on the mounted discs too, so a
+   set added after the meta disc was made is restored (#801).
 
 **Net effect:** the meta disc never goes stale in a way that matters.
 Rustic keys never go stale (a 2020-burnt meta disc can still decrypt a
