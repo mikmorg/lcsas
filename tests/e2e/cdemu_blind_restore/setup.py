@@ -385,7 +385,11 @@ def _fixture_config():
     # reserve so multi-tenant variants (#217 ships 5 repos) don't
     # overflow the 2 MB TEST_TINY capacity after ECC.
     from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
-    per_extra_tenant_bytes = 150_000
+    # 127.5 KB since rc9: with the 850 KB single-tenant floor, 150 KB per
+    # extra tenant grew the 5-tenant fixture from 12 to 17 discs and the
+    # agent's disc sweep tripped the thrash check (16 inserted, 10
+    # needed).  This keeps 5 tenants at the 1.36 MB that passed.
+    per_extra_tenant_bytes = 127_500
     reserve = (
         MIN_HOLOGRAPHIC_RESERVE_BYTES
         + max(0, len(repos) - 1) * per_extra_tenant_bytes
