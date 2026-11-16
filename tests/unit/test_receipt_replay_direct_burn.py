@@ -108,13 +108,14 @@ def env(tmp_path):
     conn.close()
 
 
-def _burn(env, *, skip_burn: bool, disc_ok: bool = True) -> Path:
+def _burn(env, *, skip_burn: bool, disc_ok: bool = True,
+          reburn: bool = False) -> Path:
     orch = _orchestrator(env["config"], env["conn"], disc_ok=disc_ok,
                          label=env["label"])
     with patch.object(BurnOrchestrator, "_assert_blank_media"):
         orch.burn_session(env["session_id"], location="Home_Shelf",
                           device="/dev/null", skip_burn=skip_burn,
-                          interactive=False)
+                          interactive=False, reburn=reburn)
     receipts = sorted((env["config"].db_path.parent / "receipts").glob("*.json"))
     assert len(receipts) == 1
     return receipts[0]
@@ -171,7 +172,8 @@ def test_older_receipt_after_reburn_at_same_location(env, caplog):
     kept = first.parent.parent / "first-disc.json"
     shutil.copy(first, kept)
     first.unlink()
-    _burn(env, skip_burn=False)
+    # #814: a second disc at the same location needs --reburn.
+    _burn(env, skip_burn=False, reburn=True)
     before = _catalog_state(env["config"].db_path)
     out = _import(env, kept, caplog)
     assert "already imported" in out

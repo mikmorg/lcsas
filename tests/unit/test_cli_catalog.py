@@ -1891,9 +1891,15 @@ class TestFirstDiscStates:
         finally:
             conn.close()
 
-    @pytest.mark.parametrize("start", ["BURNING", "BURNED"])
+    # #810: a BURNED volume (a disc of it exists, e.g. a rebuilt catalog)
+    # stays BURNED; it used to go back to STAGING here, which let
+    # 'session abort' delete it.  BURNING with no note of its earlier
+    # status was a STAGING volume.
+    @pytest.mark.parametrize(("start", "after"), [
+        ("BURNING", "STAGING"), ("BURNED", "BURNED"),
+    ])
     def test_failed_receipt_without_a_disc_returns_the_volume_to_staging(
-        self, tmp_path, start,
+        self, tmp_path, start, after,
     ):
         cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
@@ -1902,7 +1908,7 @@ class TestFirstDiscStates:
 
         assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
 
-        assert _status(db, "VOL_NEW") == "STAGING"
+        assert _status(db, "VOL_NEW") == after
         conn = get_connection(db)
         try:
             vol = get_volume_by_label(conn, "VOL_NEW")

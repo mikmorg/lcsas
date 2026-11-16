@@ -149,7 +149,12 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         get_disc_retired_at,
     )
     from lcsas.db.volume_events import add_event, get_events_for_volume
-    from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
+    from lcsas.db.volumes import (
+        get_volume_by_label,
+        mark_closed,
+        status_before_burning,
+        update_status,
+    )
 
     config = _load_config_opt(args)
     if config is None:
@@ -506,13 +511,18 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             event_detail = f"Offline burn receipt: {name}"
             if verify_failed:
                 if first_disc and not get_copies_for_volume(conn, vol.volume_id):
-                    # #483: a disc that failed verification returns the
-                    # volume to STAGING, as burn_session does, so its packs
-                    # go back to the unarchived pool.  The event records the
-                    # attempt.
-                    if vol.status != "STAGING":
-                        update_status(conn, vol.volume_id, "STAGING",
-                                      commit=False)
+                    # #483: a disc that failed verification returns a
+                    # never-burned volume to STAGING, as burn_session does,
+                    # so its packs go back to the unarchived pool.  A BURNED
+                    # volume stays BURNED (#810): a disc of it exists.  A
+                    # BURNING one goes back to the status it had before its
+                    # burn.  The event records the attempt.
+                    if vol.status == "BURNING":
+                        update_status(
+                            conn, vol.volume_id,
+                            status_before_burning(conn, vol.volume_id),
+                            commit=False,
+                        )
                     add_event(conn, vol.volume_id, "VERIFY_FAIL",
                               location=location, detail=event_detail,
                               commit=False)
