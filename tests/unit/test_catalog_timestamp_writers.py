@@ -41,12 +41,6 @@ _ALLOWED: dict[str, dict[str, str]] = {
     "burn/orchestrator.py": {
         '"created_at": datetime.now(UTC).isoformat(),':
             "session.json in the staging folder, not the catalog",
-        # Catalog writes left for the worker that owns orchestrator.py in
-        # rc10 (#826); remove these entries once they use utc_now().
-        "burn_date = datetime.now(UTC).isoformat()":
-            "#826 follow-up: disc burn date, owned by another rc10 change",
-        "verified_at = datetime.now(UTC).isoformat()":
-            "#826 follow-up: verify time, owned by another rc10 change",
     },
 }
 

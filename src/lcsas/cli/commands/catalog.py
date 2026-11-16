@@ -23,16 +23,17 @@ def _receipt_verified_at(burn_date: object) -> str:
     """The time a verified receipt's disc was read back, as the UTC ISO-8601
     string ``volume_copies.last_verified_at`` is compared in (#646): the
     receipt's ``burn_date`` (burn-iso verifies straight after burning),
-    normalised to UTC, or the import time when it is missing or unreadable.
+    normalised to UTC with its own precision (to_utc_iso, so it stays the
+    receipt's text), or the import time when it is missing or unreadable.
     A time in the future is clamped to now (written by utc_now(), #826)."""
-    from lcsas.utils.timestamps import parse_utc, utc_now
+    from lcsas.utils.timestamps import parse_utc, to_utc_iso, utc_now
 
     now_text = utc_now()
     when = parse_utc(burn_date)
     now = parse_utc(now_text)
     if when is None or now is None or when >= now:
         return now_text
-    return when.isoformat()
+    return to_utc_iso(burn_date) or now_text
 
 
 def _receipt_timestamp(value: object) -> float | None:

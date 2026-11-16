@@ -90,6 +90,7 @@ from lcsas.utils.labels import (
     generate_uuid,
     generate_volume_label,
 )
+from lcsas.utils.timestamps import utc_now
 
 _logger = logging.getLogger(__name__)
 
@@ -1530,7 +1531,7 @@ class BurnOrchestrator:
                 # verify events and the burn receipt all carry it, so
                 # 'catalog import-receipts' of this receipt on this
                 # catalog sees it was already recorded.
-                burn_date = datetime.now(UTC).isoformat()
+                burn_date = utc_now()
 
                 # Post-burn verification  [S1][BURN-04][FMA-03]
                 # Step 1: -check_media readability smoke test.
@@ -1549,7 +1550,7 @@ class BurnOrchestrator:
                         event_date=burn_date,
                     )
                     if verify_passed:
-                        verified_at = datetime.now(UTC).isoformat()
+                        verified_at = utc_now()
 
                 if was_burned:
                     # #810: VERIFIED once a disc passes; a failed disc
