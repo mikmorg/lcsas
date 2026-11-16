@@ -132,6 +132,23 @@ def test_a_damaged_file_is_still_reported(
     assert aes.backend is liar
 
 
+def test_a_damaged_file_and_a_wrong_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both attempts fail to parse: the first error is raised, and the
+    native AES is not switched off (the pure result did not parse either)."""
+    repo = _repo(tmp_path)
+    for f in (repo / "index").iterdir():
+        f.write_bytes(_encrypt_with_master(b'{not json "packs"'))
+    aes, liar, _lines = _install(monkeypatch, lambda out: b'"packs"' in out)
+    restorer = fb.PurePythonRestorer(repo, password=PASSWORD,
+                                     interactive=False)
+    with pytest.raises(ValueError):
+        restorer.restore(tmp_path / "out")
+    assert liar.lies == 1
+    assert aes.backend is liar
+
+
 def test_pure_backend_gets_no_second_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

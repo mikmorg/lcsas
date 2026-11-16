@@ -24,7 +24,12 @@ KEY = _RNG.randbytes(32)
 # The low 64 bits start 3 blocks below a carry out of bit 32 and bit 64.
 IV = _RNG.randbytes(8) + b"\xff\xff\xff\xff\xff\xff\xff\xfd"
 DATA = _RNG.randbytes(2 * 65536 + 37)  # crosses 64 KiB twice, ends mid-block
-EXPECT = pure_ctr(KEY, IV, DATA)
+
+
+@pytest.fixture(scope="module")
+def expect() -> bytes:
+    """The pure-Python result (about a second, so not at import)."""
+    return pure_ctr(KEY, IV, DATA)
 
 
 @pytest.fixture(scope="module")
@@ -37,43 +42,45 @@ def ctypes_lib() -> tuple[dict[str, Any], Any]:
     pytest.skip("no usable libcrypto for ctypes on this host")
 
 
-def test_pure_reference_is_self_consistent() -> None:
+def test_pure_reference_is_self_consistent(expect: bytes) -> None:
     """Decrypting in two pieces at a block boundary gives the same bytes
     (the reference the native output is compared with)."""
     cut = 65536
     second_iv = (int.from_bytes(IV, "big") + cut // 16) % (1 << 128)
     tail = pure_ctr(KEY, second_iv.to_bytes(16, "big"), DATA[cut:])
-    assert pure_ctr(KEY, IV, DATA[:cut]) + tail == EXPECT
+    assert pure_ctr(KEY, IV, DATA[:cut]) + tail == expect
 
 
-def test_ctypes_whole_input(ctypes_lib: tuple[dict[str, Any], Any]) -> None:
+def test_ctypes_whole_input(
+    ctypes_lib: tuple[dict[str, Any], Any], expect: bytes,
+) -> None:
     ns, lib = ctypes_lib
-    assert ns["_aesf_lib_ctr"](lib, KEY, IV, DATA) == EXPECT
+    assert ns["_aesf_lib_ctr"](lib, KEY, IV, DATA) == expect
 
 
 @pytest.mark.parametrize("step", [1000, 16 * 4096 + 7, 65536, len(DATA) - 1])
 def test_ctypes_chunk_loop(
-    ctypes_lib: tuple[dict[str, Any], Any], step: int,
+    ctypes_lib: tuple[dict[str, Any], Any], step: int, expect: bytes,
 ) -> None:
     """Chunks of *step* bytes: every chunk after the first that is not a
     multiple of 16 starts in the middle of a block."""
     ns, lib = ctypes_lib
-    assert ns["_aesf_lib_ctr"](lib, KEY, IV, DATA, step) == EXPECT
+    assert ns["_aesf_lib_ctr"](lib, KEY, IV, DATA, step) == expect
 
 
 def test_ctypes_chunk_loop_on_a_memoryview(
-    ctypes_lib: tuple[dict[str, Any], Any],
+    ctypes_lib: tuple[dict[str, Any], Any], expect: bytes,
 ) -> None:
     """A non-bytes input is copied piece by piece, not lost."""
     ns, lib = ctypes_lib
-    assert ns["_aesf_lib_ctr"](lib, KEY, IV, memoryview(DATA), 4099) == EXPECT
+    assert ns["_aesf_lib_ctr"](lib, KEY, IV, memoryview(DATA), 4099) == expect
 
 
 @pytest.mark.skipif(shutil.which("openssl") is None, reason="no openssl command")
-def test_openssl_command_large_input() -> None:
+def test_openssl_command_large_input(expect: bytes) -> None:
     exe = shutil.which("openssl")
     assert exe is not None
     backend = fast._AesfOpensslCliBackend(exe)
     if fast._aesf_self_test(backend) is not None:
         pytest.skip("this openssl fails the self-test")
-    assert backend.ctr(KEY, IV, DATA) == EXPECT
+    assert backend.ctr(KEY, IV, DATA) == expect
