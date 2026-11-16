@@ -82,12 +82,14 @@ REM carries on takes it from resume.cfg.
 set "SNAP=latest"
 set "SNAP_BAD="
 call :parse_args %*
-if defined SNAP_BAD (
-    echo ERROR: --snapshot needs a snapshot id: the letters 0-9 and a-f,
-    echo as the list of snapshots shows it, or the word latest.
-    pause
-    exit /b 2
-)
+REM Top level, not in a ( ) block: an exit /b inside one does not reach
+REM `cmd /c` on real Windows (see the exit 77 note at tier 1).
+if not defined SNAP_BAD goto :snap_ok
+echo ERROR: --snapshot needs a snapshot id: the letters 0-9 and a-f,
+echo as the list of snapshots shows it, or the word latest.
+pause
+exit /b 2
+:snap_ok
 
 REM ----- Detect target (arch + OS) ----------------------------------
 REM

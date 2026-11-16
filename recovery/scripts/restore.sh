@@ -23,6 +23,9 @@
 #   2. Explicit:
 #        sh restore.sh RECOVERY_ROOT TARGET_DIR [SNAPSHOT_ID|latest]
 #
+#   Flags come first: --target DIR and --snapshot ID name the target and
+#   the snapshot (sh restore.sh --target DIR --snapshot ID); see --help.
+#
 # Inputs:
 #   $LCSAS_PASSWORD  -- if set, used as password (otherwise prompts on stdin)
 #   $LCSAS_PWFILE    -- if set, path to a password file (overrides above)

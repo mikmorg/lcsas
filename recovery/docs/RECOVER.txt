@@ -290,9 +290,9 @@ or, naming each part:
 
   sh /mnt/restore.sh --target ~/restored --snapshot a1b2c3d4
 
-With --target, name the snapshot with --snapshot: a second word after
---target is refused.  The snapshot may be 'latest', an exact ID, or a
-unique prefix.
+When you use --target, use --snapshot for the snapshot too:
+"--target ~/restored a1b2c3d4" is refused.  The snapshot may be
+'latest', an exact ID, or the first few characters of one.
 restore.sh handles the disc cascade, password prompt, and pack-cache
 setup automatically.  To run the underlying binary directly without
 restore.sh, see the --repo / --password-file / --target / --snapshot
