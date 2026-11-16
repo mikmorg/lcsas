@@ -181,6 +181,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier_fallback.py` | Hardening test #10: restore.sh tier fallback under |
 | `test_tiers_contract.py` | test_tiers_contract.py -- docs-vs-reality contract gate for TIERS.txt. |
 | `test_timeout_scaling.py` | #453: hang-guard timeouts are stretched; deliberate waits are not. |
+| `test_verify_outcome_conduct.py` | verify.sh scores OUTCOME and CONDUCT apart, and CONDUCT ignores files |
 | `test_verify_self.py` | Hardening test #6 + #9: verify.sh must fail closed on every known |
 | `test_windows_doc_multiextent_caveat.py` | Hardening doc-pin: RECOVER_WINDOWS.txt documents the >4 GiB CDFS trap (FMT-04). |
 | `test_workflow_contracts.py` | Hardening: every CI pytest run has a passed-test floor, and triggers stay sane (#831, #837). |

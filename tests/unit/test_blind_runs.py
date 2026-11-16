@@ -62,10 +62,14 @@ def _transcript_lines() -> list[str]:
 
 
 def test_expected_checks_matches_verify_sh() -> None:
-    """EXPECTED_CHECKS is verify.sh's number of `check` calls.  Adding or
-    removing a check in verify.sh must move this constant with it."""
+    """EXPECTED_BY_KIND is verify.sh's number of `check` calls of each
+    group (#827).  Adding, removing or moving a check in verify.sh must
+    move these constants with it."""
     text = (HARNESS / "verify.sh").read_text()
-    calls = re.findall(r'^check "', text, flags=re.MULTILINE)
+    calls = re.findall(r'^check (\S+) "', text, flags=re.MULTILINE)
+    assert len(re.findall(r"^check ", text, flags=re.MULTILINE)) == len(calls)
+    by_kind = {kind: calls.count(kind) for kind in set(calls)}
+    assert by_kind == blind_runs.EXPECTED_BY_KIND == {"OUTCOME": 9, "CONDUCT": 7}
     assert len(calls) == EXPECTED == 16
 
 
@@ -96,10 +100,18 @@ esac
 
 _STUB_VERIFY = """#!/usr/bin/env bash
 # Stub verify.sh: STUB_PASS PASS lines, STUB_FAIL FAIL lines, exit STUB_RC.
+# The first STUB_OUTCOME (default 9) PASS lines are OUTCOME checks, the
+# rest CONDUCT; FAIL lines are STUB_FAIL_KIND (default CONDUCT).  STUB_KIND
+# set to "none" prints no group, as verify.sh did before #827.
 echo "verify called on: $1" >&2
 echo "$1" >> "$STUB_LOG"
-i=0; while [ "$i" -lt "${STUB_PASS:-0}" ]; do echo "PASS  check $i"; i=$((i+1)); done
-i=0; while [ "$i" -lt "${STUB_FAIL:-0}" ]; do echo "FAIL  check f$i"; i=$((i+1)); done
+tag() { [ "${STUB_KIND:-}" = none ] || printf '[%s] ' "$1"; }
+i=0; while [ "$i" -lt "${STUB_PASS:-0}" ]; do
+    k=OUTCOME; [ "$i" -lt "${STUB_OUTCOME:-9}" ] || k=CONDUCT
+    echo "PASS  $(tag $k)check $i"; i=$((i+1)); done
+i=0; while [ "$i" -lt "${STUB_FAIL:-0}" ]; do
+    echo "FAIL  $(tag "${STUB_FAIL_KIND:-CONDUCT}")check f$i"
+    echo "        why check f$i failed"; i=$((i+1)); done
 exit "${STUB_RC:-0}"
 """
 
@@ -155,8 +167,10 @@ def test_full_pass_scores_own_folder_and_removes_it(harness) -> None:
     proc, run_dir = _run_variant(harness, STUB_PASS=str(EXPECTED))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert run_dir is not None and run_dir.parent == harness["base"]
-    assert f"SCORE: {EXPECTED}/{EXPECTED} (variant=default)" in proc.stdout
+    assert (f"SCORE: {EXPECTED}/{EXPECTED} (variant=default)  "
+            "OUTCOME PASS  CONDUCT PASS") in proc.stdout
     result = _result(proc.stdout)
+    assert result["outcome"] == "pass" and result["conduct"] == "pass"
     assert result["run_dir"] == str(run_dir)
     assert result["turns"] == 31 and result["cost_usd"] == 0.25
     assert harness["log"].read_text().split() == [str(run_dir)]
@@ -226,6 +240,37 @@ def test_a_failed_check_fails_and_keeps_the_folder(harness) -> None:
     assert proc.returncode == 1
     assert f"SCORE: {EXPECTED - 1}/{EXPECTED}" in proc.stdout
     assert run_dir is not None and run_dir.is_dir()
+
+
+def test_outcome_pass_conduct_fail_is_a_failed_run(harness) -> None:
+    """#827: a run passes only when OUTCOME and CONDUCT both pass."""
+    proc, run_dir = _run_variant(
+        harness, STUB_PASS=str(EXPECTED - 1), STUB_FAIL="1", STUB_RC="1",
+    )
+    assert proc.returncode == 1
+    assert "OUTCOME PASS  CONDUCT FAIL" in proc.stdout
+    result = _result(proc.stdout)
+    assert (result["outcome"], result["conduct"]) == ("pass", "fail")
+    assert result["conduct_failed"] == 1 and result["outcome_passed"] == 9
+    assert "        why check f0 failed" in proc.stdout
+    proc, _ = _run_variant(
+        harness, STUB_PASS=str(EXPECTED - 1), STUB_FAIL="1", STUB_RC="1",
+        STUB_OUTCOME="8", STUB_FAIL_KIND="OUTCOME",
+    )
+    assert proc.returncode == 1
+    assert "OUTCOME FAIL  CONDUCT PASS" in proc.stdout
+
+
+def test_checks_without_a_group_are_not_scored(harness) -> None:
+    proc, _ = _run_variant(harness, STUB_PASS=str(EXPECTED), STUB_KIND="none")
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "OUTCOME checks, expected 9" in proc.stderr
+
+
+def test_wrong_split_between_groups_is_not_scored(harness) -> None:
+    proc, _ = _run_variant(harness, STUB_PASS=str(EXPECTED), STUB_OUTCOME="10")
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "not scored" in proc.stderr
 
 
 def test_xfail_listed_failure_exits_0_and_keeps_folder(harness) -> None:

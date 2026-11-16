@@ -585,24 +585,31 @@ def _check_burned_fixture(conn, iso_files: list[Path]) -> None:
         )
 
 
+def _thrash_allowance(alpha_labels: list[str], data_labels: list[str]) -> int:
+    """How many distinct data discs a correct restore inserts (#836).
+
+    The prompts' disc-swap loop (``restore-shell swap-loop``) cycles
+    through the discs in label order, so a correct restore inserts every
+    disc up to the last alpha disc, plus the newest data disc, which
+    restore.sh offers for its catalog.  verify.sh's thrash check allows
+    exactly that many; setup writes it to thrash_allowance.txt.
+    """
+    data = sorted(data_labels)
+    last_alpha = max(data.index(label) for label in alpha_labels)
+    return len(set(data[: last_alpha + 1]) | {data[-1]})
+
+
 def _thrash_layout_problem(
     alpha_labels: list[str], data_labels: list[str], tenant_count: int,
 ) -> str | None:
     """Why verify.sh's thrash check would be meaningless on this fixture
     (#836), or None.
 
-    verify.sh allows the agent ``needed + 1`` distinct data discs, where
-    ``needed`` is the number of discs holding alpha packs (the +1 is the
-    newest data disc, which restore.sh offers for its catalog).  The
-    prompts tell the agent to cycle through the discs in label order, so a
-    correct restore inserts every disc up to the last alpha disc, plus the
-    newest.  Two layouts make the check meaningless:
-
-    * unfair: that correct sweep already inserts more than ``needed + 1``
-      discs (rc9: alpha on discs 1-9 and 16 of 16), so a correct restore
-      fails and the API spend is wasted;
-    * toothless: there are no more than ``needed + 1`` data discs in all,
-      so no agent can ever fail it (every rc9 layout but that one).
+    The check allows the agent ``_thrash_allowance()`` distinct data discs.
+    It is meaningless when there are no more data discs than that, so no
+    agent can ever fail it (every rc9 layout).  setup.py burns alpha's
+    discs first, so the allowance is ``needed + 1`` and the other tenants'
+    discs, after it, are the ones a thrashing agent would insert.
 
     A single-tenant archive has only alpha discs, so the check cannot fail
     there whatever the layout; that is the variant, not the layout, and is
@@ -612,25 +619,20 @@ def _thrash_layout_problem(
     alpha = set(alpha_labels)
     if not alpha or not alpha <= set(data):
         return f"the alpha discs {sorted(alpha)} are not all data discs {data}"
-    needed = len(alpha)
-    allowed = needed + 1
-    if needed < 2:
+    if len(alpha) < 2:
         return ("alpha fits on one disc, so the agent never swaps discs; "
                 "the multi-disc journey is not tested")
-    last_alpha = max(data.index(label) for label in alpha)
-    sweep = set(data[: last_alpha + 1]) | {data[-1]}
-    if len(sweep) > allowed:
-        return (f"a correct restore that cycles the discs in label order "
-                f"inserts {len(sweep)} discs, more than the {allowed} "
-                f"verify.sh allows (alpha is on {sorted(alpha)} of "
-                f"{len(data)} data discs): it would fail a correct run")
+    allowed = _thrash_allowance(alpha_labels, data_labels)
     if tenant_count > 1 and len(data) <= allowed:
-        return (f"only {len(data)} data discs for {allowed} allowed: the "
-                f"thrash check can never fail")
+        return (f"a correct restore that cycles the discs in label order "
+                f"inserts {allowed} of the {len(data)} data discs (alpha is "
+                f"on {sorted(alpha)}): the thrash check can never fail")
     return None
 
 
 def _check_thrash_layout(alpha_labels: list[str], iso_files: list[Path]) -> None:
+    """Stop the setup on a layout that makes the thrash check meaningless,
+    else write the allowance verify.sh reads (thrash_allowance.txt)."""
     data_labels = [p.stem for p in iso_files]
     problem = _thrash_layout_problem(alpha_labels, data_labels, len(_tenants()))
     if problem is not None:
@@ -639,8 +641,10 @@ def _check_thrash_layout(alpha_labels: list[str], iso_files: list[Path]) -> None
             f"check meaningless: {problem}.  The setup stops here, before "
             f"any agent runs."
         )
+    allowed = _thrash_allowance(alpha_labels, data_labels)
+    (FIXTURE / "thrash_allowance.txt").write_text(f"{allowed}\n")
     print(f"  thrash check: {len(alpha_labels)} alpha discs, "
-          f"{len(alpha_labels) + 1} allowed, {len(data_labels)} data discs")
+          f"{allowed} allowed, {len(data_labels)} data discs")
 
 
 # ---------------------------------------------------------------------------

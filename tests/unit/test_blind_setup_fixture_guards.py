@@ -3,10 +3,13 @@
 * #829: a failed fixture burn used to print "burned 0 data ISOs" and go on;
   setup now stops at the burn with its message, and a burn must make as
   many discs as the bin-packer planned.
-* #836: verify.sh's thrash check allows ``needed + 1`` distinct data discs.
-  On every rc9 layout it was either impossible to fail or failed a correct
-  restore.  setup.py now burns alpha's discs first and refuses such a
-  layout before the agent starts.  The layouts below are the rc9 ones.
+* #836: verify.sh's thrash check allowed a fixed ``needed + 1`` distinct
+  data discs.  On every rc9 layout it was either impossible to fail or
+  failed a correct restore.  setup.py now burns alpha's discs first,
+  computes the allowance from the layout it built (the discs a correct
+  in-order sweep inserts), writes it to thrash_allowance.txt for
+  verify.sh, and refuses a layout where it can never be exceeded, before
+  the agent starts.  The layouts below are the rc9 ones.
 * #828: split-key-docs is now set up as a split archive is (config split,
   recorded split, config-built meta disc), so its discs carry the
   PASSWORD_INFO.txt its prompt names.
@@ -55,8 +58,9 @@ def _labels(*numbers: int) -> list[str]:
 
 @pytest.mark.parametrize("alpha, total, tenants, verdict", [
     # rc9 5-tenant, failed 15/16 twice: a correct in-order sweep
-    # inserts all 16 discs, 11 allowed.
-    ((*range(1, 10), 16), 16, 5, "more than the 11 verify.sh allows"),
+    # inserts all 16 discs.  With the allowance taken from the layout
+    # that is 16 allowed of 16 (it used to be "11 allowed, unfair").
+    ((*range(1, 10), 16), 16, 5, "inserts 16 of the 16 data discs"),
     # rc9 5-tenant, passed: 11 discs, 11 allowed, so it can never fail.
     ((*range(1, 10), 11), 11, 5, "can never fail"),
     # rc9 2-tenant variants: 6 discs (or 5), alpha on 1-5.
@@ -78,6 +82,32 @@ def test_thrash_layout(alpha, total, tenants, verdict) -> None:
         assert problem is None, problem
     else:
         assert problem is not None and verdict in problem, problem
+
+
+@pytest.mark.parametrize("alpha, total, allowed", [
+    (tuple(range(1, 6)), 7, 6),       # alpha first: needed + 1
+    (tuple(range(1, 7)), 9, 7),
+    (tuple(range(1, 5)), 4, 4),       # single tenant: the newest is alpha's
+    ((1, 2, 3, 5), 9, 6),             # a gap: discs 1-5 plus the newest
+])
+def test_thrash_allowance_is_the_in_order_sweep(alpha, total, allowed) -> None:
+    got = _setup._thrash_allowance(_labels(*alpha), _labels(*range(1, total + 1)))
+    assert got == allowed
+
+
+def test_check_thrash_layout_writes_the_allowance(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("LCSAS_TENANT_COUNT", "2")
+    monkeypatch.setattr(_setup, "FIXTURE", tmp_path)
+    isos = [Path(f"/x/{label}.iso") for label in _labels(*range(1, 8))]
+    _setup._check_thrash_layout(_labels(*range(1, 6)), isos)
+    assert (tmp_path / "thrash_allowance.txt").read_text() == "6\n"
+
+
+def test_verify_sh_reads_the_allowance_setup_writes() -> None:
+    verify = (HARNESS / "verify.sh").read_text()
+    assert "thrash_allowance.txt" in verify
+    assert "NEEDED + 1" not in verify
+    assert '"[[ $ACTUAL -le $ALLOWED ]]"' in verify
 
 
 def test_alpha_last_disc_is_the_newest_counts_once() -> None:
