@@ -638,7 +638,8 @@ class TestSplitRecordedUnderRepoId:
         assert "You need ANY 3 of them." in start_here
         info = (root / "PASSWORD_INFO.txt").read_text(encoding="utf-8")
         assert "password is SPLIT into 4 share cards." in info
-        assert "any 3 of them.  Fewer than 3 cards reveal nothing." in info
+        # One text for both files since #819 (START_HERE's "ANY").
+        assert "You need ANY 3 of them.  Fewer than 3 cards reveal nothing." in info
 
     def test_recorded_kn_reaches_disc_text_over_config(
         self, tmp_path: Path
@@ -659,7 +660,8 @@ class TestSplitRecordedUnderRepoId:
         assert "You need ANY 3 of them." in start_here
         info = (root / "PASSWORD_INFO.txt").read_text(encoding="utf-8")
         assert "password is SPLIT into 4 share cards." in info
-        assert "any 3 of them.  Fewer than 3 cards reveal nothing." in info
+        # One text for both files since #819 (START_HERE's "ANY").
+        assert "You need ANY 3 of them.  Fewer than 3 cards reveal nothing." in info
         for name, text in (("START_HERE.txt", start_here),
                            ("PASSWORD_INFO.txt", info)):
             assert "split into 5" not in text.lower(), name

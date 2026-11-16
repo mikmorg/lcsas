@@ -932,6 +932,50 @@ class TestBundleUpstreamBinaries:
             assert (recovery_dst / "bin" / t / "rustic-static").is_file(), t
             assert (recovery_dst / "bin" / t / "python" / "bin" / "python3").is_file(), t
 
+    def test_python_trees_carry_no_bytecode(self, tmp_path, monkeypatch):
+        """#815: a .pyc file names the folder it was compiled in, so the
+        cached CPython trees (compiled in place on the build machine)
+        must reach the meta disc without __pycache__, .pyc or .pyo.
+        Both cache layouts: a python/ tree, and the flat Windows tree."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        cache_root = tmp_path / "cache"
+        self._make_cache(cache_root, "x86_64-unknown-linux-musl")
+        stdlib = (
+            cache_root / "python" / "x86_64-unknown-linux-musl" / "python"
+            / "lib" / "python3.12"
+        )
+        (stdlib / "__pycache__").mkdir(parents=True)
+        (stdlib / "os.py").write_text("# os\n")
+        (stdlib / "__pycache__" / "os.cpython-312.pyc").write_bytes(b"pyc")
+        (stdlib / "old.pyo").write_bytes(b"pyo")
+        # The flat Windows layout: python.exe at the top of the triple.
+        flat = cache_root / "python" / "x86_64-pc-windows-msvc"
+        (flat / "Lib" / "__pycache__").mkdir(parents=True)
+        (flat / "python.exe").write_bytes(b"MZ")
+        (flat / "Lib" / "os.py").write_text("# os\n")
+        (flat / "Lib" / "__pycache__" / "os.cpython-312.pyc").write_bytes(b"pyc")
+        (flat / "stray.pyc").write_bytes(b"pyc")
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        MetaVolumeBuilder(tmp_path / "meta")._bundle_upstream_binaries(
+            recovery_dst
+        )
+
+        bin_dir = recovery_dst / "bin"
+        linux_py = bin_dir / "x86_64-unknown-linux-musl" / "python"
+        win_py = bin_dir / "x86_64-pc-windows-gnu" / "python"
+        assert (linux_py / "lib" / "python3.12" / "os.py").is_file()
+        assert (win_py / "Lib" / "os.py").is_file()
+        assert (win_py / "python.exe").is_file()
+        bytecode = [
+            p.relative_to(bin_dir).as_posix()
+            for p in bin_dir.rglob("*")
+            if p.name == "__pycache__" or p.suffix in (".pyc", ".pyo")
+        ]
+        assert bytecode == []
+
     def test_musl_loader_lands_in_the_python_tree(self, tmp_path, monkeypatch):
         """#714: the cached musl loader (fetch_upstream.sh extracts it to
         musl/<target>/ld-musl-<arch>.so.1) lands executable in the Linux

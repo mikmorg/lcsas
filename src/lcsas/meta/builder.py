@@ -44,6 +44,7 @@ from lcsas.meta.required_contents import (
     musl_loader_name,
     required_meta_paths,
 )
+from lcsas.utils.fs import PYTHON_BYTECODE
 
 _logger = logging.getLogger(__name__)
 
@@ -277,7 +278,7 @@ UNLISTED_MANIFESTS = frozenset({"MANIFEST.sha256", "docs/MANIFEST.sha256"})
 # Applied to bin/, which is copied as it stands, and to the whole tree
 # when git cannot say which files are tracked.
 _RECOVERY_DEBRIS = (
-    "build", "build-*", "dist", "__pycache__", "*.pyc", "*.o", "*.a",
+    "build", "build-*", "dist", "__pycache__", "*.pyc", "*.pyo", "*.o", "*.a",
 )
 
 # Fuzzer output that recovery/fuzz/.gitignore keeps out of git, by the
@@ -787,6 +788,7 @@ class MetaVolumeBuilder:
                     ignore=shutil.ignore_patterns(
                         "__pycache__",
                         "*.pyc",
+                        "*.pyo",
                         "*.egg-info",
                         ".git",
                     ),
@@ -806,7 +808,7 @@ class MetaVolumeBuilder:
                 shutil.copytree(
                     str(src),
                     str(dst),
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                    ignore=PYTHON_BYTECODE,
                 )
             elif src.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1192,8 +1194,11 @@ class MetaVolumeBuilder:
                 bin_dst.mkdir(parents=True, exist_ok=True)
                 if py_dst.exists():
                     shutil.rmtree(str(py_dst))
+                # No bytecode (#815): the cache's .pyc files were compiled
+                # on the build machine and name its folders.
                 shutil.copytree(
                     str(python_cache), str(py_dst), symlinks=True,
+                    ignore=PYTHON_BYTECODE,
                 )
                 staged_any = True
             else:
@@ -1211,9 +1216,12 @@ class MetaVolumeBuilder:
                     for entry in python_alt.iterdir():
                         if entry.name.endswith(".tar.gz") or entry.name == ".extracted":
                             continue
+                        if PYTHON_BYTECODE(str(python_alt), [entry.name]):
+                            continue
                         if entry.is_dir():
                             shutil.copytree(
                                 str(entry), str(py_dst / entry.name), symlinks=True,
+                                ignore=PYTHON_BYTECODE,
                             )
                         else:
                             shutil.copy2(str(entry), str(py_dst / entry.name))
