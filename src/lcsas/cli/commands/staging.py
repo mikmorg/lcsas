@@ -57,7 +57,17 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
             logger.info(f"  {p}")
 
         if not args.force:
-            if not _confirm("Remove these directories? [y/N] ", "y"):
+            try:
+                confirmed = _confirm("Remove these directories? [y/N] ", "y")
+            except EOFError:
+                # #826: no terminal (input redirected): nothing is removed.
+                logger.error(
+                    "No terminal available for confirmation (redirected "
+                    "input). Nothing was removed. Run it again from a "
+                    "terminal, or add --force."
+                )
+                return 1
+            if not confirmed:
                 logger.info("Aborted.")
                 return 0
             # Re-check under the still-held lock: the prompt may have sat for

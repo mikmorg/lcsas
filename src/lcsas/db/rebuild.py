@@ -218,8 +218,19 @@ def _merge_one_disc(
     if escrow_freshness is None:
         escrow_freshness = {}
 
+    # #820: a disc whose merge fails must leave no trace: its rows are
+    # rolled back, and the freshness maps and warnings it touched are put
+    # back as they were, so the next disc merges as if it had never been
+    # read.
+    saved_status = dict(status_freshness)
+    saved_escrow = dict(escrow_freshness)
+    saved_warning_count = len(warnings)
+
     # Use a safe alias to avoid conflicts with other attached catalogs.
     alias = "src"
+    # Commit anything the caller left open: a failed merge rolls back to
+    # here, and must not take the caller's work with it.
+    target.commit()
     target.execute(f"ATTACH DATABASE ? AS {alias}", (str(source_db),))
     try:
         # 1. repositories — keyed on repo_id.
@@ -537,8 +548,22 @@ def _merge_one_disc(
 
         target.commit()
 
+    except BaseException:
+        # #820: undo this disc's partial merge.  An open transaction also
+        # keeps the attached file locked, so DETACH below would fail and
+        # every later disc would find "src" still attached.
+        target.rollback()
+        status_freshness.clear()
+        status_freshness.update(saved_status)
+        escrow_freshness.clear()
+        escrow_freshness.update(saved_escrow)
+        del warnings[saved_warning_count:]
+        raise
     finally:
-        target.execute(f"DETACH DATABASE {alias}")
+        try:
+            target.execute(f"DETACH DATABASE {alias}")
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            _logger.error("Could not detach %s: %s", source_db, exc)
 
     return counts
 
@@ -553,6 +578,21 @@ def _own_volume_uuid(disc_path: Path) -> str | None:
         return None
     uuid_ = info.get("uuid") if isinstance(info, dict) else None
     return uuid_ if isinstance(uuid_, str) and uuid_ else None
+
+
+def _disc_name(disc_path: Path) -> str:
+    """How a message names a disc: its label (from ``volume_info.json``)
+    and the folder it was read from, or the folder alone."""
+    try:
+        info = json.loads(
+            (disc_path / "volume_info.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        info = None
+    label = info.get("label") if isinstance(info, dict) else None
+    if isinstance(label, str) and label:
+        return f"disc {label} ({disc_path})"
+    return f"disc at {disc_path}"
 
 
 def _promote_read_discs(
@@ -775,9 +815,17 @@ def rebuild_catalog(
                 escrow_freshness=escrow_freshness,
             )
         except Exception as exc:
-            _logger.error("Failed to merge %s: %s", disc_path, exc)
+            # #820: a damaged disc catalog (sqlite3.DatabaseError) or any
+            # other failure.  Its merge was rolled back; the later discs
+            # are still merged, and the error makes 'lcsas catalog
+            # rebuild' end with exit code 1.
+            message = (
+                f"{_disc_name(disc_path)}: its catalog is damaged or "
+                f"unreadable ({exc}). Nothing from it was merged."
+            )
+            _logger.error("%s", message)
             result.discs_skipped += 1
-            result.errors.append(f"{disc_path}: {exc}")
+            result.errors.append(message)
             continue
 
         result.discs_processed += 1

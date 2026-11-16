@@ -77,7 +77,14 @@ jobs:
         env:
           LCSAS_LIVE_USB_SMOKE: "1"
           LCSAS_LIVE_USB_FIXTURES: ${{ runner.temp }}/lcsas-fixtures
-        run: pytest tests/e2e/test_live_usb_restore.py -v
+        run: |
+          pytest tests/e2e/test_live_usb_restore.py -v \
+            --junitxml=/tmp/live-usb.xml
+
+      - name: The drill ran (not skipped)
+        # #831: the drill self-skips without QEMU, OVMF or the ISO, and the
+        # job stayed green.  Weekly run 43877950099 (2026-11-16): 1 passed.
+        run: python3 scripts/ci_min_passed.py /tmp/live-usb.xml --min-passed 1
 
       - name: Surface serial log on failure
         if: failure()

@@ -94,3 +94,69 @@ class TestCmdLocation:
         assert result == 1
         out = capsys.readouterr().out
         assert "not found" in out.lower()
+
+    def _catalog_with_disc(self, tmp_path: Path) -> Path:
+        from lcsas.db.locations import create_location
+        from lcsas.db.volume_copies import add_volume_copy
+        from lcsas.db.volumes import create_volume
+
+        cfg = _write_config(tmp_path)
+        conn = get_connection(tmp_path / "archive.db")
+        create_all(conn)
+        create_location(conn, "Home_Shelf", "")
+        create_location(conn, "Offsite_Safe", "")
+        vol = create_volume(
+            conn, "LCSAS_TEST_2026_0001", "uuid-1", "TEST_TINY",
+            1_000_000, "Home_Shelf", "VERIFIED",
+        )
+        add_volume_copy(conn, vol.volume_id, "Home_Shelf")
+        conn.close()
+        return cfg
+
+    def test_location_move_to_unregistered_location(self, tmp_path, capsys):
+        """#823: an unregistered --to says so and names 'lcsas location add'."""
+        cfg = self._catalog_with_disc(tmp_path)
+
+        result = main([
+            "--config", str(cfg), "location", "move", "LCSAS_TEST_2026_0001",
+            "--from", "Home_Shelf", "--to", "Bank_Box",
+        ])
+
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Unexpected error" not in out
+        assert "already recorded" not in out
+        assert "'Bank_Box' is not registered" in out
+        assert "lcsas location add Bank_Box" in out
+        conn = get_connection(tmp_path / "archive.db")
+        rows = conn.execute("SELECT location FROM volume_copies").fetchall()
+        conn.close()
+        assert [r[0] for r in rows] == ["Home_Shelf"]
+
+    def test_location_move_to_registered_location(self, tmp_path, capsys):
+        cfg = self._catalog_with_disc(tmp_path)
+
+        result = main([
+            "--config", str(cfg), "location", "move", "LCSAS_TEST_2026_0001",
+            "--from", "Home_Shelf", "--to", "Offsite_Safe",
+        ])
+
+        assert result == 0
+        conn = get_connection(tmp_path / "archive.db")
+        rows = conn.execute("SELECT location FROM volume_copies").fetchall()
+        conn.close()
+        assert [r[0] for r in rows] == ["Offsite_Safe"]
+
+    def test_location_move_from_wrong_location(self, tmp_path, capsys):
+        """A --from with no disc of the volume is an error, not a crash."""
+        cfg = self._catalog_with_disc(tmp_path)
+
+        result = main([
+            "--config", str(cfg), "location", "move", "LCSAS_TEST_2026_0001",
+            "--from", "Offsite_Safe", "--to", "Home_Shelf",
+        ])
+
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Unexpected error" not in out
+        assert "No in-service disc" in out
