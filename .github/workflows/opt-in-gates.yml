@@ -31,6 +31,8 @@ on:
     paths:
       - ".github/workflows/opt-in-gates.yml"
       - ".github/actions/install-rustic/**"
+      # tier3-qemu runs the tier-3 reader (#837).
+      - "src/lcsas/restore/**"
   workflow_dispatch: {}
   workflow_call: {}
 

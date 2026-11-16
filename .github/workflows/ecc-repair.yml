@@ -27,6 +27,10 @@ on:
       - "src/lcsas/iso/**"
       - "src/lcsas/burn/**"
       - "tests/integration/test_ecc_repair.py"
+      # The RS03 doc-conformance test runs here too (#831): the spec it
+      # checks, and the test itself.
+      - "tests/integration/test_rs03_doc_conformance.py"
+      - "docs/DVDISASTER_RS03_FORMAT.md"
       - ".github/workflows/ecc-repair.yml"
   workflow_dispatch: {}
   # The weekly run (weekly.yml).
@@ -69,6 +73,18 @@ jobs:
           echo "$GITHUB_WORKSPACE/recovery/build" >> "$GITHUB_PATH"
       - name: Install LCSAS (editable, with dev deps)
         run: make dev
+      - name: RS03 doc conformance (the spec's header table vs real dvdisaster)
+        # FMT-02: docs/DVDISASTER_RS03_FORMAT.md's EccHeader offsets must
+        # parse a header real dvdisaster wrote.  Same opt-in variable and
+        # tools as the proof below, so it lives here (#831); before that
+        # no job set LCSAS_ECC_REPAIR beside dvdisaster and it skipped
+        # everywhere.  Its own step, ahead of the ~80-min proof, so a
+        # red result shows in minutes.
+        run: |
+          LCSAS_ECC_REPAIR=1 pytest tests/integration/test_rs03_doc_conformance.py \
+            -v -rfEsX -m integration --junitxml=/tmp/rs03-doc.xml
+      - name: The doc-conformance test ran (not skipped)
+        run: python3 scripts/ci_min_passed.py /tmp/rs03-doc.xml --min-passed 1
       - name: RS03 repair proof + dvdisaster cross-conformance
         # Repair proof: below-threshold damage repairs byte-identical, above
         # fails loud. Cross-conformance (FMT-01, #321 closed): lcsas-ecc reads
@@ -77,4 +93,10 @@ jobs:
         # diverged from dvdisaster's format and must be fixed before release.
         run: |
           echo "lcsas-ecc on PATH: $(command -v lcsas-ecc || echo MISSING)"
-          LCSAS_ECC_REPAIR=1 pytest tests/integration/test_ecc_repair.py -v -rX -m integration
+          LCSAS_ECC_REPAIR=1 pytest tests/integration/test_ecc_repair.py \
+            -v -rfEsX -m integration --junitxml=/tmp/ecc-repair.xml
+      - name: Every repair test ran (not skipped)
+        # #831: without dvdisaster, xorriso or lcsas-ecc on the runner the
+        # tests self-skip and the job stayed green.  Weekly run
+        # 43877950099 (2026-11-16): 4 passed.  All four must pass.
+        run: python3 scripts/ci_min_passed.py /tmp/ecc-repair.xml --min-passed 4
