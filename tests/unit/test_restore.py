@@ -125,7 +125,13 @@ class TestPickListV2:
         assert src.volume_label == "VA"
         assert "VB" in src.alternates
 
-    def test_preferred_location_wins(self, memory_db):
+    def test_volume_location_does_not_reorder(self, memory_db):
+        """Ported from test_preferred_location_wins (#826).
+
+        The preferred_location parameter was never set by any caller and
+        read volumes.location (not where a disc is kept), so it was
+        removed: the label order decides between two VERIFIED volumes.
+        """
         from lcsas.db.locations import create_location
         create_location(memory_db, "Remote")
         create_location(memory_db, "Home")
@@ -145,12 +151,12 @@ class TestPickListV2:
         bulk_link_packs(memory_db, v2.volume_id, [p.pack_id])
 
         planner = RestorePlanner(memory_db)
-        pick = planner.generate_pick_list_v2(["loc_pack"], preferred_location="Home")
+        pick = planner.generate_pick_list_v2(["loc_pack"])
 
         all_sources = [s for sl in pick.volumes.values() for s in sl]
         src = all_sources[0]
-        assert src.volume_label == "VB"  # Home preferred
-        assert "VA" in src.alternates
+        assert src.volume_label == "VA"
+        assert "VB" in src.alternates
 
     def test_verified_preferred_over_burned(self, memory_db):
         v1 = create_volume(

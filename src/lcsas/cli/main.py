@@ -39,14 +39,19 @@ logger = get_logger()
 
 
 def _holder_label(args: argparse.Namespace) -> str:
-    """Human-readable command label stamped into the lock file when held."""
-    parts = ["lcsas", getattr(args, "command", "") or ""]
-    for sub in ("repo_command", "staging_command", "copy_command",
-                "volume_command", "catalog_command"):
-        val = getattr(args, sub, None)
-        if val:
-            parts.append(val)
-            break
+    """Human-readable command label stamped into the lock file when held.
+
+    The subcommand is read from ``<command>_command``, the dest every
+    command group uses in the parser, so a new group needs no entry here
+    (#826: a fixed list had fallen behind, and ``lcsas session abort``
+    showed as ``lcsas session``).
+    """
+    command = getattr(args, "command", "") or ""
+    parts = ["lcsas", command]
+    if command:
+        sub = getattr(args, f"{command.replace('-', '_')}_command", None)
+        if isinstance(sub, str) and sub:
+            parts.append(sub)
     return " ".join(p for p in parts if p).strip()
 
 

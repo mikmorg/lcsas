@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import sqlite3
-from datetime import UTC, datetime
 
 from lcsas.constants import (
     STATUS_BURNED,
@@ -17,6 +16,7 @@ from lcsas.constants import (
     STATUS_VERIFIED,
 )
 from lcsas.db.models import Volume
+from lcsas.utils.timestamps import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ def update_status(
         )
 
     if status == "VERIFIED":
-        now = datetime.now(UTC).isoformat()
+        now = utc_now()
         conn.execute(
             "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",
             (status, now, volume_id),
@@ -187,7 +187,7 @@ def mark_closed(
     conn: sqlite3.Connection, volume_id: int, *, commit: bool = True,
 ) -> None:
     """Set the closed_at timestamp on a volume (finalization)."""
-    now = datetime.now(UTC).isoformat()
+    now = utc_now()
     conn.execute(
         "UPDATE volumes SET closed_at = ? WHERE volume_id = ?",
         (now, volume_id),

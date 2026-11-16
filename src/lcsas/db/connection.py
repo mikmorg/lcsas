@@ -55,12 +55,15 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
             fd = os.open(str(db), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(fd)
     conn = sqlite3.connect(db_str)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA wal_autocheckpoint=1000;")  # explicit: checkpoint every 1000 pages
-    conn.execute("PRAGMA foreign_keys=ON;")
-    conn.execute("PRAGMA busy_timeout=30000;")
+    # Everything after connect() can fail on a truncated or corrupt
+    # catalog (journal_mode is usually the first statement to read the
+    # header), so close the connection before the error propagates (#769).
     try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA wal_autocheckpoint=1000;")  # explicit: checkpoint every 1000 pages
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA busy_timeout=30000;")
         result = conn.execute("PRAGMA quick_check(1);").fetchone()
         if result is not None and result[0] != "ok":
             raise RuntimeError(

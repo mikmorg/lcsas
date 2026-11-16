@@ -181,6 +181,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_timeout_scaling.py` | #453: hang-guard timeouts are stretched; deliberate waits are not. |
 | `test_verify_self.py` | Hardening test #6 + #9: verify.sh must fail closed on every known |
 | `test_windows_doc_multiextent_caveat.py` | Hardening doc-pin: RECOVER_WINDOWS.txt documents the >4 GiB CDFS trap (FMT-04). |
+| `test_workflow_contracts.py` | Hardening: every CI pytest run has a passed-test floor, and triggers stay sane (#831, #837). |
 | `test_workflow_path_filter.py` | Hardening: audit-gate path-filter has no ghost entries and no holes (GATE-04). |
 
 ## Adding a new hardening test
