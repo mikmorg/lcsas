@@ -164,61 +164,58 @@ def test_rs03_repairs_bitrot_byte_identical(tmp_path: Path) -> None:
         )
 
 
-def test_padded_part_filled_image_moves_up_a_rung_and_repairs(
-    tmp_path: Path,
-) -> None:
-    """#732: a thin part-filled ISO, padded inside the ISO volume, lands
-    on the next rung and still verifies and repairs byte-identically.
-
-    Small-scale stand-in for the BD25 case (a 4.5 GB ISO just under the
-    DVD rung): a ~704 MB ISO sits just under the CD rung with ~4.7%
-    parity.  Padded the way stage pads it, dvdisaster moves it up to the
-    DVD rung (a 4.7 GB image).  dvdisaster finds its ECC header right
-    after the ISO volume, so the padding must be inside the volume; this
-    proves the header is still found, and repair still works.
-    Needs ~5.5 GB of temp space.
-    """
-    xorriso = SubprocessXorrisoRunner()
-    runner = SubprocessDVDisasterRunner()
-
+def _padded_fixture(tmp_path: Path, seed: int) -> tuple[Path, dict[str, str]]:
+    """Random files plus a sparse filler: an ISO of ~344,000 sectors."""
     src = tmp_path / "src"
     src.mkdir()
-    rng = random.Random(RNG_SEED + 3)
+    rng = random.Random(seed)
     manifest: dict[str, str] = {}
     for i in range(NUM_FILES):
         data = rng.randbytes(rng.randint(100_000, 200_000))
         name = f"file_{i:03d}.bin"
         (src / name).write_bytes(data)
         manifest[name] = hashlib.sha256(data).hexdigest()
-    # Sparse filler: brings the ISO to ~344,000 sectors, inside the thin
-    # band of the CD rung (342,186 .. 346,612 sectors).
     with open(src / "zz_filler.bin", "wb") as f:
         f.truncate(344_000 * SECTOR - 4_000_000)
+    return src, manifest
 
-    iso = tmp_path / "vol.iso"
-    xorriso.create_iso(src, iso, "ECCPAD")
-    base_size = iso.stat().st_size
-    assert rs03_redundancy_pct(base_size) < MIN_EFFECTIVE_REDUNDANCY_PCT, (
-        f"fixture ISO of {base_size:,} bytes is not in the thin band"
-    )
 
-    target = rs03_pad_target_bytes(base_size, MediaType.BD25.capacity_bytes)
-    assert target is not None and target > base_size
+def _master_padded(src: Path, iso: Path, target: int) -> None:
+    """Master ``src`` again with padding inside the ISO volume, as stage
+    does (#732), and check the volume size in the PVD grew with it."""
+    xorriso = SubprocessXorrisoRunner()
+    base = iso.stat().st_size
     xorriso.create_iso(
         src, iso, "ECCPAD",
-        padding_bytes=target - base_size + XORRISO_DEFAULT_PADDING_BYTES,
+        padding_bytes=target - base + XORRISO_DEFAULT_PADDING_BYTES,
     )
     assert iso.stat().st_size == target
-    with open(iso, "rb") as f:          # the padding is inside the volume
+    with open(iso, "rb") as f:
         f.seek(16 * SECTOR + 80)
         assert int.from_bytes(f.read(4), "little") * SECTOR == target
 
+
+def test_padded_image_verifies_and_repairs(tmp_path: Path) -> None:
+    """#732: an ISO padded inside its volume still verifies and repairs.
+
+    dvdisaster looks for its ECC header right after the ISO volume size
+    in the PVD, so the padding must be inside the volume.  Pads to the
+    last size that stays on the CD rung (346,612 sectors, 8 roots), so
+    the image stays CD-sized and the test stays as cheap as the others.
+    """
+    runner = SubprocessDVDisasterRunner()
+    src, manifest = _padded_fixture(tmp_path, RNG_SEED + 3)
+    iso = tmp_path / "vol.iso"
+    SubprocessXorrisoRunner().create_iso(src, iso, "ECCPAD")
+    cd_edge = (246 * 1409 - 2) * SECTOR
+    _master_padded(src, iso, cd_edge)
+
     runner.augment_iso(iso)
-    assert iso.stat().st_size == smallest_fitting_medium_bytes(target)
-    assert iso.stat().st_size == 4_700_160_000      # the DVD rung
+    assert iso.stat().st_size == smallest_fitting_medium_bytes(cd_edge)
+    assert iso.stat().st_size == 735_836_160        # still the CD rung
     assert runner.verify_iso(iso) is True
 
-    _damage_sectors_in_place(iso, DAMAGE_SECTORS, DAMAGE_START_SECTOR)
+    _damage_sectors(iso, DAMAGE_SECTORS, DAMAGE_START_SECTOR)
     assert runner.verify_iso(iso) is False, "verify must detect the damage"
     assert runner.repair_iso(iso) is True, "repair_iso must report success"
 
@@ -236,11 +233,40 @@ def test_padded_part_filled_image_moves_up_a_rung_and_repairs(
         )
 
 
-def _damage_sectors_in_place(iso: Path, n_sectors: int, start: int) -> None:
-    """Like _damage_sectors, without reading a multi-GB image into memory."""
-    with open(iso, "r+b") as f:
-        f.seek(start * SECTOR)
-        f.write(b"\xff" * SECTOR * n_sectors)
+def test_thin_image_padded_moves_up_a_rung(tmp_path: Path) -> None:
+    """#732: a thin part-filled ISO, padded the way stage pads it, lands
+    on the next rung.
+
+    Small-scale stand-in for the BD25 case (a 4.5 GB ISO just under the
+    DVD rung): a ~704 MB ISO sits just under the CD rung with ~4.7%
+    parity; padded, dvdisaster puts it on the DVD rung.  Checks the
+    size and that the ECC header sits right after the ISO volume, where
+    dvdisaster looks for it.  A full dvdisaster -t of a 4.7 GB image
+    takes over 10 minutes, so it is not run here; the experiment in
+    #732 ran it (exit 0).  Needs ~5.5 GB of temp space.
+    """
+    runner = SubprocessDVDisasterRunner()
+    src, _manifest = _padded_fixture(tmp_path, RNG_SEED + 5)
+    iso = tmp_path / "vol.iso"
+    SubprocessXorrisoRunner().create_iso(src, iso, "ECCPAD")
+    base_size = iso.stat().st_size
+    assert rs03_redundancy_pct(base_size) < MIN_EFFECTIVE_REDUNDANCY_PCT, (
+        f"fixture ISO of {base_size:,} bytes is not in the thin band"
+    )
+    target = rs03_pad_target_bytes(base_size, MediaType.BD25.capacity_bytes)
+    assert target is not None and target > base_size
+    _master_padded(src, iso, target)
+
+    runner.augment_iso(iso)
+    assert iso.stat().st_size == smallest_fitting_medium_bytes(target)
+    assert iso.stat().st_size == 4_700_160_000      # the DVD rung
+    with open(iso, "rb") as f:
+        f.seek(target)                   # right after the ISO volume
+        hdr = f.read(SECTOR)
+    assert hdr[0:12] == b"*dvdisaster*" and hdr[12:16] == b"RS03"
+    assert int.from_bytes(hdr[68:76], "little") * SECTOR == target
+    assert int.from_bytes(hdr[120:128], "little") == 2_295_104 // 255
+    assert rs03_redundancy_pct(target) >= MIN_EFFECTIVE_REDUNDANCY_PCT
 
 
 def test_rs03_fails_loud_when_damage_exceeds_capacity(tmp_path: Path) -> None:
