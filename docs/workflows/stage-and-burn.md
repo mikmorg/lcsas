@@ -50,11 +50,23 @@ The end-to-end flow inside a single session:
 1. **Gather packs** — `BurnOrchestrator._gather_packs_for_staging`
    queries the catalog for unarchived packs, optionally filtered by repository
    and/or "missing at location".
-2. **Bin-pack** — `_multi_bin_pack` wraps `first_fit_decreasing`
-   (`src/lcsas/binpack/algorithm.py`), producing one volume plan per disc
-   until all packs are placed. Oversize packs (larger than
-   `usable_bytes - metadata_reserve_bytes`) raise `ValueError` because they
-   can never fit on the chosen media.
+2. **Measure the disc metadata, then bin-pack** (#811) — every disc
+   carries the disc catalog, each repository's index, snapshot and key
+   files, the tier-3 reader (and on production media the LCSAS source),
+   and the text files.  `measure_disc_metadata`
+   (`src/lcsas/staging/metadata.py`) sizes them as they will be on the
+   ISO: the catalog's used pages plus the rows this stage adds, each file
+   rounded up to whole sectors with its directory records, and xorriso's
+   fixed overhead.  The reserve kept free on each volume is
+   `max(metadata_reserve_mb, measured + 10 %)`; `lcsas stage` prints it.
+   When one disc cannot hold the reserve and the smallest pack, the
+   stage stops with `DiscMetadataTooLargeError` before anything is
+   staged, naming the size and the media type.  `_multi_bin_pack` then
+   wraps `first_fit_decreasing` (`src/lcsas/binpack/algorithm.py`),
+   producing one volume plan per disc until all packs are placed; each
+   pack counts with its own ISO overhead (`pack_disc_bytes`).  Oversize
+   packs (larger than `usable_bytes` less the reserve) raise `ValueError`
+   because they can never fit on the chosen media.
 3. **Disk-space pre-flight** — `stage()` computes
    `total_data_bytes × (1.05 × (1 + ecc%/100) + 1)` and refuses if
    `staging_path` does not have that much free space
@@ -94,9 +106,9 @@ The end-to-end flow inside a single session:
      dvdisaster-free fallback, FMT-01). Test media (`TEST_TINY`) is
      implicitly skipped — see `MediaType.ecc_overhead_pct`.
    - Before mastering, the staging tree (packs + disc metadata) must fit
-     in `media_type.usable_bytes`, the capacity less the ECC share. It
-     only fails when the disc metadata outgrew `metadata_reserve_mb`
-     (#674).
+     in `media_type.usable_bytes`, the capacity less the ECC share. Since
+     the reserve is measured (#811) this is a last check: it fails only
+     when the disc metadata is larger than measured (#674).
    - Before ECC, the RS03 redundancy is computed from the ISO size: RS03
      pads the image to the smallest fitting medium, and the padding is
      the parity. Below 5 % (`MIN_EFFECTIVE_REDUNDANCY_PCT`) the stage
@@ -533,9 +545,12 @@ The orchestrator's media handling rules:
   is what appears in the disc label. It defaults to the enum member name.
 - **Bin-pack capacity** — `usable_bytes` is `capacity_bytes × (100 −
   ecc_overhead_pct) / 100` (`MediaType.usable_bytes`).
-- **Hard reject on oversize packs** — A pack larger than `usable_bytes −
-  metadata_reserve_bytes` raises `ValueError` from `_multi_bin_pack`
+- **Hard reject on oversize packs** — A pack larger than `usable_bytes`
+  less the metadata reserve raises `ValueError` from `_multi_bin_pack`
   before any side effects (`BurnOrchestrator._multi_bin_pack`).
+- **Hard reject on oversized metadata** — When the measured disc
+  metadata leaves no room for the smallest pack, `stage()` raises
+  `DiscMetadataTooLargeError` before any side effects (#811).
 - **Hard reject on oversized ISO** — Post-ECC ISO larger than
   `capacity_bytes` aborts the burn with a clear error
   (`BurnOrchestrator._stage_single_volume`).

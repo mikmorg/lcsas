@@ -116,11 +116,11 @@ SPLIT_KEY_DOCS_K, SPLIT_KEY_DOCS_N = 2, 5
 SPLIT_CARDS = SECRETS / "split-cards"
 SPLIT_VARIANTS = ("mixed-split", "split-key-docs")
 
-# File sizing: each TEST_TINY volume has ~1.25 MB usable after the
-# holographic-metadata reserve (#142: TEST_TINY = 2 MB; reserve 850 KB
-# since rc9 for SQLite catalog + per-repo Rustic index/snapshots/keys +
-# the tier-3 reader).  With
-# ALPHA ≈ 30 × 130 KB ≈ 3.9 MB of pack data, alpha spans ~3-4 volumes —
+# File sizing: each TEST_TINY volume (2 MB, #142) has ~1.0-1.1 MB for
+# packs after the disc metadata that stage measures and keeps free (#811:
+# catalog + each tenant's Rustic index/snapshots/keys + the tier-3 reader
+# + ISO overhead, 0.95-1.1 MB with its margin for 1-5 tenants).  With
+# ALPHA ≈ 30 × 130 KB ≈ 3.9 MB of pack data, alpha spans 5 volumes —
 # enough disc-swap loops to exercise the agent's multi-disc reasoning
 # without thrashing.  When you change TEST_TINY's capacity, keep ALPHA
 # proportionally large or you silently regress the multi-disc test.
@@ -130,8 +130,9 @@ ALPHA_FILE_BYTES = 130 * 1024  # 130 KB × 30 = ~3.9 MB (≈ 3 TEST_TINY volumes
 # the others exist to populate the multi-tenant prompt.  Their discs come
 # after alpha's (see main), and together they must fill at least two discs,
 # or verify.sh's thrash check cannot fail (#836, _thrash_layout_problem).
-# ~1.8 MB is two discs at 2 tenants (~1.1 MB usable each after the
-# reserve) and three at 5 tenants (~0.7 MB usable).
+# ~1.8 MB is two discs at 2 tenants and three at 5 tenants (each tenant's
+# metadata is on every disc).  Measured 2026-11-16: 7 data discs (alpha
+# 1-5) by default, 8 at 5 tenants, 5 at 1 tenant.
 SECONDARY_FILES = 15
 SECONDARY_TOTAL_BYTES = 1_800_000
 
@@ -403,26 +404,11 @@ def _fixture_config():
             key_shares=MIXED_SPLIT_N,
         )
 
-    # Phase 21.3 fix: use the canonical empirical reserve constant
-    # (SQLite catalog + per-repo Rustic metadata + ISO 9660 overhead
-    # ≈ 700 KB for a single-repo fixture).  The previous 150_000
-    # under-reserved by ~5×, causing ISOs to overflow TEST_TINY's
-    # 1 MB capacity after staging.
-    #
-    # Each additional tenant injects another ~150 KB of Rustic
-    # metadata (index/snapshots/keys) into every disc.  Scale the
-    # reserve so multi-tenant variants (#217 ships 5 repos) don't
-    # overflow the 2 MB TEST_TINY capacity after ECC.
-    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
-    # 127.5 KB since rc9: with the 850 KB single-tenant floor, 150 KB per
-    # extra tenant grew the 5-tenant fixture from 12 to 17 discs and the
-    # agent's disc sweep tripped the thrash check (16 inserted, 10
-    # needed).  This keeps 5 tenants at the 1.36 MB that passed.
-    per_extra_tenant_bytes = 127_500
-    reserve = (
-        MIN_HOLOGRAPHIC_RESERVE_BYTES
-        + max(0, len(repos) - 1) * per_extra_tenant_bytes
-    )
+    # No fixed reserve: stage measures the disc metadata (catalog, each
+    # tenant's index/snapshot/key files, the tier-3 reader, ISO overhead)
+    # and keeps that much free on every disc (#811).  The 850 KB floor
+    # and the 127.5 KB per extra tenant this fixture used to need are
+    # gone.
     return LCSASConfig(
         mirror_base_path=MIRROR,
         staging_path=STAGING,
@@ -430,7 +416,7 @@ def _fixture_config():
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
-        metadata_reserve_bytes=reserve,
+        metadata_reserve_bytes=0,
         repositories=repos,
         **split_defaults,
     )

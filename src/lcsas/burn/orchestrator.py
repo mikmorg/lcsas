@@ -75,7 +75,12 @@ from lcsas.exceptions import StagingError
 from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
 from lcsas.packs.snapshot_coverage import LeftOutSnapshot, snapshot_coverage
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
-from lcsas.staging.metadata import HolographicInjector
+from lcsas.staging.metadata import (
+    DiscMetadataSize,
+    HolographicInjector,
+    measure_disc_metadata,
+    pack_disc_bytes,
+)
 from lcsas.staging.repo_marker import repo_markers
 from lcsas.utils.fs import ensure_dir, safe_remove_tree
 from lcsas.utils.hashing import sha256_file
@@ -100,6 +105,10 @@ class LowRedundancyError(StagingError):
 
 class NothingToStageError(StagingError, ValueError):
     """Every unarchived pack already waits on a staged volume (#672)."""
+
+
+class DiscMetadataTooLargeError(StagingError):
+    """One disc cannot hold the disc metadata and a pack (#811)."""
 
 
 def _describe_waiting(held: dict[str, list[str]]) -> str:
@@ -489,9 +498,9 @@ class BurnOrchestrator:
             from lcsas.utils.fs import dir_size_bytes
             estimated_bytes = dir_size_bytes(staging_root)
             # #674: the content must leave the medium's ECC share free.
-            # Packs are planned against usable_bytes minus the metadata
-            # reserve, so this trips when the disc metadata outgrew
-            # metadata_reserve_mb.  Checked before mastering.
+            # Packs are planned against usable_bytes minus the measured
+            # metadata reserve (#811), so this is a last check.  Checked
+            # before mastering.
             if (estimated_bytes > media_type.usable_bytes
                     and not self._allow_low_redundancy):
                 raise LowRedundancyError(
@@ -500,8 +509,8 @@ class BurnOrchestrator:
                     f"{media_type.usable_bytes:,} usable bytes of "
                     f"{media_type.name} (its capacity less the "
                     f"{media_type.ecc_overhead_pct}% kept for error "
-                    f"correction). The disc metadata has probably "
-                    f"outgrown metadata_reserve_mb.",
+                    f"correction). The disc metadata is larger than "
+                    f"measured.",
                     recovery_hint=(
                         "Raise metadata_reserve_mb in lcsas.toml and "
                         "stage again, or pass --allow-low-redundancy "
@@ -860,13 +869,23 @@ class BurnOrchestrator:
             # meets this whenever nothing new came in).
             raise NothingToStageError("No packs need staging.")
 
-        # 2. Bin-pack into multiple volumes
-        volume_plans = self._multi_bin_pack(packs_to_stage, mt)
+        # 2. Measure the metadata every disc carries (#811), then
+        #    bin-pack into multiple volumes.  Both before any side effect.
+        reserve, measured = self._metadata_reserve(packs_to_stage, mt)
+        logger.info(
+            "%sDisc metadata: about %s bytes measured (%s); reserving "
+            "%s bytes on each %s disc (metadata_reserve_mb: %s bytes).",
+            "[DRY RUN] " if dry_run else "", f"{measured.total:,}",
+            measured.describe(), f"{reserve:,}", mt.name,
+            f"{self._config.metadata_reserve_bytes:,}",
+        )
+        self._check_metadata_fits(packs_to_stage, mt, reserve, measured)
+        volume_plans = self._multi_bin_pack(packs_to_stage, mt, reserve)
 
         # #701: a last volume below the minimum fill waits for more data.
         # Decided on the plan, before any side effect.
         volume_plans, underfilled = self._trim_underfilled(
-            volume_plans, mt, min_fill_pct, partial=partial,
+            volume_plans, mt, min_fill_pct, partial=partial, reserve=reserve,
         )
         if not volume_plans:
             logger.info(
@@ -904,7 +923,7 @@ class BurnOrchestrator:
             total_bytes = sum(b for _, b in volume_plans)
             logger.info(f"[DRY RUN] {len(volume_plans)} volume(s) planned "
                         f"on {mt.name}")
-            pack_space = self._pack_space_bytes(mt)
+            pack_space = self._pack_space_bytes(mt, reserve)
             for i, (packs, vol_bytes) in enumerate(volume_plans, 1):
                 fill_pct = (vol_bytes / mt.capacity_bytes) * 100
                 space_pct = vol_bytes / pack_space * 100
@@ -953,7 +972,7 @@ class BurnOrchestrator:
         # duplicates the ISO while augmenting — budget one extra copy of
         # the largest padded ISO.
         apply_ecc = mt.ecc_overhead_pct > 0
-        metadata_reserve = self._config.metadata_reserve_bytes
+        metadata_reserve = reserve
         required_bytes = 0
         max_padded_iso = 0
         for _, vol_bytes in volume_plans:
@@ -2193,28 +2212,40 @@ class BurnOrchestrator:
         self,
         packs: list[Pack],
         media_type: MediaType,
+        reserve: int | None = None,
     ) -> list[tuple[list[Pack], int]]:
         """Bin-pack packs into multiple volumes.
 
-        Returns list of (selected_packs, total_bytes) tuples,
-        one per volume.
+        *reserve* is the space kept for the disc metadata on each volume;
+        None measures it (:meth:`_metadata_reserve`), as :meth:`stage`
+        does.  Each pack counts with its ISO 9660 overhead
+        (:func:`~lcsas.staging.metadata.pack_disc_bytes`).
+
+        Returns list of (selected_packs, total_bytes) tuples, one per
+        volume; total_bytes is the packs' own size.
         """
+        if reserve is None:
+            reserve = self._metadata_reserve(packs, media_type)[0]
         remaining_packs = list(packs)
         volume_plans: list[tuple[list[Pack], int]] = []
 
         while remaining_packs:
-            items = [(p.sha256, p.size_bytes) for p in remaining_packs]
+            items = [
+                (p.sha256, pack_disc_bytes(p.size_bytes))
+                for p in remaining_packs
+            ]
             selected_items, leftover_items = first_fit_decreasing(
                 items,
                 capacity=media_type.usable_bytes,
-                reserved=self._config.metadata_reserve_bytes,
+                reserved=reserve,
             )
 
             if not selected_items:
                 # None of the remaining packs fit — they're all too large.
-                usable = media_type.usable_bytes - self._config.metadata_reserve_bytes
+                usable = media_type.usable_bytes - reserve
                 oversized = [
-                    p for p in remaining_packs if p.size_bytes > usable
+                    p for p in remaining_packs
+                    if pack_disc_bytes(p.size_bytes) > usable
                 ]
                 if oversized:
                     _logger.error(
@@ -2240,14 +2271,14 @@ class BurnOrchestrator:
                 raise ValueError(
                     f"Cannot fit remaining packs into {media_type.name} "
                     f"(usable={media_type.usable_bytes}, "
-                    f"reserved={self._config.metadata_reserve_bytes})"
+                    f"reserved={reserve})"
                 )
 
             selected_hashes = {sha for sha, _size in selected_items}
             selected_packs = [
                 p for p in remaining_packs if p.sha256 in selected_hashes
             ]
-            total_bytes = sum(s for _, s in selected_items)
+            total_bytes = sum(p.size_bytes for p in selected_packs)
             volume_plans.append((selected_packs, total_bytes))
 
             remaining_packs = [
@@ -2256,14 +2287,76 @@ class BurnOrchestrator:
 
         return volume_plans
 
-    def _pack_space_bytes(self, media_type: MediaType) -> int:
+    def _pack_space_bytes(self, media_type: MediaType, reserve: int) -> int:
         """Bytes of packs one volume can hold: what _multi_bin_pack fills.
 
         The medium's usable bytes (after the ECC share) less the metadata
-        reserve.  A volume with this many bytes of packs is 100% full.
+        *reserve*.  A volume with this many bytes of packs is 100% full.
         """
-        return max(
-            1, media_type.usable_bytes - self._config.metadata_reserve_bytes,
+        return max(1, media_type.usable_bytes - reserve)
+
+    def _metadata_reserve(
+        self, packs: list[Pack], media_type: MediaType,
+    ) -> tuple[int, DiscMetadataSize]:
+        """The space kept for the disc metadata on each volume (#811).
+
+        ``max(metadata_reserve_mb, measured + margin)``: the configured
+        reserve is a floor, and the measurement
+        (:func:`~lcsas.staging.metadata.measure_disc_metadata`) covers an
+        archive whose catalog and index files have outgrown it.  Returns
+        the reserve and the measurement.
+        """
+        configured = self._config.metadata_reserve_bytes
+        measured = measure_disc_metadata(
+            self._conn, self._get_mirror_paths(),
+            pack_count=len(packs), volume_count=1,
+            with_source=not media_type.is_test,
+        )
+        # The catalog gains rows for each volume of the stage: estimate
+        # how many volumes the packs need, then count them in.
+        space = media_type.usable_bytes - max(configured, measured.reserve)
+        if space > 0 and len(packs) > 1:
+            pack_bytes = sum(pack_disc_bytes(p.size_bytes) for p in packs)
+            extra = -(-pack_bytes // space)  # one more than needed
+            measured = measure_disc_metadata(
+                self._conn, self._get_mirror_paths(),
+                pack_count=len(packs), volume_count=1 + extra,
+                with_source=not media_type.is_test,
+            )
+        return max(configured, measured.reserve), measured
+
+    def _check_metadata_fits(
+        self,
+        packs: list[Pack],
+        media_type: MediaType,
+        reserve: int,
+        measured: DiscMetadataSize,
+    ) -> None:
+        """Refuse the stage when one disc cannot hold the disc metadata and
+        the smallest pack (#811), before anything is staged.
+
+        A pack too large for the medium even without metadata is left to
+        :meth:`_multi_bin_pack`, which names it.
+        """
+        if not packs:
+            return
+        usable = media_type.usable_bytes
+        smallest = min(pack_disc_bytes(p.size_bytes) for p in packs)
+        if reserve + smallest <= usable:
+            return
+        if smallest > usable - self._config.metadata_reserve_bytes:
+            return  # the pack itself is too large: _multi_bin_pack says so
+        raise DiscMetadataTooLargeError(
+            f"The metadata that goes on every disc needs {reserve:,} bytes "
+            f"({measured.total:,} measured: {measured.describe()}; plus "
+            f"a margin). A {media_type.name} disc holds {usable:,} bytes "
+            f"besides its error correction, so it has no room left for "
+            f"even the smallest pack ({smallest:,} bytes). Nothing was "
+            f"staged.",
+            recovery_hint=(
+                "Use a larger media type: 'lcsas stage --media <type>', "
+                "or media_type in lcsas.toml."
+            ),
         )
 
     def _trim_underfilled(
@@ -2273,6 +2366,7 @@ class BurnOrchestrator:
         min_fill_pct: float,
         *,
         partial: bool,
+        reserve: int,
     ) -> tuple[list[tuple[list[Pack], int]], UnderfilledVolume | None]:
         """Drop the last planned volume when it is below *min_fill_pct* (#701).
 
@@ -2287,7 +2381,7 @@ class BurnOrchestrator:
         if min_fill_pct <= 0 or partial or not volume_plans:
             return volume_plans, None
         packs, data_bytes = volume_plans[-1]
-        space = self._pack_space_bytes(media_type)
+        space = self._pack_space_bytes(media_type, reserve)
         fill = data_bytes / space * 100
         if fill >= min_fill_pct:
             return volume_plans, None

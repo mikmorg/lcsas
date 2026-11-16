@@ -1186,7 +1186,7 @@ class FakeOperatorPrompt:
         self.messages.append(message)
 
 
-def _seed_multi_vol(conn, config, num_packs=5, pack_size=800_000):
+def _seed_multi_vol(conn, config, num_packs=5, pack_size=450_000):
     """Seed packs sized so a TEST_TINY (2 MB) session needs >1 volume."""
     config.db_path.parent.mkdir(parents=True, exist_ok=True)
     config.db_path.write_bytes(b"sqlite_placeholder")
@@ -1206,7 +1206,8 @@ def _seed_multi_vol(conn, config, num_packs=5, pack_size=800_000):
 
 @pytest.fixture
 def multi_vol_env(tmp_path):
-    """Three-volume session on TEST_TINY (5 packs @ 800 KB ÷ 2 MB → 3 discs)."""
+    """Three-volume session on TEST_TINY (5 packs @ 450 KB: two fit a
+    volume beside its measured disc metadata, #811 → 3 discs)."""
     config = _make_config(tmp_path)
     conn = get_memory_connection()
     create_all(conn)

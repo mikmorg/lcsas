@@ -101,9 +101,21 @@ def test_ample_redundancy_stages_normally(tmp_path, monkeypatch):
 
 
 def test_oversized_metadata_fails_before_mastering(tmp_path, monkeypatch):
-    """Disc metadata that outgrew the reserve: content > usable bytes."""
+    """Disc metadata that outgrew the reserve: content > usable bytes.
+
+    Since #811 stage measures the metadata before it packs and stops
+    earlier (test_disc_metadata_reserve.py); this is the last check
+    before mastering, for metadata larger than measured.
+    """
+    from lcsas.staging.metadata import DiscMetadataSize
+
     orch, conn, xorriso, _d, config = _env(
         tmp_path, monkeypatch, media=MediaType.TEST_TINY,
+    )
+    monkeypatch.setattr(
+        "lcsas.burn.orchestrator.measure_disc_metadata",
+        lambda *a, **k: DiscMetadataSize(
+            catalog=0, repositories=0, tools=0, texts=0, iso_overhead=0),
     )
     # A repository index far larger than the 100-byte metadata reserve.
     index = config.repositories["family"].mirror_path / "index"

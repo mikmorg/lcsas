@@ -38,6 +38,8 @@ _logger = logging.getLogger(__name__)
 # Repository subdirectories that make up the repository metadata
 _METADATA_DIRS = list(METADATA_SUBDIRS)
 _METADATA_FILES = ["config"]
+# The LCSAS source subpackages copied onto production discs.
+_SOURCE_SUBPACKAGES = ("restore", "utils", "db")
 
 # Empirical lower-bound reserve for the repository metadata and disc
 # catalog injected for a single-repository fixture on TEST_TINY-class
@@ -55,6 +57,190 @@ _METADATA_FILES = ["config"]
 # overhead); the reserve must exceed that metadata so the packer moves a
 # pack to the next volume.
 MIN_HOLOGRAPHIC_RESERVE_BYTES = 850_000
+
+# --- Measuring the disc metadata before bin-packing (#811) -----------------
+#
+# Every data disc carries the disc catalog, each repository's index,
+# snapshot and key files, the recovery tools and the text files.  stage()
+# measures them before it packs volumes, so a growing archive never
+# overflows a disc.  The figures below were measured against
+# ``xorriso -as mkisofs -r -J -joliet-long -iso-level 3`` (iso/xorriso.py).
+
+#: ISO 9660 sector: every file takes whole sectors on the disc.
+ISO_SECTOR_BYTES = 2048
+#: An ISO of an empty folder is 374,784 bytes (system area, volume
+#: descriptors, path tables and xorriso's tail padding); rounded up.
+ISO_FIXED_BYTES = 400 * 1024
+#: The directory records of one file or folder (ISO 9660, Joliet and Rock
+#: Ridge together): about 390 bytes measured; rounded up.
+ISO_ENTRY_BYTES = 512
+#: A folder: its own sector in the ISO 9660 tree and in the Joliet tree,
+#: plus its records in its parent (about 4,200 bytes measured).
+ISO_DIR_BYTES = 2 * ISO_SECTOR_BYTES + ISO_ENTRY_BYTES
+#: Catalog growth for each pack linked to a volume in this stage (one
+#: ``volume_packs`` row and its index entry: about 36 bytes measured).
+CATALOG_BYTES_PER_PACK = 64
+#: Catalog growth for each volume of this stage (volume, session and event
+#: rows: about 200 bytes measured for the volume row alone).
+CATALOG_BYTES_PER_VOLUME = 4096
+#: volume_info.json lists every pack of the disc by its SHA-256.
+VOLUME_INFO_BYTES_PER_PACK = 80
+#: START_HERE.txt, RESTORE_INSTRUCTIONS.txt, PASSWORD_INFO.txt,
+#: CONFIG_SUMMARY.txt, DISC_CARE.txt, VOLUME_INFO.txt and the fixed part
+#: of volume_info.json: about 25 KB together; with headroom for long
+#: owner-written hints.
+TEXT_FILES_BYTES = 64 * 1024
+#: Each repository's LCSAS_REPO.txt.
+REPO_MARKER_BYTES = 4096
+
+
+def iso_file_bytes(size: int) -> int:
+    """What a file of *size* bytes takes on an ISO: whole sectors plus its
+    directory records."""
+    sectors = -(-max(0, size) // ISO_SECTOR_BYTES)
+    return sectors * ISO_SECTOR_BYTES + ISO_ENTRY_BYTES
+
+
+def pack_disc_bytes(size: int) -> int:
+    """What a pack of *size* bytes takes on an ISO, at most: its sectors,
+    its records, and the ``data/<xx>/`` folder it may be the first in."""
+    return iso_file_bytes(size) + ISO_DIR_BYTES
+
+
+def _tree_iso_bytes(root: Path, *, skip_bytecode: bool = False) -> int:
+    """ISO bytes of *root* and every file and folder under it (0 if
+    missing)."""
+    if not root.is_dir():
+        return 0
+    total = ISO_DIR_BYTES
+    for dirpath, dirnames, filenames in os.walk(root):
+        if skip_bytecode:
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        total += ISO_DIR_BYTES * len(dirnames)
+        for name in filenames:
+            if skip_bytecode and name.endswith((".pyc", ".pyo")):
+                continue
+            try:
+                total += iso_file_bytes(os.path.getsize(os.path.join(dirpath, name)))
+            except OSError:
+                continue
+    return total
+
+
+def live_catalog_bytes(conn: sqlite3.Connection) -> int:
+    """Bytes of the catalog's used pages, as of *conn*'s latest commit.
+
+    Read through the connection, so rows still in the WAL count and an
+    in-memory catalog works too; free pages do not count (the disc copy
+    is vacuumed).
+    """
+    page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+    pages = int(conn.execute("PRAGMA page_count").fetchone()[0])
+    free = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+    return max(0, pages - free) * page_size
+
+
+@dataclass(frozen=True)
+class DiscMetadataSize:
+    """What the metadata of one data disc takes on the ISO (#811).
+
+    An upper bound: the catalog as it will be after this stage's rows
+    are added, every snapshot file (the #657 filter may leave some off),
+    and the ISO 9660 overhead of all of it.
+    """
+
+    catalog: int
+    repositories: int
+    tools: int
+    texts: int
+    iso_overhead: int
+
+    @property
+    def total(self) -> int:
+        return (self.catalog + self.repositories + self.tools + self.texts
+                + self.iso_overhead)
+
+    @property
+    def margin(self) -> int:
+        """Headroom on top of the measurement: a tenth of it."""
+        return self.total // 10
+
+    @property
+    def reserve(self) -> int:
+        """The measured reserve: the measurement plus its margin."""
+        return self.total + self.margin
+
+    def describe(self) -> str:
+        return (
+            f"catalog {self.catalog:,}, repository files "
+            f"{self.repositories:,}, recovery tools {self.tools:,}, text "
+            f"files {self.texts:,}, ISO overhead {self.iso_overhead:,} bytes"
+        )
+
+
+def measure_disc_metadata(
+    conn: sqlite3.Connection,
+    mirror_paths: Mapping[str, Path],
+    *,
+    pack_count: int,
+    volume_count: int,
+    with_source: bool,
+) -> DiscMetadataSize:
+    """Measure the metadata every data disc of a stage carries (#811).
+
+    Args:
+        conn: The master catalog.  Its size now, plus the rows this
+            stage adds (*pack_count* volume links, *volume_count*
+            volumes): the last disc of the stage carries all of them.
+        mirror_paths: Every repository's mirror, by repo_id.  Every disc
+            carries each repository's index, snapshot and key files and
+            its config (``inject_metadata``).
+        pack_count: Packs this stage puts on discs (an upper bound for
+            one disc's volume_info.json too).
+        volume_count: Volumes this stage is expected to make.
+        with_source: The LCSAS source is copied (production media).
+    """
+    catalog = iso_file_bytes(
+        live_catalog_bytes(conn)
+        + pack_count * CATALOG_BYTES_PER_PACK
+        + volume_count * CATALOG_BYTES_PER_VOLUME
+    )
+
+    repositories = 0
+    if mirror_paths:
+        repositories += ISO_DIR_BYTES  # metadata/
+    for mirror in mirror_paths.values():
+        repo = ISO_DIR_BYTES + iso_file_bytes(REPO_MARKER_BYTES)
+        found = False
+        for name in _METADATA_DIRS:
+            if (mirror / name).is_dir():
+                found = True
+                repo += _tree_iso_bytes(mirror / name)
+        for name in _METADATA_FILES:
+            path = mirror / name
+            if path.is_file():
+                found = True
+                repo += iso_file_bytes(path.stat().st_size)
+        if found:
+            repositories += repo
+
+    tools = iso_file_bytes(len(build_standalone().encode("utf-8")))
+    if with_source:
+        lcsas_pkg = Path(__file__).parent.parent
+        tools += ISO_DIR_BYTES  # lcsas_src/
+        for subpkg in _SOURCE_SUBPACKAGES:
+            tools += _tree_iso_bytes(lcsas_pkg / subpkg, skip_bytecode=True)
+
+    texts = TEXT_FILES_BYTES + pack_count * VOLUME_INFO_BYTES_PER_PACK
+    return DiscMetadataSize(
+        catalog=catalog,
+        repositories=repositories,
+        tools=tools,
+        texts=texts,
+        # The ISO's fixed part, and data/ itself (each pack's own
+        # data/<xx>/ folder is counted with the pack: pack_disc_bytes).
+        iso_overhead=ISO_FIXED_BYTES + ISO_DIR_BYTES,
+    )
 
 
 @dataclass(frozen=True)
@@ -689,7 +875,7 @@ class HolographicInjector:
         lcsas_pkg = Path(__file__).parent.parent  # src/lcsas/
         dst_root = self._root / "lcsas_src"
 
-        for subpkg in ("restore", "utils", "db"):
+        for subpkg in _SOURCE_SUBPACKAGES:
             src = lcsas_pkg / subpkg
             if src.is_dir():
                 dst = dst_root / subpkg
