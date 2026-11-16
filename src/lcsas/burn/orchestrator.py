@@ -487,11 +487,6 @@ class BurnOrchestrator:
             #    master catalog.
             try:
                 injector.inject_catalog(self._conn)
-                # Not needed for the disc copy: keeps the master file
-                # current for readers that ignore the WAL (the meta disc
-                # builder opens it with immutable=1).  PASSIVE never
-                # waits for another process's reader.
-                self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             except Exception as exc:
                 _logger.error(
                     "Catalog injection into the staging area failed; rolling "
