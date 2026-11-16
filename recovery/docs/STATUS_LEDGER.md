@@ -2,8 +2,8 @@
 
 This is the single tracker for tier-1 recovery audit findings and the
 deferred-work parking lot.  It folds together the content that used to
-live in `AUDIT_FINDINGS.md` and `DEFERRED_WORK.txt` (both now thin
-redirect stubs), reconciled against what has actually landed in `master`
+live in `AUDIT_FINDINGS.md` and `DEFERRED_WORK.txt` (both since
+deleted, #724), reconciled against what has actually landed in `master`
 as of the 2026-06 audit-remediation pass.
 
 Two sibling documents are **not** folded in here because they are live

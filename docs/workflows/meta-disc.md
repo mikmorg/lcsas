@@ -146,7 +146,13 @@ subcommand. `--output` / `-o` is required.
       differs from its archive, the build stops and names the file
       (#832). `lcsas meta verify --strict` unpacks the same archives from
       the recovery cache and compares them with the disc; archives the
-      cache lacks are listed as not checked.
+      cache lacks are listed as not checked. Developer records stay off
+      the disc (#724): the audit-gate files in `recovery/docs/`
+      (`AUDIT.md`, `EXEMPTIONS.md`, `STATUS_LEDGER.md`,
+      `SANITIZER_SUPPRESSIONS.txt`, listed in
+      `DEV_ONLY_RECOVERY_FILES`) are skipped and their rows dropped from
+      both on-disc manifests, and `_bundle_docs` skips
+      `docs/development/recovery/`.
    9. `_write_restore_script` — copy `recovery/scripts/restore.sh` to the
       disc root as `restore.sh`, the disc's one restore driver, stamped
       with the build SHA and date, and leave a two-line redirect stub in

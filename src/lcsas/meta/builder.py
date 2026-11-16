@@ -285,6 +285,33 @@ _RETIRED_META_FILES = (
 # itself), so neither counts as a file the manifest is missing.
 UNLISTED_MANIFESTS = frozenset({"MANIFEST.sha256", "docs/MANIFEST.sha256"})
 
+# Developer-process records an heir does not need (#724).  The audit-gate
+# family stays in recovery/docs/, where recovery/Makefile,
+# recovery/scripts/exemptions_check.py and the tests read it, so the
+# builder leaves it out of the copy and out of both on-disc manifests.
+# The owner's other recovery records live in docs/development/recovery/,
+# which _bundle_docs skips.  Paths are relative to recovery/ and docs/.
+DEV_ONLY_RECOVERY_FILES = frozenset({
+    "docs/AUDIT.md",
+    "docs/EXEMPTIONS.md",
+    "docs/SANITIZER_SUPPRESSIONS.txt",
+    "docs/STATUS_LEDGER.md",
+})
+DEV_ONLY_DOC_DIRS = frozenset({"development/recovery"})
+
+
+def _skip_relpaths(
+    src_root: Path, skipped: Collection[str],
+) -> Callable[[str, list[str]], set[str]]:
+    """``copytree`` ignore callable: skip *skipped* (paths under *src_root*)."""
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        rel_dir = PurePosixPath(Path(directory).relative_to(src_root).as_posix())
+        return {n for n in names if (rel_dir / n).as_posix() in skipped}
+
+    return ignore
+
+
 # Build debris that never belongs on a meta disc (recovery/.gitignore).
 # Applied to bin/, which is copied as it stands, and to the whole tree
 # when git cannot say which files are tracked.
@@ -328,9 +355,10 @@ def _fallback_recovery_ignore(
     as ``tests/fixtures/repo/index/<sha256>`` are hex-named too.
     """
     debris = shutil.ignore_patterns(*_RECOVERY_DEBRIS)
+    dev_only = _skip_relpaths(src_root, DEV_ONLY_RECOVERY_FILES)
 
     def ignore(directory: str, names: list[str]) -> set[str]:
-        skipped = set(debris(directory, names))
+        skipped = set(debris(directory, names)) | dev_only(directory, names)
         rel_dir = PurePosixPath(Path(directory).relative_to(src_root).as_posix())
         skipped.update(n for n in names if _is_fuzz_output(rel_dir / n))
         return skipped
@@ -787,17 +815,25 @@ class MetaVolumeBuilder:
                 shutil.copy2(str(src), str(dst))
 
     def _bundle_docs(self) -> None:
-        """Copy documentation into the meta disc tree."""
+        """Copy documentation into the meta disc tree.
+
+        ``docs/development/recovery/`` (the owner's recovery records,
+        #724) stays in the repository.
+        """
         for item_name in _DOC_ITEMS:
             src = self._project_root / item_name
             dst = self._output / item_name
             if src.is_dir():
                 if dst.exists():
                     shutil.rmtree(str(dst))
+                cache_files = shutil.ignore_patterns("__pycache__", "*.pyc")
+                dev_only = _skip_relpaths(src, DEV_ONLY_DOC_DIRS)
                 shutil.copytree(
                     str(src),
                     str(dst),
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                    ignore=lambda d, n, c=cache_files, x=dev_only: (
+                        set(c(d, n)) | x(d, n)
+                    ),
                 )
             elif src.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
@@ -935,6 +971,7 @@ class MetaVolumeBuilder:
         if dst.exists():
             shutil.rmtree(str(dst))
         self._copy_recovery_tree(src, dst)
+        self._drop_dev_only_manifest_rows(dst)
 
         # _write_restore_script copies scripts/restore.sh to the disc
         # root as restore.sh, the disc's one restore driver (#689).
@@ -1007,6 +1044,8 @@ class MetaVolumeBuilder:
         for rel in tracked:
             if rel.split("/", 1)[0] == "bin":
                 continue  # copied whole below
+            if rel in DEV_ONLY_RECOVERY_FILES:
+                continue  # stays in the repository (#724)
             src_file = src / rel
             if not src_file.is_file():
                 gone.append(rel)  # in the index, deleted from the work tree
@@ -1027,6 +1066,34 @@ class MetaVolumeBuilder:
                 str(bin_src), str(dst / "bin"),
                 ignore=shutil.ignore_patterns(*_RECOVERY_DEBRIS),
             )
+
+    @staticmethod
+    def _drop_dev_only_manifest_rows(dst: Path) -> None:
+        """Remove the rows of the files left off the disc (#724).
+
+        The source manifests list every authored file, the developer
+        records too; on the disc a row for an absent file would make
+        ``meta verify`` and an heir's ``sha256sum -c`` fail.
+        """
+        manifests = {
+            dst / "MANIFEST.sha256": {
+                f"./{rel}" for rel in DEV_ONLY_RECOVERY_FILES
+            },
+            dst / "docs" / "MANIFEST.sha256": {
+                f"./{rel.removeprefix('docs/')}"
+                for rel in DEV_ONLY_RECOVERY_FILES if rel.startswith("docs/")
+            },
+        }
+        for manifest, gone in manifests.items():
+            if not manifest.is_file():
+                continue
+            lines = manifest.read_text(encoding="utf-8").splitlines()
+            kept = [
+                ln for ln in lines
+                if ln.strip().split("  ", 1)[-1] not in gone
+            ]
+            if len(kept) != len(lines):
+                manifest.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
     def unlisted_recovery_files(self) -> list[str]:
         """Files under the built recovery/ that its MANIFEST.sha256 omits.

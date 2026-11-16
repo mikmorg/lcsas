@@ -19,7 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _recovery_docs() -> list[Path]:
-    return sorted((REPO_ROOT / "recovery" / "docs").glob("*.txt"))
+    # The owner's recovery records moved off the disc to
+    # docs/development/recovery/ (#724); they stay under these checks.
+    return sorted((REPO_ROOT / "recovery" / "docs").glob("*.txt")) + sorted(
+        (REPO_ROOT / "docs" / "development" / "recovery").glob("*.txt")
+    )
 
 
 def _workflow_docs() -> list[Path]:
