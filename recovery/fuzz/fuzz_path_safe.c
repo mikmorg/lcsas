@@ -2,7 +2,9 @@
  * fuzz_path_safe.c -- LibFuzzer harness for path traversal safety checks.
  *
  * Feeds arbitrary bytes to lcsas_path_safe_name and
- * lcsas_path_safe_symlink.  The goal is to find inputs where the
+ * lcsas_path_safe_symlink, and (issue #781) the whole input to the
+ * node-name decoder lcsas_unescape_name and the decoded-name checks
+ * lcsas_name_refusal / lcsas_name_windows_refusal.  The goal is to find inputs where the
  * sanitizer returns 0 (safe) for a genuinely unsafe path, or where the
  * implementation crashes/reads out-of-bounds.
  *
@@ -61,6 +63,40 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
     /* Exercise lcsas_path_safe_symlink. */
     lcsas_path_safe_symlink(root, from_dir, target);
+
+    /* Issue #781: decode the whole input as an escaped node name.  The
+     * decoded name is never longer than the text and is NUL-terminated;
+     * a name the checks accept is one plain directory entry. */
+    {
+        char *dec = (char *)malloc(size + 1);
+        long n;
+        if (dec == NULL) { free(buf); return 0; }
+        n = lcsas_unescape_name((const char *)data, size, dec, size + 1);
+        if (n >= 0) {
+            if ((size_t)n > size || dec[n] != '\0') abort();
+            if (lcsas_name_refusal(dec, (size_t)n) == NULL) {
+                if (n == 0 || memchr(dec, '/', (size_t)n)
+                        || memchr(dec, '\0', (size_t)n)
+                        || strcmp(dec, ".") == 0
+                        || strcmp(dec, "..") == 0) {
+                    abort();
+                }
+                if (lcsas_name_windows_refusal(dec, (size_t)n) == NULL
+                        && (memchr(dec, '\\', (size_t)n)
+                            || memchr(dec, ':', (size_t)n))) {
+                    abort();
+                }
+            }
+        }
+        free(dec);
+        /* A buffer one byte short of the worst case must never be
+         * overrun (ASan catches a write past this exact-size block). */
+        dec = (char *)malloc(size);
+        if (dec != NULL) {
+            (void)lcsas_unescape_name((const char *)data, size, dec, size);
+            free(dec);
+        }
+    }
 
     free(buf);
     return 0;

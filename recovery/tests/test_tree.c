@@ -16,6 +16,8 @@
  *     and a second run over it succeeds.
  *   - #655: a part-written read-only file is reopened by a resume.
  *   - #661: the resume skip needs size AND mtime to match.
+ *   - #781: escaped node names are decoded; refused names are named
+ *     and make the walk return LCSAS_TREE_INCOMPLETE.
  */
 #include "tree.h"
 #include "repo.h"
@@ -448,6 +450,129 @@ static void test_blob_failure_message(void)
     rmrf(target);
 }
 
+static int path_exists(const char *dir, const char *name)
+{
+    char p[1024];
+    struct stat st;
+    sprintf(p, "%s/%s", dir, name);
+    return lstat(p, &st) == 0;
+}
+
+static int count_entries(const char *dir)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    int n = 0;
+    if (!d) return -1;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0)
+            n++;
+    }
+    closedir(d);
+    return n;
+}
+
+static void test_escaped_names(void)
+{
+    /* #781: rustic stores a name that holds '"', '\', a control
+     * character or a non-UTF-8 byte in Go-quoted form.  Each one must
+     * be restored under its real (decoded) bytes; a name that decodes
+     * to something unsafe, or that cannot be decoded, is refused,
+     * named on stderr and makes the walk return LCSAS_TREE_INCOMPLETE
+     * -- after every other node was restored. */
+    /* Each entry is one node; kept apart because one literal would
+     * pass the 509 bytes C89 promises to support. */
+    static const char *const nodes[] = {
+        /* JSON "quo\\\"te" -> rustic text quo\"te -> quo"te */
+        "{\"name\":\"quo\\\\\\\"te\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":\"back\\\\\\\\slash\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":\"tab\\\\there\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":\"latin\\\\xe9\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":\"esc\\u001bx\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        /* refused: decodes to "..", to "/", holds NUL, bad escape,
+         * ".", empty, a name that is not a JSON string */
+        "{\"name\":\"\\\\x2e\\\\x2e\",\"type\":\"dir\",\"mode\":493,\"subtree\":\"" TREE_ID "\"}",
+        "{\"name\":\"a\\\\x2fb\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":\"n\\\\x00ul\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":\"bad\\\\q\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":\".\",\"type\":\"dir\",\"mode\":493}",
+        "{\"name\":\"\",\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        "{\"name\":7,\"type\":\"file\",\"mode\":420,\"content\":[]}",
+        /* a directory after the refused ones still restores */
+        "{\"name\":\"d\\\\tir\",\"type\":\"dir\",\"mode\":493,\"subtree\":\"" TREE_ID "\"}"
+    };
+    static char blob[2048];
+    char *target = mktarget();
+    char sub[512];
+    size_t i;
+    int rc;
+    strcpy(blob, "{\"nodes\":[");
+    for (i = 0; i < sizeof nodes / sizeof nodes[0]; i++) {
+        if (i) strcat(blob, ",");
+        strcat(blob, nodes[i]);
+    }
+    strcat(blob, "]}");
+    g_blobs[0] = blob;
+    g_blobs[1] =
+        "{\"nodes\":[{\"name\":\"in\\\\nside\",\"type\":\"file\","
+        "\"mode\":420,\"content\":[]}]}";
+    g_blobs[2] = NULL;
+    rc = run_scripted(target);
+    if (rc != LCSAS_TREE_INCOMPLETE) {
+        fprintf(stderr, "FAIL escaped_names: rc %d, want %d\n",
+                rc, LCSAS_TREE_INCOMPLETE);
+        fails++;
+    }
+    if (!path_exists(target, "quo\"te") || !path_exists(target, "back\\slash")
+            || !path_exists(target, "tab\there")
+            || !path_exists(target, "latin\xe9")
+            || !path_exists(target, "esc\x1bx")
+            || !path_exists(target, "d\tir")) {
+        fprintf(stderr, "FAIL escaped_names: a decoded name is missing\n");
+        fails++;
+    }
+    sprintf(sub, "%s/d\tir", target);
+    if (!path_exists(sub, "in\nside")) {
+        fprintf(stderr, "FAIL escaped_names: subtree name not decoded\n");
+        fails++;
+    }
+    /* Nothing else: no escaped spelling, no refused node. */
+    if (count_entries(target) != 6) {
+        fprintf(stderr, "FAIL escaped_names: %d entries, want 6\n",
+                count_entries(target));
+        fails++;
+    }
+    if (path_exists(target, "a") || path_exists(target, "n")) {
+        fprintf(stderr, "FAIL escaped_names: a refused name was written\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_long_name_refused(void)
+{
+    /* #781: a name longer than the 1023-byte buffer is refused and
+     * counted, not silently dropped. */
+    char *target = mktarget();
+    char blob[2048];
+    char name[1101];
+    memset(name, 'n', 1100);
+    name[1100] = '\0';
+    sprintf(blob, "{\"nodes\":[{\"name\":\"%s\",\"type\":\"file\","
+            "\"mode\":420,\"content\":[]}]}", name);
+    g_blobs[0] = blob;
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != LCSAS_TREE_INCOMPLETE) {
+        fprintf(stderr, "FAIL long_name: not reported as incomplete\n");
+        fails++;
+    }
+    if (count_entries(target) != 0) {
+        fprintf(stderr, "FAIL long_name: something was written\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
 /* ── tests ──────────────────────────────────────────────────────── */
 
 static void test_path_too_long(void)
@@ -622,6 +747,8 @@ int main(void)
     test_resume_readonly_partial();
     test_resume_skip_needs_mtime();
     test_blob_failure_message();
+    test_escaped_names();
+    test_long_name_refused();
     if (fails) {
         fprintf(stderr, "test_tree: %d FAIL\n", fails);
         return 1;

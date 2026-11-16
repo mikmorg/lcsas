@@ -61,6 +61,15 @@ void lcsas_progress_tick(lcsas_progress *p, unsigned long long blob_len);
 /* Emit a final summary line.  Safe with NULL / disabled. */
 void lcsas_progress_finish(const lcsas_progress *p);
 
+/*
+ * Returns 0 when every node was restored, -1 when the walk stopped on
+ * an error, or LCSAS_TREE_INCOMPLETE when the walk finished but one or
+ * more nodes were not restored because their names were refused
+ * (issue #781: a name that cannot be decoded, or that this system
+ * cannot hold).  Each such node has a "NOT RESTORED" line on stderr.
+ */
+#define LCSAS_TREE_INCOMPLETE 1
+
 int lcsas_tree_restore(const char *repo_path,
                        const lcsas_master_key *mk,
                        const lcsas_blob_index *ix,

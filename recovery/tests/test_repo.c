@@ -37,9 +37,9 @@ static int fails = 0;
 #define FIXTURE_DATA_BLOB_HEX  \
     "6565160e5ca15054fd190b02fab20e4e7daf41e54d19e649d0798d7aca56c5b2"
 #define FIXTURE_TREE_BLOB_HEX  \
-    "68255a117162e193d9a8e4940756c5754b20eb2e9f6e8934d68b31bcd0f5aa20"
+    "237a180d730dec85d965f258133ab21344bc8c8e838d15f46e7bb3265055169c"
 #define FIXTURE_PACK_HEX       \
-    "303294d19875abfad5ac347ac2f0a586936efd2850b7252378cafac5c4bd3ec6"
+    "296d51e56553e37195dd7db46e4731b5ba661f757f503effc7df5022b4bf682d"
 /* RST-02: a data blob stored UNcompressed whose plaintext is itself a
  * zstd frame; index entry has no uncompressed_length.  read_blob must
  * return it verbatim (no false decompression). */
@@ -71,7 +71,7 @@ static int fails = 0;
  * basename "evil" under C-string truncation; the hostile node must be
  * skipped so the sibling's content survives intact. */
 #define FIXTURE_NUL_NAME_TREE_HEX \
-    "39b129393d23aac68106bff79a945674dd27f077f6e02234a7c91677750fb9a9"
+    "287338be30cbce479b7457b685926b6affec7d2d474b9d4fc7894ebdac22a6ab"
 /* Content of the legitimate "evil" sibling (== nulsib_plain). */
 #define FIXTURE_NUL_SIBLING_CONTENT "the real sibling content\n"
 
@@ -792,18 +792,6 @@ main(void)
             }
         }
 
-        /* Unsafe-named node ("../escape") must NOT have been created. */
-        {
-            char esc[1024];
-            struct stat es;
-            snprintf(esc, sizeof esc, "%s/../escape", target);
-            if (stat(esc, &es) == 0) {
-                fprintf(stderr, "FAIL: '../escape' was materialized!\n");
-                fails++;
-                unlink(esc);
-            }
-        }
-
         /* Unsupported chardev node must be skipped (not crash). */
         {
             char dev[1024];
@@ -977,10 +965,10 @@ main(void)
             }
         }
 
-        /* Tree with a node name > 1024 bytes — exercises tree.c line 240
-         * (name decode_string returns -1, loop continues).  Walk
-         * completes with rc=0 because the offending node is just
-         * skipped. */
+        /* Tree with a node name > 1024 bytes: the name decode fails,
+         * the node is refused and counted, and the walk completes with
+         * LCSAS_TREE_INCOMPLETE (#781: a refused name is never a silent
+         * skip). */
         {
             char tdir[] = "/tmp/lcsas_test_long_name_XXXXXX";
             if (mkdtemp(tdir)) {
@@ -988,9 +976,10 @@ main(void)
                     repo, &mk, &ix, FIXTURE_LONG_NAME_TREE_HEX,
                     tdir, tdir, NULL, NULL
                 );
-                if (rc2 != 0) {
+                if (rc2 != LCSAS_TREE_INCOMPLETE) {
                     fprintf(stderr,
-                            "FAIL: long-name tree should rc=0, got %d\n", rc2);
+                            "FAIL: long-name tree should rc=%d, got %d\n",
+                            LCSAS_TREE_INCOMPLETE, rc2);
                     fails++;
                 }
                 {
@@ -1027,9 +1016,12 @@ main(void)
          * hostile "evil\0x" (JSON ` ` escape) both reduce to
          * basename "evil" under C-string truncation.  The hostile node
          * must be skipped (embedded NUL) so it never overwrites the
-         * sibling.  Assert the restore succeeds (rc=0, skip-and-
-         * continue) AND that "evil" holds the SIBLING's content, not
-         * the hostile node's. */
+         * sibling.  The tree also holds "../escape" and "foo/bar"
+         * (#781 moved them here from the snapshot tree).  Assert the
+         * walk carries on past the refused names and ends with
+         * LCSAS_TREE_INCOMPLETE (#781), that "evil" holds the SIBLING's
+         * content, not the hostile node's, and that "../escape" was not
+         * created. */
         {
             char tdir[] = "/tmp/lcsas_test_nul_name_XXXXXX";
             if (mkdtemp(tdir)) {
@@ -1037,10 +1029,22 @@ main(void)
                     repo, &mk, &ix, FIXTURE_NUL_NAME_TREE_HEX,
                     tdir, tdir, NULL, NULL
                 );
-                if (rc2 != 0) {
+                if (rc2 != LCSAS_TREE_INCOMPLETE) {
                     fprintf(stderr,
-                            "FAIL: nul-name tree should rc=0, got %d\n", rc2);
+                            "FAIL: nul-name tree should rc=%d, got %d\n",
+                            LCSAS_TREE_INCOMPLETE, rc2);
                     fails++;
+                }
+                {
+                    char esc[1100];
+                    struct stat es;
+                    snprintf(esc, sizeof esc, "%s/../escape", tdir);
+                    if (stat(esc, &es) == 0) {
+                        fprintf(stderr,
+                                "FAIL: '../escape' was materialized!\n");
+                        fails++;
+                        unlink(esc);
+                    }
                 }
                 {
                     char path[1100];
