@@ -317,12 +317,13 @@ def make_pack_and_index(
                 "uid": 1000, "gid": 1000,
             },
             {
-                # Symlink with a 2049-byte linktarget: longer than the old
-                # 1023-byte buffer, within the 4095 bytes Linux accepts,
-                # so it is restored (#782; tree.c g_link_target).
+                # A long absolute linktarget (1000 bytes): restored as
+                # stored (#782).  Kept under macOS's 1023-byte limit so
+                # the happy-path restore ends 0 there too; a target over
+                # 4095 bytes is refused (test_tree.c).
                 "name": "long_target",
                 "type": "symlink",
-                "linktarget": "/" + ("x" * 2048),
+                "linktarget": "/" + ("x" * 999),
                 "mode": 511,
                 "mtime": "2026-05-21T00:00:00Z",
                 "uid": 1000, "gid": 1000,
