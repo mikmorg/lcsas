@@ -1109,3 +1109,28 @@ class TestForgottenSnapshots:
         )
         assert self._scan(env, [self.KEPT]) == 0
         assert set(self._rows(env)) == {"old11111", "kept2222"}
+
+    def test_rows_of_a_repo_outside_the_filter_are_untouched(self, tmp_path):
+        """--repo work: the family listing is not taken, so family rows stay."""
+        env = self._env(tmp_path)
+        work_mirror = _make_mirror_scan(tmp_path, "work", [_sha(2)])
+        work_pw = tmp_path / "work.pw"
+        work_pw.write_text("pw\n")
+        env.config = _write_config_scan(
+            tmp_path, env.db_path,
+            {"family": env.mirror, "work": work_mirror},
+            {"family": env.password_file, "work": work_pw},
+        )
+        conn = get_connection(env.db_path)
+        register_repo(conn, "work", "work", str(work_mirror), "")
+        conn.close()
+
+        # The runner lists only KEPT for any repository: had the family
+        # listing been taken, old11111 would be removed (no volumes).
+        assert self._scan(env, [self.KEPT], "--repo", "work") == 0
+        assert {"old11111", "kept2222"} <= set(self._rows(env))
+        conn = get_connection(env.db_path)
+        owners = {r[0] for r in conn.execute(
+            "SELECT repo_id FROM snapshots WHERE snapshot_id = 'old11111'")}
+        conn.close()
+        assert owners == {"family"}

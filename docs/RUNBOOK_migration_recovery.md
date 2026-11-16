@@ -99,8 +99,10 @@ Exit sqlite3 (`.quit`) and re-run any LCSAS command, e.g.:
 lcsas status
 ```
 
-The pending migration re-runs — atomically this time — and the catalog
-comes back at the current schema version with all rows intact.
+After a `volume_events_old` repair, the pending migration re-runs —
+atomically this time — and the catalog comes back at the current schema
+version with all rows intact. After a `volumes_old` repair the catalog
+is v4, which this build refuses (see above).
 
 ## If anything looks wrong
 
