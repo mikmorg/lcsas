@@ -71,15 +71,14 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
             return 0
 
         device = _resolve_device(args, config)
-        if not getattr(args, "skip_burn", False):
-            import os
-            if not os.path.exists(device):
-                logger.error(
-                    "Optical device '%s' not found.\n"
-                    "Insert a disc or specify the correct device with --device.",
-                    device,
-                )
-                return 1
+        import os
+        if not os.path.exists(device):
+            logger.error(
+                "Optical device '%s' not found.\n"
+                "Insert a disc or specify the correct device with --device.",
+                device,
+            )
+            return 1
 
         receipts = orch.burn_session(
             session_ref=args.session,
@@ -125,9 +124,8 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     is checked against the ISO and a receipt is written for it, which
     replaces a receipt that was lost (#673).
     """
-    from datetime import UTC, datetime
-
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
+    from lcsas.utils.timestamps import utc_now
 
     iso_path = args.iso_path
     if not iso_path.exists():
@@ -224,7 +222,7 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             "session_id": args.session,
             "location": args.location,
             "device": device,
-            "burn_date": datetime.now(UTC).isoformat(),
+            "burn_date": utc_now(),
             "iso_sha256": iso_sha256,
             "iso_size_bytes": iso_size_bytes,
             "verify_passed": verify_passed,
