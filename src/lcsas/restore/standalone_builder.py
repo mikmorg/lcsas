@@ -366,13 +366,16 @@ _CLI_BLOCK = textwrap.dedent("""\
             )
             sys.exit(1)
 
+        # Exit 2 only for errors: special files this system cannot
+        # create and links the target cannot hold are listed in
+        # RESTORE_FAILURES.txt but do not fail the restore (#783).
         if restorer.failures:
             print(
-                f"[lcsas-restore] {restorer.failures} file(s) could NOT be "
+                f"[lcsas-restore] {restorer.failures} item(s) could NOT be "
                 f"restored. See {target}/RESTORE_FAILURES.txt for the list.\\n"
-                "  The rest of your data restored successfully. To restore the "
-                "skipped files, re-run from a newer meta disc or from another "
-                "undamaged disc with the same label.",
+                "  The rest of your data restored successfully. To restore "
+                "files that failed on a bad disc, re-run from a newer meta "
+                "disc or from another undamaged disc with the same label.",
                 file=sys.stderr,
             )
             sys.exit(2)

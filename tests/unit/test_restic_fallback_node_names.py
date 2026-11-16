@@ -264,6 +264,7 @@ def test_manifest_survives_non_utf8_and_tab_paths(tmp_path: Path) -> None:
     restorer = PurePythonRestorer.__new__(PurePythonRestorer)
     bad = tmp_path / os.fsdecode(b"lat\xe9\tdir") / "f"
     restorer._failures = [(str(bad), "", "IntegrityError: x")]
+    restorer._rows = list(restorer._failures)  # #783: the manifest's rows
     restorer._write_failure_manifest(tmp_path)
     text = (tmp_path / "RESTORE_FAILURES.txt").read_text(encoding="utf-8")
     row = text.splitlines()[-1]

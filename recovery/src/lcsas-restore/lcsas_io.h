@@ -40,9 +40,25 @@ int lcsas_write_exact(int fd, const void *buf, size_t len);
  * node's final mode after the content is written (#655), so a file
  * left part-written stays reopenable by a resume.  On Windows `mode`
  * is passed to open().  Returns fd or -1 on error (errno set).
- * The intermediate directories must already exist.
+ * The intermediate directories must already exist.  On POSIX the open
+ * never follows a symlink at `path` (O_NOFOLLOW, #784): it fails
+ * instead, so file data is never written through a link.
  */
 int lcsas_create_file(const char *path, unsigned int mode);
+
+/*
+ * Issue #784 -- what is at `path` now, without following a symlink in
+ * its last component: LCSAS_ENTRY_NONE (nothing, or it cannot be
+ * looked at), _DIR (a real folder), _LINK (a symlink; on Windows any
+ * reparse point: symlink, junction, mount point), _FILE (a regular
+ * file) or _OTHER (a pipe, socket or device).
+ */
+#define LCSAS_ENTRY_NONE  0
+#define LCSAS_ENTRY_DIR   1
+#define LCSAS_ENTRY_LINK  2
+#define LCSAS_ENTRY_FILE  3
+#define LCSAS_ENTRY_OTHER 4
+int lcsas_entry_kind(const char *path);
 
 /*
  * Create directory `path` and all parents (mode 0700).  Returns 0 on

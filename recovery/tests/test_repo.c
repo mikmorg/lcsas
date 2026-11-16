@@ -792,13 +792,22 @@ main(void)
             }
         }
 
-        /* Unsupported chardev node must be skipped (not crash). */
+        /* #783: a chardev node is made as rustic makes it (mknod).
+         * This one has no "device" field, so it is device 0:0, which
+         * Linux lets anyone make (the overlayfs whiteout); a real
+         * device needs root, and without it is listed (test_tree.c).
+         * Either way the restore ends 0 (checked above), and whatever
+         * was made is a character device. */
         {
             char dev[1024];
             struct stat ds;
             snprintf(dev, sizeof dev, "%s/device.dev", target);
-            if (stat(dev, &ds) == 0) {
-                fprintf(stderr, "FAIL: chardev node was materialized\n");
+            if (lstat(dev, &ds) == 0 && !S_ISCHR(ds.st_mode)) {
+                fprintf(stderr, "FAIL: device.dev is not a chardev\n");
+                fails++;
+            }
+            if (geteuid() == 0 && lstat(dev, &ds) != 0) {
+                fprintf(stderr, "FAIL: root did not make the chardev\n");
                 fails++;
             }
         }
@@ -990,8 +999,10 @@ main(void)
             }
         }
 
-        /* Tree with a node type > 32 bytes — exercises tree.c line 243
-         * (type decode_string returns -1, loop continues). */
+        /* Tree with a node type > 32 bytes: the type cannot be read,
+         * so the node is an unknown type -- an error since #783 (it
+         * was skipped silently): reported, and the walk carries on and
+         * ends LCSAS_TREE_INCOMPLETE. */
         {
             char tdir[] = "/tmp/lcsas_test_long_type_XXXXXX";
             if (mkdtemp(tdir)) {
@@ -999,9 +1010,10 @@ main(void)
                     repo, &mk, &ix, FIXTURE_LONG_TYPE_TREE_HEX,
                     tdir, tdir, NULL, NULL
                 );
-                if (rc2 != 0) {
+                if (rc2 != LCSAS_TREE_INCOMPLETE) {
                     fprintf(stderr,
-                            "FAIL: long-type tree should rc=0, got %d\n", rc2);
+                            "FAIL: long-type tree should rc=%d, got %d\n",
+                            LCSAS_TREE_INCOMPLETE, rc2);
                     fails++;
                 }
                 {

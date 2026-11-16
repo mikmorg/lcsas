@@ -580,8 +580,11 @@ DESTINATION FOLDER NOTES
   * Symlinks in the original archive are NOT restored on Windows.
     Creating Windows symlinks requires the SeCreateSymbolicLink
     privilege which we do not request.  The corresponding restored
-    paths will simply be missing.  Affected paths are reported on
-    stderr.
+    paths will simply be missing.  Each one is named in a
+    "NOT RESTORED:" line and listed in RESTORE_FAILURES.txt in the
+    folder you restored into; the restore still counts as complete.
+    Pipes, sockets and devices from Linux or macOS are not restored
+    on Windows either, and are listed the same way.
 
   * Filename case: Windows is case-insensitive.  If the original
     archive contained two files differing only by case (foo.txt and

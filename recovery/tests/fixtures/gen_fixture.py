@@ -298,7 +298,9 @@ def make_pack_and_index(
             },
             {
                 "name": "device.dev",
-                "type": "chardev",     # unsupported -> exercises "skip" path
+                # A device (#783): made as root; without root it is listed
+                # in RESTORE_FAILURES.txt and the restore still ends 0.
+                "type": "chardev",
                 "mode": 384,
                 "mtime": "2026-05-21T00:00:00Z",
                 "uid": 0, "gid": 0,
@@ -308,16 +310,16 @@ def make_pack_and_index(
             {
                 "name": "evil_link",
                 "type": "symlink",
-                "linktarget": "../../../etc/passwd",  # escapes target_root
+                # Points out of the restore: restored as stored (#782).
+                "linktarget": "../../../etc/passwd",
                 "mode": 511,
                 "mtime": "2026-05-21T00:00:00Z",
                 "uid": 1000, "gid": 1000,
             },
             {
-                # Symlink with a linktarget > 1024 bytes: exercises the
-                # lcsas_json_decode_string overflow branch in tree.c.
-                # The decode fails (return -1) and the loop `continue`s
-                # without restoring the node.
+                # Symlink with a 2049-byte linktarget: longer than the old
+                # 1023-byte buffer, within the 4095 bytes Linux accepts,
+                # so it is restored (#782; tree.c g_link_target).
                 "name": "long_target",
                 "type": "symlink",
                 "linktarget": "/" + ("x" * 2048),

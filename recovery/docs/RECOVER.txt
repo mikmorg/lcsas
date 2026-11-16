@@ -306,15 +306,53 @@ a message identifying the bad blob.  Re-run the restore with another
 disc that has the same label (LCSAS burns more than one disc with
 each label).
 
+ITEMS NOT RESTORED
+
+A restore can end with some items not restored.  Each one is named in
+a line that starts "NOT RESTORED:", and all of them are listed in the
+file RESTORE_FAILURES.txt in the folder you restored into: one line
+per item, with the path and the reason.  At the end the restore says
+how many there were.
+
+Not a problem (the restore still counts as complete, exit code 0):
+
+  * "special file ... not created": a pipe, socket or device that this
+    computer will not create.  It holds no data.  Devices need root:
+    run the restore as root if you need them back.
+  * "link not created: the target file system does not support
+    symlinks": see TARGET FILESYSTEM LIMITATIONS below.
+
+Every other reason is an error.  The restore ends with "finished with
+errors" (exit code 1 from lcsas-restore, exit code 2 from tier 3).
+Everything not listed was restored.  What to do:
+
+  * "a folder with this name is already there": the folder you
+    restored into holds an earlier restore, with a folder where this
+    backup has a file or a link.  The restore never deletes a folder.
+    Restore into a new, empty folder instead.
+  * A file whose data could not be read (tier 3): re-run from the
+    newest meta disc, or with another disc that has the same label.
+  * "name refused" or "link refused": the backup holds a name or a
+    link this computer cannot use.  Try another computer (for example
+    Linux instead of Windows), or restore with rustic (tier 2).
+
+The restore never writes through a link: a link left by an earlier
+restore where this backup has a file or a folder is replaced by the
+real file or folder.  Links themselves are restored exactly as they
+were backed up, even links that point outside the restore folder.
+
 TARGET FILESYSTEM LIMITATIONS (FAT32 / EXFAT / SMB)
 
 If your target directory lives on a filesystem that cannot store
 symbolic links (FAT32, exFAT, most SMB shares, some FUSE mounts),
-lcsas-restore emits a per-affected-node warning:
-    WARNING: target filesystem does not support symlinks; skipped <path>
-The restore then continues with the rest of the tree.  The restored
-output is intentionally LOSSY on these filesystems: symlinks are
-dropped, and POSIX modes / ownership may also degrade silently.
+each link is named in a line like this one and listed in
+RESTORE_FAILURES.txt:
+    NOT RESTORED: <path> (link not created: the target file system
+    does not support symlinks)
+The restore then continues with the rest of the tree, and still counts
+as complete.  The restored output is intentionally LOSSY on these
+filesystems: symlinks are dropped, and POSIX modes / ownership may
+also degrade silently.
 This is by design, not a corruption indicator -- the alternative
 (materialising the symlink target as a regular file containing the
 link string) would silently rewrite the restored data.
@@ -632,9 +670,12 @@ src/, and the documents under docs/ are everything you need.
 EXIT CODES
 
   lcsas-restore exits:
-    0  -- success (restored, or listed)
+    0  -- success (restored, or listed); special files or links this
+          computer cannot hold may be listed in RESTORE_FAILURES.txt
+          (see "ITEMS NOT RESTORED")
     1  -- failed (missing file, integrity failure, a pack on no disc
-          it can see)
+          it can see), or finished with errors: some items were not
+          restored (listed in RESTORE_FAILURES.txt)
     2  -- usage error
     75 -- you typed q at its disc prompt (or its input ended); run the
           same command again to carry on

@@ -66,6 +66,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
 | `test_keyshare_windows_wine.py` | rc6: the committed Windows ``lcsas-keyshare.exe`` under wine. |
 | `test_last_verified_writer_exists.py` | Hardening test: volume_copies.last_verified_at must have a writer. |
+| `test_links_specials_differential.py` | Issues #782-#785, #852: tiers 1, 2 and 3 restore links and FIFOs alike. |
 | `test_live_usb_procedure_docs.py` | test_live_usb_procedure_docs.py -- static doc-pinning gate for the |
 | `test_manifest_freshness.py` | test_manifest_freshness.py -- tamper/staleness gate for recovery/MANIFEST.sha256. |
 | `test_meta_bundles_dvdisaster_source.py` | Hardening test (FMT-02): the dvdisaster RS03 source must be pinned, |

@@ -156,6 +156,10 @@ TREE BLOB
 
           /* For "symlink" */
           "linktarget": "../somewhere",
+          "linktarget_raw": "<base64>",   /* only when not UTF-8 */
+
+          /* For "dev" and "chardev" (also "fifo", "socket": no data) */
+          "device":  259,
 
           /* Optional */
           "extended_attributes": [{"name": "...", "value": "<base64>"}]
@@ -187,7 +191,10 @@ NODE NAMES
   Every other character stands for itself (written as UTF-8).  Example:
   the stored text  latin\xe9.txt  is the 10-byte name "latin", byte
   0xE9, ".txt".  A name with no backslash is used as it is.  Only
-  "name" is escaped this way: "linktarget" is plain text.
+  "name" is escaped this way: "linktarget" is plain text.  When a link
+  target is not valid UTF-8, "linktarget" holds it with each bad byte
+  replaced by U+FFFD, and "linktarget_raw" holds the exact bytes in
+  base64: use "linktarget_raw" when it is present.
 
   Text that does not follow these rules (an unknown escape such as
   "\q", a backslash at the end, too few hex digits, a \u or \U value
@@ -206,12 +213,19 @@ PATH SAFETY
    - A rejected name is never written under another name.  Tiers 1 and
      3 report each one ("NOT RESTORED"), restore everything else, and
      end with an error.
-   - Symlinks whose "linktarget" is ABSOLUTE are restored as-is (matching
-     rustic; see issue #187).  Containment of the restore tree is NOT
-     guaranteed for absolute symlinks.  REJECT symlinks whose RELATIVE
-     linktarget lexically escapes the restore root.
+   - Every symlink is restored as-is with its stored target, as rustic
+     does (issues #187, #782): absolute, relative, pointing up and out
+     of the restore root, or dangling.  Containment of the restore tree
+     is NOT guaranteed by link targets.  Instead NEVER write through a
+     symlink (#784): open files without following a link in the last
+     component, and where the restore folder already holds a link (or
+     a pipe, socket or device) at a file's or a folder's path, remove
+     it and make the real item.  Never remove a folder: a folder where
+     the snapshot has another kind of item is reported instead.
+   - REJECT (report, end with an error) a link target that is empty,
+     holds a NUL byte, or is longer than 4095 bytes.
 
-  See src/lcsas-restore/path.c.
+  See src/lcsas-restore/path.c and src/lcsas-restore/tree.c.
 
 CHECKSUMS
 

@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -1193,10 +1194,14 @@ class TestHardlinkRestore:
 # ── Unsupported Node Type Test ───────────────────────────────────
 
 class TestUnsupportedNodeType:
-    """Test that unsupported node types are skipped with a warning."""
+    """#783: special files are made as rustic makes them; one this system
+    will not make is listed without failing; an unknown type is an error.
+    (Before #783 every special file was skipped with a warning.)"""
 
     def test_device_node_skipped(self, tmp_path, capsys):
-        """Device nodes are skipped gracefully, other files still restored."""
+        """A FIFO is made; a device needs root, so without it the device
+        is listed (not a failure); an unknown type is a failure; other
+        files are still restored."""
         repo = _build_test_repo(tmp_path)
 
         file_content = b"Good file\n"
@@ -1217,6 +1222,10 @@ class TestUnsupportedNodeType:
                 {
                     "name": "myfifo",
                     "type": "fifo",
+                },
+                {
+                    "name": "mydoor",
+                    "type": "door",
                 },
             ],
         }).encode()
@@ -1260,14 +1269,23 @@ class TestUnsupportedNodeType:
 
         # Good file was restored
         assert (target / "good.txt").read_text() == "Good file\n"
-        # Unsupported nodes not created
-        assert not (target / "mydevice").exists()
-        assert not (target / "myfifo").exists()
-
-        # Warning printed to stderr
         captured = capsys.readouterr()
-        assert "Skipping unsupported node type 'dev': mydevice" in captured.err
-        assert "Skipping unsupported node type 'fifo': myfifo" in captured.err
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        if hasattr(os, "mkfifo"):
+            assert stat.S_ISFIFO(os.lstat(target / "myfifo").st_mode)
+        if os.name != "nt" and os.geteuid() == 0:
+            assert stat.S_ISBLK(os.lstat(target / "mydevice").st_mode)
+            assert restorer.skipped == 0
+        else:
+            assert not os.path.lexists(target / "mydevice")
+            assert "special file (block device) not created" in manifest
+            assert "special file(s) were not restored" in captured.err
+            assert restorer.skipped >= 1
+        # The unknown type is the one failure.
+        assert not os.path.lexists(target / "mydoor")
+        assert "unknown item type: door" in manifest
+        assert restorer.failures == 1
+        assert "ERROR: 1 item(s) were NOT restored." in captured.err
 
 
 # ── Extended Attributes Test ─────────────────────────────────────
@@ -2290,23 +2308,22 @@ class TestRestoreTreeSecurityPaths:
         assert restorer.failures == 1
         assert (target / "safe.txt").exists()
 
-    def test_symlink_absolute_target_skipped(self, tmp_path, capsys):
-        """Lines 706-710: symlink pointing to absolute path is skipped."""
+    def test_symlink_absolute_target_restored(self, tmp_path):
+        """#782: an absolute target is restored as stored (was skipped)."""
         repo, _ = self._build_repo_with_tree(tmp_path, [
-            {"name": "evil.link", "type": "symlink", "linktarget": "/etc/passwd"},
+            {"name": "abs.link", "type": "symlink", "linktarget": "/etc/passwd"},
         ])
         target = tmp_path / "restored"
         restorer = PurePythonRestorer(repo, password=PASSWORD)
         restorer.restore(target=target)
-        assert not (target / "evil.link").exists()
-        captured = capsys.readouterr()
-        assert "absolute target" in captured.err
+        assert os.readlink(str(target / "abs.link")) == "/etc/passwd"
+        assert restorer.failures == 0
 
-    def test_symlink_escaping_target_skipped(self, tmp_path, capsys):
-        """RST-06: symlink resolving outside target directory is skipped,
-        logged, and recorded in the failure manifest (was dead code: the
-        boolean from is_relative_to() was discarded under try/except
-        ValueError, which never raises, so escaping links were created)."""
+    def test_symlink_escaping_target_restored(self, tmp_path):
+        """#782: a relative target that points out of the target folder
+        is restored as stored, as tier 1 and rustic do (RST-06 skipped
+        it; the protection is now that nothing is written through a
+        link, #784)."""
         repo, _ = self._build_repo_with_tree(tmp_path, [
             {"name": "escape.link", "type": "symlink",
              "linktarget": "../../../../etc"},
@@ -2314,15 +2331,9 @@ class TestRestoreTreeSecurityPaths:
         target = tmp_path / "restored"
         restorer = PurePythonRestorer(repo, password=PASSWORD)
         restorer.restore(target=target)
-        # No symlink created (not even a dangling one).
-        assert not (target / "escape.link").is_symlink()
-        assert not (target / "escape.link").exists()
-        captured = capsys.readouterr()
-        assert "out-of-bounds" in captured.err
-        # Recorded in the manifest as a skipped-symlink fidelity loss.
-        manifest = (target / "RESTORE_FAILURES.txt").read_text()
-        assert "skipped-symlink" in manifest
-        assert "escape.link" in manifest
+        assert os.readlink(str(target / "escape.link")) == "../../../../etc"
+        assert restorer.failures == 0
+        assert not (target / "RESTORE_FAILURES.txt").exists()
 
     def test_symlink_overwrites_existing_file(self, tmp_path):
         """Lines 724-727: pre-existing file at symlink path is replaced."""
@@ -2341,7 +2352,9 @@ class TestRestoreTreeSecurityPaths:
         assert os.readlink(str(target / "link.txt")) == "actual.txt"
 
     def test_symlink_overwrites_existing_dir(self, tmp_path):
-        """Lines 724-727: pre-existing directory at symlink path is replaced."""
+        """#784: a folder where the snapshot has a link is never removed
+        (it may hold anything); the link is reported as not restored.
+        (Before #784 tier 3 deleted the folder and its contents.)"""
         repo, _ = self._build_repo_with_tree(tmp_path, [
             {"name": "actual.txt", "type": "file", "content": []},
             {"name": "link.txt", "type": "symlink", "linktarget": "actual.txt"},
@@ -2350,10 +2363,15 @@ class TestRestoreTreeSecurityPaths:
         target.mkdir(parents=True, exist_ok=True)
         # Pre-create a directory where the symlink should land
         (target / "link.txt").mkdir()
+        (target / "link.txt" / "keep").write_text("keep")
 
         restorer = PurePythonRestorer(repo, password=PASSWORD)
         restorer.restore(target=target)
-        assert (target / "link.txt").is_symlink()
+        assert not (target / "link.txt").is_symlink()
+        assert (target / "link.txt" / "keep").read_text() == "keep"
+        assert restorer.failures == 1
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        assert "a folder with this name is already there" in manifest
 
 
 # ── Hardlink Fallback (OSError) Test ─────────────────────────────
@@ -3312,6 +3330,7 @@ class TestFailureManifestWriteError:
         # (restic_fallback.py:564-567).
         r = _bare_restorer(tmp_path)
         r._failures = [("some/file", "blobid", "corrupt blob")]
+        r._rows = list(r._failures)  # #783: the manifest lists _rows
         not_a_dir = tmp_path / "afile"
         not_a_dir.write_text("x")
         r._write_failure_manifest(not_a_dir)  # must not raise
