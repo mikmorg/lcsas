@@ -997,3 +997,122 @@ def test_restore_bat_helpers_never_read_the_scripts_input():
     missing = [ln for ln in hits
                if "<nul" not in ln.replace(" ", "") and "^<nul" not in ln]
     assert not missing, "these read the script's input:\n" + "\n".join(missing)
+
+
+# ---------------------------------------------------------------------
+# rc10: the two restore scripts aligned (#627, #631, #605, #608, #613)
+# ---------------------------------------------------------------------
+
+
+def test_restore_bat_password_retry_path_never_pauses():
+    """#608: a wrong or empty password, or cards that do not fit, ask
+    again.  A `pause` on that path would wait for a key with the answers
+    piped in (windows-e2e) and eat the next answer.  The only pause
+    between :pw_next and :pw_ok is the one under :pw_gave_up, the end of
+    the run (77)."""
+    code = _code(RESTORE_BAT.read_text())
+    path = code[code.index(":pw_next"):code.index(":pw_ok")]
+    gave_up = path.index(":pw_gave_up")
+    gave_up_end = path.index("goto :wrong_password", gave_up)
+    pauses = [i for i, ln in enumerate(path) if ln == "pause" or ln.startswith("pause ")]
+    assert pauses, "self-check: :pw_gave_up has its pause"
+    assert all(gave_up < i < gave_up_end for i in pauses), [path[i - 3:i + 1] for i in pauses]
+
+
+def test_restore_bat_tier1_missing_stops_a_set_read_from_the_discs():
+    """#631: the data\\ check sat inside the tier-1 block, so with
+    lcsas-restore.exe missing (antivirus) a set read from the discs went
+    to tier 2, which cannot ask for discs (C5).  The check is now at top
+    level, before the folder and the password, and outside the tier-1
+    block: missing program + no data\\ goes to :tier1_missing (64), which
+    names the program, the antivirus and RECOVER_WINDOWS.txt."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    guard = [
+        'if exist "%RECOVERY%\\bin\\%ARCH%\\lcsas-restore.exe" goto :tier1_present',
+        'if exist "%REPO%\\data\\" goto :tier1_present',
+        "goto :tier1_missing",
+        ":tier1_present",
+    ]
+    at = code.index(guard[0])
+    assert code[at:at + 4] == guard, code[at:at + 4]
+    assert code.index(":repo_selected") < at < code.index(":ask_target")
+    save = next(i for i, ln in enumerate(code) if ln.endswith("call :save_resume"))
+    assert at < code.index(":pw_next") and at < save
+    tier1 = content[content.index("----- Tier 1:"):content.index("----- Tier 2:")]
+    assert ":tier1_missing" not in tier1 and ":tier1_present" not in tier1
+    body = _label_body(content, ":tier1_missing")
+    assert body[-2:] == ["pause", "exit /b 64"], body
+    text = "\n".join(body)
+    for want in ("lcsas-restore.exe", "Antivirus", "RECOVER_WINDOWS.txt",
+                 "run restore.bat again from the META disc"):
+        assert want in text, want
+    assert code.index(":tier1_missing") > code.index(":wrong_password"), "top level"
+
+
+def test_restore_bat_shares_dir_leaves_out_a_bad_card():
+    """#627 item 3: a card file with a mistake (exit 3) is left out and
+    the others are combined, as restore.sh does; each card is checked in
+    a subroutine (no labels inside a block)."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    start = code.index(":pw_from_shares_dir")
+    block = code[start:code.index(":shares_dir_bad", start)]
+    assert 'if not "%KRC%"=="3" goto :shares_dir_failed' in block
+    assert "for /l %%I in (1,1,%SH_N%) do call :shares_dir_one %%I" in block
+    assert "if %SH_KEPT% geq %SH_N% goto :shares_dir_failed" in block
+    one = _label_body(content, ":shares_dir_one")
+    assert '"%KS_EXE%" "card%1.txt" >nul 2> "one.txt" <nul' in one
+    assert "echo [lcsas-restore] leaving out !SH_NAME_%1!: it has a mistake:" in code
+
+
+def test_restore_bat_a_combiner_that_does_not_work_asks_for_the_password():
+    """#627 item 8: a card checked alone that exits 2 (or any code but 0,
+    1 and 3) is not the card's fault; restore.bat asked for that card
+    again for ever.  Now it says the combiner does not work here and asks
+    for the rebuilt password, as restore.sh does."""
+    code = _code(RESTORE_BAT.read_text())
+    assert 'if "%KRC%"=="2" goto :share_bad' not in code
+    body = code[code.index(":keyshare_broken"):]
+    body = body[:body.index("goto :pw_next") + 1]
+    assert 'set "PW_OWN=1"' in body
+    assert code.count("goto :keyshare_broken") == 3
+
+
+def test_restore_bat_lcsas_repo_refuses_a_name_two_sets_share():
+    """#627 item 8: LCSAS_REPO naming two sets by their name took the
+    first; restore.sh refuses.  An id still picks at once; a name or
+    name_cmd is counted (SEL_N) and two hits stop with exit 1."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert "if %SEL_N% gtr 1 goto :repo_ambiguous" in code
+    assert code.index('set "SEL_N=0"') < code.index("if %SEL_N% gtr 1 goto :repo_ambiguous")
+    match_set = _label_body(content, ":match_set")
+    assert not [ln for ln in match_set if "CAND_NC_" in ln], match_set
+    body = _label_body(content, ":repo_ambiguous")
+    assert body[-2:] == ["pause", "exit /b 1"], body
+
+
+def test_restore_bat_same_label_takes_the_newer_catalog():
+    """#605: two discs with the same label (a disc and a copy of it): the
+    one whose catalog.db is newer, as restore.sh ranks them.  cmd prints
+    a file's date in the computer's language (#482), so xcopy /D /L
+    compares the two and nothing parses a date."""
+    content = RESTORE_BAT.read_text()
+    consider = _label_body(content, ":consider_disc")
+    assert 'call :file_newer "%1:\\catalog.db" "!NEWEST_ROOT!"' in content
+    newer = _label_body(content, ":file_newer")
+    xcopy = [ln for ln in newer if ln.startswith("xcopy")]
+    assert xcopy == ['xcopy "%~1" "%~2." /D /L /Y 2>nul <nul '
+                     '| findstr /i /l /c:"%~nx1" >nul 2>nul'], xcopy
+    assert "%%~t" not in content and "~t" not in "".join(consider)
+
+
+def test_restore_bat_banner_repeats_the_quickedit_note():
+    """#613: the relocated copy, which runs the rest of the restore, did
+    not repeat the QuickEdit note; the banner of every run now says it
+    in short."""
+    content = RESTORE_BAT.read_text()
+    banner = content[content.index("LCSAS Restore (Windows)"):content.index(":ask_target")]
+    assert "a click pauses the restore" in banner
+    assert '"Select"' in banner and "Esc" in banner
