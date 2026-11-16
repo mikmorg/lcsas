@@ -124,8 +124,9 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     is checked against the ISO and a receipt is written for it, which
     replaces a receipt that was lost (#673).
     """
+    from datetime import UTC, datetime
+
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
-    from lcsas.utils.timestamps import utc_now
 
     iso_path = args.iso_path
     if not iso_path.exists():
@@ -222,7 +223,10 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             "session_id": args.session,
             "location": args.location,
             "device": device,
-            "burn_date": utc_now(),
+            # A receipt is a file, not the catalog: its burn date keeps the
+            # format receipts always had (microseconds), and import copies
+            # it to the disc record through to_utc_iso, as it always did.
+            "burn_date": datetime.now(UTC).isoformat(),
             "iso_sha256": iso_sha256,
             "iso_size_bytes": iso_size_bytes,
             "verify_passed": verify_passed,

@@ -29,6 +29,11 @@ _ALLOWED: dict[str, dict[str, str]] = {
         'datetime.now(UTC).isoformat(timespec="seconds"), record.threshold,':
             "AUDIT log line, not the catalog",
     },
+    "cli/commands/burn.py": {
+        '"burn_date": datetime.now(UTC).isoformat(),':
+            "burn-iso receipt file field; import normalises it with "
+            "to_utc_iso and records it verbatim (test_portable_burn_loop)",
+    },
     "db/connection.py": {
         '"since": datetime.now().astimezone().isoformat(),':
             "lock-holder stamp in the .lock file, not the catalog",
