@@ -139,13 +139,33 @@ def test_alpha_is_burned_first_and_on_its_own() -> None:
 
 
 def test_other_tenants_fill_more_than_one_disc(monkeypatch) -> None:
-    """Sizing only; the real disc count is checked by the setup itself."""
-    from lcsas.config.media import MediaType
+    """Sizing only; the real disc count is checked by the setup itself.
 
+    Since #811 the fixture sets no reserve: stage measures the disc
+    metadata.  ``least`` is a lower bound of that measurement (the ISO's
+    fixed part, the tier-3 reader and an empty catalog), so ``room`` is
+    at least the pack space of a real disc.
+    """
+    import sqlite3
+
+    from lcsas.config.media import MediaType
+    from lcsas.db.schema import create_all
+    from lcsas.restore.standalone_builder import build_standalone
+    from lcsas.staging.metadata import (
+        ISO_FIXED_BYTES,
+        iso_file_bytes,
+        live_catalog_bytes,
+    )
+
+    empty = sqlite3.connect(":memory:")
+    create_all(empty)
+    least = (ISO_FIXED_BYTES + iso_file_bytes(len(build_standalone().encode()))
+             + iso_file_bytes(live_catalog_bytes(empty)))
+    empty.close()
     monkeypatch.delenv("LCSAS_VARIANT", raising=False)
     for tenants in (2, 5):
         monkeypatch.setenv("LCSAS_TENANT_COUNT", str(tenants))
-        reserve = _setup._fixture_config().metadata_reserve_bytes
+        reserve = max(_setup._fixture_config().metadata_reserve_bytes, least)
         room = MediaType.TEST_TINY.usable_bytes - reserve
         per_file = _setup._secondary_file_bytes(tenants)
         total = per_file * _setup.SECONDARY_FILES * (tenants - 1)

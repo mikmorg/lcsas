@@ -66,10 +66,11 @@ class MediaType(Enum):
     #
     # Sizing: the disc catalog is copied onto EVERY disc and grows
     # with the whole archive, while ``metadata_reserve_mb`` (default 100 MB)
-    # is subtracted from every volume's pack budget.  Against CD700's
-    # 626 MB usable that default eats ~17%, leaving ~522 MB of packs per
-    # disc.  Small collections should lower metadata_reserve_mb to match
-    # their actual catalog; large archives should not use CD700 at all,
+    # is subtracted from every volume's pack budget (or the measured disc
+    # metadata, when larger: #811).  Against CD700's 626 MB usable that
+    # default eats ~17%, leaving ~522 MB of packs per disc.  Small
+    # collections may lower metadata_reserve_mb: stage still keeps the
+    # measured size free.  Large archives should not use CD700 at all,
     # because the growing catalog eventually will not fit at any reserve.
     #
     # Durability: CD-R is organic dye on a thin reflective layer and rots

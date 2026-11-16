@@ -350,6 +350,20 @@ class TestStageCollection:
 class TestMinFill:
     SIZES = {"fam": [BIG, BIG, BIG], "work": []}
 
+    @pytest.fixture(autouse=True)
+    def _small_measurement(self, monkeypatch):
+        """Pin the reserve to the configured 0.5 MB: these tests pin the
+        min-fill arithmetic, and the measured disc metadata (#811, tested
+        in test_disc_metadata_reserve.py) would otherwise set it."""
+        from lcsas.staging.metadata import DiscMetadataSize
+
+        monkeypatch.setattr(
+            "lcsas.burn.orchestrator.measure_disc_metadata",
+            lambda *a, **k: DiscMetadataSize(
+                catalog=0, repositories=0, tools=0, texts=0,
+                iso_overhead=100_000),
+        )
+
     def test_last_volume_below_min_fill_is_held_back(self, tmp_path, capsys):
         cfg, db = _setup(tmp_path, sizes=self.SIZES)
         assert _stage(cfg, "--media", "TEST_TINY", "--min-fill", "80") == 0
@@ -434,11 +448,13 @@ class TestMinFill:
         pack = Pack(pack_id=1, sha256="a" * 64, size_bytes=full,
                     repo_id="r", is_pruned=False, created_at="")
         plans = [([pack], full)]
+        reserve = config.metadata_reserve_bytes
         kept, short = orch._trim_underfilled(plans, MediaType.BD25, 90,
-                                             partial=False)
+                                             partial=False, reserve=reserve)
         assert kept == plans and short is None
         kept, short = orch._trim_underfilled([([pack], full // 2)],
-                                             MediaType.BD25, 90, partial=False)
+                                             MediaType.BD25, 90, partial=False,
+                                             reserve=reserve)
         assert kept == [] and short is not None
         assert round(short.fill_pct) == 50
 

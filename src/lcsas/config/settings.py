@@ -43,7 +43,9 @@ class LCSASConfig:
     # Volume label prefix
     label_prefix: str = "LCSAS"
 
-    # Metadata overhead reserved during bin packing (bytes)
+    # Space kept free on each volume for the disc metadata during bin
+    # packing (bytes).  A floor: stage measures the metadata and keeps
+    # the larger of the two (#811).
     metadata_reserve_bytes: int = 104_857_600  # 100 MB
 
     # ── Password split (Shamir / SLIP-0039) defaults ─────────────
