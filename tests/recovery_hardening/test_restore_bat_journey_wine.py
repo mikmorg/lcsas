@@ -1595,7 +1595,9 @@ def test_tier1_missing_stops_a_set_read_from_the_discs(
         finally:
             rc = run.finish()
         out = run.text
-        _assert_clean(out)
+        # Not _assert_clean: the decoy tier 2 is not a program, so cmd
+        # says it cannot recognize it, which is the point here.
+        assert not ACCESS_DENIED.search(out), out
         assert "[tier 2] running" in out, out
         assert "the restore program is missing" not in out, out
         assert rc == 1, f"rc={rc}\n{out}"
