@@ -272,26 +272,42 @@ show /15.)
 
   DATE        VARIANT              MODEL   SCORE   COST   FIXTURE BUILT FROM
   ──────────  ───────────────────  ──────  ──────  ─────  ──────────────────
-  2026-11-12  single-key           haiku   16/16   $0.16  master c08a83e
-  2026-11-12  split-2of5           haiku   16/16   $0.20  master c08a83e
-  2026-11-12  split-key-docs       haiku   16/16   $0.29  master c08a83e
-  2026-11-12  tier1-missing        haiku   16/16   $0.46  master c08a83e
-  2026-11-12  tier1-tier2-missing  haiku   16/16   $0.35  master c08a83e
-  2026-11-12  single-tenant        haiku   16/16   $0.14  master c08a83e
-  2026-11-12  5-tenant             haiku   16/16   $0.28  master c08a83e
-  2026-11-12  no-catalog           haiku   16/16   $0.16  master c08a83e
-  2026-11-12  mixed-split          haiku   16/16   $0.25  master c08a83e
-  2026-11-12  split-key-docs (2)   haiku   16/16   $0.29  master c08a83e
+  2026-11-14  single-key           haiku   16/16   $0.18  master 7206b63
+  2026-11-14  split-2of5           haiku   16/16   $0.20  master 7206b63
+  2026-11-14  split-key-docs       haiku   16/16   $0.30  master 7206b63
+  2026-11-14  tier1-missing        haiku   16/16   $0.32  master 7206b63
+  2026-11-14  tier1-tier2-missing  haiku   16/16   $0.54  master 7206b63
+  2026-11-14  single-tenant        haiku   16/16   $0.16  master 7206b63
+  2026-11-14  5-tenant             haiku   16/16   $0.12  7206b63 + #779
+  2026-11-14  no-catalog           haiku   16/16   $0.20  master 7206b63
+  2026-11-14  mixed-split          haiku   16/16   $0.25  master 7206b63
+  2026-11-14  split-key-docs (2)   haiku   16/16   $0.24  master 7206b63
   (not built) windows              haiku   --/16   --     retires once #476 passes
                                                           (#479)
 
-  The 2026-11-12 rows are the v1.0.0-rc8 sweep (#478), run the same
+  The 2026-11-14 rows are the v1.0.0-rc9 sweep (#478), run the same
+  way, on master 7206b63 with every rc9 restore-path change in (the
+  musl loader #770, blanked disc-catalog fields #771, fast tier-3 AES
+  and zstd #775).  Every variant reached 16/16.  Runs that fell short:
+    - split-key-docs scored 16/16, then 14/16 (the agent read a script
+      and wrote a wrapper script: the compliance flakes in
+      VARIANT_FLAKE_NOTES.md), then 16/16 twice in a row; the rows
+      above are those two.
+    - 5-tenant scored 15/16 twice: its fixture had grown to 17 discs
+      and the agent inserted 16 of them where 10 held its files, which
+      the thrash check fails.  #779 (harness only, the one change
+      between 7206b63 and the v1.0.0-rc9 tag e4d252b) sized the
+      fixture's reserve per extra tenant; on 12 discs it scored 16/16.
+  Two earlier rc9 passes (master 8fcca2b and e41e078) found the
+  single-tenant fixture overflow that #777/#778 fixed; their runs
+  count in the total.  All 33 rc9 runs together cost $8.22.
+
+  The 2026-11-12 rows were the v1.0.0-rc8 sweep (#478), run the same
   way, on master c08a83e with every rc8 restore-path change in.  Every
   variant reached 16/16.  Two agent-behaviour checks
   failed on some runs, never a restore check:
     - split-key-docs scored 14/16 on its first run (the agent wrote a
-      disc-swap loop script), then 16/16 three times in a row; the
-      rows above are the first two of those.
+      disc-swap loop script), then 16/16 three times in a row.
     - mixed-split scored 15/16 and then 14/16: once the agent read the
       resume.sh that restore.sh writes, once it wrote a disc-swap loop
       script.  Its third run scored 16/16.  Both are the compliance
@@ -304,7 +320,7 @@ show /15.)
   split-key-2of5 variant), each building its own fixture meta disc
   from the tree named above.  COST is the agent's reported API spend.
   Seven variants scored 16/16 on their first run.  Three needed a
-  re-run, and each re-run scored 16/16 (rows since replaced by rc8's):
+  re-run, and each re-run scored 16/16 (rows since replaced):
     - tier1-tier2-missing hit the sweep's 1080 s limit, set to share
       the host, while other jobs held the load near 44.  Its agent had
       skipped the newest-data-disc step, so tier 3 had no catalog and
