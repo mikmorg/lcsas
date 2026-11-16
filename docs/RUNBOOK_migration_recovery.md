@@ -72,6 +72,10 @@ DROP TABLE volumes;
 ALTER TABLE volumes_old RENAME TO volumes;
 ```
 
+The repaired catalog is schema v4. This LCSAS build no longer migrates
+catalogs older than v5 (#822): it refuses them, changes nothing, and
+names the last release that can migrate them.
+
 ### If the leftover is `volume_events_old` (interrupted v5→v6)
 
 Same pattern:
