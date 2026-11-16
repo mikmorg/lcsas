@@ -33,9 +33,17 @@ from pathlib import Path
 
 import pytest
 
+from lcsas.config.media import MediaType
 from lcsas.ecc.dvdisaster import (
+    MIN_EFFECTIVE_REDUNDANCY_PCT,
     SubprocessDVDisasterRunner,
+    rs03_pad_target_bytes,
+    rs03_redundancy_pct,
     smallest_fitting_medium_bytes,
+)
+from lcsas.iso.xorriso import (
+    XORRISO_DEFAULT_PADDING_BYTES,
+    SubprocessXorrisoRunner,
 )
 
 pytestmark = [
@@ -119,21 +127,13 @@ def test_rs03_repairs_bitrot_byte_identical(tmp_path: Path) -> None:
     runner.augment_iso(iso, redundancy_pct=REDUNDANCY_PCT)
     padded_size = iso.stat().st_size
     assert padded_size > base_size, "augment must grow the image with ECC"
-    # BURN-07: RS03 augmented mode pads to the smallest fitting medium.
-    # dvdisaster rounds the augmented image down to whole RS03 layers
-    # (multiples of 255 sectors — observed: 735,836,160 = 255 × 1409 ×
-    # 2048 for a CD-sized pad), so the result lands just UNDER the
-    # nominal medium size; smallest_fitting_medium_bytes is therefore a
-    # safe upper bound for the staging pre-flight budget.
-    ladder = smallest_fitting_medium_bytes(base_size)
-    assert padded_size <= ladder, (
-        f"augmented size {padded_size:,} exceeds the pre-flight budget "
-        f"({ladder:,}) — smallest_fitting_medium_bytes is no longer an "
-        f"upper bound"
-    )
-    assert padded_size > ladder * 0.98, (
-        f"augmented size {padded_size:,} is not within 2% of the smallest "
-        f"fitting medium ({ladder:,}) — RS03 did not pad to a full medium?"
+    # BURN-07 / #732: smallest_fitting_medium_bytes mirrors dvdisaster's
+    # CalcRS03Layout, so it predicts the augmented size to the byte
+    # (735,836,160 = 255 × 1409 × 2048 for the CD rung).  The staging
+    # pre-flight and the redundancy check both rely on it.
+    assert padded_size == smallest_fitting_medium_bytes(base_size), (
+        f"augmented size {padded_size:,} differs from the model "
+        f"({smallest_fitting_medium_bytes(base_size):,})"
     )
     print(
         f"RS03 effective redundancy: {base_size:,} -> {padded_size:,} bytes "
@@ -162,6 +162,112 @@ def test_rs03_repairs_bitrot_byte_identical(tmp_path: Path) -> None:
         assert recovered[name] == expected, (
             f"{name}: content not recovered byte-identical after RS03 repair"
         )
+
+
+def _padded_fixture(tmp_path: Path, seed: int) -> tuple[Path, dict[str, str]]:
+    """Random files plus a sparse filler: an ISO of ~344,000 sectors."""
+    src = tmp_path / "src"
+    src.mkdir()
+    rng = random.Random(seed)
+    manifest: dict[str, str] = {}
+    for i in range(NUM_FILES):
+        data = rng.randbytes(rng.randint(100_000, 200_000))
+        name = f"file_{i:03d}.bin"
+        (src / name).write_bytes(data)
+        manifest[name] = hashlib.sha256(data).hexdigest()
+    with open(src / "zz_filler.bin", "wb") as f:
+        f.truncate(344_000 * SECTOR - 4_000_000)
+    return src, manifest
+
+
+def _master_padded(src: Path, iso: Path, target: int) -> None:
+    """Master ``src`` again with padding inside the ISO volume, as stage
+    does (#732), and check the volume size in the PVD grew with it."""
+    xorriso = SubprocessXorrisoRunner()
+    base = iso.stat().st_size
+    xorriso.create_iso(
+        src, iso, "ECCPAD",
+        padding_bytes=target - base + XORRISO_DEFAULT_PADDING_BYTES,
+    )
+    assert iso.stat().st_size == target
+    with open(iso, "rb") as f:
+        f.seek(16 * SECTOR + 80)
+        assert int.from_bytes(f.read(4), "little") * SECTOR == target
+
+
+def test_padded_image_verifies_and_repairs(tmp_path: Path) -> None:
+    """#732: an ISO padded inside its volume still verifies and repairs.
+
+    dvdisaster looks for its ECC header right after the ISO volume size
+    in the PVD, so the padding must be inside the volume.  Pads to the
+    last size that stays on the CD rung (346,612 sectors, 8 roots), so
+    the image stays CD-sized and the test stays as cheap as the others.
+    """
+    runner = SubprocessDVDisasterRunner()
+    src, manifest = _padded_fixture(tmp_path, RNG_SEED + 3)
+    iso = tmp_path / "vol.iso"
+    SubprocessXorrisoRunner().create_iso(src, iso, "ECCPAD")
+    cd_edge = (246 * 1409 - 2) * SECTOR
+    _master_padded(src, iso, cd_edge)
+
+    runner.augment_iso(iso)
+    assert iso.stat().st_size == smallest_fitting_medium_bytes(cd_edge)
+    assert iso.stat().st_size == 735_836_160        # still the CD rung
+    assert runner.verify_iso(iso) is True
+
+    _damage_sectors(iso, DAMAGE_SECTORS, DAMAGE_START_SECTOR)
+    assert runner.verify_iso(iso) is False, "verify must detect the damage"
+    assert runner.repair_iso(iso) is True, "repair_iso must report success"
+
+    out = tmp_path / "extracted"
+    out.mkdir()
+    cmd = ["xorriso", "-indev", str(iso), "-osirrox", "on"]
+    for name in manifest:                # not the 700 MB filler
+        cmd += ["-extract", f"/{name}", str(out / name)]
+    subprocess.run(cmd, check=True, capture_output=True, text=True,
+                   stdin=subprocess.DEVNULL)
+    for name, expected in manifest.items():
+        assert _sha(out / name) == expected, (
+            f"{name}: not recovered byte-identical after RS03 repair of a "
+            f"padded image"
+        )
+
+
+def test_thin_image_padded_moves_up_a_rung(tmp_path: Path) -> None:
+    """#732: a thin part-filled ISO, padded the way stage pads it, lands
+    on the next rung.
+
+    Small-scale stand-in for the BD25 case (a 4.5 GB ISO just under the
+    DVD rung): a ~704 MB ISO sits just under the CD rung with ~4.7%
+    parity; padded, dvdisaster puts it on the DVD rung.  Checks the
+    size and that the ECC header sits right after the ISO volume, where
+    dvdisaster looks for it.  A full dvdisaster -t of a 4.7 GB image
+    takes well over 10 minutes, so it is not run here; in the #732
+    experiment, -t on such an image recognised the RS03 header and found
+    every data sector good.  Needs ~5.5 GB of temp space.
+    """
+    runner = SubprocessDVDisasterRunner()
+    src, _manifest = _padded_fixture(tmp_path, RNG_SEED + 5)
+    iso = tmp_path / "vol.iso"
+    SubprocessXorrisoRunner().create_iso(src, iso, "ECCPAD")
+    base_size = iso.stat().st_size
+    assert rs03_redundancy_pct(base_size) < MIN_EFFECTIVE_REDUNDANCY_PCT, (
+        f"fixture ISO of {base_size:,} bytes is not in the thin band"
+    )
+    target = rs03_pad_target_bytes(base_size, MediaType.BD25.capacity_bytes)
+    assert target is not None and target > base_size
+    _master_padded(src, iso, target)
+
+    runner.augment_iso(iso)
+    assert iso.stat().st_size == smallest_fitting_medium_bytes(target)
+    assert iso.stat().st_size == 4_700_160_000      # the DVD rung
+    with open(iso, "rb") as f:
+        f.seek(target)                   # right after the ISO volume
+        hdr = f.read(SECTOR)
+    assert hdr[0:12] == b"*dvdisaster*" and hdr[12:16] == b"RS03"
+    assert int.from_bytes(hdr[68:76], "little") * SECTOR == target
+    assert int.from_bytes(hdr[120:128], "little") == 2_295_104 // 255
+    assert rs03_redundancy_pct(target) >= MIN_EFFECTIVE_REDUNDANCY_PCT
 
 
 def test_rs03_fails_loud_when_damage_exceeds_capacity(tmp_path: Path) -> None:

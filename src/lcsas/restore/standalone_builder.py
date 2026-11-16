@@ -169,23 +169,29 @@ _HEADER = textwrap.dedent("""\
     #
     #  It restores data from a restic/rustic repository using ONLY
     #  Python 3 standard library.  zstd-compressed (rustic v2 default)
-    #  repositories decompress via the bundled pure-Python decoder; the
-    #  optional 'zstandard' package is used instead when present (~100x
-    #  faster).
+    #  repositories decompress via the built-in pure-Python decoder; the
+    #  'zstandard' package is used instead when Python can import it
+    #  (~100x faster).
     #
     #  Usage:
     #    python3 standalone_restorer.py --repo /path/to/cache \\\\
     #        --password-file password.txt --target /path/to/output
     #
     #  NO pip packages, NO native binaries, NO internet REQUIRED.
-    #  (zstandard pip package needed only for zstd-compressed repositories)
     #
     #  AES-256-CTR uses a native OpenSSL when one is safe and passes a
     #  known-answer test: the libcrypto library (ctypes; Windows, and
-    #  glibc Pythons on Linux) or the 'openssl' command (its command
-    #  line carries the key; LCSAS_TIER3_AES=pure turns it off).  Else
-    #  pure Python at ~0.15 MB/s (about 2 hours per GB).  The log line
+    #  glibc Pythons on Linux) or the 'openssl' command.  Else pure
+    #  Python at ~0.15 MB/s (about 2 hours per GB).  The log line
     #  "AES-256-CTR: using ..." says which.
+    #
+    #  The 'openssl' command takes the repository's data key (not the
+    #  password) on its command line.  Other users of this computer can
+    #  read it while it runs, and a computer with process accounting or
+    #  an exec audit log keeps it in that log.  On such a computer run
+    #  with LCSAS_TIER3_AES=pure (slow) to keep the key off the command
+    #  line:
+    #    LCSAS_TIER3_AES=pure python3 standalone_restorer.py ...
     #
     #  Requires Python 3.10 or newer (stdlib only).
     # ═══════════════════════════════════════════════════════════════════

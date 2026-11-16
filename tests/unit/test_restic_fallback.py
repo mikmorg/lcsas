@@ -457,12 +457,10 @@ class TestSnapshotOrder:
             (repo / "snapshots" / name).write_bytes(b"")
         r = PurePythonRestorer(repo_path=repo, password=PASSWORD)
 
-        def _fake_decrypt(path: Path) -> bytes:
-            return json.dumps(
-                {"time": times[path.name], "tree": "t" + path.name}
-            ).encode()
+        def _fake_read(path: Path) -> dict[str, str]:
+            return {"time": times[path.name], "tree": "t" + path.name}
 
-        r._decrypt_file = _fake_decrypt  # type: ignore[method-assign]
+        r._read_json_file = _fake_read  # type: ignore[method-assign]
         r._load_snapshots()
         return r
 

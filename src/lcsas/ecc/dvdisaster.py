@@ -47,13 +47,12 @@ def _log_effective_redundancy(
 
 
 # RS03 augmented images cannot take a redundancy setting; dvdisaster pads
-# the image up to the smallest fitting medium and fills the slack with
-# parity ("Setting the redundancy is not possible due to constraints in
-# the format" — man dvdisaster, -n under "RS03 images").  These are the
-# medium sizes dvdisaster targets, in 2048-byte sectors × bytes:
-# CD 360,000 · DVD 2,295,104 · DVD9 4,171,712 · BD 12,219,392 ·
-# BD-DL 24,438,784 · BDXL-TL 48,878,592 (the BD trio matches
-# MediaType.{BD25,BD50,BDXL100}.capacity_bytes exactly).
+# the image up to a full medium and fills the slack with parity ("Setting
+# the redundancy is not possible due to constraints in the format" — man
+# dvdisaster, -n under "RS03 images").  These are the NOMINAL capacities of
+# the media on that ladder; every production MediaType capacity is one of
+# them (tests/unit/test_media_types.py).  The rung dvdisaster actually
+# picks, and the exact augmented size, come from RS03_MEDIUM_SECTORS below.
 RS03_MEDIUM_LADDER_BYTES: tuple[int, ...] = (
     737_280_000,        # CD (80 min)
     4_700_372_992,      # DVD single layer
@@ -63,28 +62,132 @@ RS03_MEDIUM_LADDER_BYTES: tuple[int, ...] = (
     100_103_356_416,    # BDXL 100 GB triple layer
 )
 
+RS03_SECTOR_BYTES = 2048
+_GF_FIELDMAX = 255
+# CalcRS03Layout moves an image up a rung once the smaller medium would
+# leave it fewer than 8 Reed-Solomon roots (8 parity layers of 255).
+RS03_MIN_ROOTS = 8
+
+# dvdisaster's own medium sizes in 2048-byte sectors (src/dvdisaster.h:
+# CDR_SIZE, DVD_SL_SIZE, DVD_DL_SIZE, BD_SL_SIZE, BD_DL_SIZE,
+# BDXL_TL_SIZE).  The BD sizes are the defect-management ones (the
+# installed 0.79.10 has no other; later patch levels add
+# --no-bdr-defect-management, never passed here), so a BD image is about
+# 24.2 GB, not 25.0.  recovery/src/lcsas-ecc/rs03.c uses
+# the same table.  BDXL_QL (quad layer) is left out: nothing LCSAS burns
+# is that large.
+RS03_MEDIUM_SECTORS: tuple[int, ...] = (
+    359_424,            # CD
+    2_295_104,          # DVD single layer
+    4_171_712,          # DVD9 dual layer
+    11_826_176,         # BD single layer
+    23_652_352,         # BD dual layer
+    47_305_728,         # BDXL triple layer
+)
+
+
+def _rs03_roots(data_sectors: int, medium_sectors: int) -> int:
+    """dvdisaster's ``get_roots``: parity roots left on this medium."""
+    per_layer = medium_sectors // _GF_FIELDMAX
+    ndata = (data_sectors + 2 + per_layer - 1) // per_layer
+    return _GF_FIELDMAX - ndata - 1
+
+
+def _rs03_rung(data_sectors: int) -> int:
+    """Index into RS03_MEDIUM_SECTORS of the medium dvdisaster picks."""
+    for i, medium in enumerate(RS03_MEDIUM_SECTORS):
+        if _rs03_roots(data_sectors, medium) >= RS03_MIN_ROOTS:
+            return i
+    raise ValueError(
+        f"image of {data_sectors * RS03_SECTOR_BYTES:,} bytes is too large "
+        f"for RS03 on the largest medium (BDXL 100 GB)"
+    )
+
+
+def _rs03_augmented_bytes_for_rung(rung: int) -> int:
+    per_layer = RS03_MEDIUM_SECTORS[rung] // _GF_FIELDMAX
+    return _GF_FIELDMAX * per_layer * RS03_SECTOR_BYTES
+
 
 def smallest_fitting_medium_bytes(image_bytes: int) -> int:
-    """Padded size of an RS03-augmented image of ``image_bytes`` bytes.
+    """Exact size of the RS03-augmented image of ``image_bytes`` bytes.
 
-    RS03 augmented mode grows the image to the smallest medium on
-    :data:`RS03_MEDIUM_LADDER_BYTES` that fits it; the burn pre-flight
-    must budget staging-area space for the *padded* size, not the raw ISO.
-    This is an upper bound: dvdisaster rounds the augmented image down
-    to whole RS03 layers (multiples of 255 sectors), so the real result
-    lands slightly under the nominal medium size (observed: a CD-sized
-    pad is 735,836,160 bytes vs the 737,280,000 nominal).
+    Mirrors dvdisaster's ``CalcRS03Layout`` (augmented image): the image
+    goes on the smallest medium of :data:`RS03_MEDIUM_SECTORS` that still
+    leaves it at least 8 parity roots, and the result is rounded down to
+    whole RS03 layers (255 x sectors-per-layer).  So an image just under a
+    medium's size does NOT stay on that medium: past about 96.5% of it,
+    dvdisaster moves up a rung.  Real output matches this to the byte
+    (CD: 735,836,160; DVD: 4,700,160,000; tests/integration/
+    test_ecc_repair.py).  The burn pre-flight budgets this size.
 
     Raises:
-        ValueError: if the image exceeds the largest RS03 medium.
+        ValueError: if the image is too large for any RS03 medium.
     """
-    for medium_bytes in RS03_MEDIUM_LADDER_BYTES:
-        if image_bytes <= medium_bytes:
-            return medium_bytes
-    raise ValueError(
-        f"image of {image_bytes:,} bytes exceeds the largest RS03 medium "
-        f"({RS03_MEDIUM_LADDER_BYTES[-1]:,} bytes, BDXL 100 GB)"
-    )
+    sectors = -(-image_bytes // RS03_SECTOR_BYTES)
+    return _rs03_augmented_bytes_for_rung(_rs03_rung(sectors))
+
+
+def rs03_redundancy_pct(image_bytes: int) -> float:
+    """Effective RS03 redundancy, as logged after augmenting."""
+    if image_bytes <= 0:
+        raise ValueError("an empty image has no RS03 redundancy")
+    padded = smallest_fitting_medium_bytes(image_bytes)
+    return (padded - image_bytes) / image_bytes * 100
+
+
+def rs03_pad_target_bytes(image_bytes: int, capacity_bytes: int) -> int | None:
+    """Size to pad an ISO to so its RS03 parity clears the floor (#732).
+
+    A part-filled last volume can land just under a lower rung of the
+    ladder (say 4.5 GB on a BD25 volume, just under the DVD rung) and get
+    only about 4% parity.  Making the ISO a little bigger moves it up a
+    rung, where the parity is large.  This returns:
+
+    - ``image_bytes`` when the image already clears the floor on a medium
+      that fits ``capacity_bytes`` (no padding);
+    - the smallest larger size that dvdisaster puts on the next rung up,
+      when that rung's image still fits ``capacity_bytes`` and clears the
+      floor;
+    - ``None`` when no padding helps: the image is thin on the highest
+      rung that fits ``capacity_bytes``, or its rung does not fit at all.
+      Padding is then not the answer; the redundancy check and the
+      post-ECC size check decide.
+
+    Padding goes to the next rung only, not straight to the medium's own
+    rung: the parity there is already far above the floor (DVD to DVD9
+    gives about 88%), and a full-medium pad would turn a tiny last volume
+    into a 24 GB image for no real gain.
+
+    Raises:
+        ValueError: if the image is too large for any RS03 medium.
+    """
+    if image_bytes <= 0:
+        return image_bytes      # nothing to pad; callers skip empty ISOs
+    sectors = -(-image_bytes // RS03_SECTOR_BYTES)
+    candidates = [sectors]
+    rung = _rs03_rung(sectors)
+    for lower in range(rung, len(RS03_MEDIUM_SECTORS) - 1):
+        per_layer = RS03_MEDIUM_SECTORS[lower] // _GF_FIELDMAX
+        # The fewest sectors that leave fewer than 8 roots on ``lower``,
+        # so dvdisaster moves the image up to ``lower + 1``.
+        candidates.append(
+            (_GF_FIELDMAX - 1 - RS03_MIN_ROOTS) * per_layer - 1
+        )
+    for size_sectors in candidates:
+        size = size_sectors * RS03_SECTOR_BYTES
+        padded = smallest_fitting_medium_bytes(size)
+        if padded > capacity_bytes:
+            return None
+        if (padded - size) / size * 100 >= MIN_EFFECTIVE_REDUNDANCY_PCT:
+            return image_bytes if size_sectors == sectors else size
+    return None
+
+
+def rs03_staged_image_bytes(iso_bytes: int, capacity_bytes: int) -> int:
+    """Augmented size of a volume's ISO, after any #732 padding."""
+    target = rs03_pad_target_bytes(iso_bytes, capacity_bytes)
+    return smallest_fitting_medium_bytes(target or iso_bytes)
 
 
 def _require_augment_space(iso_path: Path) -> int:
