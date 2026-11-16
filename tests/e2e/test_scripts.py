@@ -110,14 +110,22 @@ def test_e2e_pipeline() -> None:
 @pytest.mark.requires_cdemu
 @pytest.mark.skipif(
     os.geteuid() != 0,
-    reason="cdemu disc-swap loop requires root",
+    reason="drill aid: a real (virtual) cdemu drive, root to mount it; "
+    "run by hand on the lab VM in a broker window.  CI covers the same "
+    "restore.sh disc-swap loop without root: "
+    "tests/integration/test_interactive_restore.py",
 )
 def test_smoke_single_drive(tmp_path: Path) -> None:
     """Run scripts/smoke_single_drive.py to exercise the single-drive restore.
 
-    The script drives a cdemu virtual drive to simulate disc swaps, so it
-    needs both the cdemu binary and root privileges (for the underlying
-    ``sudo rm -rf`` cleanup and cdemu daemon control).
+    A drill aid, not a CI gate (#630): the script drives a cdemu virtual
+    drive (``/dev/sr0``, mounted with ``mount``) to swap discs, so it
+    needs the cdemu daemon and root, which GitHub runners lack, and the
+    lab's CDEmu is shared (a broker window).  What it proves beyond
+    ``tests/integration/test_interactive_restore.py`` (the same
+    ``restore.sh`` loop and driver, discs swapped as folders, run by CI's
+    integration job) is only that a real optical device node mounts and
+    swaps.
     """
     assert SMOKE_SCRIPT.is_file(), f"missing {SMOKE_SCRIPT}"
     result = subprocess.run(

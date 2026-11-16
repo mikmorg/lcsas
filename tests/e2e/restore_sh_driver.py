@@ -1,8 +1,9 @@
 """Drive the meta disc's ``restore.sh`` through a pseudoterminal (#756).
 
-Shared by ``tests/integration/test_interactive_restore.py`` (loop
-devices) and ``scripts/smoke_single_drive.py`` (a cdemu drive).  Both
-need root to put a disc "in the drive"; everything here does not, so
+Shared by ``tests/integration/test_interactive_restore.py`` (unpacked
+discs renamed in and out of one folder, no root; CI's integration job
+runs it) and ``scripts/smoke_single_drive.py`` (a cdemu drive, root: a
+drill aid run by hand).  Nothing here needs root, so
 ``tests/unit/test_restore_sh_driver.py`` checks it on every run: the
 command line passes only flags ``restore.sh`` accepts, every prompt
 below is text ``restore.sh`` or tier 1 really prints, and
@@ -112,7 +113,8 @@ def build_restore_env(
     *mount_dir* is the one place discs are looked for; mount each data
     disc at a folder in it.  *meta_disc* is where the META disc is (the
     folder ``restore.sh`` is run from): ``restore.sh`` copies itself
-    into *tools_dir* before it runs.
+    into *tools_dir* before it runs.  ``LCSAS_INTERACTIVE=on``: ask the
+    questions whatever the terminal looks like (it is a pty here).
     """
     return {
         "PATH": path,
@@ -122,6 +124,7 @@ def build_restore_env(
         "LCSAS_TOOLS_DIR": str(tools_dir),
         "LCSAS_MOUNT_DIRS": str(mount_dir),
         "LCSAS_META_DISC": str(meta_disc),
+        "LCSAS_INTERACTIVE": "on",
     }
 
 
