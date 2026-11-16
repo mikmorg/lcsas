@@ -455,13 +455,17 @@ class BurnOrchestrator:
         # multi-minute dvdisaster run also compensates.  The staging tree
         # is left on disk for diagnosis (abort/clean removes it).
         try:
-            # 4. Inject the disc catalog AFTER the catalog commit.
-            #    Checkpoint WAL so all committed data is in the main .db
-            #    file, then copy it to the staging area, keeping the master
-            #    catalog and the disc catalog in sync.
+            # 4. Inject the disc catalog AFTER the catalog commit: an
+            #    online backup of this connection's catalog (#812), so it
+            #    holds this volume even while another process reads the
+            #    master catalog.
             try:
-                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                injector.inject_catalog(self._config.db_path)
+                injector.inject_catalog(self._conn)
+                # Not needed for the disc copy: keeps the master file
+                # current for readers that ignore the WAL (the meta disc
+                # builder opens it with immutable=1).  PASSIVE never
+                # waits for another process's reader.
+                self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             except Exception as exc:
                 _logger.error(
                     "Catalog injection into the staging area failed; rolling "

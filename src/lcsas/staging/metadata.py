@@ -617,6 +617,24 @@ def _password_note(config: LCSASConfig) -> list[str]:
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 
 
+def _backup_to(src: sqlite3.Connection, dst: Path) -> None:
+    """Copy the database of *src* to a new file *dst* (#812).
+
+    SQLite's online backup: a consistent copy of every row committed
+    as *src* sees it, whatever other connections are doing.  No
+    ``-wal`` or ``-shm`` file is left beside *dst*.
+    """
+    if dst.exists():
+        dst.unlink()
+    out = sqlite3.connect(dst)
+    try:
+        src.backup(out)
+    finally:
+        out.close()
+    with open(dst, "rb+") as fh:
+        os.fsync(fh.fileno())
+
+
 def _use_rollback_journal(db: Path) -> None:
     """Switch the SQLite file *db* from WAL to a rollback journal (#534)."""
     conn = sqlite3.connect(db)
@@ -780,11 +798,21 @@ class HolographicInjector:
             if marker is not None:
                 write_repo_marker(repo_meta_dir, marker)
 
-    def inject_catalog(self, db_path: Path) -> None:
-        """Copy the master catalog to the staging root as the disc catalog.
+    def inject_catalog(self, source: sqlite3.Connection | Path) -> None:
+        """Write the disc catalog to the staging root.
+
+        *source* is the master catalog: an open connection (what
+        ``stage`` passes) or the path of the catalog file.  The copy is
+        made with SQLite's online backup (#812), which copies every
+        committed row the connection sees, including rows still in the
+        write-ahead log.  A plain file copy after a WAL checkpoint missed
+        the newest rows (the volume being staged) whenever another
+        process held a read transaction, because the checkpoint then
+        stops early.  A path that is not an SQLite file is copied as it
+        is.
 
         The owner's master catalog runs in WAL mode (``db/connection.py``)
-        and a byte copy keeps that mode in the file header.  SQLite cannot
+        and the copy keeps that mode in the file header.  SQLite cannot
         open a WAL-mode file on read-only media without ``immutable=1`` (it must
         create the ``-shm``/``-wal`` files beside it), so tier 1's
         disc-swap hints and a stock ``sqlite3`` could not read the catalog
@@ -795,14 +823,24 @@ class HolographicInjector:
         descriptions (#733): those columns are blanked, so a disc shows
         them only to someone with the repository password, inside
         rustic's encrypted snapshot files.  The master catalog keeps them.
+        The blanking ends with ``VACUUM``, so the copy has no free pages.
         """
         dst = self._root / "catalog.db"
-        copy_file(db_path, dst)
-        with dst.open("rb") as fh:
-            is_sqlite = fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
-        if is_sqlite:
-            _use_rollback_journal(dst)
-            _blank_snapshot_columns(dst)
+        if isinstance(source, Path):
+            with source.open("rb") as fh:
+                is_sqlite = fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
+            if not is_sqlite:
+                copy_file(source, dst)
+                return
+            src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+            try:
+                _backup_to(src, dst)
+            finally:
+                src.close()
+        else:
+            _backup_to(source, dst)
+        _use_rollback_journal(dst)
+        _blank_snapshot_columns(dst)
 
     def write_volume_info(
         self,
