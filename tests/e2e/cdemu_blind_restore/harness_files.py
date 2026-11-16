@@ -109,12 +109,29 @@ def heredoc_writes(command: str) -> Iterator[tuple[str, str]]:
         yield m.group("path"), "\n".join(body)
 
 
+_QUOTED = re.compile(r"'(?P<s>[^']*)'" + r'|"(?P<d>(?:[^"\\]|\\.)*)"')
+
+
+def _blank_quotes(text: str) -> str:
+    """Each quoted string becomes "Q" (or "" when empty), so the shell
+    operators inside it do not split it.  A double-quoted string that
+    holds a command substitution is opened up instead: the command in
+    `"$(...)"` or in backticks runs, so it must be seen."""
+    def one(m: re.Match[str]) -> str:
+        if m.group("s") is not None:
+            return '""' if m.group("s") == "" else '"Q"'
+        inner = m.group("d")
+        if "$(" in inner or "`" in inner:
+            return " " + _blank_quotes(inner) + " "
+        return '""' if inner == "" else '"Q"'
+    return _QUOTED.sub(one, text)
+
+
 def _blank(text: str) -> str:
     """*text* with quoted strings, ${...} and $((...)) replaced by
     placeholders, so the shell operators inside them do not split it.
     An empty string stays "" so a send of ENTER can be told apart."""
-    text = re.sub(r"'[^']*'", lambda m: '""' if m.group(0) == "''" else '"Q"', text)
-    text = re.sub(r'"(?:[^"\\]|\\.)*"', lambda m: '""' if m.group(0) == '""' else '"Q"', text)
+    text = _blank_quotes(text)
     text = re.sub(r"\$\{[^}]*\}", "V", text)
     text = re.sub(r"\$\(\((?:[^()]|\([^()]*\))*\)\)", "A", text)
     # An array written out: NAME=(word word ...).
@@ -194,6 +211,8 @@ def harness_file(transcript: Path) -> Callable[[str], bool]:
 
     def exempt(path: str) -> bool:
         path = _normal(path)
+        if path in others:  # the agent wrote it, and not as the loop
+            return False
         return path in prompt_files or bool(_RESTORE_SH_WRITES.search(path))
 
     return exempt

@@ -178,6 +178,27 @@ def test_a_loop_that_does_more_is_a_wrapper(extra: str) -> None:
     assert not harness_files.is_swap_loop(_body(_loop_with(extra)))
 
 
+# The same, with the command hidden inside a double-quoted substitution.
+@pytest.mark.parametrize("extra", [
+    '    echo "$(sh /media/restore.sh ~/restored latest)"\n',
+    '    echo "`sh /media/restore.sh`"\n',
+    '    restore-shell send "$(cat ~/alpha.key)"\n',
+])
+def test_a_quoted_substitution_is_looked_into(extra: str) -> None:
+    assert not harness_files.is_swap_loop(_body(_loop_with(extra)))
+
+
+def test_a_loop_with_quoted_substitutions_is_the_loop() -> None:
+    quoted = _loop_with('    echo "swap $(date +%T): ${DATA_DISCS[$disc_idx]}"\n')
+    assert not harness_files.is_swap_loop(_body(quoted))  # date: not the loop
+    quoted = _body(_loop_with("")).replace(
+        "out=$(restore-shell expect 'Insert the right disc|restore complete' 120)",
+        "out=\"$(restore-shell expect 'Insert the right disc|restore complete' 120)\"",
+    )
+    assert 'out="$(' in quoted
+    assert harness_files.is_swap_loop(quoted)
+
+
 def test_a_runner_is_a_wrapper() -> None:
     assert not harness_files.is_swap_loop(_body(RESTORE_RUNNER))
 
@@ -215,6 +236,14 @@ def test_a_path_written_as_loop_and_as_wrapper_is_not_exempt(
     ]))
     assert not exempt("/tmp/x.sh")
     assert exempt("/tmp/y.sh")
+
+
+def test_a_resume_sh_the_agent_wrote_itself_is_not_exempt(tmp_path: Path) -> None:
+    exempt = harness_files.harness_file(_transcript(tmp_path, [
+        "cat > ~/lcsas-restore-tools/resume.sh <<'EOF'\n"
+        "sh /media/restore.sh ~/restored latest\nEOF",
+    ]))
+    assert not exempt("/home/lcsas-blind/lcsas-restore-tools/resume.sh")
 
 
 # --- verify.sh end to end ----------------------------------------------------

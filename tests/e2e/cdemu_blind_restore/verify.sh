@@ -292,7 +292,7 @@ check OUTCOME "agent ran restore.sh (no auto/legacy/standalone)" \
 #     allowed — we only forbid inspecting code.
 cat > "$RUN_DIR/script_read_check.py" <<'PY'
 import json, re, shlex, sys
-sys.path.insert(0, sys.argv[2])
+sys.path.insert(0, sys.argv[2]); sys.dont_write_bytecode = True
 from harness_files import harness_file  # files the prompt or restore.sh made
 made_by_harness = harness_file(sys.argv[1])
 
@@ -375,7 +375,7 @@ check CONDUCT "agent drove restore via managed terminal session" \
 #     /var/tmp/.
 cat > "$RUN_DIR/no_authoring_check.py" <<'PY'
 import json, re, sys
-sys.path.insert(0, sys.argv[2])
+sys.path.insert(0, sys.argv[2]); sys.dont_write_bytecode = True
 from harness_files import harness_file  # files the prompt or restore.sh made
 made_by_harness = harness_file(sys.argv[1])
 
