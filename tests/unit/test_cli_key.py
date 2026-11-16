@@ -1304,6 +1304,34 @@ class TestKeyVerify:
         assert rc == 0
         assert "OK:" in capsys.readouterr().out
 
+    def test_key_verify_prefix_typed_cards(self, tmp_path: Path, capsys) -> None:
+        """#797: cards typed as 4-letter prefixes verify too."""
+        cfg = _config_file(tmp_path)  # keys/ unlockable by PASSWORD
+        out = tmp_path / "shares"
+        main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha",
+            "--out", str(out),
+        ])
+        capsys.readouterr()
+        typed = []
+        for i, card in enumerate(_share_card_files(out)[:2]):
+            lines = card.read_text().splitlines()
+            idx = next(
+                n for n, ln in enumerate(lines) if "THE SHARE WORDS" in ln
+            ) + 1
+            lines[idx] = "  " + " ".join(w[:4] for w in lines[idx].split())
+            f = tmp_path / f"typed-{i}.txt"
+            f.write_text("\n".join(lines) + "\n")
+            typed.append(f)
+        rc = main([
+            "--config", str(cfg),
+            "key", "verify", "--repo", "alpha",
+            "--share-file", str(typed[0]), "--share-file", str(typed[1]),
+        ])
+        assert rc == 0
+        assert "OK:" in capsys.readouterr().out
+
     def test_key_verify_password_file_ok(self, tmp_path: Path, capsys) -> None:
         cfg = _config_file(tmp_path)
         rc = main([
