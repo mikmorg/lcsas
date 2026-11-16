@@ -71,6 +71,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_meta_bundles_dvdisaster_source.py` | Hardening test (FMT-02): the dvdisaster RS03 source must be pinned, |
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
 | `test_meta_completeness_367.py` | test_meta_completeness_367.py -- tiered meta completeness (issue #367). |
+| `test_meta_upstream_provenance.py` | test_meta_upstream_provenance.py -- bundled upstream bytes come from the pinned archives (#832). |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
 | `test_multidisc_cases.py` | Run recovery/tests/test_multidisc.py's cases inside the hardening tier (#465). |
 | `test_no_boot_deadend_routing.py` | test_no_boot_deadend_routing.py -- static regression guard against the |
