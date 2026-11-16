@@ -409,3 +409,17 @@ def test_cli_reburn_flag_and_dry_run(two, caplog, monkeypatch):
                      two["session_id"], "--location", "Home",
                      "--device", two["db"], *extra]) == 0, caplog.text
         assert seen["reburn"] is expected
+
+
+def test_reburn_hint_names_reburn_where_a_verified_disc_is_recorded(two):
+    """The 'burn it again' hint (a failed receipt, 'lcsas status') adds
+    --reburn where the burn would otherwise skip the volume."""
+    from lcsas.cli.common import _reburn_hint
+
+    _burn(two)
+    vid = two["manifests"][0].volume_id
+    sid = two["session_id"]
+    assert _reburn_hint(two["conn"], vid, "Home").endswith(
+        f"'lcsas burn --session {sid} --location Home --reburn'.")
+    assert _reburn_hint(two["conn"], vid, "Bank").endswith(
+        f"'lcsas burn --session {sid} --location Bank'.")
