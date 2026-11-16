@@ -19,6 +19,7 @@ import json
 import os
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -869,6 +870,15 @@ class TestSplitErrors:
 # Combine error branches + stdin path.
 # --------------------------------------------------------------------------
 
+def _assert_stdout_clean(capsys: pytest.CaptureFixture[str], message: str) -> Any:
+    """stdout is the password channel of `key combine`: on failure it stays
+    empty and the message is on stderr."""
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+    return captured
+
+
 class TestCombineErrors:
     def _make_shares(self, tmp_path: Path) -> list[Path]:
         pw_file = _write_pw_file(tmp_path / "pw")
@@ -885,15 +895,17 @@ class TestCombineErrors:
         import io
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
         assert main(["key", "combine"]) == 1
-        assert "No shares supplied" in capsys.readouterr().out
+        _assert_stdout_clean(capsys, "No shares supplied")
 
     def test_under_threshold_fails(self, tmp_path: Path, capsys) -> None:
         mfiles = self._make_shares(tmp_path)
+        capsys.readouterr()  # drop the split's output
         assert main(["key", "combine", "--share-file", str(mfiles[0])]) == 1
-        assert "Could not reconstruct" in capsys.readouterr().out
+        _assert_stdout_clean(capsys, "Could not reconstruct")
 
     def test_corrupted_share_fails(self, tmp_path: Path, capsys) -> None:
         mfiles = self._make_shares(tmp_path)
+        capsys.readouterr()  # drop the split's output
         bad = tmp_path / "bad.txt"
         words = mfiles[1].read_text().strip().split()
         words[3] = "zzzzzz"  # not a valid wordlist word
@@ -908,7 +920,7 @@ class TestCombineErrors:
         # the per-share check names the bad word (rc 1) before
         # reconstruction, as the C combiner does.  (#797: this was
         # "found 0 share words" before.) [KEY-01]
-        captured = capsys.readouterr()
+        captured = _assert_stdout_clean(capsys, "failed individual validation")
         assert f"share ({bad}): word 4 'zzzzzz' is not a share word" in captured.err
 
     def test_foreign_share_set_fails(self, tmp_path: Path, capsys) -> None:
@@ -922,18 +934,19 @@ class TestCombineErrors:
             "--password-file", str(pw2), "--out", str(out2),
         ])
         foreign = _share_mnemonic_files(out2, "beta")
+        capsys.readouterr()  # drop the splits' output
         assert main([
             "key", "combine",
             "--share-file", str(mine[0]),
             "--share-file", str(foreign[0]),
         ]) == 1
-        assert "Could not reconstruct" in capsys.readouterr().out
+        _assert_stdout_clean(capsys, "Could not reconstruct")
 
     def test_share_file_missing(self, tmp_path: Path, capsys) -> None:
         assert main([
             "key", "combine", "--share-file", str(tmp_path / "nope.txt"),
         ]) == 1
-        assert "Share file does not exist" in capsys.readouterr().out
+        _assert_stdout_clean(capsys, "Share file does not exist")
 
     def test_blank_share_file_rejected(
         self, tmp_path: Path, capsys
@@ -943,7 +956,62 @@ class TestCombineErrors:
         blank = tmp_path / "blank.txt"
         blank.write_text("   \n")
         assert main(["key", "combine", "--share-file", str(blank)]) == 1
-        assert "0 share words" in capsys.readouterr().out
+        _assert_stdout_clean(capsys, "0 share words")
+
+    def test_stdout_holds_only_the_password_subprocess(self, tmp_path: Path) -> None:
+        """A real `lcsas key combine` process, stdout and stderr captured
+        apart: on failure stdout is empty and the error is on stderr; with
+        --out stdout is empty; otherwise stdout is exactly the password."""
+        import subprocess
+        import sys
+
+        mfiles = self._make_shares(tmp_path)
+        bad = tmp_path / "bad.txt"
+        words = mfiles[1].read_text().split()
+        words[3] = "zzzzzz"
+        bad.write_text(" ".join(words) + "\n")
+        env = dict(os.environ)
+        env["PYTHONPATH"] = (
+            str(Path(__file__).resolve().parents[2] / "src")
+            + os.pathsep + env.get("PYTHONPATH", "")
+        )
+
+        def run(*args: str) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [sys.executable, "-m", "lcsas.cli.main", "key", "combine", *args],
+                capture_output=True, env=env, timeout=120, check=False,
+                stdin=subprocess.DEVNULL,
+            )
+
+        # Too few shares: fails at the rebuild.
+        proc = run("--share-file", str(mfiles[0]))
+        assert proc.returncode == 1
+        assert proc.stdout == b""
+        assert b"Could not reconstruct the password" in proc.stderr
+        # A mistyped share: fails at the per-share check.
+        proc = run("--share-file", str(mfiles[0]), "--share-file", str(bad))
+        assert proc.returncode == 1
+        assert proc.stdout == b""
+        assert b"word 4 'zzzzzz' is not a share word" in proc.stderr
+        assert b"failed individual validation" in proc.stderr
+        # A missing file.
+        proc = run("--share-file", str(tmp_path / "nope.txt"))
+        assert proc.returncode == 1
+        assert proc.stdout == b""
+        assert b"Share file does not exist" in proc.stderr
+        # Success to a file: nothing on stdout.
+        out = tmp_path / "pw-out"
+        proc = run(
+            "--share-file", str(mfiles[0]), "--share-file", str(mfiles[2]),
+            "--out", str(out),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == b""
+        assert out.read_bytes() == PASSWORD
+        # Success to stdout: the password, byte for byte, and nothing else.
+        proc = run("--share-file", str(mfiles[0]), "--share-file", str(mfiles[2]))
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == PASSWORD
 
     def test_combine_from_stdin(self, tmp_path: Path, capsys, monkeypatch) -> None:
         import io

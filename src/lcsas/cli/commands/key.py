@@ -19,7 +19,7 @@ from lcsas.cli.common import (
     _open_catalog,
     _resolve_db_path,
 )
-from lcsas.log import get_logger
+from lcsas.log import get_logger, log_to_stderr
 
 if TYPE_CHECKING:
     from lcsas.config.settings import LCSASConfig
@@ -710,7 +710,17 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
 
 
 def cmd_key_combine(args: argparse.Namespace) -> int:
-    """Reconstruct a repository password from K SLIP-0039 share mnemonics."""
+    """Reconstruct a repository password from K SLIP-0039 share mnemonics.
+
+    stdout carries the rebuilt password and nothing else: a script runs
+    ``lcsas key combine > pw``, so every message, log line included, goes
+    to stderr.  On failure stdout stays empty.
+    """
+    with log_to_stderr():
+        return _key_combine(args)
+
+
+def _key_combine(args: argparse.Namespace) -> int:
     from lcsas.keyshare import (
         KeyShareError,
         check_share,
@@ -792,7 +802,10 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
 
     if args.out is not None:
         _write_private_file(args.out, password)
-        print(f"Reconstructed password written to {args.out} (mode 0600).")
+        print(
+            f"Reconstructed password written to {args.out} (mode 0600).",
+            file=sys.stderr,
+        )
     else:
         # Raw bytes: a password may not be valid UTF-8 and must not gain a
         # trailing newline, or it would no longer match the original.
