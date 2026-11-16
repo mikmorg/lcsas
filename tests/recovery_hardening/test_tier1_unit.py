@@ -640,6 +640,65 @@ def test_fixture_verbose_full_restore(tmp_path: Path) -> None:
     assert "indexed" in err and "blobs" in err, err
 
 
+def test_fixture_refused_names_exit_nonzero(tmp_path: Path) -> None:
+    """Issue #781: a snapshot whose tree holds refused names ("../escape",
+    "foo/bar", "evil<NUL>x") still restores every other node, names each
+    refused one in a NOT RESTORED line, and exits 1 without saying
+    "restore complete" (main.c's LCSAS_TREE_INCOMPLETE branch).
+
+    The fixture keeps such names out of its snapshots (so the happy-path
+    restores exit 0); this test adds a snapshot of its hostile-name side
+    tree to a copy, encrypted with gen_fixture.py's own helper."""
+    import importlib.util
+    import json
+
+    fixture = _fixture_repo()
+    if fixture is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    gen_path = fixture.parent / "gen_fixture.py"
+    spec = importlib.util.spec_from_file_location("_gen_fixture", gen_path)
+    assert spec is not None and spec.loader is not None
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+
+    repo = tmp_path / "repo"
+    shutil.copytree(fixture, repo)
+    manifest = json.loads((repo / "manifest.json").read_text())
+    shutil.rmtree(repo / "snapshots")
+    (repo / "snapshots").mkdir()
+    snap = json.dumps({
+        "time": "2026-05-22T00:00:00Z",
+        "tree": manifest["nul_name_tree_id"],
+        "paths": ["/hostile"],
+        "hostname": "test", "username": "test",
+        "uid": 1000, "gid": 1000, "tags": [],
+    }).encode()
+    enc = gen.encrypt_authenticated(
+        gen.MASTER_ENCRYPT, gen.MASTER_MAC_K, gen.MASTER_MAC_R,
+        b"\x30" + b"\x00" * 15, snap,
+    )
+    (repo / "snapshots" / gen.sha256(enc).hex()).write_bytes(enc)
+
+    pwfile = _make_pwfile(tmp_path)
+    target = tmp_path / "restored"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(target),
+        timeout=30,
+    )
+    err = res.stderr
+    assert res.returncode == 1, err
+    assert err.count("NOT RESTORED: ") == 3, err
+    assert "3 item(s) were NOT restored" in err, err
+    assert "finished with errors" in err, err
+    assert "restore complete" not in err, err
+    assert (target / "evil").read_text() == "the real sibling content\n"
+    assert not (tmp_path / "escape").exists()
+
+
 def test_fixture_trailing_zeros_restored_correctly(tmp_path: Path) -> None:
     """Issue #264: trailing_zeros.bin in the fixture (0xff*64 + 0x00*8192)
     exercises write_blob_sparse tree.c:263 — the loop-exit `return 0`

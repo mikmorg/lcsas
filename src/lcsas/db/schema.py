@@ -5,13 +5,26 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from lcsas.exceptions import LcsasError
+
 _logger = logging.getLogger(__name__)
 
 CURRENT_SCHEMA_VERSION = 10
 
+# The oldest catalog schema this build migrates (#822).  The steps from
+# v2-v4 were removed: the v4->v5 step renamed ``volumes`` to
+# ``volumes_old``, which made SQLite point the foreign keys of every other
+# table at ``volumes_old`` before dropping it, and a v2 catalog failed
+# part way.  No release ever wrote a catalog older than v5 (v5 dates from
+# March 2026; v1.0.0-rc1 already wrote v9).
+MIN_MIGRATABLE_SCHEMA_VERSION = 5
+# The last release whose migrate() still had the v2-v4 steps.
+LAST_RELEASE_WITH_PRE_V5_STEPS = "v1.0.0-rc9"
 
-class SchemaVersionError(RuntimeError):
-    """Catalog schema is newer than this LCSAS build understands."""
+
+class SchemaVersionError(LcsasError, RuntimeError):
+    """Catalog schema is newer than this LCSAS build understands, or
+    older than the oldest it migrates (#822)."""
 
 
 class WedgedMigrationError(RuntimeError):
@@ -237,11 +250,12 @@ SQL_CREATE_INDICES = [
 def detect_wedged_migration(conn: sqlite3.Connection) -> list[str]:
     """Return leftover ``*_old`` table names from an interrupted migration.
 
-    The table-recreating migrations (v4→v5 on ``volumes``, v5→v6 on
-    ``volume_events``) rename the live table to ``<name>_old`` while
-    rebuilding it.  Post-FMA-07 the whole rebuild is one transaction, so
-    a leftover can only come from a pre-fix crash — and the original
-    rows are intact inside the ``*_old`` table.
+    The table-recreating migrations (v4→v5 on ``volumes``, removed in
+    #822 but run by older builds; v5→v6 on ``volume_events``) rename the
+    live table to ``<name>_old`` while rebuilding it.  Post-FMA-07 the
+    whole rebuild is one transaction, so a leftover can only come from a
+    pre-fix crash — and the original rows are intact inside the
+    ``*_old`` table.
     """
     rows = conn.execute(
         "SELECT name FROM sqlite_master "
@@ -265,14 +279,38 @@ def _refuse_wedged(conn: sqlite3.Connection) -> None:
         )
 
 
+def _refuse_too_old(conn: sqlite3.Connection) -> None:
+    """Raise if the catalog is older than this build migrates (#822).
+
+    Version 0 is an uninitialized catalog, which ``create_all`` creates.
+    """
+    version = get_schema_version(conn)
+    if 0 < version < MIN_MIGRATABLE_SCHEMA_VERSION:
+        raise SchemaVersionError(
+            f"Catalog schema is v{version}. This LCSAS build migrates "
+            f"catalogs from schema v{MIN_MIGRATABLE_SCHEMA_VERSION} on. "
+            f"LCSAS {LAST_RELEASE_WITH_PRE_V5_STEPS} is the last release "
+            f"that can migrate a v{version} catalog. Nothing was changed.",
+            recovery_hint=(
+                f"The {LAST_RELEASE_WITH_PRE_V5_STEPS} migration can leave "
+                "foreign keys pointing at a dropped table 'volumes_old' "
+                "(issue #822). Check the result with: sqlite3 <catalog> "
+                "'PRAGMA foreign_key_check'"
+            ),
+        )
+
+
 def create_all(conn: sqlite3.Connection) -> None:
     """Create all tables and indices. Idempotent (IF NOT EXISTS).
 
     Refuses wedged catalogs (leftover ``*_old`` tables) before creating
     anything, so an interrupted pre-FMA-07 migration is never masked by
-    recreating empty shadow tables over the renamed originals.
+    recreating empty shadow tables over the renamed originals.  Refuses
+    catalogs older than ``MIN_MIGRATABLE_SCHEMA_VERSION`` the same way,
+    before any table is added (#822).
     """
     _refuse_wedged(conn)
+    _refuse_too_old(conn)
     cursor = conn.cursor()
 
     cursor.execute(SQL_CREATE_SCHEMA_VERSION)
@@ -385,8 +423,18 @@ def migrate(conn: sqlite3.Connection) -> int:
     whole step back to a consistent pre-step catalog.  New migrations
     MUST follow the same template.  ``executescript`` is forbidden here
     (it implicitly commits any open transaction).
+
+    A step that recreates a table which other tables reference must
+    build the new table under another name, copy the rows, drop the old
+    table and rename the new one into place.  Renaming the live table
+    first makes SQLite point the other tables' foreign keys at the
+    renamed copy, which is then dropped (#822).
+
+    Catalogs older than ``MIN_MIGRATABLE_SCHEMA_VERSION`` are refused
+    with :class:`SchemaVersionError` before anything is changed (#822).
     """
     _refuse_wedged(conn)
+    _refuse_too_old(conn)
     current = get_schema_version(conn)
     if current >= CURRENT_SCHEMA_VERSION:
         return current
@@ -396,102 +444,11 @@ def migrate(conn: sqlite3.Connection) -> int:
     cursor = conn.cursor()
     fk_off = False
     try:
-        # v2 → v3: add verified_at column, created_at on repositories
-        if current < 3:
-            cursor.execute("BEGIN IMMEDIATE")
-            cols = {r[1] for r in cursor.execute("PRAGMA table_info(volumes)").fetchall()}
-            if "verified_at" not in cols:
-                cursor.execute("ALTER TABLE volumes ADD COLUMN verified_at DATETIME")
-            cols = {r[1] for r in cursor.execute("PRAGMA table_info(repositories)").fetchall()}
-            if "created_at" not in cols:
-                cursor.execute(
-                    "ALTER TABLE repositories ADD COLUMN "
-                    "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
-                )
-            cursor.execute("DROP INDEX IF EXISTS idx_packs_sha256")
-            cursor.execute("DROP INDEX IF EXISTS idx_volume_packs_volume_id")
-            cursor.execute(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                (3,),
-            )
-            cursor.execute("COMMIT")
-
-        # v3 → v4: volume_events table, volume_copies extra columns
-        if current < 4:
-            cursor.execute("BEGIN IMMEDIATE")
-            # Create volume_events table (idempotent)
-            cursor.execute(SQL_CREATE_VOLUME_EVENTS)
-            for idx_sql in (
-                "CREATE INDEX IF NOT EXISTS idx_volume_events_volume "
-                "ON volume_events (volume_id);",
-                "CREATE INDEX IF NOT EXISTS idx_volume_events_type "
-                "ON volume_events (event_type);",
-            ):
-                cursor.execute(idx_sql)
-
-            # Add columns to volume_copies (if missing)
-            cols = {r[1] for r in cursor.execute("PRAGMA table_info(volume_copies)").fetchall()}
-            if "iso_sha256" not in cols:
-                cursor.execute("ALTER TABLE volume_copies ADD COLUMN iso_sha256 TEXT")
-            if "last_verified_at" not in cols:
-                cursor.execute("ALTER TABLE volume_copies ADD COLUMN last_verified_at DATETIME")
-            if "media_serial" not in cols:
-                cursor.execute(
-                    "ALTER TABLE volume_copies ADD COLUMN media_serial TEXT NOT NULL DEFAULT ''"
-                )
-
-            cursor.execute(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                (4,),
-            )
-            cursor.execute("COMMIT")
-
-        # v4 → v5: widen volumes.status CHECK to include CONSOLIDATING.
-        # SQLite cannot alter CHECK constraints — must recreate the table.
-        # We disable FK enforcement during the swap to avoid spurious violations.
-        # PRAGMA foreign_keys is a silent no-op inside a transaction, so it
-        # must be set before BEGIN (we are in autocommit here).
-        if current < 5:
-            conn.execute("PRAGMA foreign_keys=OFF")
-            fk_off = True
-            cursor.execute("BEGIN IMMEDIATE")
-            cursor.execute("ALTER TABLE volumes RENAME TO volumes_old")
-            cursor.execute(
-                """CREATE TABLE volumes (
-                    volume_id   INTEGER PRIMARY KEY AUTOINCREMENT,
-                    label       TEXT UNIQUE NOT NULL,
-                    uuid        TEXT UNIQUE NOT NULL,
-                    media_type  TEXT NOT NULL,
-                    capacity_bytes INTEGER NOT NULL,
-                    used_bytes  INTEGER NOT NULL DEFAULT 0,
-                    location    TEXT NOT NULL DEFAULT 'Home_Shelf',
-                    status      TEXT NOT NULL DEFAULT 'STAGING'
-                                CHECK (status IN (
-                                    'STAGING', 'BURNING', 'BURNED',
-                                    'VERIFIED', 'CONSOLIDATING', 'DEPRECATED', 'DESTROYED'
-                                )),
-                    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    closed_at   DATETIME,
-                    verified_at DATETIME
-                )"""
-            )
-            cursor.execute("INSERT INTO volumes SELECT * FROM volumes_old")
-            cursor.execute("DROP TABLE volumes_old")
-            # Recreate the status index (v5 migration dropped the old one)
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_volumes_status ON volumes (status);"
-            )
-            cursor.execute(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                (5,),
-            )
-            cursor.execute("COMMIT")
-            conn.execute("PRAGMA foreign_keys=ON")
-            fk_off = False
-
         # v5 → v6: widen volume_events.event_type CHECK to include
         # 'BURN_RECEIPT_IMPORTED'. SQLite cannot alter CHECK constraints —
-        # the table must be recreated. No data shape changes.
+        # the table must be recreated. No data shape changes.  Renaming
+        # the live table is safe here only because no table references
+        # volume_events (see the docstring, #822).
         if current < 6:
             conn.execute("PRAGMA foreign_keys=OFF")
             fk_off = True

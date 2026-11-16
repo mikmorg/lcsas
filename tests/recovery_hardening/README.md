@@ -73,6 +73,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_meta_completeness_367.py` | test_meta_completeness_367.py -- tiered meta completeness (issue #367). |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
 | `test_multidisc_cases.py` | Run recovery/tests/test_multidisc.py's cases inside the hardening tier (#465). |
+| `test_name_escaping_differential.py` | Issue #781: tiers 1, 2 and 3 restore escaped file names alike. |
 | `test_no_boot_deadend_routing.py` | test_no_boot_deadend_routing.py -- static regression guard against the |
 | `test_no_bypass_check.py` | Unit tests for the blind-restore #13 bypass check. |
 | `test_no_unpinned_boot_artifacts.py` | BOOT-07: nothing executable reaches a meta-volume tree unpinned. |
@@ -181,6 +182,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_verify_outcome_conduct.py` | verify.sh scores OUTCOME and CONDUCT apart, and CONDUCT ignores files |
 | `test_verify_self.py` | Hardening test #6 + #9: verify.sh must fail closed on every known |
 | `test_windows_doc_multiextent_caveat.py` | Hardening doc-pin: RECOVER_WINDOWS.txt documents the >4 GiB CDFS trap (FMT-04). |
+| `test_workflow_contracts.py` | Hardening: every CI pytest run has a passed-test floor, and triggers stay sane (#831, #837). |
 | `test_workflow_path_filter.py` | Hardening: audit-gate path-filter has no ghost entries and no holes (GATE-04). |
 
 ## Adding a new hardening test

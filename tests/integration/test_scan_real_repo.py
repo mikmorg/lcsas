@@ -286,3 +286,39 @@ class TestScanPersistsRealSnapshots:
         ids = {r["snapshot_id"] for r in world.query("SELECT snapshot_id FROM snapshots")}
         assert ids == {s["id"] for s in world.rustic_snapshots()}
         assert "Removed 1 snapshot row(s) with an empty id" in capsys.readouterr().out
+
+    def test_scan_after_rustic_forget_reconciles_the_row(self, world, capsys):
+        """#824 against real rustic: a forgotten snapshot loses its row when
+        no disc can hold it, and keeps a noted row when one may."""
+        assert world.lcsas("scan") == 0
+        older, newer = sorted(world.rustic_snapshots(), key=lambda s: s["time"])
+
+        world._rustic("forget", older["id"])
+        assert {s["id"] for s in world.rustic_snapshots()} == {newer["id"]}
+        assert world.lcsas("scan") == 0
+
+        ids = {r["snapshot_id"] for r in world.query("SELECT snapshot_id FROM snapshots")}
+        assert ids == {newer["id"]}
+        assert "removed 1 snapshot row(s)" in capsys.readouterr().out
+
+        # Now a volume exists (staged after both snapshots): forgetting
+        # the newer one keeps its row, noted.
+        conn = get_connection(world.db)
+        try:
+            conn.execute(
+                "INSERT INTO volumes (label, uuid, media_type, capacity_bytes,"
+                " status) VALUES ('TEST_TINY_2026_0001', 'u1', 'TEST_TINY',"
+                " 1000000, 'VERIFIED')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        # A third snapshot keeps the listing non-empty: an empty listing
+        # leaves every row as it is.
+        world.backup()
+        world._rustic("forget", newer["id"])
+        assert world.lcsas("scan") == 0
+        rows = {r["snapshot_id"]: r["description"] for r in world.query(
+            "SELECT snapshot_id, description FROM snapshots"
+        )}
+        assert rows[newer["id"]].startswith("LCSAS: not in the mirror")

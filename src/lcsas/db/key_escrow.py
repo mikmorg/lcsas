@@ -21,10 +21,10 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
 from pathlib import Path
 
 from lcsas.db.models import KeyEscrow
+from lcsas.utils.timestamps import utc_now
 
 
 def _table_exists(conn: sqlite3.Connection) -> bool:
@@ -72,7 +72,7 @@ def record_split(
     follow.
     """
     if split_at is None:
-        split_at = datetime.now(UTC).isoformat()
+        split_at = utc_now()
     conn.execute(
         """INSERT INTO key_escrow
                (repo_id, threshold, shares, slip39_id, split_at)

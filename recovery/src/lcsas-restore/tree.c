@@ -118,6 +118,73 @@ decode_path_component(const char *src, const lcsas_json_tok *tok,
     return n;
 }
 
+/* Issue #781 -- print `n` bytes of a name or path so that a control
+ * character or DEL in it cannot move the cursor or hide text on the
+ * reader's terminal: those bytes are shown as \xNN. */
+static void
+print_visible(const char *s, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x20 || c == 0x7F) fprintf(stderr, "\\x%02x", c);
+        else fputc(c, stderr);
+    }
+}
+
+/* Issue #781 -- the escaped text of the node name being decoded.  One
+ * buffer for the whole walk (the name is decoded before any recursion
+ * and the text is not needed after), so the per-frame stack the depth
+ * cap is sized for does not grow. */
+static char g_stored_name[1024];
+
+/* Issue #781 -- read the node's "name" and decode it to the raw bytes
+ * to create.  The JSON string holds rustic's escaped text (see
+ * lcsas_unescape_name), and the path-safety checks run on the DECODED
+ * bytes, never on the escaped text.  Returns 0 with the name in
+ * `out`; otherwise prints a "NOT RESTORED" line naming the node and
+ * returns -1, and the caller counts the node as not restored. */
+static int
+decode_node_name(const char *src, const lcsas_json_tok *tok,
+                 const char *target_dir, char *out, size_t cap)
+{
+    const char *why = NULL;
+    const char *shown = g_stored_name;
+    size_t shown_len = 0;
+    long n = lcsas_json_decode_string(src, tok, g_stored_name,
+                                      sizeof g_stored_name);
+    if (n < 0) {
+        why = "the name is too long or badly stored";
+        shown = src + tok->start;
+        shown_len = tok->end > tok->start ? tok->end - tok->start : 0;
+        if (shown_len > 200) shown_len = 200;
+    } else {
+        long m;
+        shown_len = (size_t)n;
+        m = lcsas_unescape_name(g_stored_name, (size_t)n, out, cap);
+        if (m < 0) {
+            why = "the name cannot be decoded";
+        } else {
+            why = lcsas_name_refusal(out, (size_t)m);
+#ifdef _WIN32
+            if (!why) why = lcsas_name_windows_refusal(out, (size_t)m);
+#endif
+#ifdef __APPLE__
+            if (!why && !lcsas_name_is_utf8(out, (size_t)m)) {
+                why = "macOS cannot store a name that is not valid UTF-8";
+            }
+#endif
+        }
+    }
+    if (!why) return 0;
+    fprintf(stderr, "NOT RESTORED: ");
+    print_visible(target_dir, strlen(target_dir));
+    fputc('/', stderr);
+    print_visible(shown, shown_len);
+    fprintf(stderr, " (%s)\n", why);
+    return -1;
+}
+
 static void
 hardlink_map_init(hardlink_map *m)
 {
@@ -850,6 +917,7 @@ tree_restore_recurse(const char *repo_path,
                      struct lcsas_disc_locator *locator,
                      lcsas_progress *progress,
                      hardlink_map *hlmap,
+                     unsigned long *not_restored,
                      int depth)
 {
     unsigned char tree_id[32];
@@ -943,38 +1011,20 @@ tree_restore_recurse(const char *repo_path,
             char node_path[4096];
 
             if (name_i < 0 || type_i < 0) continue;
-            {
-                long nrc = decode_path_component((char *)blob,
-                                                 &toks[name_i],
-                                                 name_buf,
-                                                 sizeof name_buf);
-                if (nrc == DECODE_PATH_NUL) {
-                    fprintf(stderr,
-                            "skip unsafe name (embedded NUL)\n");
-                    continue;
-                }
-                if (nrc < 0) continue;  /* overflow / bad escape */
+            /* Issue #781: decode rustic's escaped name, then run the
+             * path-safety checks (empty, ".", "..", '/', NUL; on
+             * Windows also the characters NTFS cannot store) on the
+             * decoded bytes.  A refused name is reported and counted,
+             * and the walk carries on with the next node; the restore
+             * then ends non-zero (see lcsas_tree_restore). */
+            if (decode_node_name((char *)blob, &toks[name_i], target_dir,
+                                 name_buf, sizeof name_buf) != 0) {
+                (*not_restored)++;
+                continue;
             }
             if (lcsas_json_decode_string((char *)blob, &toks[type_i],
                                          type_buf, sizeof type_buf) < 0)
                 continue;
-
-            /* Path traversal safety: name must be a plain basename. */
-            if (lcsas_path_safe_name(name_buf) != 0) {
-                fprintf(stderr, "skip unsafe name: %s\n", name_buf);
-                continue;
-            }
-            {
-                size_t i;
-                int has_slash = 0;
-                for (i = 0; name_buf[i]; i++) {
-                    if (name_buf[i] == '/') { has_slash = 1; break; }
-                }
-                if (has_slash) {
-                    fprintf(stderr, "skip name with slash: %s\n", name_buf);
-                    continue;
-                }
-            }
 
             {
                 /* T1C-04: a silently-truncated path restores a file to
@@ -1062,7 +1112,8 @@ tree_restore_recurse(const char *repo_path,
                     if (tree_restore_recurse(repo_path, mk, ix, sub_hex,
                                              node_path, target_root,
                                              locator, progress,
-                                             hlmap, depth + 1) != 0) {
+                                             hlmap, not_restored,
+                                             depth + 1) != 0) {
                         goto out;
                     }
                 }
@@ -1191,11 +1242,21 @@ lcsas_tree_restore(const char *repo_path,
                    lcsas_progress *progress)
 {
     hardlink_map hlmap;
+    unsigned long not_restored = 0;
     int rc;
     hardlink_map_init(&hlmap);
     rc = tree_restore_recurse(repo_path, mk, ix, tree_id_hex,
                               target_dir, target_root,
-                              locator, progress, &hlmap, 0);
+                              locator, progress, &hlmap,
+                              &not_restored, 0);
     hardlink_map_free(&hlmap);
+    /* Issue #781: a node whose name was refused is not restored.  Say
+     * how many, and never report the restore as complete. */
+    if (not_restored > 0) {
+        fprintf(stderr,
+                "ERROR: %lu item(s) were NOT restored (see the "
+                "\"NOT RESTORED\" lines above)\n", not_restored);
+        if (rc == 0) rc = LCSAS_TREE_INCOMPLETE;
+    }
     return rc;
 }

@@ -5,11 +5,15 @@ name: test
 # rustic, with real rustic". No Protocol mocks here — this CI installs the
 # actual binaries and exercises them end-to-end against the integration suite.
 
+# One run per PR commit (#837): pull_request tests every PR commit, so
+# push names master only.  With `branches: ['**']` a PR commit ran twice
+# (push + pull_request).  A tag push starts nothing: the tagged commit
+# was tested on master.  pull_request stays unfiltered: `test` and
+# `recovery-hardening` are required checks and must report on every PR.
 on:
   push:
-    branches: ['**']
+    branches: [master]
   pull_request:
-    branches: ['**']
 
 jobs:
   test:
@@ -61,10 +65,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python (3.11 default; 3.10 for the tier-3 floor check)
+        # The generated tier-3 reader promises to run on Python 3.10
+        # (RST-09), and the test that compiles it under python3.10
+        # skipped in every job (#831).  The last version listed is the
+        # default `python`.
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: |
+            3.10
+            3.11
+
+      - name: python3.10 is on PATH and python is still 3.11
+        run: |
+          set -euo pipefail
+          python3.10 --version
+          python --version | grep -q '^Python 3\.11\.'
+          python3 --version | grep -q '^Python 3\.11\.'
 
       - name: Install rustic (pinned; the one pin lives in the action)
         uses: ./.github/actions/install-rustic
@@ -108,10 +125,31 @@ jobs:
           grep -Eq '[1-9][0-9]* tests? collected' /tmp/contract_collect.log
 
       - name: Run unit tests
+        env:
+          PYTEST_ADDOPTS: --junitxml=/tmp/unit.xml
         run: make test-unit
 
+      - name: Unit skip floor
+        # #831: every pytest run in CI has a passed floor.  2026-11-16
+        # master push (run 43798138583): 2904 passed / 1 skipped (the
+        # python3.10 compile, which now runs).  Floor = 2800; re-baseline
+        # down only from a known-good run, never up to chase a flake.
+        run: python3 scripts/ci_min_passed.py /tmp/unit.xml --min-passed 2800
+
+      - name: The tier-3 reader compiles under Python 3.10 (not skipped)
+        # make test-unit ran it above; this proves it RAN rather than
+        # skipped on a missing python3.10 (#831).
+        run: |
+          pytest "tests/unit/test_write_standalone.py::TestStandaloneFloor::test_generated_script_compiles_under_python310" \
+            -v --junitxml=/tmp/py310.xml
+          python3 scripts/ci_min_passed.py /tmp/py310.xml --min-passed 1
+
       - name: Meta bundling completeness (six-target contract)
-        run: pytest tests/recovery_hardening/test_meta_bundling_completeness.py -v
+        run: |
+          pytest tests/recovery_hardening/test_meta_bundling_completeness.py -v \
+            --junitxml=/tmp/meta-bundling.xml
+          # Run 43798138583: 32 passed / 1 skipped.
+          python3 scripts/ci_min_passed.py /tmp/meta-bundling.xml --min-passed 32
 
       - name: Run integration tests
         env:

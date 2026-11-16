@@ -228,8 +228,8 @@ Tier-2 (rustic) sanitizes input during `rustic backup` — a real
 malicious tree cannot be created via the documented interface
 without synthesising a tree blob directly.  Operator-visible
 behaviour on a hostile snapshot therefore differs only in the
-delivery channel (tier-1 logs `skip unsafe name: <name>` to stderr
-and continues; rustic does not get the chance to fail on a name
+delivery channel (tier-1 logs `NOT RESTORED: <path> (<reason>)` to
+stderr, continues, and exits 1 at the end (#781); rustic does not get the chance to fail on a name
 its own backup pipeline never produced).  This is parity in
 practice: both tiers refuse to materialise a `..`-escape or
 absolute path under the restore target.

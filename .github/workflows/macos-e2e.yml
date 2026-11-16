@@ -52,6 +52,8 @@ on:
     paths:
       - "recovery/scripts/**"
       - "src/lcsas/meta/**"
+      # The tier-3 reader the meta disc carries (#837).
+      - "src/lcsas/restore/**"
       - "src/lcsas/staging/metadata.py"
       # The set markers on the discs, and name_cmd (#606, #617).
       - "src/lcsas/staging/repo_marker.py"

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from unittest import mock
 
 import pytest
 
@@ -269,8 +270,21 @@ class TestLockedConnection:
         # Create a file that causes an error during PRAGMA/quick_check
         db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
 
-        with pytest.raises((sqlite3.DatabaseError, RuntimeError)):
+        opened: list[sqlite3.Connection] = []
+        real_connect = sqlite3.connect
+
+        def tracking_connect(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            opened.append(conn)
+            return conn
+
+        with mock.patch("lcsas.db.connection.sqlite3.connect", tracking_connect), \
+                pytest.raises((sqlite3.DatabaseError, RuntimeError)):
             get_connection(db)
 
-        # If connection wasn't closed, a subsequent attempt would fail to open
-        # This test primarily validates the error handling code path works
+        # #769: the PRAGMA setup (journal_mode is the first statement to read
+        # the damaged header) fails, and the connection must be closed before
+        # the error propagates.  A closed connection refuses any statement.
+        assert len(opened) == 1
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            opened[0].execute("SELECT 1")
