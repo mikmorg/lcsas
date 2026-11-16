@@ -84,6 +84,13 @@ from lcsas.restore._aes_pure import (
 _PROGRESS_FILES_INTERVAL = 50
 _PROGRESS_BYTES_INTERVAL = 64 * 1024 * 1024  # 64 MiB
 
+# The file-count pass reads every tree blob; the restore pass then needs
+# the same trees again.  On a multi-disc archive a second read can mean
+# a second disc prompt (#602), so the count pass keeps the trees it read
+# (checked against their hash) for the restore pass, up to this many
+# bytes of tree data.  Trees past the cap are read again, as before.
+_TREE_CACHE_MAX_BYTES = 128 * 1024 * 1024  # 128 MiB
+
 
 # ── Optional zstd ────────────────────────────────────────────────
 
@@ -877,6 +884,10 @@ class PurePythonRestorer:
 
         self._master_key: MasterKey | None = None
         self._blob_index: dict[str, BlobLocation] | None = None
+        # Tree blobs kept from the count pass for the restore pass
+        # (#602); emptied when restore() returns.
+        self._tree_cache: dict[str, bytes] = {}
+        self._tree_cache_bytes = 0
         self._snapshots: list[SnapshotMeta] | None = None
 
         # Progress reporting state — reset at the top of every
@@ -954,6 +965,9 @@ class PurePythonRestorer:
             if self._failures:
                 self._write_failure_manifest(target)
             raise
+        finally:
+            self._tree_cache.clear()
+            self._tree_cache_bytes = 0
 
         # Force a final 100% line so the last reported count matches
         # the total — otherwise the heir sees e.g. 47/50 and
@@ -1606,6 +1620,9 @@ class PurePythonRestorer:
         Returns:
             Raw blob content (file data or tree JSON).
         """
+        cached = self._tree_cache.get(blob_id)
+        if cached is not None:
+            return cached  # a tree the count pass read and checked (#602)
         assert self._blob_index is not None
         if blob_id not in self._blob_index:
             raise KeyError(f"Blob not found in index: {blob_id}")
@@ -1932,6 +1949,9 @@ class PurePythonRestorer:
         Only tree blobs are read (which are typically a small
         fraction of total bytes), so this is cheap even on large
         repositories.  Used to provide N/M-style progress reporting.
+
+        The trees read are kept, up to ``_TREE_CACHE_MAX_BYTES``, so the
+        restore pass does not read them (and ask for their disc) again.
         """
         total = 0
         # Iterative DFS to avoid recursion-depth limits on deep trees.
@@ -1951,6 +1971,9 @@ class PurePythonRestorer:
                 # records the failure.  Missing OSError here aborted the
                 # whole restore before the tolerant pass began (#481).
                 return total
+            if self._tree_cache_bytes + len(tree_data) <= _TREE_CACHE_MAX_BYTES:
+                self._tree_cache[tid] = tree_data
+                self._tree_cache_bytes += len(tree_data)
             for node in tree_doc.get("nodes", []):
                 ntype = node.get("type", "file")
                 if ntype == "file":
