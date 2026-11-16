@@ -49,10 +49,14 @@ def test_fixture_config_splits_only_alpha(monkeypatch) -> None:
     assert config.key_split is False  # nothing archive-wide
 
 
-def test_other_variants_split_nothing(monkeypatch) -> None:
-    monkeypatch.setenv("LCSAS_VARIANT", "split-key-docs")
+@pytest.mark.parametrize("variant", ["", "split-key-2of5", "no-catalog"])
+def test_other_variants_split_nothing(monkeypatch, variant: str) -> None:
+    # split-key-docs used to be pinned here too; since #828 it is set up as
+    # a split archive (tests/unit/test_blind_setup_fixture_guards.py).
+    monkeypatch.setenv("LCSAS_VARIANT", variant)
     config = _setup._fixture_config()
     assert not any(config.repo_split(n)[0] for n in config.repositories)
+    assert _setup._variant_splits() == {}
 
 
 def test_recorded_split_matches_cards_and_passes_drift(
@@ -63,13 +67,13 @@ def test_recorded_split_matches_cards_and_passes_drift(
     secrets.mkdir()
     (secrets / "alpha.pw").write_bytes(_SECRET + b"\n")
     monkeypatch.setattr(_setup, "SECRETS", secrets)
-    monkeypatch.setattr(_setup, "MIXED_SPLIT_CARDS", secrets / "cards")
+    monkeypatch.setattr(_setup, "SPLIT_CARDS", secrets / "cards")
     conn = get_memory_connection()
     create_all(conn)
     for name, repo_id in _IDS.items():
         register_repo(conn, repo_id, name, f"/m/{name}")
 
-    _setup._record_mixed_split(conn)
+    _setup._record_splits(conn)
 
     cards = sorted((secrets / "cards").glob("alpha-share-*-card.txt"))
     assert len(cards) == 2  # the heir's quorum of the 3 printed

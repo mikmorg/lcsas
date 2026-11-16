@@ -27,7 +27,10 @@
 #   split-key-docs       — KEY-04 docs-driven acceptance gate: agent gets a
 #                          scenario-only prompt (no command spoon-feed) plus 2
 #                          production -card.txt artifacts, and must derive
-#                          every command from the on-disc instructions.
+#                          every command from the on-disc instructions.  The
+#                          archive splits every password 2-of-5 in its
+#                          config; the discs and a config-built meta disc
+#                          carry PASSWORD_INFO.txt (#828).
 #   mixed-split          — #587: one archive, alpha's password split 2-of-3
 #                          in its own config table, bravo on an ordinary
 #                          password.  The discs and a config-built meta disc
