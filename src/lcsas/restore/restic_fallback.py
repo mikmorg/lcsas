@@ -55,11 +55,11 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from lcsas.restore._aes_fast import FastAesCtr
 from lcsas.restore._aes_pure import (
@@ -484,6 +484,82 @@ def _decrypt_authenticated(
     return _aes_ctr_fast()(encrypt_key, iv, ciphertext)
 
 
+#: What parsing a decrypted key, index, snapshot or config file raises
+#: when its plaintext is wrong: bad UTF-8 or JSON, bad base64 (all
+#: ValueError), a wrong shape, or (index, snapshot) a bad zstd frame.
+_PARSE_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError, TypeError, KeyError, AttributeError, *_ZSTD_ERRORS,
+)
+
+_T = TypeVar("_T")
+
+
+def _decrypt_and_parse(  # noqa: UP047 — the reader must run on Python 3.10
+    encrypt_key: bytes,
+    mac_k: bytes,
+    mac_r: bytes,
+    data: bytes,
+    parse: Callable[[bytes], _T],
+    what: str,
+) -> _T:
+    """Decrypt *data* and return ``parse(plaintext)``, with a second attempt.
+
+    Key, index, snapshot and config files carry no content hash, so a
+    native AES that turned wrong after its self-test would show only as
+    a file that will not parse (#793).  When parsing fails and a native
+    AES did the decryption, decrypt once more with the pure-Python AES.
+    If that parses, the native AES was wrong: it is switched off for the
+    rest of the run.  If not, the first parse error is raised: the file
+    itself is damaged.
+
+    Raises:
+        IntegrityError: the MAC check failed.
+        One of ``_PARSE_ERRORS``: *parse* failed on both attempts.
+    """
+    plaintext = _decrypt_authenticated(encrypt_key, mac_k, mac_r, data)
+    try:
+        return parse(plaintext)
+    except _PARSE_ERRORS:
+        if not _aes_ctr_fast().is_native(len(data) - 32):
+            raise
+        second = _decrypt_authenticated(
+            encrypt_key, mac_k, mac_r, data, pure=True,
+        )
+        if second == plaintext:
+            raise
+        try:
+            result = parse(second)
+        except _PARSE_ERRORS:
+            pass
+        else:
+            _aes_ctr_fast().disable(f"gave wrong output for {what}")
+            return result
+        raise
+
+
+def _unpack_repo_file(data: bytes) -> bytes:
+    """Strip the repository-v2 compression byte; decompress if zstd.
+
+    Restic repository format v2 prepends a compression-type byte
+    after decryption:
+      - ``\\x00``  → uncompressed (strip the prefix)
+      - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
+      - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
+      - ``{``       → v1 repository, raw JSON, no prefix
+
+    After the prefix byte the data is either raw JSON or a
+    zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
+    """
+    # Repo v2: first byte is a compression-type indicator
+    if len(data) > 5 and data[1:5] == _ZSTD_MAGIC:
+        # Byte 0 is compression type (1 or 2), rest is zstd frame
+        return _decompress_zstd(data[1:])
+    if len(data) > 1 and data[0:1] in (b"\x00", b"\x01", b"\x02"):
+        # Compression type present but no zstd magic → just strip
+        return data[1:]
+    return data
+
+
 def _constant_time_eq(a: bytes, b: bytes) -> bool:
     """Constant-time byte comparison to prevent timing attacks."""
     if len(a) != len(b):
@@ -585,19 +661,22 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     kek_mac_k = derived[32:48]
     kek_mac_r = derived[48:64]
 
-    # Decrypt the master key
-    master_json = _decrypt_authenticated(
-        kek_encrypt, kek_mac_k, kek_mac_r, encrypted_master
-    )
-
-    try:
+    def parse(master_json: bytes) -> MasterKey:
         master = json.loads(master_json)
         return MasterKey(
             encrypt=base64.b64decode(master["encrypt"]),
             mac_k=base64.b64decode(master["mac"]["k"]),
             mac_r=base64.b64decode(master["mac"]["r"]),
         )
-    except (ValueError, TypeError, KeyError, AttributeError) as e:
+
+    # Decrypt the master key (the MAC check raises IntegrityError: a
+    # wrong password) and parse it, with a pure-AES second attempt.
+    try:
+        return _decrypt_and_parse(
+            kek_encrypt, kek_mac_k, kek_mac_r, encrypted_master, parse,
+            f"key file {key_file.name}",
+        )
+    except _PARSE_ERRORS as e:
         raise KeyFileCorruptError(
             f"key file {key_file}: the password is right, but the master "
             f"key inside is malformed ({type(e).__name__}: {e})"
@@ -980,27 +1059,23 @@ class PurePythonRestorer:
     def _decrypt_file(self, path: Path) -> bytes:
         """Read, decrypt, and (if needed) decompress a repository file.
 
-        Restic repository format v2 prepends a compression-type byte
-        after decryption:
-          - ``\\x00``  → uncompressed (strip the prefix)
-          - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
-          - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
-          - ``{``       → v1 repository, raw JSON, no prefix
-
-        After the prefix byte the data is either raw JSON or a
-        zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
+        See ``_unpack_repo_file`` for the compression byte.  No second
+        AES attempt here: ``_read_json_file`` is the reader with one.
         """
-        data = self._decrypt(path.read_bytes())
+        return _unpack_repo_file(self._decrypt(path.read_bytes()))
 
-        # Repo v2: first byte is a compression-type indicator
-        if len(data) > 5 and data[1:5] == _ZSTD_MAGIC:
-            # Byte 0 is compression type (1 or 2), rest is zstd frame
-            data = _decompress_zstd(data[1:])
-        elif len(data) > 1 and data[0:1] in (b"\x00", b"\x01", b"\x02"):
-            # Compression type present but no zstd magic → just strip
-            data = data[1:]
+    def _read_json_file(self, path: Path) -> Any:
+        """Decrypt, decompress and parse an index, snapshot or config file.
 
-        return data
+        With a pure-AES second attempt when it will not parse (#793).
+        """
+        assert self._master_key is not None
+        mk = self._master_key
+        return _decrypt_and_parse(
+            mk.encrypt, mk.mac_k, mk.mac_r, path.read_bytes(),
+            lambda plain: json.loads(_unpack_repo_file(plain)),
+            f"{path.parent.name}/{path.name[:12]}",
+        )
 
     def _load_index(self) -> None:
         """Read and decrypt all index files → build blob location map."""
@@ -1017,8 +1092,7 @@ class PurePythonRestorer:
         for idx_file in index_files:
             if not idx_file.is_file():
                 continue
-            plaintext = self._decrypt_file(idx_file)
-            idx_doc = json.loads(plaintext)
+            idx_doc = self._read_json_file(idx_file)
             index_data.append((idx_file.name, idx_doc))
             for sup in idx_doc.get("supersedes", []):
                 supersedes.add(sup)
@@ -1052,8 +1126,7 @@ class PurePythonRestorer:
         for snap_file in sorted(snap_dir.iterdir()):
             if not snap_file.is_file():
                 continue
-            plaintext = self._decrypt_file(snap_file)
-            snap_doc = json.loads(plaintext)
+            snap_doc = self._read_json_file(snap_file)
             self._snapshots.append(
                 SnapshotMeta(
                     snapshot_id=snap_file.name,
@@ -2073,7 +2146,7 @@ class PurePythonRestorer:
         if config_path.is_file():
             import contextlib
             with contextlib.suppress(Exception):
-                config_doc = json.loads(self._decrypt_file(config_path))
+                config_doc = self._read_json_file(config_path)
 
         assert self._snapshots is not None
         assert self._blob_index is not None
