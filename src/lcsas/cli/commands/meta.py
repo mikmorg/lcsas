@@ -302,7 +302,7 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
     a meta disc directory before it's mastered into an ISO, or
     for periodic disc-health checks on a mounted meta disc.
     """
-    import hashlib
+    from lcsas.utils.hashing import sha256_file
 
     out = args.output.resolve()
     manifest_path = out / "recovery" / "MANIFEST.sha256"
@@ -340,14 +340,7 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
         if not path.is_file():
             missing.append(rel)
             continue
-        h = hashlib.sha256()
-        with path.open("rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
-        got = h.hexdigest()
+        got = sha256_file(path)
         if got != want_sha:
             mismatched.append((rel, want_sha, got))
         else:

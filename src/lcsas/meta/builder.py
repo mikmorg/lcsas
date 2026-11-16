@@ -44,6 +44,7 @@ from lcsas.meta.required_contents import (
     musl_loader_name,
     required_meta_paths,
 )
+from lcsas.utils.hashing import sha256_file
 
 _logger = logging.getLogger(__name__)
 
@@ -553,7 +554,6 @@ class MetaVolumeBuilder:
         self,
         output_dir: Path,
         project_root: Path | None = None,
-        static_rustic_path: Path | None = None,
         config: LCSASConfig | None = None,
         catalog_db_path: Path | None = None,
         recovery_dir: Path | None = None,
@@ -567,15 +567,11 @@ class MetaVolumeBuilder:
             output_dir: Where to build the meta disc directory tree.
             project_root: Root of the LCSAS project (containing ``src/``).
                 If *None*, auto-detected from this module's path.
-            static_rustic_path: Optional path to a statically-linked
-                (musl) rustic binary.  Bundled as ``tools/bin/rustic-static``
-                to provide a glibc-independent fallback.
             config: Optional LCSAS configuration.  When provided,
                 START_HERE.txt and PASSWORD_INFO.txt are generated on the
                 meta disc using the survivability fields.
         """
         self._output = output_dir
-        self._static_rustic_path = static_rustic_path
         self._config = config
         self._catalog_db_path = catalog_db_path
         self._bundle_recovery_toolchain = bundle_recovery_toolchain
@@ -698,8 +694,9 @@ class MetaVolumeBuilder:
         """Bundle rustic, xorriso, and Python with shared libs.
 
         Also bundles optional tools (dvdisaster) if available on PATH,
-        a statically-linked rustic binary if provided, and the
-        ``zstandard`` Python package for zstd-compressed repo support.
+        a copy of rustic as ``rustic-static`` when the host's rustic is
+        statically linked, and the ``zstandard`` Python package for
+        zstd-compressed repo support.
         """
         tools_dir = self._output / "tools"
         bundler = ToolBundler(tools_dir)
@@ -708,8 +705,7 @@ class MetaVolumeBuilder:
             bundler.bundle_binary(tool)
 
         for tool in _OPTIONAL_TOOLS:
-            import shutil as _shutil
-            if _shutil.which(tool):
+            if shutil.which(tool):
                 bundler.bundle_binary(tool)
 
         bundler.bundle_python()
@@ -744,29 +740,15 @@ class MetaVolumeBuilder:
         # bundled stdlib (importlib resolves it to .../lcsas/keyshare).
         bundler.bundle_python_package("lcsas.keyshare")
 
-        # Bundle static rustic binary (glibc-independent fallback).
-        # If an explicit path was provided, use it.  Otherwise,
-        # auto-detect: if the bundled rustic is already statically
-        # linked, copy it as rustic-static too.
-        static_src: Path | None = None
-        if self._static_rustic_path is not None:
-            static_src = Path(self._static_rustic_path).resolve()
-            if not static_src.is_file():
-                raise FileNotFoundError(
-                    f"Static rustic binary not found: {static_src}"
-                )
-        elif (bundler.bin_dir / "rustic").is_file():
-            # Auto-detect: check if the bundled rustic has no shared deps
+        # Glibc-independent fallback: if the bundled rustic is statically
+        # linked (no shared deps), copy it as tools/bin/rustic-static too.
+        bundled_rustic = bundler.bin_dir / "rustic"
+        if bundled_rustic.is_file():
             from lcsas.meta.bundler import get_shared_libs
 
-            bundled_rustic = bundler.bin_dir / "rustic"
-            if not get_shared_libs(bundled_rustic):
-                static_src = bundled_rustic
-
-        if static_src is not None:
             dst = bundler.bin_dir / "rustic-static"
-            if not dst.exists():
-                shutil.copy2(str(static_src), str(dst))
+            if not get_shared_libs(bundled_rustic) and not dst.exists():
+                shutil.copy2(str(bundled_rustic), str(dst))
                 os.chmod(str(dst), 0o755)
 
     # ── Source bundling ──────────────────────────────────────────
@@ -1069,7 +1051,6 @@ class MetaVolumeBuilder:
         legitimate single-arch build, and the per-target copy loop already
         skips absent targets — so this fails only on genuine corruption.
         """
-        import hashlib
         manifest = self._recovery_dir / "UPSTREAM.sha256"
         if not manifest.is_file():
             return
@@ -1085,11 +1066,7 @@ class MetaVolumeBuilder:
             cached = cache_root / relpath
             if not cached.is_file():
                 continue  # partial cache — the copy loop skips it too
-            digest = hashlib.sha256()
-            with cached.open("rb") as fh:
-                for chunk in iter(lambda: fh.read(1 << 20), b""):
-                    digest.update(chunk)
-            got = digest.hexdigest()
+            got = sha256_file(cached)
             if got != expected:
                 mismatches.append(f"{relpath}: expected {expected}, got {got}")
         if mismatches:
@@ -1148,7 +1125,6 @@ class MetaVolumeBuilder:
             "x86_64-pc-windows-gnu",
         ):
             bin_dst = recovery_dst / "bin" / target
-            staged_any = False
 
             # ── rustic ─────────────────────────────────────────────
             # The fetch script extracts the tarball next to itself; the
@@ -1160,7 +1136,6 @@ class MetaVolumeBuilder:
                     out_name = "rustic-static.exe" if cand.suffix == ".exe" else "rustic-static"
                     shutil.copy2(str(cand), str(bin_dst / out_name))
                     os.chmod(str(bin_dst / out_name), 0o755)
-                    staged_any = True
                     break
 
             # ── restic ─────────────────────────────────────────────
@@ -1176,7 +1151,6 @@ class MetaVolumeBuilder:
                     out_name = "restic.exe" if cand.suffix == ".exe" else "restic"
                     shutil.copy2(str(cand), str(bin_dst / out_name))
                     os.chmod(str(bin_dst / out_name), 0o755)
-                    staged_any = True
                     break
 
             # ── python ─────────────────────────────────────────────
@@ -1195,7 +1169,6 @@ class MetaVolumeBuilder:
                 shutil.copytree(
                     str(python_cache), str(py_dst), symlinks=True,
                 )
-                staged_any = True
             else:
                 # Windows PBS tarballs extract to "python/" directly or
                 # to the target root; try both.
@@ -1217,7 +1190,6 @@ class MetaVolumeBuilder:
                             )
                         else:
                             shutil.copy2(str(entry), str(py_dst / entry.name))
-                    staged_any = True
 
             # ── musl loader (#714) ─────────────────────────────────
             # The Linux CPython needs /lib/ld-musl-<arch>.so.1, which
@@ -1234,11 +1206,6 @@ class MetaVolumeBuilder:
                     loader_dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(str(loader_cache), str(loader_dst))
                     os.chmod(str(loader_dst), 0o755)
-
-            if staged_any:
-                # No-op: directory already created by the per-binary
-                # branches; documenting intent.
-                pass
 
     def _bundle_tier1_binaries(self, recovery_dst: Path) -> None:
         """Copy cross-built lcsas-restore binaries into per-target dirs.
@@ -1346,8 +1313,6 @@ class MetaVolumeBuilder:
         recovery tree (some older builds didn't ship it) — there's
         nothing to merge into.
         """
-        import hashlib
-
         manifest_path = recovery_dst / "MANIFEST.sha256"
         if not manifest_path.is_file():
             return
@@ -1379,16 +1344,7 @@ class MetaVolumeBuilder:
                     continue
                 # Path inside recovery/ — manifest format is "./relative/path".
                 rel = path.relative_to(recovery_dst).as_posix()
-                # Compute SHA-256 streaming so this scales to the ~30 MB
-                # python tarballs without slurping into memory.
-                h = hashlib.sha256()
-                with path.open("rb") as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        h.update(chunk)
-                bin_entries.append(f"{h.hexdigest()}  ./{rel}")
+                bin_entries.append(f"{sha256_file(path)}  ./{rel}")
 
         merged = "\n".join(existing_lines + bin_entries) + "\n"
         manifest_path.write_text(merged)
@@ -1718,19 +1674,10 @@ class MetaVolumeBuilder:
         reject any file there that has no row).  Keeps every other row
         untouched.
         """
-        import hashlib
-
         manifest = self._output / "recovery" / "MANIFEST.sha256"
         if not manifest.is_file():
             return
-        h = hashlib.sha256()
-        with on_disc.open("rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
-        new_row = f"{h.hexdigest()}  {rel}"
+        new_row = f"{sha256_file(on_disc)}  {rel}"
         out: list[str] = []
         replaced = False
         for line in manifest.read_text(encoding="utf-8").splitlines():
