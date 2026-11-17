@@ -139,6 +139,47 @@ class TestStops:
         # restore.sh's own words still reach the screen, once.
         assert res.stderr.count(message) == 1, res.stderr
 
+    def test_exit_74_ends_the_loop_with_74(self, tmp_path):
+        """restore.sh exits 74 when the disk is full (#799): no message
+        needs to be read for it."""
+        a = _Auto(tmp_path)
+        _stub(a.recovery, {"bravo": "exit 74"})
+
+        res = a.run()
+
+        assert res.returncode == 74, res.stderr
+        assert a.calls() == ["alpha", "bravo"], "no set may start after a full disk"
+        assert "The restore of bravo stopped: the disk is full" in res.stderr
+        assert "These backup sets were not restored: charlie" in res.stderr
+
+    def test_exit_4_is_finished_and_the_loop_goes_on(self, tmp_path):
+        """restore.sh exit 4 (#799): the set finished, but some items
+        could not be restored.  The next sets are restored; the loop
+        ends with 4, and 1 wins when a set failed."""
+        a = _Auto(tmp_path)
+        _stub(a.recovery, {"alpha": "exit 4"})
+
+        res = a.run()
+
+        assert res.returncode == 4, res.stderr
+        assert a.calls() == ["alpha", "bravo", "charlie"]
+        assert "alpha finished, but some items could not be restored" in res.stderr
+        assert f"{a.target}/alpha/RESTORE_FAILURES.txt" in res.stderr
+        assert "FAILED" not in res.stderr, res.stderr
+
+        b = _Auto(tmp_path / "b")
+        _stub(b.recovery, {"alpha": "exit 4", "bravo": "exit 9"})
+        assert b.run().returncode == 1
+
+    def test_help_prints_the_header(self, tmp_path):
+        res = subprocess.run(["sh", str(RESTORE_AUTO), "--help"],
+                             capture_output=True, text=True, timeout=30)
+        assert res.returncode == 0, res.stderr
+        assert "keep a disc\nthat holds it mounted" in res.stdout, res.stdout
+        assert "Every other set is restored again" in res.stdout, res.stdout
+        assert "#!/bin/sh" not in res.stdout
+        assert "set -eu" not in res.stdout
+
     def test_a_full_disk_on_the_last_set_names_no_other(self, tmp_path):
         a = _Auto(tmp_path)
         _stub(a.recovery, {"charlie": f"echo '{TIER1_FULL}' >&2; exit 1"})

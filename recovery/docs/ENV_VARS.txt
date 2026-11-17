@@ -277,7 +277,7 @@ LCSAS_INTERACTIVE
   Default:  unset → auto  (opt-in)
   Since:    rc6 (#617)
   Read by:  restore.sh and restore.bat (both pass it to tier 1 as
-            --interactive)
+            --interactive; restore.sh to tier 3 too)
   What:     restore.bat passes it to tier 1 as --interactive on, off
             or auto; any other value is ignored.  auto (tier 1's own
             default) asks at the disc-swap prompt only when its input
@@ -286,11 +286,14 @@ LCSAS_INTERACTIVE
             the wine single-drive test.  off never asks: a pack that is
             on no inserted disc fails at once.  restore.sh passes it to
             tier 1 the same way (since rc6, #617) and prints a line
-            when it ignores a value.  restore.sh's own extra questions
-            follow it too: the newest data disc, the check that asks
-            again for a wrong password (typed, or from LCSAS_PASSWORD,
-            LCSAS_PWFILE or LCSAS_SHARES_DIR), and "Restore another
-            backup set?" are asked on auto only when stdin is a
+            when it ignores a value.  It passes it to tier 3 (the
+            Python reader) as --interactive as well (rc10, #805);
+            unset, tier 3 gets on, as before.  restore.sh's own extra
+            questions follow it too: the newest data disc, the check
+            that asks again for a wrong password (typed, or from
+            LCSAS_PASSWORD, LCSAS_PWFILE or LCSAS_SHARES_DIR; with
+            tier 1, 2, 2b or 3, #805), and "Restore another backup
+            set?" are asked on auto only when stdin is a
             terminal, on on always (a test rig answers them through a
             pipe), never on off.  So a piped or scripted run never
             waits for them.  restore.bat's own questions do not follow

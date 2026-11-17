@@ -258,7 +258,7 @@ verify/repair tool (FMT-01). `required_meta_paths()`
 |---|---|
 | `x86_64-unknown-linux-musl`     | Linux x86_64, static |
 | `aarch64-unknown-linux-musl`    | Linux ARM64, static (Pi 4/5, Asahi, Graviton) |
-| `armv7-unknown-linux-gnueabihf` | Linux 32-bit ARM (Pi 1/2/3/Zero) |
+| `armv7-unknown-linux-gnueabihf` | Linux 32-bit ARM, ARMv7 and newer (Pi 2/3; not the ARMv6 Pi 1 or Zero) |
 | `aarch64-apple-darwin`          | macOS Apple Silicon (built via `zig cc -target aarch64-macos`) |
 | `x86_64-apple-darwin`           | macOS Intel (`zig cc -target x86_64-macos`) |
 | `x86_64-pc-windows-gnu`         | Windows (`.exe`; POSIX-sh / `restore.bat` driver) |
