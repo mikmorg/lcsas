@@ -18,15 +18,16 @@ checks, on the host side:
   it is named in a ``NOT RESTORED`` line and a row of
   ``RESTORE_FAILURES.txt``, and tier 1 exits 4 (#872);
 * nothing is written outside the restore folder;
-* the restore folder, the password file and the pack cache folder
-  (``LCSAS_PACK_CACHE_DIR``) may have non-ASCII names too: the
-  arguments and the environment are read as Unicode.
+* the restore folder, the password file, the pack cache folder
+  (``LCSAS_PACK_CACHE_DIR``) and a disc catalog (``--catalog``) may
+  have non-ASCII names too: the arguments and the environment are read
+  as Unicode.
 
 Wine does not hold Windows' MAX_PATH limit everywhere, so the long path
-passing here does not prove the ``\\\\?\\`` prefix on its own; the
-prefix itself is checked on real Windows by the windows-e2e journey and
-by ``test_long_path_prefix_helper`` below (built with zig, when zig is
-installed).
+passing here does not prove the ``\\\\?\\`` prefix on its own:
+``test_long_path_prefix_helper`` below checks the prefix itself (built
+with zig, when zig is installed).  No test runs these names on real
+Windows yet (the windows-e2e journey uses plain names).
 
 Skips when wine, rustic or the Windows binary is absent.
 """
@@ -121,6 +122,28 @@ def _make_source(src: Path) -> None:
     (deep / LONG_LEAF).write_bytes(_content(LONG_LEAF))
 
 
+def _make_catalog(path: Path) -> None:
+    """A minimal disc catalog: one disc holding one 2 MiB pack."""
+    import sqlite3
+
+    db = sqlite3.connect(str(path))
+    db.executescript(
+        "CREATE TABLE schema_version(version INTEGER);"
+        "INSERT INTO schema_version VALUES(10);"
+        "CREATE TABLE packs(pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+        " size_bytes INTEGER, repo_id TEXT);"
+        "CREATE TABLE volumes(volume_id INTEGER PRIMARY KEY, label TEXT,"
+        " uuid TEXT, media_type TEXT, status TEXT);"
+        "CREATE TABLE volume_packs(volume_id INTEGER, pack_id INTEGER);"
+        "INSERT INTO volumes VALUES(1, 'LCSAS_TEST_2026_0001', 'u1',"
+        " 'CD700', 'VERIFIED');"
+        "INSERT INTO packs VALUES(1, '" + "ab" * 32 + "', 2097152, 'r');"
+        "INSERT INTO volume_packs VALUES(1, 1);"
+    )
+    db.commit()
+    db.close()
+
+
 def _wine_env(prefix: Path) -> dict[str, str]:
     # A UTF-8 locale: wine converts host file names with it.
     return {**os.environ, "WINEPREFIX": str(prefix), "WINEDEBUG": "-all",
@@ -144,6 +167,10 @@ def restored(tmp_path_factory):
     pw.write_text(PASSWORD + "\n")
     repo = base / "repo"
     build_rustic_repo(src, repo, pw)
+    # A disc catalog in that folder too: sqlite takes UTF-8 file names
+    # on Windows, which tier 1 now passes it.
+    catalog = home / "catalögue.db"
+    _make_catalog(catalog)
     target = home / "réstored 目标"
     cache = home / "cäche"
     exe = base / "lcsas-restore.exe"
@@ -161,9 +188,17 @@ def restored(tmp_path_factory):
             env={**env, "LCSAS_PACK_CACHE_DIR": _win(cache)},
             capture_output=True, timeout=600,
         )
+        cat = subprocess.run(
+            ["wine", str(exe), "--list-pending-packs",
+             "--catalog", _win(catalog), "--repo", _win(home),
+             "--password-file", "NUL"],
+            env=env, capture_output=True, timeout=300,
+        )
     finally:
         stop_wineserver(prefix)
     yield {
+        "cat_rc": cat.returncode,
+        "cat_out": (cat.stdout + cat.stderr).decode("utf-8", "replace"),
         "base": base, "src": src, "target": target, "cache": cache,
         "rc": res.returncode,
         "err": res.stderr.decode("utf-8", "replace"),
@@ -240,7 +275,8 @@ def test_nothing_is_written_outside_the_restore_folder(restored) -> None:
     assert set(os.listdir(base)) == allowed, sorted(os.listdir(base))
     home = w["target"].parent
     assert set(os.listdir(home)) <= {
-        "pässword.txt", "réstored 目标", "cäche"}, sorted(os.listdir(home))
+        "pässword.txt", "catalögue.db", "réstored 目标", "cäche"}, sorted(
+            os.listdir(home))
     assert not list(base.rglob("evil.txt"))
 
 
@@ -376,3 +412,12 @@ def test_long_path_prefix_helper(tmp_path: Path) -> None:
     leaf = deep.joinpath(
         *["folder-name-of-fifty-characters-xxxxxxxxxxxxxxxxx"] * 6, "fé.txt")
     assert leaf.read_bytes() == b"hi"
+
+
+def test_catalog_in_a_non_ascii_folder_is_read(restored) -> None:
+    """--catalog names a file in a non-ASCII folder: sqlite opens it
+    (it takes UTF-8 names on Windows, which tier 1 now passes)."""
+    out = restored["cat_out"]
+    assert restored["cat_rc"] == 0, out
+    assert "Total: 1 pack," in out, out
+    assert "LCSAS_TEST_2026_0001" in out, out
