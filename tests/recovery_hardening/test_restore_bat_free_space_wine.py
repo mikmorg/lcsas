@@ -63,6 +63,8 @@ SIZING = "Need about"
 SAME_DRIVE = "on the same drive"
 ASK = "Carry on anyway? [y/N]"
 STOPPED = "Not enough free space for this restore"
+WHOLE = "counts every backup set on these discs"
+ESTIMATE = "estimate from the catalog"
 
 
 @dataclass
@@ -110,7 +112,8 @@ def meta(wine: _Wine, tmp_path: Path) -> Iterator[Path]:
 
 def _catalog(meta: Path, size_bytes: int) -> None:
     """A real catalog whose one pack is ``size_bytes``, where restore.bat
-    looks for one (recovery\\catalog.db)."""
+    looks for one (recovery\\catalog.db).  Its set id is not the folder
+    name (repo), so the size is the whole archive's (#798)."""
     sys.path.insert(0, str(RECOVERY / "tests"))
     import test_multidisc  # sibling fixture builder
 
@@ -122,6 +125,36 @@ def _catalog(meta: Path, size_bytes: int) -> None:
 
 def _free(wine: _Wine) -> int:
     return shutil.disk_usage(wine.drive_c).free
+
+
+def _catalog_per_set(meta: Path, sizes: dict[str, int]) -> None:
+    """A real catalog with one pack of the given size per set id, each
+    on a volume of its own; the ids are the folder names (#798)."""
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    import sqlite3
+
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+
+    conn = sqlite3.connect(meta / "recovery" / "catalog.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        create_all(conn)
+        for n, (set_id, size) in enumerate(sorted(sizes.items()), start=1):
+            register_repo(conn, set_id, set_id, f"/srv/{set_id}")
+            pack = register_pack(conn, f"{n:02x}" * 32, size, set_id)
+            vol = create_volume(
+                conn, label=f"LCSAS_TEST_2026_{n:04d}", uuid=f"uuid-{n}",
+                media_type="BD25", capacity_bytes=26_843_545_600,
+                status="VERIFIED",
+            )
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _second_set(meta: Path) -> None:
@@ -159,8 +192,10 @@ def test_same_drive_needs_the_folder_and_the_cache(wine: _Wine, meta: Path) -> N
     assert SAME_DRIVE in out and "C:\\cache660" in out, out
     assert "LCSAS_SKIP_SPACE_CHECK" in out, out
     assert "[tier 1]" not in out, out
-    # One backup set: the size is that set's, so no question.
-    assert ASK not in out, out
+    # The size is an estimate (here the whole archive's: the catalog
+    # does not know the set by its folder name), so it asks; the input
+    # has ended, so it stops.
+    assert ASK in out and WHOLE in out, out
     assert STOPPED in out, out
 
 
@@ -186,7 +221,7 @@ def _several_sets_up_to_the_question(wine: _Wine, meta: Path) -> _Run:
     lines = _sizing_lines(seen)
     assert len(lines) == 1 and "C:\\restored" in lines[0], run.text
     assert SAME_DRIVE in seen, run.text
-    assert "all 2 backup sets" in seen and "may need less" in seen, run.text
+    assert WHOLE in seen and "may need less" in seen, run.text
     return run
 
 
@@ -217,6 +252,42 @@ def test_several_sets_short_drive_other_answers_stop(
 
     assert rc == 1, f"rc={rc}\n--- output ---\n{out}"
     assert STOPPED in out and "LCSAS_SKIP_SPACE_CHECK" in out, out
+    assert "[tier 1]" not in out, out
+
+
+def test_the_chosen_set_is_sized_on_its_own(wine: _Wine, meta: Path) -> None:
+    """#798: the catalog knows each set by its folder name, so the size
+    is the chosen set's (lcsas-restore.exe --repo-id): repo is 1 MB and
+    fits, although setb (twice the free space) makes the archive too
+    big.  Nothing is asked and tier 1 runs."""
+    _second_set(meta)
+    _catalog_per_set(meta, {"repo": 1024 * 1024, "setb": _free(wine) * 2})
+    run = _Run(wine, "E:\\recovery\\scripts\\restore.bat", extra_env={  # type: ignore[arg-type]
+        "LCSAS_NO_RELOCATE": "1",
+        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_NEWEST_DISC_PROMPT": "0",
+        "LCSAS_PW": "not-used",
+        "LCSAS_PACK_CACHE_DIR": "C:\\cache660",
+    })
+    run.answer("Which one do you want to restore? [1]: ", "1")
+    run.answer("Restore to which folder?", "C:\\restored")
+    run.expect("[tier 1] running")
+    run.finish()
+
+    assert _sizing_lines(run.text) == [], run.text
+    assert ASK not in run.text, run.text
+
+
+def test_a_set_too_big_on_its_own_says_estimate(wine: _Wine, meta: Path) -> None:
+    """The chosen set alone does not fit: the size is that set's, an
+    estimate, so it asks; the end of the input stops (exit 1)."""
+    _catalog_per_set(meta, {"repo": _free(wine) * 2})
+    rc, out = _run(wine, "C:\\restored")
+
+    assert rc == 1, f"rc={rc}\n--- output ---\n{out}"
+    assert len(_sizing_lines(out)) == 1, out
+    assert ESTIMATE in out and WHOLE not in out, out
+    assert ASK in out and STOPPED in out, out
     assert "[tier 1]" not in out, out
 
 

@@ -229,14 +229,21 @@ def test_restore_bat_relaunch_removes_the_copy_and_keeps_its_exit_code():
     `& cmd /c exit` after it as part of its own command.
 
     Updated (B2 review): and only when the folder is the restore's own,
-    with .lcsas-tools in it (the check at the start refuses any other)."""
+    with .lcsas-tools in it (the check at the start refuses any other).
+
+    Updated (PR #874): a folder still there after rmdir is removed again
+    after two seconds.  windows-e2e once found the folder's bin\\<arch>
+    left empty behind: a scanner still held the program that had just
+    run, and the next run of the same code passed.  The `&` inside the
+    clause has no spaces, so the split above keeps the clause whole."""
     line = _code_lines(_relocation_block(RESTORE_BAT.read_text()))[-1]
     cmds = [c.strip() for c in line.split(" & ")]
     call = cmds.index('call "%TOOLS%\\recovery\\scripts\\restore.bat" %*')
     assert cmds[call + 1:] == [
         'call set "LCSAS_RC=%%ERRORLEVEL%%"',
         '(if exist "%TOOLS%\\.done" if exist "%TOOLS%\\.lcsas-tools" '
-        'rmdir /s /q "%TOOLS%") 2>nul',
+        '(rmdir /s /q "%TOOLS%"&if exist "%TOOLS%\\" '
+        '(ping -n 3 127.0.0.1 >nul&rmdir /s /q "%TOOLS%"))) 2>nul',
         "cmd /c exit %%LCSAS_RC%%",
     ], cmds
 
@@ -668,7 +675,8 @@ def test_restore_bat_resume_launcher_ends_itself_before_the_restore():
         '(if exist "%TOOLS%\\.done" del /f /q "%~f0") 2>nul',
         # Updated (B2 review): only a folder with .lcsas-tools in it.
         '(if exist "%TOOLS%\\.done" if exist "%TOOLS%\\.lcsas-tools" '
-        'rmdir /s /q "%TOOLS%") 2>nul',
+        '(rmdir /s /q "%TOOLS%"&if exist "%TOOLS%\\" '
+        '(ping -n 3 127.0.0.1 >nul&rmdir /s /q "%TOOLS%"))) 2>nul',
         "cmd /c exit %%LCSAS_RC%%",
     ], cmds
     # The script deletes the Desktop copy itself on rc 0 (it may be the

@@ -13,15 +13,19 @@ PREREQUISITES
 You will need:
   - The LCSAS meta disc (BD-R / DVD), labelled LCSAS_META.
   - The repository password (set when the archive was created).
-  - A target directory with free space of AT LEAST the archive size
-    (the size shown by `lcsas restore plan`, or the snapshot size) on
-    the target disk, and the same again on the pack-cache disk
-    (default: your home folder, see "THE TOOLS FOLDER").  When the
-    two are on ONE disk (the usual case), that disk needs twice the
-    archive size.  restore.sh (and restore.bat on Windows) checks
-    this for you before any password or disc prompt and refuses with
-    the exact numbers if a disk is too small.  A restore that carries
-    on counts what it already wrote.
+  - A target directory with free space of AT LEAST the size of the
+    backup set you restore (the size shown by `lcsas restore plan`,
+    or the snapshot size) on the target disk, and the same again on
+    the pack-cache disk (default: your home folder, see "THE TOOLS
+    FOLDER").  When the two are on ONE disk (the usual case), that
+    disk needs twice the set's size.  restore.sh (and restore.bat on
+    Windows) checks this for you before any password or disc prompt,
+    from the catalog, and says the numbers if a disk is too small.
+    The size is an estimate, so on a terminal it then asks
+        Carry on anyway? [y/N]
+    y goes on (if the disk fills up, the restore stops part-way: see
+    exit code 74); anything else, or no terminal, stops it (exit
+    code 1).  A restore that carries on counts what it already wrote.
     Override with LCSAS_SKIP_SPACE_CHECK=1 if you know better.
 
 DECISION FLOW
@@ -93,12 +97,12 @@ uses that disc's newer list of snapshots.
       xattr -dr com.apple.quarantine ~/lcsas-meta
       sh ~/lcsas-meta/restore.sh ~/restored
 
-  Linux -- "Permission denied"; restore.sh reporting that the meta
-  disc "lacks all recovery binaries" with each tier "not executable"
-  although the files are there; or the restore quietly falling back
-  to the slow Python reader (tier 3).  The files sit on a filesystem
-  that may not run programs: a FAT/exFAT USB stick (it drops the
-  executable bit) or any mount with the "noexec" option:
+  Linux -- "Permission denied"; restore.sh reporting that "the
+  recovery programs are on this disc, but this computer will not run
+  them"; or the restore quietly falling back to the slow Python
+  reader (tier 3).  The files sit on a filesystem that may not run
+  programs: a FAT/exFAT USB stick (it drops the executable bit) or
+  any mount with the "noexec" option:
 
       cp -R /media/$USER/<label> ~/lcsas-meta
       chmod -R u+x ~/lcsas-meta/recovery/bin
@@ -157,6 +161,12 @@ in this order.  Each one says how to answer.
      (exit code 65); after question 5 it means no other set, and
      the run ends with 0.
 
+     Only when a disk looks too small for that set (see
+     PREREQUISITES): restore.sh gives the numbers and asks
+         Carry on anyway? [y/N]
+     y carries on; any other answer stops, with nothing restored
+     (exit code 1).
+
   3. The password.  What you type is not shown.  An empty answer is
      asked again, and so is a password the backup set does not
      accept: it is checked before the restore starts.  Q then ENTER
@@ -182,9 +192,10 @@ in this order.  Each one says how to answer.
      one folder would be mixed together.  Q then ENTER restores no
      other set.
 
-Question 1, the check of the password, and question 5 come only on a
-terminal: never when the answers come from a pipe or a script.  To
-run with no questions at all, give the answers in advance (see
+Question 1, the free-space question, the check of the password, and
+question 5 come only on a terminal: never when the answers come from
+a pipe or a script.  To run with no questions at all, give the
+answers in advance (see
 "ENVIRONMENT VARIABLES"):
 
     LCSAS_REPO=photos LCSAS_PWFILE=/path/to/password-file \
@@ -390,7 +401,7 @@ This means you can re-run `sh /mnt/restore.sh ...` against the same
 target directory without worrying about partial files being
 silently treated as complete.  Files that finished cleanly on the
 first pass (size matches manifest) are skipped; files that failed
-are retried.  No "delete the target directory first" dance.
+are retried.  There is no need to delete the target folder first.
 
 The Python reader (tier 3) carries on the same way.  It writes each
 file under a name ending .lcsas-partial and renames it only when the
@@ -419,7 +430,7 @@ STOPPING AND CARRYING ON LATER
 You can stop a restore at any time:
 
   * At a disc prompt, type q then ENTER.  restore.sh exits with code
-    75 ("stopped at your request").
+    75 ("stopped at the disc prompt at your request").
   * At a question restore.sh asks, type q then ENTER: exit code 65 at
     the newest data disc or the backup set, 77 at the password or a
     share card.
@@ -715,26 +726,37 @@ EXIT CODES
 
   restore.sh exits:
     0  -- success (whichever tier ran)
-    1  -- generic failure (no repo found, unsupported OS/arch, etc.)
-    2  -- usage error
+    1  -- a failure the message above it names: no backup set found,
+          an unsupported computer, not enough free space (see
+          PREREQUISITES), "no recovery method available", or the tier
+          that ran failed
+    2  -- usage error; with --check-disc, the image has no ECC data,
+          so there is nothing to repair
+    3  -- --check-disc only: no image, no recovery folder or no
+          lcsas-ecc for this computer, or the image could not be read
+          or repaired (see "REPAIRING A DAMAGED DISC")
     4  -- the restore finished, but some items could not be restored:
           they are listed in RESTORE_FAILURES.txt in the folder you
           restored into (see "ITEMS NOT RESTORED").  Nothing to carry
           on; restore.bat uses the same code
-    64 -- no recovery method available
+    64 -- no recovery program on this meta disc can run on this
+          computer (see below)
     65 -- you stopped at a question restore.sh asked (the newest
           data disc, the backup set, the overwrite warning for a
-          folder that is not empty, or "restore into RAM anyway?"), or
+          folder that is not empty, or "Continue restoring into RAM
+          anyway?"), or
           the folder to restore into is inside the tools folder
     74 -- the disk you restore to is full: free some space (or use a
           bigger disk), then carry on with resume.sh
-    75 -- you typed q at a disc prompt; carry on with resume.sh
+    75 -- you typed q at a disc prompt (tier 1 or tier 3); carry on
+          with resume.sh
     77 -- a repository key rejected the password (whichever tier
           ran), or you typed q at the password or a share card prompt
     129 / 130 / 143 -- the terminal closed / Ctrl-C / killed; carry
           on with resume.sh, if the stop came after the backup set
           and the folder were chosen (see "STOPPING AND CARRYING ON
           LATER")
+  Any other code is the one the tier that ran stopped with.
   On every exit but 0 and 4 the tools folder stays (see "THE TOOLS
   FOLDER"), except Ctrl-C at "Restore another backup set?" or the
   folder question after it: that set is restored, nothing is left to
