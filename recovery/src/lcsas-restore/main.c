@@ -438,9 +438,16 @@ main(int argc, char **argv)
         fprintf(stderr, "cannot read password file: %s\n", pwfile);
         goto out;
     }
-    /* Strip trailing newlines / CR. */
-    while (pw_len > 0 && (pw[pw_len - 1] == '\n' || pw[pw_len - 1] == '\r')) {
-        pw[--pw_len] = '\0';
+    /* Issue #641 -- the password is the file's first line, read as
+     * rustic reads it: every byte before the first LF, less one CR at
+     * its end.  Spaces are kept.  Tier 3 and `lcsas key` use the same
+     * rule, so a file of two lines gives every reader one password. */
+    {
+        size_t k = 0;
+        while (k < pw_len && pw[k] != '\n') k++;
+        if (k > 0 && pw[k - 1] == '\r') k--;
+        pw_len = k;
+        pw[pw_len] = '\0';
     }
 
     snprintf(keys_dir, sizeof keys_dir, "%s/keys", repo_path);

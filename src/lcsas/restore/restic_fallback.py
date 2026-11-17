@@ -298,6 +298,23 @@ _DISK_FULL_ERRNOS = frozenset(
 )
 
 
+def password_from_file_bytes(data: bytes) -> bytes:
+    """The password a password file holds (#641): its first line.
+
+    Read as rustic reads it: every byte before the first LF, less one CR
+    at its end.  Spaces are kept, and so is a second CR.  Tier 1
+    (lcsas-restore) and the ``lcsas key`` commands use the same rule, so
+    every reader agrees on a file of more than one line.
+    """
+    line = data.split(b"\n", 1)[0]
+    return line[:-1] if line.endswith(b"\r") else line
+
+
+def read_password_file(path: Path) -> bytes:
+    """Read *path* and return its password (see password_from_file_bytes)."""
+    return password_from_file_bytes(path.read_bytes())
+
+
 def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
     """Build the abort for a full target filesystem while writing *path*."""
     return RestoreAbortedError(
@@ -1036,7 +1053,7 @@ class PurePythonRestorer:
         if password is not None:
             self._password = password
         elif password_file is not None:
-            self._password = password_file.read_bytes().rstrip(b"\n\r")
+            self._password = read_password_file(password_file)
         else:
             raise ValueError("Provide either password_file or password")
 

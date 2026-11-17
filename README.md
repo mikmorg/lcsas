@@ -115,10 +115,12 @@ lcsas init --db-path /var/lib/lcsas/archive.db
 Each repository gets its own password so that compromise of one password does not expose the other repository.
 
 ```bash
-# Generate a separate password file for each repository
+# Generate a separate password file for each repository.  Keep the
+# password on ONE line: rustic and every LCSAS reader use only the first
+# line (base64 wraps long output, so 48 bytes, not 64).
 mkdir -p /root/keys
-dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64 > /root/keys/family.key
-dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64 > /root/keys/personal.key
+head -c 48 /dev/urandom | base64 | tr -d '\n' > /root/keys/family.key
+head -c 48 /dev/urandom | base64 | tr -d '\n' > /root/keys/personal.key
 chmod 600 /root/keys/*.key
 ```
 
