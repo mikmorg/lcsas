@@ -1717,7 +1717,7 @@ class TestISOContentValidation:
         # holographic-injection budget (SQLite catalog + per-repo Rustic
         # metadata) for staging; the remaining ~1.35 MB of usable capacity
         # then forces multi-volume splitting at the given pack size.
-        from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
+        from tests.e2e.fixture_lib import MIN_HOLOGRAPHIC_RESERVE_BYTES
         config = _make_config(
             tmp_path, num_repos=1, media=MediaType.TEST_TINY,
             metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,

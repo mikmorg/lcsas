@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # sqlite3 is imported lazily where it is actually used
     import sqlite3
-    from collections.abc import Callable, Collection
+    from collections.abc import Callable, Collection, Iterator
 
     from lcsas.staging.repo_marker import RepoMarker
 
@@ -104,6 +104,45 @@ def pinned_dvdisaster_source_name(recovery_dir: Path) -> str | None:
         if relpath.startswith("dvdisaster/src/"):
             return relpath.rsplit("/", 1)[-1]
     return None
+
+
+@contextlib.contextmanager
+def read_catalog(src: Path) -> Iterator[sqlite3.Connection]:
+    """A read-only connection to the master catalog that sees every
+    committed row (#861).
+
+    ``mode=ro`` reads the write-ahead log, so rows that were committed but
+    not yet checkpointed into the main file are seen.  ``immutable=1``
+    ignores the log: on a live catalog it read stale rows, or no tables
+    at all on a new one.  ``mode=ro`` cannot open a WAL-mode catalog in a
+    folder this process may not write when the ``-shm`` file is missing
+    (SQLite cannot create it).  The catalog and its log are then copied
+    to a temporary folder and read there, so the log is still applied.
+    """
+    import sqlite3
+    import tempfile
+
+    conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    try:
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    except sqlite3.OperationalError:
+        conn.close()
+        with tempfile.TemporaryDirectory(prefix="lcsas-catalog-") as tmp:
+            copy = Path(tmp) / "catalog.db"
+            shutil.copyfile(src, copy)
+            wal = src.with_name(src.name + "-wal")
+            if wal.is_file():
+                shutil.copyfile(wal, copy.with_name(copy.name + "-wal"))
+            conn = sqlite3.connect(copy)
+            try:
+                yield conn
+            finally:
+                conn.close()
+        return
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _write_and_sync(path: Path, content: str) -> None:
@@ -1408,21 +1447,16 @@ class MetaVolumeBuilder:
             return
 
         import sqlite3
-        conn = sqlite3.connect(
-            f"file:{src}?mode=ro&immutable=1", uri=True
-        )
-        # The split reader (key_escrow.get_split_for_repo) needs named
-        # columns; a Row still unpacks like a tuple below.
-        conn.row_factory = sqlite3.Row
-        try:
+        with read_catalog(src) as conn:
+            # The split reader (key_escrow.get_split_for_repo) needs named
+            # columns; a Row still unpacks like a tuple below.
+            conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT repo_id, mirror_path FROM repositories"
             ).fetchall()
             retired = self._read_retired_repos(conn)
             packs_on_discs = self._read_packs_on_discs(conn)
             markers = self._read_repo_markers(conn, [r[0] for r in rows])
-        finally:
-            conn.close()
 
         meta_root = self._output / "metadata"
         meta_root.mkdir(parents=True, exist_ok=True)
@@ -1875,17 +1909,15 @@ class MetaVolumeBuilder:
 
         from lcsas.db.key_escrow import recorded_splits_by_name
 
-        conn = sqlite3.connect(f"file:{src}?mode=ro&immutable=1", uri=True)
-        conn.row_factory = sqlite3.Row
         try:
-            return recorded_splits_by_name(conn, {
-                name: repo.mirror_path
-                for name, repo in self._config.repositories.items()
-            })
+            with read_catalog(src) as conn:
+                conn.row_factory = sqlite3.Row
+                return recorded_splits_by_name(conn, {
+                    name: repo.mirror_path
+                    for name, repo in self._config.repositories.items()
+                })
         except sqlite3.DatabaseError:  # pragma: no cover - not a catalog
             return {}
-        finally:
-            conn.close()
 
     def _render_meta_start_here(
         self,

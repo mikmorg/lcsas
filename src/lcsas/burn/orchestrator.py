@@ -198,6 +198,61 @@ def unfinished_iso_path(iso_path: Path) -> Path:
     return iso_path.with_suffix(".unfinished")
 
 
+#: Written into a burn session's staging folder when ``lcsas stage``
+#: finished it: every volume staged, or the kept volumes of a stage that
+#: stopped part-way made consistent (#813).  Its absence marks a stage
+#: that was killed (#862).
+SESSION_MANIFEST = "session.json"
+
+
+def unfinished_stage_refusal(
+    session_dir: Path, session_id: str | None,
+) -> str | None:
+    """Why a burn session's staging folder must not be burned, or None.
+
+    A stage killed hard (SIGKILL, power loss) runs no clean-up.  Killed
+    while it hard-linked the packs of a volume, it leaves the volumes
+    before it with snapshot files whose packs are on no disc, so
+    "latest" on those discs could not be restored (#862).  Such a folder
+    has no :data:`SESSION_MANIFEST`: the stage writes it last.  A folder
+    that does not exist is not refused here (its ISOs are missing, which
+    the burn reports).  *session_id* None (``burn-iso``, which reads no
+    catalog) names the session by its folder.
+    """
+    if not session_dir.is_dir() or (session_dir / SESSION_MANIFEST).is_file():
+        return None
+    if session_id is None:
+        which = f"the burn session in {session_dir}"
+        ref = "<session-id>"
+        find = " ('lcsas session list' shows its id)"
+    else:
+        which = f"burn session {session_id}"
+        ref = session_id
+        find = ""
+    return (
+        f"The stage of {which} did not finish: its staging folder has no "
+        f"{SESSION_MANIFEST}. Its discs could name a snapshot whose packs "
+        f"are on no disc. Nothing was burned. Remove the session with "
+        f"'lcsas session abort {ref}' (or 'lcsas stage --clean --session "
+        f"{ref} --force'){find}, then run 'lcsas stage' again."
+    )
+
+
+def unfinished_stage_refusal_for_iso(iso_path: Path) -> str | None:
+    """:func:`unfinished_stage_refusal` for an ISO burned on its own
+    (``lcsas burn-iso``).
+
+    Only an ISO still in its staging folder can be checked: that folder
+    holds the volume's tree (``<label>/volume_info.json``) beside
+    ``<label>.iso``.  An ISO copied elsewhere (the portable workflow
+    ships ISOs alone) is not refused.
+    """
+    session_dir = iso_path.resolve().parent
+    if not (session_dir / iso_path.stem / "volume_info.json").is_file():
+        return None
+    return unfinished_stage_refusal(session_dir, None)
+
+
 @dataclass
 class BurnManifest:
     """Describes a prepared burn operation (single volume)."""
@@ -487,11 +542,6 @@ class BurnOrchestrator:
             #    master catalog.
             try:
                 injector.inject_catalog(self._conn)
-                # Not needed for the disc copy: keeps the master file
-                # current for readers that ignore the WAL (the meta disc
-                # builder opens it with immutable=1).  PASSIVE never
-                # waits for another process's reader.
-                self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             except Exception as exc:
                 _logger.error(
                     "Catalog injection into the staging area failed; rolling "
@@ -1757,7 +1807,12 @@ class BurnOrchestrator:
         #665: a never-burned volume whose ISO hash is empty was staged by
         a ``lcsas stage`` that did not finish (killed during mastering or
         ECC).  Its ISO may lack RS03 data, so it is never burned.
+
+        #862: a session whose staging folder has no session.json was
+        staged by a ``lcsas stage`` that was killed
+        (:func:`unfinished_stage_refusal`).
         """
+        from lcsas.db.sessions import get_session
         from lcsas.exceptions import BurnError
 
         vols = [(sv, get_volume_by_id(self._conn, sv.volume_id))
@@ -1776,6 +1831,11 @@ class BurnOrchestrator:
                     f"again."
                 ),
             )
+        refusal = unfinished_stage_refusal(
+            Path(get_session(self._conn, session_id).staging_dir), session_id,
+        )
+        if refusal is not None:
+            raise BurnError(refusal)
 
         # #668: a burn interrupted hard (killed, power loss) leaves its
         # volume in BURNING.  With no disc recorded it goes back to the
@@ -2373,6 +2433,20 @@ class BurnOrchestrator:
                 labels.append(label)
         return remaining, held
 
+    def plan_volumes(
+        self, packs: list[Pack], media_type: MediaType,
+    ) -> list[tuple[list[Pack], int]]:
+        """The volumes :meth:`stage` makes of exactly *packs*, with no
+        side effect: the measured reserve (#811) and the same bin-packing.
+
+        ``lcsas consolidate`` previews with it, so the volume count it
+        shows is the one ``consolidate --execute`` stages (#862).  Raises
+        as :meth:`stage` does when the packs cannot fit.
+        """
+        reserve, measured = self._metadata_reserve(packs, media_type)
+        self._check_metadata_fits(packs, media_type, reserve, measured)
+        return self._multi_bin_pack(packs, media_type, reserve)
+
     def _multi_bin_pack(
         self,
         packs: list[Pack],
@@ -2564,7 +2638,12 @@ class BurnOrchestrator:
         session_dir: Path,
         manifests: list[BurnManifest],
     ) -> Path:
-        """Write session.json manifest to the burn session directory."""
+        """Write session.json manifest to the burn session directory.
+
+        Written last by :meth:`stage` (and by :meth:`_after_failed_stage`
+        for the volumes it keeps), it marks the session's stage finished
+        (:func:`unfinished_stage_refusal`).
+        """
         manifest_data = {
             "session_id": session_id,
             "created_at": datetime.now(UTC).isoformat(),
@@ -2584,11 +2663,15 @@ class BurnOrchestrator:
                 for m in manifests
             ],
         }
-        manifest_path = session_dir / "session.json"
-        with open(manifest_path, "w", encoding="utf-8") as f:
+        # Written under another name and renamed: the file marks a
+        # finished stage (#862), so a half-written one must never exist.
+        manifest_path = session_dir / SESSION_MANIFEST
+        work = manifest_path.with_suffix(".json.tmp")
+        with open(work, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        os.replace(work, manifest_path)
         return manifest_path
 
     @staticmethod

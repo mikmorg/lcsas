@@ -33,6 +33,18 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# A floor for ``metadata_reserve_bytes`` in test fixtures that pin a
+# volume layout on TEST_TINY (2 MB) media.  stage() measures the metadata
+# every disc carries and reserves at least that (#811), so a fixture
+# normally configures no reserve; this floor keeps the few fixtures that
+# count on a pack moving to the next volume as they were laid out.  The
+# disc metadata of a single-repository TEST_TINY fixture (catalog,
+# repository files, tier-3 reader, text files, ISO overhead) is about
+# 800 KB.  Moved here from lcsas.staging.metadata, where only tests used
+# it (#819); tests/unit/test_holographic_metadata_size.py checks it still
+# covers the payload.
+MIN_HOLOGRAPHIC_RESERVE_BYTES = 850_000
+
 # The backup set build_windows_fixture makes.  Its name has a space, which
 # name_cmd keeps; the macOS journey restores it.
 WINDOWS_SET_NAME = "Family photos"
@@ -562,7 +574,6 @@ def build_windows_fixture(
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
-    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
     from lcsas.staging.repo_marker import cmd_name
 
     sources = workdir / "sources"
@@ -635,9 +646,10 @@ def build_windows_fixture(
         conn.commit()
 
     # 4. burn pipeline → data ISOs (no ECC; the gate exercises the restore
-    #    path, not RS03 repair — that has its own opt-in suite).  Each
-    #    further set adds its index/snapshots/keys to every disc, as in the
-    #    blind fixture's reserve.  A split set's config says so, as the
+    #    path, not RS03 repair — that has its own opt-in suite).  The stage
+    #    measures the metadata every disc carries, each set's
+    #    index/snapshots/keys included (#811), so the fixture configures
+    #    no reserve of its own.  A split set's config says so, as the
     #    owner's lcsas.toml does; the burn's drift guard checks it against
     #    the recorded split.
     repos = {
@@ -656,9 +668,7 @@ def build_windows_fixture(
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
-        metadata_reserve_bytes=(
-            MIN_HOLOGRAPHIC_RESERVE_BYTES + 150_000 * (len(plan) - 1)
-        ),
+        metadata_reserve_bytes=0,
         repositories=repos,
     )
 

@@ -39,8 +39,7 @@ from lcsas.db.schema import create_all
 from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.packs.delta import DeltaAnalyzer
 from lcsas.packs.scanner import scan_mirror_packs
-from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
-from tests.e2e.fixture_lib import add_repo
+from tests.e2e.fixture_lib import MIN_HOLOGRAPHIC_RESERVE_BYTES, add_repo
 from tests.e2e.restore_sh_driver import (
     ENTER,
     EXIT_DISC_PROMPT_QUIT,

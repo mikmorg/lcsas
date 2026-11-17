@@ -56,6 +56,9 @@ metadata_reserve_mb = 0
 """)
     iso = staging / f"{LABEL}.iso"
     iso.write_bytes(b"\0" * 2048)
+    # A finished stage leaves its session.json; the burn refuses a
+    # session folder without one (#862).
+    (staging / "session.json").write_text("{}\n")
     conn = get_connection(db)
     try:
         create_all(conn)

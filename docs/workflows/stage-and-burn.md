@@ -140,7 +140,14 @@ The end-to-end flow inside a single session:
      refuses it. Run `lcsas session abort <id>`, then `lcsas stage` again.
 6. **Write session manifest** — `session.json` lists volume ids, labels,
    uuids, ISO paths, and pack row numbers (`pack_ids`)
-   (`BurnOrchestrator.stage`).
+   (`BurnOrchestrator.stage`). It is written last, so it also marks a
+   finished stage (#862). A stage killed hard (SIGKILL, power loss)
+   while it hard-linked the packs of a later volume leaves the earlier
+   volumes with snapshot files whose packs are on no disc, and no
+   `session.json`. `lcsas burn` refuses such a session, and
+   `lcsas burn-iso` refuses an ISO still in its staging folder. Run
+   `lcsas session abort <id>` (or `lcsas stage --clean --session <id>
+   --force`), then `lcsas stage` again.
 7. **Burn (separate phase, `burn_session`)** — for each session-volume:
    - Transition `STAGING → BURNING` (`BurnOrchestrator.burn_session`).
    - `xorriso burn_iso` writes the ISO to `/dev/srN`

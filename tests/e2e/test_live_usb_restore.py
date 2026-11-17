@@ -251,8 +251,11 @@ def _build_archive(work: Path) -> _Archive:
     from lcsas.meta.builder import MetaVolumeBuilder
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
-    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
-    from tests.e2e.fixture_lib import add_repo, burn_to_isos
+    from tests.e2e.fixture_lib import (
+        MIN_HOLOGRAPHIC_RESERVE_BYTES,
+        add_repo,
+        burn_to_isos,
+    )
 
     sources = work / "sources" / TENANT
     sources.mkdir(parents=True)
