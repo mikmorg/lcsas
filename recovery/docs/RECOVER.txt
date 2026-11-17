@@ -161,6 +161,12 @@ in this order.  Each one says how to answer.
      (exit code 65); after question 5 it means no other set, and
      the run ends with 0.
 
+     Only when a disk looks too small for that set (see
+     PREREQUISITES): restore.sh gives the numbers and asks
+         Carry on anyway? [y/N]
+     y carries on; any other answer stops, with nothing restored
+     (exit code 1).
+
   3. The password.  What you type is not shown.  An empty answer is
      asked again, and so is a password the backup set does not
      accept: it is checked before the restore starts.  Q then ENTER
@@ -186,9 +192,10 @@ in this order.  Each one says how to answer.
      one folder would be mixed together.  Q then ENTER restores no
      other set.
 
-Question 1, the check of the password, and question 5 come only on a
-terminal: never when the answers come from a pipe or a script.  To
-run with no questions at all, give the answers in advance (see
+Question 1, the free-space question, the check of the password, and
+question 5 come only on a terminal: never when the answers come from
+a pipe or a script.  To run with no questions at all, give the
+answers in advance (see
 "ENVIRONMENT VARIABLES"):
 
     LCSAS_REPO=photos LCSAS_PWFILE=/path/to/password-file \

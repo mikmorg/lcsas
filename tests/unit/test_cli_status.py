@@ -192,8 +192,8 @@ def test_status_names_a_killed_stage_with_its_way_out(tmp_path, capsys):
 
     assert main(["--db", str(db), "status"]) == 0
     out = capsys.readouterr().out
-    assert "do not burn session sess-GHOST_VOL (GHOST_VOL)" in out, out
-    assert "has no session.json" in out, out
+    assert "the stage of burn session sess-GHOST_VOL did not finish" in out, out
+    assert "has no session.json. Do not burn it (GHOST_VOL)" in out, out
     assert "'lcsas session abort sess-GHOST_VOL'" in out, out
     assert "then run 'lcsas stage' again" in out, out
     assert "waiting to be burned" not in out, out
@@ -229,7 +229,7 @@ def test_status_ignores_a_cleaned_session_without_session_json(
 
     assert main(["--db", str(db), "status"]) == 0
     out = capsys.readouterr().out
-    assert "do not burn session" not in out, out
+    assert "did not finish" not in out, out
 
 
 def _fma05_catalog(db_path, volumes):

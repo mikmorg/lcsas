@@ -45,6 +45,8 @@ NOT_OURS = {
     "No suitable key found": "rustic",
     "wrong password or no key found": "restic",
     "LCSAS KEY SHARE": "the heading printed on a share card",
+    "BARE-MINIMUM PATH ENDS HERE": "a comment in restore.sh (TIERS.txt "
+    "names the part of the script before it)",
 }
 
 # Messages a program builds from parts: each part must be in its source.
@@ -121,15 +123,22 @@ def _py_strings(src: str) -> str:
     return " ".join(t for _, _, t in sorted(parts))
 
 
+def _code(src: str, comment: str) -> str:
+    """The source without its comment lines: a quote that lives on only
+    in a comment is not a message."""
+    return "\n".join(line for line in src.splitlines()
+                     if not line.lstrip().upper().startswith(comment))
+
+
 def _corpus() -> list[str]:
     """What the recovery programs print, as several streams: each one
     joined in source order, and each source whole (a quote on one line)."""
     streams: list[str] = []
     for f in sorted((RECOVERY / "scripts").glob("*.sh")):
-        src = f.read_text(encoding="utf-8")
+        src = _code(f.read_text(encoding="utf-8"), "#")
         streams += [_shell_formats(src), src]
     for f in sorted((RECOVERY / "scripts").glob("*.bat")):
-        src = f.read_text(encoding="utf-8")
+        src = _code(f.read_text(encoding="utf-8"), "REM")
         streams += [_bat_echoes(src), src]
     for f in sorted((RECOVERY / "src").rglob("*.c")):
         streams.append(_c_strings(f.read_text(encoding="utf-8", errors="replace")))

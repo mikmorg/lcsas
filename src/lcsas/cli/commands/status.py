@@ -413,15 +413,15 @@ def _cmd_status(args: argparse.Namespace) -> int:
         unburned = [v for v in unburned if v.label not in incomplete]
         # #862: a stage killed hard leaves a session folder with no
         # session.json, and ISOs that look finished.  burn refuses it;
-        # status names it with the way out, never as waiting to be burned.
+        # status names it with the way out, never as waiting to be burned
+        # (the condition is burn's own: unfinished_stage_refusal).
         # Its volumes the #665 warning names already are left out of it,
         # and a session with no other volume gets no second warning.
-        killed: list[tuple[str, str, list[str]]] = []
+        killed: list[tuple[str, list[str]]] = []
         for s in list_sessions(conn):
             if s.status == SESSION_CLEANED:
                 continue
-            refusal = unfinished_stage_refusal(Path(s.staging_dir), s.session_id)
-            if refusal is None:
+            if unfinished_stage_refusal(Path(s.staging_dir), s.session_id) is None:
                 continue
             labels = [str(r["label"]) for r in conn.execute(
                 "SELECT v.label FROM session_volumes sv JOIN volumes v "
@@ -430,9 +430,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 (s.session_id,),
             ) if str(r["label"]) not in incomplete]
             if labels or s.session_id not in incomplete_sessions:
-                killed.append((s.session_id, refusal, labels))
-        killed_ids = {sid for sid, _, _ in killed}
-        killed_labels = {label for _, _, labels in killed for label in labels}
+                killed.append((s.session_id, labels))
+        killed_ids = {sid for sid, _ in killed}
+        killed_labels = {label for _, labels in killed for label in labels}
         unburned = [v for v in unburned if v.label not in killed_labels]
         with_iso = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
         # #671: a volume whose disc failed verification is listed under
@@ -490,10 +490,14 @@ def _cmd_status(args: argparse.Namespace) -> int:
             where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
                      else "(no disc in service)")
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
-    for sid, refusal, labels in killed:
+    for sid, labels in killed:
         logger.warning(
-            "WARNING: do not burn session %s%s. %s", sid,
-            f" ({', '.join(labels)})" if labels else "", refusal,
+            "WARNING: the stage of burn session %s did not finish: its "
+            "staging folder has no session.json. Do not burn it%s: its "
+            "discs could name a snapshot whose packs are on no disc. "
+            "Remove it with 'lcsas session abort %s' (or 'lcsas stage "
+            "--clean --session %s --force'), then run 'lcsas stage' again.",
+            sid, f" ({', '.join(labels)})" if labels else "", sid, sid,
         )
     if incomplete:
         logger.warning(
