@@ -858,7 +858,7 @@ class TestRestoreExecSpacePreflight:
                   return_value=mock_runner),
             patch("shutil.disk_usage", side_effect=fake_disk_usage),
             # Mock the two paths onto distinct filesystems.
-            patch("lcsas.cli.commands.restore._fs_dev",
+            patch("lcsas.restore.orchestrator.fs_dev",
                   side_effect=lambda p: 2 if "cachefs" in str(p) else 1),
             patch("lcsas.restore.executor.RestoreExecutor") as mock_exec_cls,
             patch("sys.stdin") as mock_stdin,
@@ -909,8 +909,8 @@ class TestReportMissingByLabel:
     def test_groups_by_disc_with_alternates_and_deprecated(self, caplog):
         import logging
 
-        from lcsas.cli.main import _report_missing_by_label
         from lcsas.db.models import Pack
+        from lcsas.restore.orchestrator import report_missing_by_label
         from lcsas.restore.planner import PackSource, PickListV2
 
         sha_a = "aa" * 32
@@ -935,7 +935,7 @@ class TestReportMissingByLabel:
         )
 
         with caplog.at_level(logging.DEBUG, logger="lcsas"):
-            _report_missing_by_label(pick, [sha_a, sha_b])
+            report_missing_by_label(pick, [sha_a, sha_b])
 
         errors = " ".join(
             r.message for r in caplog.records if r.levelno >= logging.ERROR
@@ -958,7 +958,7 @@ class TestRetryFromAlternatesBatch:
         """When an alternate volume directory does not exist, a warning is logged."""
         import logging
 
-        from lcsas.cli.main import _retry_from_alternates_batch
+        from lcsas.restore.orchestrator import retry_from_alternates_batch
 
         vol_dir = tmp_path / "volumes"
         vol_dir.mkdir()
@@ -971,7 +971,7 @@ class TestRetryFromAlternatesBatch:
         failed_packs = ["deadbeef" * 8]
 
         with caplog.at_level(logging.WARNING, logger="lcsas"):
-            result = _retry_from_alternates_batch(
+            result = retry_from_alternates_batch(
                 mock_executor,
                 tmp_path / "cache",
                 vol_dir,
@@ -988,7 +988,7 @@ class TestRetryFromAlternatesBatch:
         """No missing-dir warning when the alternate volume directory exists."""
         import logging
 
-        from lcsas.cli.main import _retry_from_alternates_batch
+        from lcsas.restore.orchestrator import retry_from_alternates_batch
 
         vol_dir = tmp_path / "volumes"
         alt_dir = vol_dir / "ALT_VOL"
@@ -1000,7 +1000,7 @@ class TestRetryFromAlternatesBatch:
         failed_packs = ["deadbeef" * 8]
 
         with caplog.at_level(logging.WARNING, logger="lcsas"):
-            _retry_from_alternates_batch(
+            retry_from_alternates_batch(
                 mock_executor,
                 tmp_path / "cache",
                 vol_dir,
@@ -1018,7 +1018,7 @@ class TestRetryFromAlternatesBatch:
         """Phase 21.7: when iso_shas is supplied AND a sibling .iso
         exists, the retry call passes both iso_path and
         expected_sha256 to ingest_volume."""
-        from lcsas.cli.main import _retry_from_alternates_batch
+        from lcsas.restore.orchestrator import retry_from_alternates_batch
 
         vol_dir = tmp_path / "volumes"
         alt_dir = vol_dir / "ALT_VOL"
@@ -1031,7 +1031,7 @@ class TestRetryFromAlternatesBatch:
         alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
         iso_shas = {"ALT_VOL": "a" * 64}
 
-        _retry_from_alternates_batch(
+        retry_from_alternates_batch(
             mock_executor,
             tmp_path / "cache",
             vol_dir,
@@ -1049,7 +1049,7 @@ class TestRetryFromAlternatesBatch:
         """No sibling .iso → iso_path is None even if iso_shas has the
         hash.  Avoids feeding a None iso_path with a non-None SHA to
         the executor (which the verify branch would reject)."""
-        from lcsas.cli.main import _retry_from_alternates_batch
+        from lcsas.restore.orchestrator import retry_from_alternates_batch
 
         vol_dir = tmp_path / "volumes"
         alt_dir = vol_dir / "ALT_VOL"
@@ -1061,7 +1061,7 @@ class TestRetryFromAlternatesBatch:
         alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
         iso_shas = {"ALT_VOL": "a" * 64}
 
-        _retry_from_alternates_batch(
+        retry_from_alternates_batch(
             mock_executor,
             tmp_path / "cache",
             vol_dir,
@@ -1079,7 +1079,7 @@ class TestRetryFromAlternatesBatch:
     def test_default_iso_shas_omitted(self, tmp_path):
         """Backward-compat: iso_shas defaults to None and the call still
         works exactly as before Phase 21.7 — no iso_path, no SHA."""
-        from lcsas.cli.main import _retry_from_alternates_batch
+        from lcsas.restore.orchestrator import retry_from_alternates_batch
 
         vol_dir = tmp_path / "volumes"
         alt_dir = vol_dir / "ALT_VOL"
@@ -1089,7 +1089,7 @@ class TestRetryFromAlternatesBatch:
         mock_executor.ingest_volume.return_value = IngestionResult(0, [])
         alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
 
-        _retry_from_alternates_batch(
+        retry_from_alternates_batch(
             mock_executor,
             tmp_path / "cache",
             vol_dir,
@@ -1117,7 +1117,7 @@ class TestRetryFromAlternatesInteractive:
     ):
         """Operator types a mount path; iso_dir holds a sibling .iso;
         both iso_path and expected_sha256 land on ingest_volume."""
-        from lcsas.cli.main import _retry_from_alternates_interactive
+        from lcsas.restore.orchestrator import retry_from_alternates_interactive
 
         # Synthesize a real mount path the user "types in".
         mount_path = tmp_path / "mounted_alt"
@@ -1136,7 +1136,7 @@ class TestRetryFromAlternatesInteractive:
         alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
         iso_shas = {"ALT_VOL": "b" * 64}
 
-        _retry_from_alternates_interactive(
+        retry_from_alternates_interactive(
             mock_executor,
             tmp_path / "cache",
             ["deadbeef" * 8],
@@ -1153,7 +1153,7 @@ class TestRetryFromAlternatesInteractive:
         """No --iso-dir → iso_path is None even though iso_shas has a
         hash (matches Phase 21.6 invariant: SHA without iso_path is
         a no-op in the executor's verify guard)."""
-        from lcsas.cli.main import _retry_from_alternates_interactive
+        from lcsas.restore.orchestrator import retry_from_alternates_interactive
 
         mount_path = tmp_path / "mounted_alt"
         mount_path.mkdir()
@@ -1162,7 +1162,7 @@ class TestRetryFromAlternatesInteractive:
         mock_executor = MagicMock()
         mock_executor.ingest_volume.return_value = IngestionResult(1, [])
 
-        _retry_from_alternates_interactive(
+        retry_from_alternates_interactive(
             mock_executor,
             tmp_path / "cache",
             ["deadbeef" * 8],
@@ -1177,12 +1177,12 @@ class TestRetryFromAlternatesInteractive:
 
     def test_skip_response_doesnt_ingest(self, tmp_path, monkeypatch):
         """User typing 'skip' bypasses ingest_volume entirely."""
-        from lcsas.cli.main import _retry_from_alternates_interactive
+        from lcsas.restore.orchestrator import retry_from_alternates_interactive
 
         monkeypatch.setattr("builtins.input", lambda _prompt="": "skip")
         mock_executor = MagicMock()
 
-        remaining = _retry_from_alternates_interactive(
+        remaining = retry_from_alternates_interactive(
             mock_executor,
             tmp_path / "cache",
             ["deadbeef" * 8],
@@ -1197,7 +1197,7 @@ class TestRetryFromAlternatesInteractive:
         """Phase 21.9 added two kwargs with None defaults — direct
         callers that don't know about them must continue to work
         with no iso_path / no expected_sha256."""
-        from lcsas.cli.main import _retry_from_alternates_interactive
+        from lcsas.restore.orchestrator import retry_from_alternates_interactive
 
         mount_path = tmp_path / "mounted_alt"
         mount_path.mkdir()
@@ -1206,7 +1206,7 @@ class TestRetryFromAlternatesInteractive:
         mock_executor = MagicMock()
         mock_executor.ingest_volume.return_value = IngestionResult(0, [])
 
-        _retry_from_alternates_interactive(
+        retry_from_alternates_interactive(
             mock_executor,
             tmp_path / "cache",
             ["deadbeef" * 8],
@@ -1224,41 +1224,41 @@ class TestFindSiblingIso:
 
     def test_iso_next_to_extracted_dir(self, tmp_path):
         """Common layout: extracted/ + sibling .iso file."""
-        from lcsas.cli.main import _find_sibling_iso
+        from lcsas.restore.orchestrator import find_sibling_iso
 
         (tmp_path / "VOL_X").mkdir()
         (tmp_path / "VOL_X.iso").write_bytes(b"")
-        assert _find_sibling_iso(tmp_path, "VOL_X") == tmp_path / "VOL_X.iso"
+        assert find_sibling_iso(tmp_path, "VOL_X") == tmp_path / "VOL_X.iso"
 
     def test_iso_inside_extracted_dir(self, tmp_path):
         """Alternate layout: ISO sits inside the per-label tree."""
-        from lcsas.cli.main import _find_sibling_iso
+        from lcsas.restore.orchestrator import find_sibling_iso
 
         nested = tmp_path / "VOL_Y"
         nested.mkdir()
         (nested / "VOL_Y.iso").write_bytes(b"")
-        assert _find_sibling_iso(tmp_path, "VOL_Y") == nested / "VOL_Y.iso"
+        assert find_sibling_iso(tmp_path, "VOL_Y") == nested / "VOL_Y.iso"
 
     def test_no_iso_returns_none(self, tmp_path):
         """Neither layout present → None, no exception."""
-        from lcsas.cli.main import _find_sibling_iso
+        from lcsas.restore.orchestrator import find_sibling_iso
 
         (tmp_path / "VOL_Z").mkdir()
         # No VOL_Z.iso anywhere.
-        assert _find_sibling_iso(tmp_path, "VOL_Z") is None
+        assert find_sibling_iso(tmp_path, "VOL_Z") is None
 
     def test_prefers_top_level_over_nested(self, tmp_path):
         """When both layouts coexist, the top-level sibling wins (it's
         the more common arrangement on operators' machines, and the
         function probes in that order)."""
-        from lcsas.cli.main import _find_sibling_iso
+        from lcsas.restore.orchestrator import find_sibling_iso
 
         nested = tmp_path / "VOL_BOTH"
         nested.mkdir()
         top = tmp_path / "VOL_BOTH.iso"
         top.write_bytes(b"top")
         (nested / "VOL_BOTH.iso").write_bytes(b"nested")
-        assert _find_sibling_iso(tmp_path, "VOL_BOTH") == top
+        assert find_sibling_iso(tmp_path, "VOL_BOTH") == top
 
 
 # ---------------------------------------------------------------------------

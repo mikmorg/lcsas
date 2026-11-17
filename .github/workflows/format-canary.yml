@@ -50,13 +50,17 @@ jobs:
           python-version: "3.11"
 
       - name: Install LATEST rustic (deliberately unpinned)
+        env:
+          # Unauthenticated API calls share a 60-per-hour limit per runner
+          # address and fail with 403 when it is used up.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
           cd "$(mktemp -d)"
           # Resolve the latest release asset for x86_64 linux-gnu via the API.
           api="https://api.github.com/repos/rustic-rs/rustic/releases/latest"
-          url=$(curl -fsSL "$api" \
+          url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$api" \
             | grep -o 'https://[^"]*x86_64-unknown-linux-gnu\.tar\.gz' \
             | head -n1)
           if [ -z "$url" ]; then

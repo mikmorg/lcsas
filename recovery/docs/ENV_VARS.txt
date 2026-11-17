@@ -223,8 +223,8 @@ BEHAVIOR KNOBS
 LCSAS_PACK_CACHE_DIR
   Default:  auto  (opt-out / default ON)
   Since:    Phase 24
-  Read by:  restore.sh, restore.bat and tier 1 (tier 1 does the
-            copying; the scripts choose the folder)
+  Read by:  restore.sh, restore.bat, tier 1 and tier 3 (tiers 1
+            and 3 do the copying; the scripts choose the folder)
   What:     Opportunistic pack cache directory.  Three values:
               auto    (default when unset) → pack-cache/ in the tools
                       folder (see LCSAS_TOOLS_DIR), so a stopped
@@ -247,6 +247,12 @@ LCSAS_PACK_CACHE_DIR
             cache's drive lacks room for the disc plus 5% of the
             drive (at most 1 GB) to spare (#634; before rc7: when the
             drive was under 10% free).
+            Tier 3 (standalone_restorer.py) reads the same variable
+            since rc10 (#602): unset or empty, no cache.  It copies
+            the packs of its backup set from each data disc it finds,
+            with the same free-space rule, and checks each copy
+            against its pack id.  Before rc10 tier 3 had no cache and
+            could ask for a disc about once per file.
   Why:      Opt-OUT.  The v3 blind run took 16 disc swaps for 3 needed
             discs without the cache.  Forgetting this knob means the
             heir swaps discs 3-16× more often than necessary —

@@ -15,10 +15,6 @@ from typing import TYPE_CHECKING
 
 from lcsas.cli.commands.key import _write_private_file  # noqa: F401 - re-exported
 from lcsas.cli.commands.restore import (  # noqa: F401 - re-exported
-    _find_sibling_iso,
-    _report_missing_by_label,
-    _retry_from_alternates_batch,
-    _retry_from_alternates_interactive,
     cmd_restore_exec,
     cmd_restore_from_disc,
     cmd_restore_plan,
