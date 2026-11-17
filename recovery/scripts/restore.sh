@@ -35,10 +35,13 @@
 # marker (metadata/<id>/LCSAS_REPO.txt) says its password is split, else
 # for the password, again after a wrong one.
 #
-# Documented exit codes:
+# Documented exit codes (recovery/docs/RECOVER.txt, "EXIT CODES"):
 #   0    success
-#   1    generic failure (no repository, unsupported OS/arch, etc.)
-#   2    usage error
+#   1    generic failure (no repository, unsupported OS/arch, not enough
+#        free space, no recovery method available, etc.)
+#   2    usage error; --check-disc: the image has no ECC data
+#   3    --check-disc: no image, no recovery tree or no lcsas-ecc, or the
+#        image could not be read or repaired
 #   4    the restore finished, but some items could not be restored:
 #        they are listed in <target>/RESTORE_FAILURES.txt (#799)
 #   64   no recovery binary available at any tier (issue #225)
@@ -47,7 +50,8 @@
 #   75   the reader typed q at the disc prompt of tier 1 (#615) or tier 3
 #   77   a repository key rejected the password (any tier, #805), or the
 #        reader stopped at the password or share card prompt
-#   130  stopped with Ctrl-C (143: killed with TERM)
+#   129, 130, 143  the terminal closed, Ctrl-C, killed with TERM
+# Any other code is the one the tier that ran stopped with.
 #
 # Tools folder (#609): run off a disc, the script copies itself, this
 # computer's binaries, the docs and the meta disc's metadata/ into
@@ -120,23 +124,28 @@ find_meta_mount() {
     printf '%s\n' "$1"
 }
 
-# Print this host's rust triple (the bin/<triple>/ dir restore.sh runs
-# from), or nothing when the platform isn't one we ship.  The same
-# matrix as the main dispatch below, minus its error exits: relocation
-# only uses it to copy less.
-_host_triple() {
-    _ht_m="$(uname -m 2>/dev/null)"
-    case "$(uname -s 2>/dev/null)" in
+# host_triple OS MACHINE: the rust triple of the recovery/bin/<triple>/
+# folder for this computer (OS from uname -s, MACHINE from uname -m), or
+# nothing when the discs carry no programs for it.  The one table of the
+# six targets the meta disc builder bundles (recovery/UPSTREAM.sha256).
+# An ARMv6 processor maps to armv7: only the stock restic in that folder
+# runs there (#803, see OLD_ARM).
+host_triple() {
+    case "$1" in
         Linux)
-            case "$_ht_m" in
+            case "$2" in
                 x86_64|amd64)      echo x86_64-unknown-linux-musl ;;
                 aarch64|arm64)     echo aarch64-unknown-linux-musl ;;
                 armv7*|armv6*|arm) echo armv7-unknown-linux-gnueabihf ;;
             esac ;;
         Darwin)
-            case "$_ht_m" in
+            case "$2" in
                 arm64|aarch64)     echo aarch64-apple-darwin ;;
                 x86_64)            echo x86_64-apple-darwin ;;
+            esac ;;
+        MINGW*|MSYS*|CYGWIN*|Windows*)
+            case "$2" in
+                x86_64|amd64)      echo x86_64-pc-windows-gnu ;;
             esac ;;
     esac
 }
@@ -423,7 +432,7 @@ relocate_to_ram() {
     # for one target.  Unknown platform or no such dir: copy everything.
     _copy_from="$src_bin"
     _copy_to="bin"
-    _reloc_triple="${LCSAS_TARGET:-$(_host_triple)}"
+    _reloc_triple="${LCSAS_TARGET:-$(host_triple "$(uname -s 2>/dev/null)" "$(uname -m 2>/dev/null)")}"
     if [ -n "$src_bin" ] && [ -n "$_reloc_triple" ] \
        && [ -d "$src_bin/$_reloc_triple" ]; then
         _copy_from="$src_bin/$_reloc_triple"
@@ -800,8 +809,8 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           1 → suppress the 'no data discs detected'
                           hard-error (advanced / test environments).
   LCSAS_ALLOW_TMPFS_TARGET
-                          1 → skip the 'restore into RAM anyway?'
-                          confirmation prompt when TARGET_DIR sits on
+                          1 → skip the 'Continue restoring into RAM
+                          anyway?' prompt when TARGET_DIR sits on
                           a RAM-backed filesystem (tmpfs/ramfs).  The
                           warning still prints.
   LCSAS_FORBID_TMPFS_TARGET
@@ -809,8 +818,8 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           even with no TTY attached.  For automation
                           that must never restore into RAM.
   LCSAS_SKIP_SPACE_CHECK  1 → skip the free-space preflight that
-                          compares the archive size (from the catalog)
-                          against free space at TARGET_DIR and the
+                          compares the chosen set's size (from the
+                          catalog) against free space at TARGET_DIR and the
                           pack cache (twice the size when both are on
                           one disk) before any password/disc prompt.
                           Default: check ON when the size is derivable.
@@ -918,35 +927,26 @@ if [ -n "$CHECK_DISC_IMG" ]; then
         exit 3
     fi
 
-    # Per-target triple selection -- same matrix as the main dispatch,
-    # honouring $LCSAS_TARGET.  Resolve bin/<triple>/lcsas-ecc, with a
-    # bin/lcsas-ecc fallback for flat layouts / tests.
+    # The triple: $LCSAS_TARGET, else this computer's (host_triple).
+    # Resolve bin/<triple>/lcsas-ecc, with a bin/lcsas-ecc fallback for
+    # flat layouts / tests.
     cd_machine="$(uname -m 2>/dev/null || echo x86_64)"
-    cd_os="$(uname -s 2>/dev/null || echo Linux)"
-    if [ -n "${LCSAS_TARGET:-}" ]; then
-        cd_triple="$LCSAS_TARGET"
-    else
-        case "$cd_os" in
-            Linux)
-                case "$cd_machine" in
-                    x86_64|amd64)      cd_triple="x86_64-unknown-linux-musl" ;;
-                    aarch64|arm64)     cd_triple="aarch64-unknown-linux-musl" ;;
-                    armv7*|arm)        cd_triple="armv7-unknown-linux-gnueabihf" ;;
-                    armv6*)
-                        # #803: lcsas-ecc is built for ARMv7 and stops
-                        # with an illegal instruction on ARMv6.
-                        printf 'restore.sh: --check-disc: this computer has an ARMv6 processor (%s);\n' "$cd_machine" >&2
-                        printf 'lcsas-ecc needs ARMv7 or newer.  Check the disc on a newer computer.\n' >&2
-                        exit 3 ;;
-                    *)                 cd_triple="x86_64-unknown-linux-musl" ;;
-                esac ;;
-            Darwin)
-                case "$cd_machine" in
-                    arm64|aarch64)     cd_triple="aarch64-apple-darwin" ;;
-                    *)                 cd_triple="x86_64-apple-darwin" ;;
-                esac ;;
-            *)                         cd_triple="x86_64-pc-windows-gnu" ;;
+    cd_triple="${LCSAS_TARGET:-$(host_triple "$(uname -s 2>/dev/null || echo Linux)" "$cd_machine")}"
+    if [ -z "${LCSAS_TARGET:-}" ]; then
+        case "$cd_machine" in
+            armv6*)
+                # #803: lcsas-ecc is built for ARMv7 and stops with an
+                # illegal instruction on ARMv6.
+                printf 'restore.sh: --check-disc: this computer has an ARMv6 processor (%s);\n' "$cd_machine" >&2
+                printf 'lcsas-ecc needs ARMv7 or newer.  Check the disc on a newer computer.\n' >&2
+                exit 3 ;;
         esac
+    fi
+    if [ -z "$cd_triple" ]; then
+        printf 'restore.sh: --check-disc: the discs carry no lcsas-ecc for this computer (%s %s).\n' \
+               "$(uname -s 2>/dev/null)" "$cd_machine" >&2
+        printf 'Check the disc on a Linux, macOS or Windows computer (x86_64 or ARM).\n' >&2
+        exit 3
     fi
 
     cd_ecc_bin=""
@@ -1050,14 +1050,14 @@ if [ -n "$CHECK_DISC_IMG" ]; then
 fi
 
 # Pattern 1: first arg looks like a recovery root (has bin/ or src/).
-if [ $# -ge 2 ] && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
+if [ $# -ge 2 ] && { [ -d "$1/bin" ] || [ -d "$1/src" ]; } 2>/dev/null; then
     RECOVERY="$1"
     RECOVERY_GIVEN=1
     TARGET="$2"
     TARGET_FROM_POS=1
     SNAP_POS="${3:-}"
 elif [ $# -ge 1 ] && [ -n "$TARGET_FLAG" ] \
-     && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
+     && { [ -d "$1/bin" ] || [ -d "$1/src" ]; } 2>/dev/null; then
     # --target DIR already supplied the target; the sole positional is
     # the recovery root (optionally followed by a snapshot id).
     RECOVERY="$1"
@@ -1228,17 +1228,8 @@ fi
 
 # ── Target detection (arch + OS) ──────────────────────────────────
 #
-# Picks one of the six targets bundled by the meta disc builder (see
-# docs/history/CROSS_PLATFORM_META_RFC.md §3, recovery/UPSTREAM.sha256):
-#
-#   x86_64-unknown-linux-musl        Linux x86_64
-#   aarch64-unknown-linux-musl       Linux ARM64
-#   armv7-unknown-linux-gnueabihf    Linux 32-bit ARM
-#   aarch64-apple-darwin             macOS Apple Silicon
-#   x86_64-apple-darwin              macOS Intel
-#   x86_64-pc-windows-gnu            Windows (POSIX driver path)
-#
-# Override with $LCSAS_TARGET if auto-detection misfires.
+# Picks one of the six targets the meta disc carries (host_triple, at
+# the top).  Override with $LCSAS_TARGET if auto-detection misfires.
 
 if [ -x "$RECOVERY/scripts/detect_arch.sh" ]; then
     MACHINE="$(sh "$RECOVERY/scripts/detect_arch.sh" 2>/dev/null || uname -m)"
@@ -1247,63 +1238,32 @@ else
 fi
 OS="$(uname -s 2>/dev/null || printf 'Linux\n')"
 
-# IMPORTANT: $TARGET above is the *caller-supplied restore directory*
-# (positional arg 1 or 2).  From here on we need a separate name for
-# the per-platform rust-triple that selects which binary to dispatch
-# to under recovery/bin/.  Stuff the caller's TARGET into TARGET_DIR
-# and free up TARGET to hold the triple — which the rest of the
-# script reads when computing $RESTORE_BIN / $RUSTIC_BIN paths.
+# $TARGET so far is the folder to restore into; from here on it is the
+# triple that names the recovery/bin/<triple>/ folder.
 TARGET_DIR="$TARGET"
-TARGET=""
-# 1 on an ARMv6 processor (#803): the bundled programs cannot run.
+TARGET="${LCSAS_TARGET:-$(host_triple "$OS" "$MACHINE")}"
+# 1 on an ARMv6 processor (#803): the bundled programs cannot run.  Only
+# the stock restic (tier 2b) and a python3 of this computer (tier 3) do.
 OLD_ARM=""
-
-if [ -n "${LCSAS_TARGET:-}" ]; then
-    TARGET="$LCSAS_TARGET"
-else
+if [ -z "${LCSAS_TARGET:-}" ]; then
+    case "$MACHINE" in armv6*) OLD_ARM=1 ;; esac
+fi
+if [ -z "$TARGET" ]; then
     case "$OS" in
         Linux)
-            case "$MACHINE" in
-                x86_64|amd64)        TARGET="x86_64-unknown-linux-musl" ;;
-                aarch64|arm64)       TARGET="aarch64-unknown-linux-musl" ;;
-                armv7*|arm)          TARGET="armv7-unknown-linux-gnueabihf" ;;
-                armv6*)
-                    # #803: an ARMv6 processor (Raspberry Pi 1 or Zero).
-                    # Every program built for armv7 stops there with an
-                    # illegal instruction; only the stock restic (tier
-                    # 2b) and a python3 of this computer (tier 3) run.
-                    TARGET="armv7-unknown-linux-gnueabihf"
-                    OLD_ARM=1 ;;
-                *)
-                    printf 'unsupported Linux machine: %s\n' "$MACHINE" >&2
-                    printf '(supported: x86_64, aarch64/arm64, armv7)\n' >&2
-                    exit 1 ;;
-            esac ;;
+            printf 'unsupported Linux machine: %s\n' "$MACHINE" >&2
+            printf '(supported: x86_64, aarch64/arm64, armv7)\n' >&2 ;;
         Darwin)
-            case "$MACHINE" in
-                arm64|aarch64)       TARGET="aarch64-apple-darwin" ;;
-                x86_64)              TARGET="x86_64-apple-darwin" ;;
-                *)
-                    printf 'unsupported macOS machine: %s\n' "$MACHINE" >&2
-                    exit 1 ;;
-            esac ;;
+            printf 'unsupported macOS machine: %s\n' "$MACHINE" >&2 ;;
         MINGW*|MSYS*|CYGWIN*|Windows*)
-            case "$MACHINE" in
-                x86_64|amd64)        TARGET="x86_64-pc-windows-gnu" ;;
-                *)
-                    printf 'unsupported Windows machine: %s\n' "$MACHINE" >&2
-                    printf '(only x86_64 is supported under POSIX-sh; use restore.bat instead)\n' >&2
-                    exit 1 ;;
-            esac ;;
+            printf 'unsupported Windows machine: %s\n' "$MACHINE" >&2
+            printf '(only x86_64 is supported under POSIX-sh; use restore.bat instead)\n' >&2 ;;
         *)
             printf 'unsupported OS: %s\n' "$OS" >&2
-            printf '(supported: Linux, Darwin, MINGW/MSYS/CYGWIN/Windows)\n' >&2
-            exit 1 ;;
+            printf '(supported: Linux, Darwin, MINGW/MSYS/CYGWIN/Windows)\n' >&2 ;;
     esac
+    exit 1
 fi
-
-# Legacy single-axis $ARCH retained for callers reading it post-source.
-ARCH="$TARGET"
 
 if [ -n "$OLD_ARM" ]; then
     {
@@ -1352,12 +1312,13 @@ _restore_exit_handler() {
     # restore can carry on from it.  Only a folder carrying the marker,
     # and only what this script put there (tools_dir_remove).  Once the
     # set is restored (RESTORE_DONE), a stop at the "another set?"
-    # questions leaves nothing to carry on.
+    # questions leaves nothing to carry on, and with no tier that can
+    # run here (NO_METHOD) resume.sh could not carry on either.
     if [ -n "${TOOLS:-}" ] && [ -f "$TOOLS/$TOOLS_MARK" ]; then
         if [ "$rc" -eq 0 ] || [ "${RESTORE_DONE:-0}" = 1 ]; then
             cd / 2>/dev/null
             tools_dir_remove "$TOOLS"
-        elif [ -f "$TOOLS/resume.sh" ]; then
+        elif [ -f "$TOOLS/resume.sh" ] && [ -z "${NO_METHOD:-}" ]; then
             cat >&2 <<EOF
 
 The restore stopped before it finished (exit code $rc).  The files
@@ -2536,12 +2497,18 @@ fi
 # The burn side checks staging-area space before writing a byte; mirror
 # that on the restore side BEFORE the password / disc prompts so a
 # too-small target fails in one obvious line, not via ENOSPC after a
-# long disc-swapping session.  Required bytes come from the catalog:
-# the exact per-repository pack sum when a sqlite3 CLI is on PATH, else
-# the tier-1 binary's --list-pending-packs total (a slight over-
-# estimate when packs live on several discs).  When neither tool can
-# run, the check is SKIPPED -- never block a restore on a missing
-# convenience tool.  The pack cache needs about that size too: packs
+# long disc-swapping session.  Required bytes come from the catalog: the
+# chosen set's pack sum, from a sqlite3 command when there is one, else
+# from tier 1's --list-pending-packs --repo-id (#798: the set's
+# metadata/<id> folder name is its packs.repo_id; a slight over-estimate
+# when packs live on several discs).  When tier 1 knows no pack of that
+# id (an older disc names its folders by set name), it sizes the whole
+# archive, every set on the discs.  When neither tool can run, the check
+# is SKIPPED -- never block a restore on a missing convenience tool.
+# Any size is an estimate, so a short disk asks the reader, when there
+# is one, whether to carry on; with nobody to ask, or any answer but y,
+# the run stops (exit 1), as restore.bat does.  The pack cache needs
+# about that size too: packs
 # accumulate in it while the restore writes the target.  When the
 # target and the cache share a filesystem (the default: both under
 # the home folder) that filesystem needs the SUM of the two (#660);
@@ -2591,6 +2558,22 @@ used_kb_in() {
     printf '%s\n' "$_uk"
 }
 
+# pending_kb [--repo-id ID]: KB of the packs tier 1's --list-pending-packs
+# counts (of set ID, or of the whole archive); nothing when it counts no
+# pack or prints no total.  Its output is captured: it must not reach the
+# reader's terminal.  Tier 1 wants --repo and --password-file even here,
+# where it reads neither (#535); the password is not asked for yet, so
+# /dev/null.
+pending_kb() {
+    "$_RESTORE_BIN_PROBE" --repo "$REPO" --password-file /dev/null \
+            --catalog "${catalog_local:-$catalog_pick}" \
+            --list-pending-packs "$@" 2>/dev/null </dev/null \
+        | awk '/^Total:/ && $2 + 0 > 0 {
+              for (i = 3; i < NF; i++)
+                  if ($(i+1) == "MB") { printf "%d\n", $i * 1024; exit }
+          }' || true
+}
+
 still_needed_kb() {
     # required_kb less the "$1" KB already there, never below 0.
     if [ "$1" -ge "$required_kb" ]; then echo 0
@@ -2612,6 +2595,8 @@ space_short() {
 
 if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
     required_kb=0
+    # 1 when the size counts every backup set on the discs.
+    _sp_whole=""
     _tenant="$(basename "$REPO")"
     if [ -n "$catalog_pick" ] && command -v sqlite3 >/dev/null 2>&1; then
         _req_bytes="$(sqlite3 "${catalog_local:-$catalog_pick}" \
@@ -2621,30 +2606,17 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
                AND p.is_pruned = 0;" 2>/dev/null || true)"
         case "$_req_bytes" in
             ''|*[!0-9]*) ;;
-            *) required_kb=$(( ($_req_bytes + 1023) / 1024 )) ;;
+            *) required_kb=$(( (_req_bytes + 1023) / 1024 )) ;;
         esac
     fi
     if [ "$required_kb" -eq 0 ] && [ -n "$catalog_pick" ] \
        && [ -x "$_RESTORE_BIN_PROBE" ]; then
-        # Parse "Total: N packs, X.X MB across M discs." -> X.X
-        # (output captured -- must not leak onto the heir's tty).
-        # Tier 1's argument check wants --repo and --password-file even
-        # for --list-pending-packs, which reads neither (it exits before
-        # the key load); without them it printed usage, exited 2, and
-        # this fallback never produced a size (#535).  The password has
-        # not been asked for yet, so pass /dev/null.
-        _req_mb="$("$_RESTORE_BIN_PROBE" --repo "$REPO" \
-                       --password-file /dev/null --catalog "${catalog_local:-$catalog_pick}" \
-                       --list-pending-packs 2>/dev/null \
-                   | awk '/^Total:/ {
-                         for (i = 1; i < NF; i++)
-                             if ($(i+1) == "MB") { print $i; exit }
-                     }' || true)"
-        case "$_req_mb" in
-            ''|*[!0-9.]*) ;;
-            *) required_kb="$(awk -v mb="$_req_mb" \
-                   'BEGIN { printf "%d", mb * 1024 }')" ;;
-        esac
+        _sp_kb="$(pending_kb --repo-id "$_tenant")"
+        if [ -z "$_sp_kb" ]; then
+            _sp_kb="$(pending_kb)"
+            [ -z "$_sp_kb" ] || _sp_whole=1
+        fi
+        required_kb="${_sp_kb:-0}"
     fi
     if [ "$required_kb" -gt 0 ]; then
         mkdir -p "$TARGET_DIR" 2>/dev/null || true
@@ -2680,9 +2652,29 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
             fi
         fi
         if [ "$space_fail" = "1" ]; then
-            printf 'Free space or choose a different --target, then re-run.\n' >&2
-            printf '(set LCSAS_SKIP_SPACE_CHECK=1 to bypass this check.)\n' >&2
-            exit 1
+            {
+                if [ -n "$_sp_whole" ]; then
+                    printf 'That size counts every backup set on these discs, not only\n'
+                    printf '%s, so the set you chose may need less.\n' "$SET_NAME"
+                else
+                    printf 'That size is an estimate from the catalog, and the restore\n'
+                    printf 'may need less.\n'
+                fi
+            } >&2
+            _sp_ans=""
+            if is_interactive; then
+                printf 'You can carry on, but if the disk fills up the restore stops\n' >&2
+                printf 'part-way.  Carry on anyway? [y/N] ' >&2
+                IFS= read -r _sp_ans || _sp_ans=""
+            fi
+            case "$_sp_ans" in
+                y|Y|yes|YES|Yes) ;;
+                *)
+                    printf 'Not enough free space for this restore; nothing was restored.\n' >&2
+                    printf 'Free space or choose a different --target, then re-run.\n' >&2
+                    printf '(set LCSAS_SKIP_SPACE_CHECK=1 to bypass this check.)\n' >&2
+                    exit 1 ;;
+            esac
         fi
     fi
 fi
@@ -2930,6 +2922,18 @@ stdtool_kind() {
     esac
 }
 
+# stool_run KIND BIN ARGS...: run rustic or restic (KIND), BIN, on the
+# chosen set with the password file; ARGS are its command (restore,
+# snapshots).  restic runs without a lock: the set is on read-only discs.
+stool_run() {
+    _sr_kind="$1"; _sr_bin="$2"; shift 2
+    if [ "$_sr_kind" = rustic ]; then
+        "$_sr_bin" --repository "$REPO" --password-file "$PWFILE" "$@"
+    else
+        RESTIC_PASSWORD_FILE="$PWFILE" "$_sr_bin" -r "$REPO" "$@" --no-lock
+    fi
+}
+
 # rejects_password KIND BIN: 0 when the rustic or restic BIN says the
 # password in $PWFILE opens no key of $REPO (#805).  It lists the
 # snapshots, which opens the keys first and reads no pack.  rustic
@@ -2937,13 +2941,7 @@ stdtool_kind() {
 # newer) and says "wrong password or no key found".
 rejects_password() {
     _rp_rc=0
-    if [ "$1" = rustic ]; then
-        _rp_out="$("$2" --repository "$REPO" --password-file "$PWFILE" \
-                       snapshots 2>&1 </dev/null)" || _rp_rc=$?
-    else
-        _rp_out="$(RESTIC_PASSWORD_FILE="$PWFILE" "$2" -r "$REPO" \
-                       snapshots --no-lock 2>&1 </dev/null)" || _rp_rc=$?
-    fi
+    _rp_out="$(stool_run "$1" "$2" snapshots 2>&1 </dev/null)" || _rp_rc=$?
     [ "$_rp_rc" -ne 0 ] || return 1
     [ "$1" = restic ] && [ "$_rp_rc" -eq 12 ] && return 0
     case "$_rp_out" in
@@ -3331,7 +3329,7 @@ add_pack_search() {
 OLD_IFS="$IFS"; IFS=":"
 for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     IFS="$OLD_IFS"
-    [ -n "$parent" ] && [ -d "$parent" ] || { IFS=":"; continue; }
+    if [ -z "$parent" ] || [ ! -d "$parent" ]; then IFS=":"; continue; fi
     for mnt in "$parent"/*; do
         [ -d "$mnt" ] || continue
         # Don't list the recovery folder itself again.
@@ -3706,61 +3704,6 @@ tier_exit() {
     exit "$TIER_RC"
 }
 
-# ── Tier dispatch ─────────────────────────────────────────────────
-#
-# Each tier is tried in priority order.  The default behavior is to
-# `exec` the first available binary — once tier 1 starts, the shell
-# is gone and there is no fall-through if tier 1 crashes mid-restore.
-# That matches the bare-minimum restore story: tier 1 IS the
-# restore, and it has to work.
-#
-# Opt-in fallback (LCSAS_TIER_FALLBACK=1): run the tier as a
-# subprocess, capture exit code, and fall through to the next tier
-# on non-zero.  Useful when the heir suspects a bug in a higher
-# tier and wants the script to walk the cascade for them.  Tier 3 is
-# always `exec`'d (it's the last resort — nothing to fall back to).
-
-RESTORE_BIN="$RECOVERY/bin/$TARGET/lcsas-restore"
-RUSTIC_BIN="$RECOVERY/bin/$TARGET/rustic-static"
-FALLBACK="${LCSAS_TIER_FALLBACK:-0}"
-if [ -n "$OLD_ARM" ]; then
-    # #803: built for ARMv7, they stop with an illegal instruction here.
-    printf '[tier 1] skipped: lcsas-restore needs an ARMv7 or newer processor\n' >&2
-    printf '[tier 2] skipped: rustic-static needs an ARMv7 or newer processor\n' >&2
-    RESTORE_BIN=""
-    RUSTIC_BIN=""
-fi
-
-# Issue #223 — present-but-corrupted tier binaries.
-#
-# `[ -x BIN ]` only checks for the executable bit; it doesn't notice
-# bit-rot off the meta disc.  Two failure modes survive that check:
-#
-#   1. Zero-byte file.  POSIX shells "exec" an empty file as a no-op
-#      script that exits 0 -- so without a size check, a corrupted
-#      tier 1 silently claims success and the heir gets nothing.
-#   2. Wrong-arch binary (Linux ELF on macOS, Windows PE on Linux).
-#      `exec` returns 126 ("not executable") and the shell exits;
-#      under default semantics that aborts the cascade entirely.
-#
-# bin_preflight_ok PATH -- returns 0 iff PATH is non-empty AND a
-# `--help` dry-run completes without an exec-format error (rc != 126
-# and != 127) or an illegal instruction (rc != 132).  Any other exit
-# code (incl. program errors like rc=17 from a synthetic-failure stub)
-# is treated as "binary loads fine"; the cascade then runs it for real
-# and lets normal exit-code semantics (or LCSAS_TIER_FALLBACK) handle
-# the result.  (It is defined with the password helpers above, whose
-# check uses it too.)
-#
-# Every tier's exit code is read by tier_ended (above): 0 is a restore
-# that succeeded; a wrong password (77), q at a disc prompt (75), a full
-# disk (74) and a restore that finished without some items (4) end the
-# run whatever LCSAS_TIER_FALLBACK says, because the next tier would
-# only do the same, or redo a finished restore.  Any other code is a
-# failure: the last tier tried (and every tier, unless
-# LCSAS_TIER_FALLBACK=1) ends the run with it.  The session log line is
-# written once a tier has run (#805).
-
 # tier_err_file: a new file for the copy of a tier's messages, in
 # TIER_ERR; none when no temporary file can be made (then the messages
 # are only shown, and a restore that finished without some items is
@@ -3773,6 +3716,101 @@ tier_err_file() {
                   "${TMPDIR:-/tmp}" >&2
 }
 
+# tier3_replay: after a tier-3 failure, show its messages again under a
+# labelled separator (#240), so the cause is not lost among the lines
+# before it.  Not after an outcome tier_ended reports itself.
+tier3_replay() {
+    case "$TIER_RC" in 0|74|75|77) return 0 ;; esac
+    [ -n "$TIER_ERR" ] && [ -s "$TIER_ERR" ] || return 0
+    if [ "$TIER_RC" -eq 2 ] && [ -f "$FAILURES_FILE" ] \
+       && { tier_said "item(s) were NOT restored." \
+            || tier_said "could NOT be restored"; }; then
+        return 0
+    fi
+    printf '\n[tier 3] FAILED (rc=%d)\n' "$TIER_RC" >&2
+    printf '[tier 3] -------------- captured stderr --------------\n' >&2
+    sed 's/^/[tier 3] /' "$TIER_ERR" >&2
+    printf '[tier 3] --------------------------------------------\n' >&2
+}
+
+# try_tier TIER KIND NEXT CMD...: run tier TIER's program, CMD (KIND as
+# for tier_ended), and act on its exit code (tier_ended).  A failure
+# falls through to tier NEXT with LCSAS_TIER_FALLBACK=1; otherwise, or
+# with no NEXT, it ends the run with the tier's exit code.
+#
+# Tiers 1 and 3 (lcsas, python) run through run_tier, which keeps a copy
+# of their messages for tier_ended.  Tier 3 asks for the password again
+# when a key rejects it and someone is there (#805; tier 1 never sees a
+# wrong password: the check before it asks again).  Tiers 2 and 2b keep
+# the terminal as their stderr for their progress bars, so nothing is
+# copied: tier_ended finds a wrong password by asking them again.
+try_tier() {
+    _tt_tier="$1"; _tt_kind="$2"; _tt_next="$3"; shift 3
+    case "$_tt_kind" in
+        lcsas|python)
+            tier_err_file
+            while :; do
+                drop_old_failures
+                run_tier "$@"
+                if [ "$_tt_kind" != python ] || [ "$TIER_RC" -ne 77 ] \
+                   || ! is_interactive; then
+                    break
+                fi
+                printf 'That password was not accepted for %s.\n' "$SET_NAME" >&2
+                [ -n "$PWFILE_TMP" ] || new_pwfile
+                ask_typed
+            done
+            [ "$_tt_kind" != python ] || tier3_replay ;;
+        *)
+            STOOL="$1"
+            TIER_RC=0
+            stool_run "$_tt_kind" "$@" || TIER_RC=$? ;;
+    esac
+    tier_ended "$_tt_tier" "$_tt_kind"
+    if [ -n "$_tt_next" ] && [ "$FALLBACK" = "1" ]; then
+        printf '[tier %s] exited %d, falling through to tier %s\n' \
+               "$_tt_tier" "$TIER_RC" "$_tt_next" >&2
+    else
+        tier_exit
+    fi
+}
+
+# ── Tier dispatch ─────────────────────────────────────────────────
+#
+# Each tier is tried in priority order, and the first one that can run
+# is the restore: by default its exit code ends the run (try_tier).
+# That matches the bare-minimum restore story: tier 1 IS the restore,
+# and it has to work.  Tiers are run, not exec'd, so the EXIT trap
+# still shreds the temporary password file (#363).
+#
+# Opt-in fallback (LCSAS_TIER_FALLBACK=1): a tier that fails falls
+# through to the next one.  Useful when the heir suspects a bug in a
+# higher tier and wants the script to walk the cascade for them.  A
+# wrong password (77), q at a disc prompt (75), a full disk (74) and a
+# restore that finished without some items (4) end the run even then
+# (tier_ended): the next tier would only do the same, or redo a
+# finished restore.  The session log line is written once a tier has
+# run (#805).
+
+RESTORE_BIN="$RECOVERY/bin/$TARGET/lcsas-restore"
+RUSTIC_BIN="$RECOVERY/bin/$TARGET/rustic-static"
+FALLBACK="${LCSAS_TIER_FALLBACK:-0}"
+if [ -n "$OLD_ARM" ]; then
+    # #803: built for ARMv7, they stop with an illegal instruction here.
+    printf '[tier 1] skipped: lcsas-restore needs an ARMv7 or newer processor\n' >&2
+    printf '[tier 2] skipped: rustic-static needs an ARMv7 or newer processor\n' >&2
+    RESTORE_BIN=""
+    RUSTIC_BIN=""
+fi
+
+# Issue #223 -- present-but-corrupted tier binaries.  `[ -x BIN ]` only
+# checks the executable bit.  A zero-byte file would run as an empty
+# script that exits 0 (a restore that "succeeded" with nothing), and a
+# wrong-arch binary exits 126.  bin_preflight_ok (with the password
+# helpers above) runs `--help` first: it fails on an empty file, an
+# exec-format error (126, 127) or an illegal instruction (132); any
+# other exit code means the program loads, and it is run for real.
+
 # ── Tier 1: prebuilt lcsas-restore (C89, static, no Python) ───────
 
 if [ -x "$RESTORE_BIN" ] && ! bin_preflight_ok "$RESTORE_BIN"; then
@@ -3784,42 +3822,18 @@ elif [ -s "$RESTORE_BIN" ] && [ ! -x "$RESTORE_BIN" ]; then
     printf 'START_HERE.txt "IF THE COMPUTER REFUSES TO RUN IT".\n' >&2
 elif [ -x "$RESTORE_BIN" ]; then
     printf '[tier 1] using prebuilt lcsas-restore (%s)\n' "$TARGET" >&2
-    # Drop cwd outside the meta disc before exec, so the kernel does
-    # not hold it through the exec barrier.
-    [ -n "${META_DISC:-}" ] && cd / 2>/dev/null || true
-    # Build the pack-search / catalog / meta-disc flag list as positional
-    # params.  The lists are newline-delimited, so splitting on $NL (not
-    # the default IFS) keeps a spaced path — e.g. a disc mounted at
-    # /media/user/DISC LABEL 1 — as a single argument (issue #364).
+    # Leave the meta disc, so this shell does not keep it busy.
+    if [ -n "${META_DISC:-}" ]; then cd / 2>/dev/null || true; fi
+    # The pack-search / catalog / meta-disc flags as positional params.
+    # The lists are newline-delimited, so splitting on $NL (not the
+    # default IFS) keeps a spaced path -- e.g. a disc mounted at
+    # /media/user/DISC LABEL 1 -- as a single argument (issue #364).
     _oifs=$IFS; IFS=$NL
     # shellcheck disable=SC2086
     set -- $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG $INTERACTIVE_ARG
     IFS=$_oifs
-    # Run (not exec) so the EXIT trap fires and shreds the temporary
-    # password file; exec would replace this shell and leave
-    # /tmp/lcsas-pw.* on disk after the restore (issue #363).
-    tier_err_file
-    drop_old_failures
-    run_tier "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
+    try_tier 1 lcsas 2 "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
              --target "$TARGET_DIR" --snapshot "$SNAP" "$@"
-    # Exit 77 means a key file POSITIVELY rejected the password
-    # (Poly1305 MAC mismatch) -- NOT a missing/unreadable keys dir,
-    # which exits 1 and is allowed to fall through.  A rejected
-    # password is TERMINAL: tiers 2/2b/3 read the SAME keys with the
-    # SAME password, so they would only fail identically -- and a
-    # later tier can leave a partial tree behind before it rejects
-    # the password (issue #384).  Exit 75 is the reader's q at the disc
-    # prompt (#615): a pause, not a tier-1 failure, so it is TERMINAL
-    # like 77: the tools folder stays and the exit handler prints how to
-    # carry on.
-    tier_ended 1 lcsas
-    if [ "$FALLBACK" = "1" ]; then
-        printf '[tier 1] exited %d, falling through to tier 2\n' \
-               "$TIER_RC" >&2
-    else
-        # The last tier we try on the non-fallback path.
-        tier_exit
-    fi
 fi
 
 # ── Tier 2: vendored rustic-static (no Python) ────────────────────
@@ -3845,19 +3859,7 @@ elif [ -x "$RUSTIC_BIN" ] && [ ! -d "$REPO/data" ]; then
     printf 'restores (no %s/data/); falling through to tier 3\n' "$REPO" >&2
 elif [ -x "$RUSTIC_BIN" ]; then
     printf '[tier 2] using vendored rustic-static (%s)\n' "$TARGET" >&2
-    # Run (not exec) so the EXIT trap shreds the temp password file
-    # (issue #363).
-    STOOL="$RUSTIC_BIN"
-    TIER_RC=0
-    "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
-                 restore "$SNAP" "$TARGET_DIR" || TIER_RC=$?
-    tier_ended 2 rustic
-    if [ "$FALLBACK" = "1" ]; then
-        printf '[tier 2] exited %d, falling through to tier 3\n' \
-               "$TIER_RC" >&2
-    else
-        tier_exit
-    fi
+    try_tier 2 rustic 3 "$RUSTIC_BIN" restore "$SNAP" "$TARGET_DIR"
 fi
 
 # ── Tier 2b: stock restic / rustic (independent, audited reader) ──
@@ -3881,22 +3883,10 @@ if [ -n "$STDTOOL_BIN" ] && [ -x "$STDTOOL_BIN" ] \
        && [ -d "$REPO/data" ] && bin_preflight_ok "$STDTOOL_BIN"; then
     _stdtool_kind="$(stdtool_kind "$STDTOOL_BIN")"
     printf '[tier 2b] using stock %s (%s)\n' "$_stdtool_kind" "$STDTOOL_BIN" >&2
-    # Run (not exec) so the EXIT trap shreds the temp password file
-    # (issue #363).
-    STOOL="$STDTOOL_BIN"
-    TIER_RC=0
     if [ "$_stdtool_kind" = rustic ]; then
-        "$STDTOOL_BIN" --repository "$REPO" --password-file "$PWFILE" \
-             restore "$SNAP" "$TARGET_DIR" || TIER_RC=$?
+        try_tier 2b rustic 3 "$STDTOOL_BIN" restore "$SNAP" "$TARGET_DIR"
     else
-        RESTIC_PASSWORD_FILE="$PWFILE" "$STDTOOL_BIN" -r "$REPO" \
-             restore "$SNAP" --target "$TARGET_DIR" --no-lock || TIER_RC=$?
-    fi
-    tier_ended 2b "$_stdtool_kind"
-    if [ "$FALLBACK" = "1" ]; then
-        printf '[tier 2b] exited %d, falling through to tier 3\n' "$TIER_RC" >&2
-    else
-        tier_exit
+        try_tier 2b restic 3 "$STDTOOL_BIN" restore "$SNAP" --target "$TARGET_DIR"
     fi
 fi
 
@@ -3948,22 +3938,12 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         fi
         # Issue #234 -- pass every currently-known data-disc root AND
         # every mount-parent dir as --mount-point so tier 3 can drive
-        # the LCSAS disc-swap protocol exactly as tier 1 does.
-        # PACK_SEARCH_ARGS is already built by the upstream
-        # LCSAS_MOUNT_DIRS walk (see line ~700) and contains one
-        # "--pack-search <root>" per inserted data disc.  Rewrite to
-        # tier-3's flag name.
-        #
-        # In addition, since the heir typically inserts data discs
-        # one at a time after the prompt fires (the first disc may not
-        # be mounted when restore.sh started), we ALSO pass each
-        # LCSAS_MOUNT_DIRS entry directly as --mount-point so the swap
-        # rescan finds packs at the canonical mount point after each
-        # insert.  Tier 3 probes both data/<XX>/<hex> and <XX>/<hex>
-        # layouts under every mount point.
-        # TIER3_MOUNT_ARGS is newline-delimited like PACK_SEARCH_ARGS; the
-        # flag token lives on its own line, so rewrite the whole
-        # `--pack-search` line to `--mount-point` (a value line with a
+        # the LCSAS disc-swap protocol exactly as tier 1 does: the
+        # "--pack-search <root>" pairs of PACK_SEARCH_ARGS (one per data
+        # disc found above), then each LCSAS_MOUNT_DIRS entry, where the
+        # discs inserted after the prompt are mounted.  The list is
+        # newline-delimited with each flag on its own line, so the
+        # whole `--pack-search` line is rewritten (a value line with a
         # spaced path is left untouched -- issue #364).
         TIER3_MOUNT_ARGS=""
         if [ -n "$PACK_SEARCH_ARGS" ]; then
@@ -4032,68 +4012,22 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
             on|off|auto) _t3_interactive="$LCSAS_INTERACTIVE" ;;
             *)           _t3_interactive=on ;;
         esac
-        #
-        # Issue #248 -- pass the catalog through so tier-3's framed
-        # prompt can resolve pack IDs to volume labels in the
-        # SAME shape tier-1 prints.  $CATALOG_ARG was resolved
-        # earlier (~line 796) and reused here verbatim; empty when
-        # no catalog is reachable -- the Python reader then
-        # falls back to its legacy "(no catalog available)" line.
-        #
-        # Issue #240 -- capture tier-3 stderr and echo on failure.
-        # Issue #248 -- thread $CATALOG_ARG so tier-3's swap prompt
-        #               resolves pack IDs to volume labels.
-        #
-        # Previously this was `exec "$PYBIN" "$PYREST" ...` which
-        # replaces the shell process and inherits the Python exit code
-        # silently.  When tier-3 crashes at startup (e.g. ImportError,
-        # missing PYTHONPATH), the heir sees only a numeric exit
-        # and the traceback vanishes.  It now runs through run_tier,
-        # which shows its messages and keeps a copy (in TIER_ERR, made
-        # in TMPDIR: /tmp may be read-only or missing on a rescue
-        # system, #806); on a failure the copy is replayed with a
-        # labelled separator so the failure mode is unambiguous in
-        # agent transcripts.
-        tier_err_file
-        # Build the catalog / mount-point / snapshot flag list as positional
-        # params, splitting the newline-delimited lists so spaced paths
-        # survive intact (issue #364).
+        # The catalog (#248: the disc prompt names volume labels, as
+        # tier 1's does; without it the reader prints "(no catalog
+        # available)"), mount points and snapshot as positional params,
+        # split on newlines so spaced paths survive (issue #364).
         _oifs=$IFS; IFS=$NL
         # shellcheck disable=SC2086
         set -- $CATALOG_ARG $TIER3_MOUNT_ARGS $TIER3_SNAP_ARGS $META_DISC_ARG
         IFS=$_oifs
-        while :; do
-            drop_old_failures
-            # The bundled loader, if find_tier3_python chose one (#714),
-            # runs the interpreter named after it.
-            run_tier ${TIER3_PYLOADER:+"$TIER3_PYLOADER"} "$PYBIN" "$PYREST" \
-                   --repo "$REPO" \
-                   --password-file "$PWFILE" \
-                   --target "$TARGET_DIR" \
-                   --interactive "$_t3_interactive" \
-                   "$@"
-            # #805: a key rejected the password (tier 3 exits 77 before
-            # it writes anything).  Someone is there: ask again, as the
-            # check before tier 1 does.
-            if [ "$TIER_RC" -ne 77 ] || ! is_interactive; then break; fi
-            printf 'That password was not accepted for %s.\n' "$SET_NAME" >&2
-            [ -n "$PWFILE_TMP" ] || new_pwfile
-            ask_typed
-        done
-        if [ "$TIER_RC" -ne 0 ] && [ "$TIER_RC" -ne 75 ] \
-           && [ "$TIER_RC" -ne 77 ] && [ "$TIER_RC" -ne 74 ] \
-           && [ -n "$TIER_ERR" ] && [ -s "$TIER_ERR" ] \
-           && ! { [ "$TIER_RC" -eq 2 ] && [ -f "$FAILURES_FILE" ] \
-                  && { tier_said "item(s) were NOT restored." \
-                       || tier_said "could NOT be restored"; }; }; then
-            printf '\n[tier 3] FAILED (rc=%d)\n' "$TIER_RC" >&2
-            printf '[tier 3] -------------- captured stderr --------------\n' >&2
-            sed 's/^/[tier 3] /' "$TIER_ERR" >&2
-            printf '[tier 3] --------------------------------------------\n' >&2
-        fi
-        tier_ended 3 python
-        # Tier 3's 2 is a usage error only when it did not restore.
-        tier_exit
+        # The bundled loader, if find_tier3_python chose one (#714), runs
+        # the interpreter named after it.  Tier 3 is the last tier.
+        try_tier 3 python "" ${TIER3_PYLOADER:+"$TIER3_PYLOADER"} "$PYBIN" "$PYREST" \
+                 --repo "$REPO" \
+                 --password-file "$PWFILE" \
+                 --target "$TARGET_DIR" \
+                 --interactive "$_t3_interactive" \
+                 "$@"
     fi
     if [ -n "$PYREST" ] && [ -z "$PYBIN" ]; then
         printf '[tier 3] cannot run:\n' >&2
@@ -4101,6 +4035,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
     fi
 fi
 
+NO_METHOD=1
 cat >&2 <<EOF
 ERROR: no recovery method available.
 
