@@ -74,6 +74,13 @@
 #  define O_BINARY 0
 #endif
 
+/* O_NOFOLLOW (POSIX.1-2008): open() fails instead of following a
+ * symlink in the last path component (#784).  Windows has no such
+ * flag; tree.c checks for a reparse point there before it writes. */
+#ifndef O_NOFOLLOW
+#  define O_NOFOLLOW 0
+#endif
+
 /* Path helpers for the mkdir -p walks and path comparisons.
  *   LCSAS_IS_SEP(c)        a directory separator: '/', and on Windows
  *                          '\' as well.

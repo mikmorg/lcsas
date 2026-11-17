@@ -431,10 +431,11 @@ class TestStandaloneSubprocess:
             assert err.count("[lcsas-restore] stopped at the disc prompt") == 1
             assert "could not start" not in err
 
-    def test_escaping_symlink_not_created(self, tmp_path):
-        """RST-06: the generated script must skip an escaping relative
-        symlink — no out-of-target link is created, and the loss is
-        recorded in the manifest (exit 2)."""
+    def test_escaping_symlink_restored_as_stored(self, tmp_path):
+        """#782: the generated script restores a relative link that
+        points out of the target with its stored target and exits 0, as
+        tier 1 and rustic do.  (RST-06 used to skip it with exit 2; the
+        protection is now that nothing is written through a link.)"""
         repo, pw_file, script = _build_repo_and_script(
             tmp_path,
             extra_nodes=[{
@@ -458,21 +459,18 @@ class TestStandaloneSubprocess:
             text=True,
             timeout=120,
         )
-        # The escaping symlink is a recorded skip → exit 2.
-        assert result.returncode == 2, (
-            f"Expected exit 2 for skipped symlink, got {result.returncode}.\n"
+        # #782: a link that points out of the target is restored as
+        # stored, as tier 1 and rustic do (it was skipped with exit 2).
+        assert result.returncode == 0, (
+            f"Expected exit 0, got {result.returncode}.\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
         link = target / "escape.link"
-        assert not link.is_symlink(), "escaping symlink must NOT be created"
-        assert not link.exists()
+        assert link.is_symlink()
+        assert os.readlink(link) == "../../../../etc"
         # The legitimate file still restored.
         assert (target / "standalone_test.txt").is_file()
-        manifest = target / "RESTORE_FAILURES.txt"
-        assert manifest.is_file()
-        manifest_text = manifest.read_text()
-        assert "skipped-symlink" in manifest_text
-        assert "escape.link" in manifest_text
+        assert not (target / "RESTORE_FAILURES.txt").exists()
 
     def test_script_has_no_lcsas_imports(self, tmp_path):
         """The generated script must not contain any 'from lcsas' imports."""

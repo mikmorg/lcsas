@@ -17,7 +17,7 @@ Investigation corrected the issue's original framing:
 - The failing step is `coverage-c` → `exemptions_check.py`, **not** a coverage
   shortfall. Measured tier-1 line coverage is **88.5%**, comfortably above the
   gate threshold (83% CI / 88% local floor). *Do not lower the threshold.*
-- `recovery/docs/EXEMPTIONS.md` is a **live contract**: every uncovered line in
+- `recovery/docs/EXEMPTIONS.md` (in the source repository; not on the meta disc) is a **live contract**: every uncovered line in
   `recovery/src/lcsas-restore/*.c` must be listed, and every listed line must
   actually be uncovered (VOLATILE excepted). The contract has **drifted**:
   ~133 uncovered lines are undocumented and ~95 entries now refer to lines that

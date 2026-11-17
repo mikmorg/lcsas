@@ -58,7 +58,10 @@ LCSAS_PWFILE=/full/path/to/password.txt \
     sh /mnt/recovery/scripts/restore_auto.sh /mnt/recovery ~/restored
 ```
 
-Each backup set goes into its own folder under `~/restored`.
+Each backup set goes into its own folder under `~/restored`. Mount your
+newest data disc first: the script also restores the backup sets on it.
+If it stops (you typed `q`, or the disk is full), run the same command
+again to carry on.
 
 ## What Is NOT on This Disc
 

@@ -336,11 +336,17 @@ ships fallback paths:
   `RECOVERY_ROOT` is `/mnt/recovery`) and reads the password from the
   `LCSAS_PWFILE` environment variable (which must be set).  It runs
   `restore.sh` once for every backup set it finds (in the meta disc's
-  `metadata/`), restoring its latest snapshot into
-  `TARGET_ROOT/<id>`, and exits 1 when it finds none.  It turns off
-  the newest-disc and "another set?" questions, so mount your newest
-  data disc first.  The legacy Bash drivers (`restore_legacy.sh`,
-  `restore-auto.sh`) were retired in #689.
+  `metadata/` and on every mounted disc in `LCSAS_MOUNT_DIRS`, so a set
+  added after the meta disc was made is restored too), restoring its
+  latest snapshot into `TARGET_ROOT/<id>`, and exits 1 when it finds
+  none.  It turns off the newest-disc and "another set?" questions, so
+  mount your newest data disc first.  Each set gets its own tools
+  folder, `<tools folder>-<id>`, so a stopped set keeps its `resume.sh`
+  while later sets run.  `q` at a disc prompt (exit 75), Ctrl-C (130)
+  or a full disk (exit 1) ends the whole run, naming the set; run the
+  same command again to carry on.  A wrong password (77) or another
+  failure only fails that set (#801).  The legacy Bash drivers
+  (`restore_legacy.sh`, `restore-auto.sh`) were retired in #689.
 - **Direct invocation of the upstream rustic binary** at
   `tools/bin/rustic-static`.  Requires you to manually assemble
   the pack tree (see [troubleshooting.md](../TROUBLESHOOTING.md#manual-pack-assembly-last-resort-tier-3-fallback)).
@@ -353,6 +359,9 @@ ships fallback paths:
   disc box stops the whole restore with exit code 75.  A full disk
   stops it with exit code 1 and names the full folder.  A damaged file
   is skipped and listed in `RESTORE_FAILURES.txt` (exit code 2).
+  Special files this computer cannot create, and links on a file
+  system without links, are listed there too but do not change the
+  exit code (see `recovery/docs/RECOVER.txt`, "ITEMS NOT RESTORED").
 
 All four are documented in `README_RESTORE.md` on the meta disc.
 

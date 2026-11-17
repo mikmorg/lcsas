@@ -84,7 +84,7 @@ make -C recovery audit-gate THRESHOLD=95
 - v1 index file with `supersedes` to a second index (exercises the dedup branch)
 - Encrypted snapshot pointing at a root tree
 - Encrypted pack containing: a data blob, a sub-tree blob, and the root tree blob
-- Root tree with diverse node types: file, dir (with subtree → another file), symlink (safe), symlink with traversal target (rejected), node with `..` name (rejected), node with `/` in name (rejected), unsupported `chardev` type (skipped)
+- Root tree with diverse node types: file, dir (with subtree → another file), symlink (safe), symlink with traversal target (restored as stored since #782), a 1000-byte absolute link target, a `chardev` (made as rustic makes it; without root listed in RESTORE_FAILURES.txt, #783).  Refused names (`../escape`, `foo/bar`, `evil<NUL>x`) live in a side tree since #781
 
 `test_repo.c` exercises the full API (`lcsas_repo_load_keys_dir`, `lcsas_repo_load_key_file`, `lcsas_repo_decrypt`, `lcsas_repo_load_index`, `lcsas_repo_load_snapshots`, `lcsas_repo_read_blob`, `lcsas_blob_index_find`, `lcsas_snapshot_latest`/`_find`, `lcsas_tree_restore`) against this fixture and asserts on the restored filesystem state.
 
@@ -179,9 +179,10 @@ honours absolute-target symlinks in restored snapshots (matching
 tier-2 / rustic).  Previously tier-1 rejected them as a containment
 defence.  Operators who relied on the implicit containment property
 must now sandbox the restore target separately — see issue #187 for
-the full rationale.  Relative-target symlinks are still validated
-via `lex_resolve_inside` to ensure they resolve under the restore
-root.
+the full rationale.  Since #782 relative targets that leave the
+restore root are restored as stored too (tiers 1 and 3, as rustic);
+the protection is that neither tier ever writes through a link
+(#784, `make_way` in tree.c).
 
 Phase 14 surfaced two real bugs on first run:
 - `lcsas_create_file` hardcoded mode 0600 → fixed to honour the

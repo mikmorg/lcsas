@@ -102,12 +102,12 @@ for variant in [single-key, split-key-2of5]:        # K4.1 then K4.2
     loop:
         run:  LCSAS_BLIND_ACK_COST=1 make blind-restore-<variant>   # haiku, real API spend, ~20 min
         read: the run dir's verify.sh output + transcript.jsonl
-        if SCORE == 15/15:  break
-        diagnose the failing criterion (which of the 15), fix via a worktree agent
+        if every check passed (SCORE: 16/16 today; 15/15 when this ran):  break
+        diagnose the failing criterion, fix via a worktree agent
         (production code or harness wiring — NOT by weakening verify.sh), re-run.
         BUDGET GUARD: after 3 consecutive failing runs on the same root cause, STOP
         and report — do not burn budget looping on a bug you can't localize.
-    require: two CONSECUTIVE 15/15 runs (K4.3 flake guard) before marking the variant done.
+    require: two CONSECUTIVE full-score runs (K4.3 flake guard) before marking the variant done.
 ```
 
 - Diagnose from `transcript.jsonl` (what the heir typed) + the 15 named checks in

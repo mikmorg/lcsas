@@ -221,6 +221,8 @@ corrections (T1C-03):
   restore-tree containment guarantee.  Only RELATIVE linktargets that
   lexically escape the restore root are rejected.  The code
   (`path.c:lcsas_path_safe_symlink`) never changed — only the doc.
+  Since #782 the tree walk restores every link as stored (relative
+  escapes too) and never writes through one (#784).
 - **NUL in names.**  The NUL-rejection claim was always in the spec but was
   not enforced for names until 2026-06-13
   (`tree.c:decode_path_component`).  Old discs' binaries do not reject

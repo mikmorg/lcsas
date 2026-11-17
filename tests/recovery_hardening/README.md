@@ -66,6 +66,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
 | `test_keyshare_windows_wine.py` | rc6: the committed Windows ``lcsas-keyshare.exe`` under wine. |
 | `test_last_verified_writer_exists.py` | Hardening test: volume_copies.last_verified_at must have a writer. |
+| `test_links_specials_differential.py` | Issues #782-#785, #852: tiers 1, 2 and 3 restore links and FIFOs alike. |
 | `test_live_usb_procedure_docs.py` | test_live_usb_procedure_docs.py -- static doc-pinning gate for the |
 | `test_manifest_freshness.py` | test_manifest_freshness.py -- tamper/staleness gate for recovery/MANIFEST.sha256. |
 | `test_meta_bundles_dvdisaster_source.py` | Hardening test (FMT-02): the dvdisaster RS03 source must be pinned, |
@@ -90,6 +91,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_repo_marker_tolerance.py` | test_repo_marker_tolerance.py -- the real readers ignore LCSAS_REPO.txt. |
 | `test_restore_auto_gaps.py` | test_restore_auto_gaps.py -- restore_auto.sh usage-error exits and repo-discovery layouts. |
 | `test_restore_auto_repo_select.py` | test_restore_auto_repo_select.py -- restore_auto.sh per-repo selection. |
+| `test_restore_auto_stops_and_sets.py` | test_restore_auto_stops_and_sets.py -- restore_auto.sh's loop (#801). |
 | `test_restore_bat_ecc_dispatch_wine.py` | FMT-01: restore.bat --check-disc ECC repair path, end-to-end under wine. |
 | `test_restore_bat_free_space_wine.py` | restore.bat's free-space check, under wine (#660). |
 | `test_restore_bat_journey_wine.py` | restore.bat's questions under wine: disc, set, password, cards (#605-#608). |

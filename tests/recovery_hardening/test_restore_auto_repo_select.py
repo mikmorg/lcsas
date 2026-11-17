@@ -46,6 +46,7 @@ def test_restore_auto_selects_each_repo_via_lcsas_repo(tmp_path: Path) -> None:
         **os.environ,
         "LCSAS_PWFILE": str(pwfile),
         "RECORD": str(record),
+        "LCSAS_MOUNT_DIRS": "",  # no mounted disc joins the list (#801)
     }
     res = subprocess.run(
         ["sh", str(RESTORE_AUTO), str(recovery), str(target)],
@@ -95,6 +96,7 @@ def test_restore_auto_keeps_going_after_wrong_password(tmp_path: Path) -> None:
         **os.environ,
         "LCSAS_PWFILE": str(pwfile),
         "RECORD": str(record),
+        "LCSAS_MOUNT_DIRS": "",  # no mounted disc joins the list (#801)
     }
     res = subprocess.run(
         ["sh", str(RESTORE_AUTO), str(recovery), str(target)],

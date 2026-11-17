@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import atexit
 import base64
+import binascii
 import contextlib
 import errno
 import hashlib
@@ -54,6 +55,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import sys
 import tempfile
 from collections.abc import Callable, Collection, Iterator
@@ -443,6 +445,167 @@ def _visible(text: str) -> str:
         else:
             out.append(ch)
     return "".join(out)
+
+
+# ── Items not restored, links, special files (#782-#785) ─────────
+#
+# The same rules as tier 1 (recovery/src/lcsas-restore/tree.c); the
+# reasons and summary sentences are word for word the same.
+
+#: First lines of RESTORE_FAILURES.txt (tier 1 writes the same text,
+#: with its own name on the second line).
+_FAILURES_HEADER = (
+    "LCSAS restore: items that were NOT restored.",
+    "Written by the Python reader (tier 3).  Everything else was restored.",
+    'A row whose reason starts "special file" is a pipe, socket or',
+    "device that this system cannot create.  It holds no data.",
+    'A row whose reason starts "link not created: the target file',
+    'system" is a link that this file system cannot hold.',
+    'Every other row is an error: see "ITEMS NOT RESTORED" in RECOVER.txt.',
+    "",
+    "path\treason\tblob_id",
+)
+_FAILURES_NAME = "RESTORE_FAILURES.txt"
+
+#: Kinds of item not restored: an error, a special file this system
+#: will not create, a link the target file system cannot hold.  Only
+#: errors make the restore end non-zero.
+_NR_FAILED, _NR_SPECIAL, _NR_LINK = "failed", "special", "link"
+
+_LINK_UNSUPPORTED = (
+    "link not created: the target file system does not support symlinks"
+)
+#: symlink() errors that mean "this file system cannot hold links"
+#: (FAT32, exFAT, most SMB shares), as in tier 1.
+_LINK_UNSUPPORTED_ERRNOS = frozenset(
+    {errno.EPERM, errno.ENOSYS, getattr(errno, "EOPNOTSUPP", errno.ENOSYS)}
+)
+#: The longest link target Linux accepts is 4095 bytes; tier 1 refuses
+#: a longer one the same way.
+_LINK_TARGET_MAX = 4095
+
+_SPECIAL_LABELS = {
+    "fifo": "FIFO",
+    "socket": "socket",
+    "dev": "block device",
+    "chardev": "character device",
+}
+
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _mode_from_go(mode: int) -> int:
+    """The POSIX mode word for a node's ``mode`` (Go ``os.FileMode``).
+
+    rustic stores setuid, setgid and sticky at bits 23, 22 and 20, not
+    at the POSIX bits 11, 10 and 9; a plain ``& 0o7777`` drops them.
+    The POSIX bits are honoured too.  Tier 1: mode_from_go_filemode.
+    """
+    posix = mode & 0o777
+    if mode & (1 << 23):
+        posix |= 0o4000
+    if mode & (1 << 22):
+        posix |= 0o2000
+    if mode & (1 << 20):
+        posix |= 0o1000
+    return posix | (mode & 0o7000)
+
+
+def _entry_kind(path: Path | str) -> str | None:
+    """What is at *path* now, without following a link there: ``None``
+    (nothing), ``"dir"``, ``"link"`` (a symlink; on Windows any reparse
+    point: symlink, junction), ``"file"`` or ``"other"`` (pipe, socket,
+    device)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode) or (
+        getattr(st, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
+    ):
+        return "link"
+    if stat.S_ISDIR(st.st_mode):
+        return "dir"
+    if stat.S_ISREG(st.st_mode):
+        return "file"
+    return "other"
+
+
+def _make_way(path: Path, want: str) -> str | None:
+    """Issue #784: make room at *path* for the item the snapshot has
+    there (*want* is ``"dir"``, ``"file"`` or ``"other"``: a link or a
+    special file).  Returns ``None`` when the path is ready, else the
+    reason it is not.
+
+    Whatever is in the way is replaced, except a folder: a folder where
+    the snapshot has a file, link or special file is never removed.  A
+    symlink is never followed: it is removed and the real item made in
+    its place, so no data is written through it.  On Windows a reparse
+    point is reported, not removed.  A regular file where the snapshot
+    has a file is left (it is replaced when the new one is complete).
+    """
+    kind = _entry_kind(path)
+    if kind is None:
+        return None
+    if kind == "dir":
+        return None if want == "dir" else "a folder with this name is already there"
+    if kind == "file" and want == "file":
+        return None
+    if kind == "link" and os.name == "nt":
+        return "a link or junction with this name is already there"
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return "the item already there with this name cannot be removed"
+    return None
+
+
+def _link_target(node: dict[str, Any]) -> tuple[bytes, str | None]:
+    """The bytes a symlink node points at, and ``None``; or ``b""`` and
+    the reason the target cannot be used.
+
+    rustic stores a target that is not valid UTF-8 twice: ``linktarget``
+    with each bad byte replaced by U+FFFD, and ``linktarget_raw``, the
+    exact bytes in base64.  The raw bytes win when present.
+    """
+    raw = node.get("linktarget_raw")
+    if raw is not None:
+        if not isinstance(raw, str):
+            return b"", "the link target cannot be decoded"
+        try:
+            data = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError):
+            return b"", "the link target cannot be decoded"
+    else:
+        text = node.get("linktarget")
+        if not isinstance(text, str):
+            return b"", "the link has no target"
+        data = text.encode("utf-8", "surrogatepass")
+    if len(data) > _LINK_TARGET_MAX:
+        return b"", "the link target is too long"
+    if not data:
+        return b"", "the link target is empty"
+    if b"\0" in data:
+        return b"", "the link target holds a NUL byte"
+    return data, None
+
+
+def _make_special(node_type: str, path: Path, device: int) -> None:
+    """Make a FIFO, socket or device as rustic does.  A FIFO and a
+    socket need no privilege on Linux; a device needs root.  Raises
+    OSError, or NotImplementedError where the system has no such call."""
+    if not hasattr(os, "mknod") or not hasattr(os, "mkfifo"):
+        raise NotImplementedError
+    if node_type == "fifo":
+        os.mkfifo(path, 0o600)
+    elif node_type == "socket":
+        os.mknod(path, 0o600 | stat.S_IFSOCK)
+    elif node_type == "dev":
+        os.mknod(path, 0o600 | stat.S_IFBLK, device)
+    else:
+        os.mknod(path, 0o600 | stat.S_IFCHR, device)
 
 
 def _decrypt_authenticated(
@@ -854,6 +1017,11 @@ class PurePythonRestorer:
         # could not be restored under tolerant traversal.  Reset at the
         # top of every restore() call.
         self._failures: list[tuple[str, str, str]] = []
+        # Every item not restored, errors or not, in walk order: the rows
+        # of RESTORE_FAILURES.txt (#783).  _skipped counts the ones that
+        # are not errors (special files, links the target cannot hold).
+        self._rows: list[tuple[str, str, str]] = []
+        self._skipped: dict[str, int] = {_NR_SPECIAL: 0, _NR_LINK: 0}
         # Search-path resolution: callers can either rely on the legacy
         # ``repo_path/data`` location or pass an explicit list of mount
         # points (typically each currently-inserted data disc's root).
@@ -934,6 +1102,8 @@ class PurePythonRestorer:
         """
         self._ensure_loaded()
         self._failures = []
+        self._rows = []
+        self._skipped = {_NR_SPECIAL: 0, _NR_LINK: 0}
 
         if snapshot_id is not None:
             snap = self._find_snapshot(snapshot_id)
@@ -960,9 +1130,9 @@ class PurePythonRestorer:
         try:
             self._restore_tree(snap.tree, target)
         except RestoreAbortedError:
-            # #658: the restore stops here; still list the files that
-            # failed before the stop.
-            if self._failures:
+            # #658: the restore stops here; still list the items that
+            # were not restored before the stop.
+            if self._rows:
                 self._write_failure_manifest(target)
             raise
         finally:
@@ -974,17 +1144,26 @@ class PurePythonRestorer:
         # wonders if the last 3 files were skipped.
         self._emit_progress(force=True)
 
-        if self._failures:
-            self._write_failure_manifest(target)
-            restored = self._progress_done_files
-            total = restored + len(self._failures)
+        # #783: how many items were not restored, of each kind, and
+        # where the list is.  Tier 1 prints the same sentences.  Only
+        # errors keep the restore from being complete.
+        if self._skipped[_NR_SPECIAL]:
             _log(
-                f"Restored {restored:,} of {total:,} files. "
-                f"{len(self._failures)} file(s) FAILED — see "
-                f"RESTORE_FAILURES.txt. The rest of your data is intact "
-                f"in {target}."
+                f"{self._skipped[_NR_SPECIAL]} special file(s) were not "
+                "restored: pipes, sockets or devices that this system "
+                "cannot create.  They hold no data."
             )
-        else:
+        if self._skipped[_NR_LINK]:
+            _log(
+                f"{self._skipped[_NR_LINK]} link(s) were not restored: the "
+                "target file system does not support symlinks."
+            )
+        if self._failures:
+            _log(f"ERROR: {len(self._failures)} item(s) were NOT restored.")
+        self._write_failure_manifest(target)
+        if self._rows:
+            _log(f"See {target}/{_FAILURES_NAME} for the list.")
+        if not self._failures:
             _log("Restore complete.")
         return snap
 
@@ -993,32 +1172,47 @@ class PurePythonRestorer:
         """Number of nodes that could not be restored in the last run.
 
         Zero on a clean restore.  Non-zero under tolerant mode when one
-        or more files were skipped; ``RESTORE_FAILURES.txt`` under the
-        target lists them.
+        or more items could not be restored because of an error;
+        ``RESTORE_FAILURES.txt`` under the target lists them.  Special
+        files this system cannot create and links the target file
+        system cannot hold are not counted here (see ``skipped``).
         """
         return len(self._failures)
 
-    def _write_failure_manifest(self, target: Path) -> None:
-        """Write the per-file failure list to ``RESTORE_FAILURES.txt``.
+    @property
+    def skipped(self) -> int:
+        """Items not restored in the last run that are not errors (#783):
+        special files this system cannot create, and links the target
+        file system cannot hold.  Listed in ``RESTORE_FAILURES.txt``."""
+        return sum(self._skipped.values())
 
-        One line per failure: relative path, reason, and the blob id
-        implicated (empty when the failure was not blob-scoped, e.g. a
-        whole-subtree tree-blob read failure).
+    def _write_failure_manifest(self, target: Path) -> None:
+        """Write ``RESTORE_FAILURES.txt``: one row per item not restored.
+
+        Each row is the path, the reason and the blob id implicated
+        (empty when the failure was not blob-scoped), tab-separated,
+        exactly as tier 1 writes them.  With no rows, a file of that
+        name left by an earlier run is removed (only one that starts
+        with our header), so it never describes an older run.
         """
-        manifest = target / "RESTORE_FAILURES.txt"
-        lines = [
-            "LCSAS tier-3 restore (the Python reader) — files that could NOT be restored.",
-            "Every OTHER file in this directory restored successfully.",
-            "Re-running tier 3 from a newer meta disc, or mounting another",
-            "undamaged disc with the same label, is the remedy.",
-            "",
-            "path\treason\tblob_id",
-        ]
-        for path, blob_id, reason in self._failures:
+        manifest = target / _FAILURES_NAME
+        if not self._rows:
+            try:
+                if _entry_kind(manifest) == "file":
+                    with open(manifest, "rb") as f:
+                        if f.read(6) == b"LCSAS ":
+                            manifest.unlink()
+            except OSError:
+                pass
+            return
+        lines = list(_FAILURES_HEADER)
+        for path, blob_id, reason in self._rows:
             # _visible: a tab or newline in a restored name (#781) must
             # not split the row.
             lines.append(f"{_visible(path)}\t{_visible(reason)}\t{blob_id}")
         try:
+            if _make_way(manifest, "file") is not None:
+                raise IsADirectoryError(str(manifest))
             # backslashreplace: a restored name that is not valid UTF-8
             # (#781) reaches here as a surrogate-escaped str.
             manifest.write_text(
@@ -1715,14 +1909,16 @@ class PurePythonRestorer:
         to the next sibling.  ``strict=True`` restores the legacy
         raise-first behaviour.
 
-        Symlink policy (RST-06): restic restores symlinks verbatim; we
-        deliberately diverge for this last-resort tier.  Absolute targets
-        and relative targets that resolve outside *target_dir* are
-        **skipped and logged** (and recorded in RESTORE_FAILURES.txt as
-        ``skipped-symlink`` entries).  Skipping beats create-and-warn
-        because tier-3 may run as root from a rescue environment, where an
-        escaping link is a sandbox-escape primitive.  In-tree relative
-        links are restored normally.
+        Links (#782): every symlink is restored with its stored target,
+        as tier 1 and rustic do: absolute, relative, pointing up and out
+        of the restore, or dangling.  Making a link writes nothing
+        outside the target folder; the risk is a later write THROUGH a
+        link, which ``_make_way`` rules out (#784).
+
+        Items not restored (#783): an error (refused name, unusable link
+        target, unknown type, a folder in the way) is listed and makes
+        ``failures`` non-zero; a special file this system will not make
+        and a link the target file system cannot hold are listed only.
         """
         try:
             tree_data = self._read_blob(tree_id)
@@ -1741,7 +1937,7 @@ class PurePythonRestorer:
             hardlink_map = {}
 
         for node in tree_doc.get("nodes", []):
-            name = node["name"]
+            name = node.get("name")
             node_type = node.get("type", "file")
             # Issue #781: decode rustic's escaped name to raw bytes, then
             # run the path-safety checks (empty, ".", "..", "/", NUL; on
@@ -1752,6 +1948,26 @@ class PurePythonRestorer:
             if safe_name is None:
                 continue
             node_path = target_dir / safe_name
+
+            # #784: never write through what an earlier restore left at
+            # this path (see _make_way).  #783: an unknown type is an
+            # error.
+            special = _SPECIAL_LABELS.get(node_type)
+            if node_type == "file":
+                want = "file"
+            elif node_type == "dir":
+                want = "dir"
+            elif node_type == "symlink" or special:
+                want = "other"
+            else:
+                self._not_restored(
+                    node_path, f"unknown item type: {node_type}"
+                )
+                continue
+            why = _make_way(node_path, want)
+            if why is not None:
+                self._not_restored(node_path, why)
+                continue
 
             # Per-node containment: one bad node never aborts the rest of
             # the tree.  ``_restore_file`` and the subtree recursion have
@@ -1772,6 +1988,9 @@ class PurePythonRestorer:
                         src = hardlink_map[hl_key]
                         try:
                             node_path.parent.mkdir(parents=True, exist_ok=True)
+                            # An older file of this name is replaced
+                            # (os.link never overwrites).
+                            node_path.unlink(missing_ok=True)
                             os.link(src, node_path)
                             continue
                         except OSError:
@@ -1789,7 +2008,7 @@ class PurePythonRestorer:
                         hardlink_map[hl_key] = node_path
 
                 elif node_type == "dir":
-                    node_path.mkdir(parents=True, exist_ok=True)
+                    node_path.mkdir(exist_ok=True)
                     if "subtree" in node:
                         self._restore_tree(
                             node["subtree"], node_path, hardlink_map
@@ -1797,49 +2016,28 @@ class PurePythonRestorer:
                     # Restore directory permissions after contents
                     self._apply_metadata(node, node_path)
                 elif node_type == "symlink":
-                    link_target = node.get("linktarget", "")
-                    # Validate symlink target: only allow relative links
-                    # to stay within target_dir
-                    if Path(link_target).is_absolute():
-                        _log(
-                            f"Skipping symlink {node_path.name} with absolute "
-                            f"target (security: {link_target!r})"
-                        )
-                        continue
-                    # Resolve the symlink target relative to the node's
-                    # parent directory.  ``is_relative_to`` returns a bool
-                    # and never raises — branch on the value (RST-06: the
-                    # old try/except ValueError was dead code, so escaping
-                    # links were created).
-                    resolved = (node_path.parent / link_target).resolve()
-                    if not resolved.is_relative_to(target_dir.resolve()):
-                        # Symlink resolves outside target directory.  We
-                        # deliberately diverge from restic's verbatim
-                        # restore: for the last-resort tier-3 path (which
-                        # may run as root from a rescue environment) an
-                        # escaping link is skipped, logged, and recorded in
-                        # RESTORE_FAILURES.txt so the fidelity loss is
-                        # visible rather than planting a sandbox escape.
-                        msg = (
-                            f"Skipping symlink {node_path.name} with "
-                            f"out-of-bounds target (would escape to {resolved})"
-                        )
-                        _log(msg)
-                        self._failures.append(
-                            (str(node_path), "", f"skipped-symlink: {link_target}")
-                        )
-                        continue
-                    # Target is valid; create the symlink
-                    if node_path.is_symlink() or node_path.exists():
-                        if node_path.is_dir() and not node_path.is_symlink():
-                            shutil.rmtree(node_path)
-                        else:
-                            node_path.unlink()
-                    node_path.symlink_to(link_target)
+                    self._restore_symlink(node, node_path)
                 else:
-                    _log(
-                        f"Skipping unsupported node type {node_type!r}: {name}"
-                    )
+                    # #783: a FIFO, socket or device, made as rustic
+                    # makes it; when this system will not, it is listed
+                    # and the exit code is not affected.
+                    try:
+                        _make_special(
+                            node_type, node_path, int(node.get("device", 0))
+                        )
+                    except (OSError, NotImplementedError, ValueError,
+                            TypeError) as exc:
+                        if isinstance(exc, OSError) and exc.errno:
+                            why = os.strerror(exc.errno)
+                        else:
+                            why = "this system cannot create it"
+                        self._not_restored(
+                            node_path,
+                            f"special file ({special}) not created: {why}",
+                            _NR_SPECIAL,
+                        )
+                    else:
+                        self._apply_metadata(node, node_path)
             except _NodeFailed:
                 # Already recorded + logged by the failing leaf; the
                 # subtree recursion records its own. Keep going.
@@ -1852,6 +2050,40 @@ class PurePythonRestorer:
                     raise
                 self._record_failure(node_path, "", exc)
                 continue
+
+    def _restore_symlink(self, node: dict[str, Any], path: Path) -> None:
+        """#782: make the link with its stored target (raw bytes when
+        rustic kept them in ``linktarget_raw``).  A target that cannot
+        be used is an error; a target file system without links is
+        listed only (#783).  Raises OSError for a full disk."""
+        data, why = _link_target(node)
+        if why is not None:
+            self._not_restored(path, f"link refused: {why}")
+            return
+        try:
+            target = os.fsdecode(data)
+        except UnicodeDecodeError:
+            self._not_restored(
+                path, "link refused: this system cannot hold the link target"
+            )
+            return
+        try:
+            os.symlink(target, path)
+        except NotImplementedError:
+            self._not_restored(path, _LINK_UNSUPPORTED, _NR_LINK)
+            return
+        except OSError as exc:
+            if exc.errno in _DISK_FULL_ERRNOS:
+                raise
+            if exc.errno in _LINK_UNSUPPORTED_ERRNOS or os.name == "nt":
+                self._not_restored(path, _LINK_UNSUPPORTED, _NR_LINK)
+            else:
+                self._not_restored(
+                    path,
+                    f"link not created: {os.strerror(exc.errno or 0)}",
+                )
+            return
+        self._apply_metadata(node, path, is_link=True)
 
     def _restore_file(self, node: dict[str, Any], path: Path) -> None:
         """Extract a file from its content blobs.
@@ -1869,7 +2101,20 @@ class PurePythonRestorer:
 
         bytes_written = 0
         try:
-            with open(tmp_path, "wb") as f:
+            # #784: never write through a link at the partial file's
+            # path: remove whatever is there, and open without following
+            # one.  os.replace below swaps a link at the final path for
+            # the file itself.
+            if _make_way(tmp_path, "file") is not None:
+                raise IsADirectoryError(errno.EISDIR, "a folder is in the way",
+                                        str(tmp_path))
+            fd = os.open(
+                tmp_path,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+            with os.fdopen(fd, "wb") as f:
                 for blob_id in content_ids:
                     try:
                         chunk = self._read_blob(blob_id)
@@ -1930,17 +2175,30 @@ class PurePythonRestorer:
         where = f"{_visible(str(target_dir))}/{shown}"
         if self._strict:
             raise IntegrityError(f"NOT RESTORED: {where} ({why})")
-        self._failures.append((where, "", f"name refused: {why}"))
-        _log(f"NOT RESTORED: {where} ({why})")
+        self._not_restored(where, f"name refused: {why}")
         return None
+
+    def _not_restored(
+        self, path: Path | str, reason: str, kind: str = _NR_FAILED
+    ) -> None:
+        """#783: one item not restored: a "NOT RESTORED" line (worded as
+        tier 1's) and a row in RESTORE_FAILURES.txt.  Only *kind*
+        ``_NR_FAILED`` counts as a failure."""
+        row = (str(path), "", reason)
+        self._rows.append(row)
+        if kind == _NR_FAILED:
+            self._failures.append(row)
+        else:
+            self._skipped[kind] += 1
+        _log(f"NOT RESTORED: {_visible(str(path))} ({_visible(reason)})")
 
     def _record_failure(
         self, path: Path, blob_id: str, exc: BaseException
     ) -> None:
         """Record one per-node failure for the manifest + summary."""
-        self._failures.append(
-            (str(path), blob_id, f"{type(exc).__name__}: {exc}")
-        )
+        row = (str(path), blob_id, f"{type(exc).__name__}: {exc}")
+        self._failures.append(row)
+        self._rows.append(row)
         _log(f"FAILED (continuing): {path} — {exc}")
 
     def _count_files(self, tree_id: str) -> int:
@@ -2096,27 +2354,35 @@ class PurePythonRestorer:
         self._progress_last_emit_files = done_files
         self._progress_last_emit_bytes = done_bytes
 
-    def _apply_metadata(self, node: dict[str, Any], path: Path) -> None:
-        """Best-effort metadata restoration (permissions, timestamps, xattrs)."""
+    def _apply_metadata(
+        self, node: dict[str, Any], path: Path, *, is_link: bool = False
+    ) -> None:
+        """Best-effort metadata: owner (root only), mode, xattrs, times.
+
+        #785: rustic's order, as in tier 1.  A change of owner clears
+        setuid/setgid, so the owner goes before the mode; the times go
+        last.  Nothing here follows a link (*is_link*: the link's own
+        owner, xattrs and times; a link has no mode of its own).
+        """
+        uid, gid = node.get("uid"), node.get("gid")
+        if (
+            hasattr(os, "geteuid") and os.geteuid() == 0
+            and isinstance(uid, int) and isinstance(gid, int)
+            and uid >= 0 and gid >= 0
+        ):
+            try:
+                os.chown(path, uid, gid, follow_symlinks=False)
+            except (OSError, NotImplementedError) as exc:
+                _log(f"Could not set the owner of {path}: {exc}")
+
         try:
-            if "mode" in node and not path.is_symlink():
-                os.chmod(path, node["mode"] & 0o7777)
-        except OSError as exc:
+            if "mode" in node and not is_link and not path.is_symlink():
+                os.chmod(path, _mode_from_go(int(node["mode"])))
+        except (OSError, TypeError, ValueError) as exc:
             _log(f"Could not set permissions on {path}: {exc}")
 
-        try:
-            mtime = node.get("mtime")
-            atime = node.get("atime")
-            if mtime:
-                # Parse ISO 8601 nanosecond timestamp → epoch float
-                mt = _parse_timestamp(mtime)
-                at = _parse_timestamp(atime) if atime else mt
-                os.utime(path, (at, mt), follow_symlinks=False)
-        except (OSError, ValueError) as exc:
-            _log(f"Could not set timestamps on {path}: {exc}")
-
         # Extended attributes (restic stores as list of {name, value})
-        for xa in node.get("extended_attributes", []):
+        for xa in node.get("extended_attributes") or []:
             try:
                 xa_name = xa.get("name", "")
                 xa_value = base64.b64decode(xa.get("value", ""))
@@ -2125,10 +2391,21 @@ class PurePythonRestorer:
                         str(path), xa_name, xa_value,
                         follow_symlinks=False,
                     )
-            except OSError:
+            except (OSError, ValueError, AttributeError):
                 _log(
                     f"Could not set xattr {xa.get('name')} on {path}"
                 )
+
+        try:
+            mtime = node.get("mtime")
+            atime = node.get("atime")
+            if mtime and (not is_link or os.utime in os.supports_follow_symlinks):
+                # Parse ISO 8601 nanosecond timestamp → epoch float
+                mt = _parse_timestamp(mtime)
+                at = _parse_timestamp(atime) if atime else mt
+                os.utime(path, (at, mt), follow_symlinks=False)
+        except (OSError, ValueError, NotImplementedError) as exc:
+            _log(f"Could not set timestamps on {path}: {exc}")
 
     # ── Diagnostic / Info ────────────────────────────────────────
 

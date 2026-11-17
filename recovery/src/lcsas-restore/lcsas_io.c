@@ -4,6 +4,11 @@
  * Strict C89 + POSIX.1-2001.  Requires `unistd.h` for read/write/lseek
  * and `sys/stat.h` for `mkdir` / `fstat`.
  */
+#ifdef _WIN32
+/* A system header: it goes before posix_compat.h's shim macros. */
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#endif
 #include "lcsas_io.h"
 #include "posix_compat.h"
 
@@ -112,12 +117,14 @@ lcsas_create_file(const char *path, unsigned int mode)
      * writable once and the open retried. */
 #ifndef _WIN32
     (void)mode;
-    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, (mode_t)0600);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY | O_NOFOLLOW,
+              (mode_t)0600);
     if (fd < 0 && errno == EACCES) {
         struct stat st;
         if (lstat(path, &st) == 0 && S_ISREG(st.st_mode)
                 && chmod(path, (mode_t)0600) == 0) {
-            fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY,
+            fd = open(path,
+                      O_WRONLY | O_CREAT | O_TRUNC | O_BINARY | O_NOFOLLOW,
                       (mode_t)0600);
         }
     }
@@ -126,6 +133,25 @@ lcsas_create_file(const char *path, unsigned int mode)
               (mode_t)(mode & 0777));
 #endif
     return fd;
+}
+
+int
+lcsas_entry_kind(const char *path)
+{
+#ifdef _WIN32
+    DWORD a = GetFileAttributesA(path);
+    if (a == INVALID_FILE_ATTRIBUTES) return LCSAS_ENTRY_NONE;
+    if (a & FILE_ATTRIBUTE_REPARSE_POINT) return LCSAS_ENTRY_LINK;
+    if (a & FILE_ATTRIBUTE_DIRECTORY) return LCSAS_ENTRY_DIR;
+    return LCSAS_ENTRY_FILE;
+#else
+    struct stat st;
+    if (lstat(path, &st) != 0) return LCSAS_ENTRY_NONE;
+    if (S_ISLNK(st.st_mode)) return LCSAS_ENTRY_LINK;
+    if (S_ISDIR(st.st_mode)) return LCSAS_ENTRY_DIR;
+    if (S_ISREG(st.st_mode)) return LCSAS_ENTRY_FILE;
+    return LCSAS_ENTRY_OTHER;
+#endif
 }
 
 int

@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-10-30
 - Issue: none (owner decisions Q33 and Q38 of the 2026-10-30 review;
-  glossary in [`CONTEXT.md`](../../CONTEXT.md))
+  glossary in `CONTEXT.md`, in the source repository; not on the meta disc)
 
 ## Context
 

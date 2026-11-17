@@ -78,12 +78,12 @@ disc_locator.c:1111   VOLATILE   "
 disc_locator.c:1113   VOLATILE   "
 
 # lcsas_io.c
-lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
-lcsas_io.c:23   INTRACTABLE   "
-lcsas_io.c:30   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (#222 disc-disconnect classifier); needs a source that returns 0 mid-read - integration-only
-lcsas_io.c:31   INTRACTABLE   "
-lcsas_io.c:47   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs racy signal injection
-lcsas_io.c:48   INTRACTABLE   "
+lcsas_io.c:27   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
+lcsas_io.c:28   INTRACTABLE   "
+lcsas_io.c:35   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (#222 disc-disconnect classifier); needs a source that returns 0 mid-read - integration-only
+lcsas_io.c:36   INTRACTABLE   "
+lcsas_io.c:52   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs racy signal injection
+lcsas_io.c:53   INTRACTABLE   "
 
 # main.c
 main.c:670   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
@@ -132,38 +132,47 @@ repo.c:1195   INTRACTABLE   "
 repo.c:1197   INTRACTABLE   "
 
 # tree.c
-tree.c:359   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
-tree.c:388   INTRACTABLE   write_blob_sparse write_exact fail on the non-zero prefix; needs a RO mount or write-syscall injection
-tree.c:398   INTRACTABLE   write_blob_sparse lseek fail on the sparse-hole seek; SEEK_CUR on a writable regular fd cannot fail without syscall injection
-tree.c:402   INTRACTABLE   write_blob_sparse write_exact fail on a short (<4 KiB) zero run; same syscall-injection need as 281 (the branch itself is now covered)
-tree.c:430   INTRACTABLE   apply_node_ownership body; guarded by geteuid()!=0 early-return - only reachable when the test process runs as root, which coverage-c never does
-tree.c:431   INTRACTABLE   "
-tree.c:432   INTRACTABLE   "
-tree.c:433   INTRACTABLE   "
-tree.c:435   INTRACTABLE   "
-tree.c:436   INTRACTABLE   "
-tree.c:438   INTRACTABLE   "
-tree.c:443   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
-tree.c:765   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
-tree.c:766   INTRACTABLE   "
-tree.c:767   INTRACTABLE   "
-tree.c:772   INTRACTABLE   "
-tree.c:828   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 626
-tree.c:829   INTRACTABLE   "
-tree.c:830   INTRACTABLE   "
-tree.c:831   INTRACTABLE   "
-tree.c:839   INTRACTABLE   "
-tree.c:1066   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
-tree.c:1070   INTRACTABLE   "
-tree.c:1163   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT/EPERM/EOPNOTSUPP/ENOSYS classifier on symlink() fail (#221/#224); needs a filesystem-full or non-POSIX (FAT32/exFAT/SMB) target - integration-only
-tree.c:1164   INTRACTABLE   "
-tree.c:1165   INTRACTABLE   "
-tree.c:1167   INTRACTABLE   "
-tree.c:1171   INTRACTABLE   "
-tree.c:1172   INTRACTABLE   "
-tree.c:1173   INTRACTABLE   "
-tree.c:1182   INTRACTABLE   "
-tree.c:1187   INTRACTABLE   tree_restore_recurse generic symlink()-fail catch-all; any symlink() failure needs an environmental condition (RO mount, EACCES) the coverage-c harness does not provide
+tree.c:229   VOLATILE   nr_report_item row malloc fail (#783): only the fault-inject sweep (coverage-c step 3c) can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries
+tree.c:230   VOLATILE   "
+tree.c:231   VOLATILE   "
+tree.c:240   VOLATILE   nr_report_item rows realloc fail (#783); same fault-inject dependence as 229
+tree.c:241   VOLATILE   "
+tree.c:242   VOLATILE   "
+tree.c:488   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
+tree.c:517   INTRACTABLE   write_blob_sparse write_exact fail on the non-zero prefix; needs a RO mount or write-syscall injection
+tree.c:527   INTRACTABLE   write_blob_sparse lseek fail on the sparse-hole seek; SEEK_CUR on a writable regular fd cannot fail without syscall injection
+tree.c:531   INTRACTABLE   write_blob_sparse write_exact fail on a short (<4 KiB) zero run; same syscall-injection need as 281 (the branch itself is now covered)
+tree.c:559   INTRACTABLE   apply_node_ownership body; guarded by geteuid()!=0 early-return - only reachable when the test process runs as root, which coverage-c never does
+tree.c:560   INTRACTABLE   "
+tree.c:561   INTRACTABLE   "
+tree.c:562   INTRACTABLE   "
+tree.c:564   INTRACTABLE   "
+tree.c:565   INTRACTABLE   "
+tree.c:567   INTRACTABLE   "
+tree.c:572   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
+tree.c:900   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+tree.c:901   INTRACTABLE   "
+tree.c:902   INTRACTABLE   "
+tree.c:907   INTRACTABLE   "
+tree.c:963   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 626
+tree.c:964   INTRACTABLE   "
+tree.c:965   INTRACTABLE   "
+tree.c:966   INTRACTABLE   "
+tree.c:974   INTRACTABLE   "
+tree.c:1152   DEFENSIVE   decode_link_target: the second lcsas_b64_decode over the same input returns a length other than the sizing pass's; the decoder is deterministic
+tree.c:1391   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
+tree.c:1395   INTRACTABLE   "
+tree.c:1462   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on symlink() fail (#221); needs a filesystem-full target - integration-only
+tree.c:1466   INTRACTABLE   "
+tree.c:1477   INTRACTABLE   symlink() EPERM/EOPNOTSUPP/ENOSYS: link listed as not restored (#224/#783); needs a non-POSIX (FAT32/exFAT/SMB) target - integration-only (test_tier1_fat32_target.py)
+tree.c:1597   INTRACTABLE   write_failures_file write fail after a successful open (#783); needs a filesystem-full target - integration-only
+tree.c:1603   INTRACTABLE   "
+tree.c:1608   INTRACTABLE   "
+tree.c:1609   INTRACTABLE   "
+tree.c:1610   INTRACTABLE   "
+tree.c:1611   INTRACTABLE   "
+tree.c:1650   INTRACTABLE   lcsas_tree_restore summary for links the target cannot hold (#783); same constraint as 1477
+tree.c:1667   VOLATILE   lcsas_tree_restore rows-lost summary (#783); reached only when 229/240 are, by the fault-inject sweep
 ```<!-- EXEMPTIONS-FENCE-END -->
 
 ## Path forward
@@ -221,9 +230,12 @@ tier-1 gates as `lcsas-restore`:
 - **Sanitize** — `test_keyshare` is in `TEST_BINS`, so the `make
   -C recovery sanitize` ASan/UBSan/LSan run already builds and runs it
   (it formalises the one-off ASan check noted in PLAN.md C5.3).
-- **CI trigger** — `.github/workflows/audit-gate.yml` lists
-  `recovery/src/lcsas-keyshare/**` in both the push and pull_request path
-  filters, so a PR touching only combiner source runs the gate.
+- **CI trigger** — `.github/workflows/audit-gate.yml` runs on every
+  pull_request (unfiltered since #412); its `changes` job counts
+  `recovery/src/**`, which holds `recovery/src/lcsas-keyshare/`, as
+  gate-relevant, so a PR touching only combiner source runs the gate.
+  The push trigger (master only since #843) has the same `recovery/src/**`
+  path filter.
 
 Coverage notes (NOT FENCE-enforced — narrative only):
 

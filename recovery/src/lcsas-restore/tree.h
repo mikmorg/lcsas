@@ -2,7 +2,7 @@
  * tree.h -- recursive tree-blob walker.
  *
  * Reads a tree blob, iterates its nodes, and materializes files,
- * directories, and symlinks under `target_dir`.
+ * directories, symlinks and special files under `target_dir`.
  */
 #ifndef LCSAS_TREE_H
 #define LCSAS_TREE_H
@@ -64,9 +64,19 @@ void lcsas_progress_finish(const lcsas_progress *p);
 /*
  * Returns 0 when every node was restored, -1 when the walk stopped on
  * an error, or LCSAS_TREE_INCOMPLETE when the walk finished but one or
- * more nodes were not restored because their names were refused
- * (issue #781: a name that cannot be decoded, or that this system
- * cannot hold).  Each such node has a "NOT RESTORED" line on stderr.
+ * more nodes were not restored because of an error (issues #781,
+ * #783): a name that cannot be decoded or that this system cannot
+ * hold, a link target that cannot be used, an unknown node type, or a
+ * folder where the snapshot has another kind of item (#784).
+ *
+ * A special file (FIFO, socket, device) this system will not create,
+ * and a symlink the target file system cannot hold, are not errors:
+ * they are listed, and the return value is not affected.
+ *
+ * Every node not restored has a "NOT RESTORED: <path> (<reason>)" line
+ * on stderr and a row in `target_root`/RESTORE_FAILURES.txt (the same
+ * file tier 3 writes).  With nothing to list, a RESTORE_FAILURES.txt
+ * an earlier run left there is removed.
  */
 #define LCSAS_TREE_INCOMPLETE 1
 
@@ -75,7 +85,7 @@ int lcsas_tree_restore(const char *repo_path,
                        const lcsas_blob_index *ix,
                        const char *tree_id_hex,
                        const char *target_dir,
-                       const char *target_root, /* used for symlink safety */
+                       const char *target_root, /* RESTORE_FAILURES.txt */
                        struct lcsas_disc_locator *locator,
                        lcsas_progress *progress);
 

@@ -14,6 +14,10 @@
  * layout raises LCSAS_MAX_TREE_DEPTH and the stack ulimit, or falls
  * back to tier-2 (rustic).
  */
+/* mknod() and S_IFSOCK are XSI (#783: special files). */
+#if !defined(_WIN32) && !defined(_XOPEN_SOURCE)
+#  define _XOPEN_SOURCE 700
+#endif
 #include "tree.h"
 #include "path.h"
 #include "json_q.h"
@@ -98,38 +102,159 @@ typedef struct {
     size_t cap;
 } hardlink_map;
 
-/* Decode a JSON string into a path component, rejecting any embedded
- * NUL byte.  The decoder returns the TRUE decoded length, but a JSON
- * NUL escape (backslash-u-0000) lands a literal NUL in `out` while the
- * resulting C string truncates there -- so two distinct names whose
- * bytes differ only after a NUL would collide to the same restored
- * path (T1C-03).  Comparing the returned length against strlen(out)
- * detects the truncation.  Returns the length on success, -1 on a
- * plain decode failure (overflow / bad escape), or DECODE_PATH_NUL
- * when the decode succeeded but the value contains an embedded NUL. */
-#define DECODE_PATH_NUL (-2)
-static long
-decode_path_component(const char *src, const lcsas_json_tok *tok,
-                      char *out, size_t cap)
+/* Issues #781, #783 -- items that are not restored.
+ *
+ * Every node the walk does not restore is named on stderr in a
+ * "NOT RESTORED: <path> (<reason>)" line and gets a row in
+ * RESTORE_FAILURES.txt under the restore target (the same file, row
+ * format and reasons as tier 3).  There are three kinds:
+ *
+ *   NR_FAILED   an error (a refused name, a link target that cannot be
+ *               used, an unknown item type, a folder in the way).  The
+ *               walk carries on, and the restore ends "finished with
+ *               errors" (LCSAS_TREE_INCOMPLETE, exit 1).
+ *   NR_SPECIAL  a pipe, socket or device this system would not create
+ *               (a device needs root; Windows has none of them).  It
+ *               holds no data: listed, exit code unaffected.
+ *   NR_LINK     a symlink the target file system cannot hold (FAT32,
+ *               exFAT, most SMB shares; Windows tier 1 never makes
+ *               links).  Listed, exit code unaffected.
+ */
+#define NR_FAILED  0
+#define NR_SPECIAL 1
+#define NR_LINK    2
+
+typedef struct {
+    unsigned long count[3];
+    char **rows;           /* "path\treason\t" (blob id empty), malloc'd */
+    size_t nrows;
+    size_t cap;
+    unsigned long rows_lost;   /* rows dropped on an allocation failure */
+} nr_report;
+
+#define RESTORE_FAILURES_NAME "RESTORE_FAILURES.txt"
+
+/* Length of the valid UTF-8 sequence that starts at s (1 to 4), or 0
+ * when the bytes there are not one (overlong forms, surrogates and
+ * code points above U+10FFFF are not valid). */
+static size_t
+utf8_seq_len(const unsigned char *s, size_t n)
 {
-    long n = lcsas_json_decode_string(src, tok, out, cap);
-    if (n < 0) return -1;
-    if ((size_t)n != strlen(out)) return DECODE_PATH_NUL;
-    return n;
+    unsigned char c = s[0];
+    unsigned char lo = 0x80, hi = 0xBF;
+    size_t need, k;
+    if (c < 0x80) return 1;
+    if (c >= 0xC2 && c <= 0xDF) need = 2;
+    else if (c >= 0xE0 && c <= 0xEF) need = 3;
+    else if (c >= 0xF0 && c <= 0xF4) need = 4;
+    else return 0;
+    if (c == 0xE0) lo = 0xA0;
+    if (c == 0xED) hi = 0x9F;
+    if (c == 0xF0) lo = 0x90;
+    if (c == 0xF4) hi = 0x8F;
+    if (n < need) return 0;
+    if (s[1] < lo || s[1] > hi) return 0;
+    for (k = 2; k < need; k++) {
+        if (s[k] < 0x80 || s[k] > 0xBF) return 0;
+    }
+    return need;
 }
 
-/* Issue #781 -- print `n` bytes of a name or path so that a control
- * character or DEL in it cannot move the cursor or hide text on the
- * reader's terminal: those bytes are shown as \xNN. */
+/* Copy `n` bytes of a name, path or reason to `out` (when not NULL)
+ * so that it cannot move the cursor, hide text or split a row: a
+ * control character, DEL, or a byte that is not part of valid UTF-8 is
+ * written as \xNN.  Tier 3's _visible() shows them the same way.
+ * Returns the length written. */
+static size_t
+visible_text(char *out, const char *s, size_t n)
+{
+    static const char hexd[] = "0123456789abcdef";
+    size_t i = 0, o = 0;
+    while (i < n) {
+        unsigned char c = (unsigned char)s[i];
+        size_t k = utf8_seq_len((const unsigned char *)s + i, n - i);
+        if (c < 0x20 || c == 0x7F || k == 0) {
+            if (out) {
+                out[o] = '\\';
+                out[o + 1] = 'x';
+                out[o + 2] = hexd[c >> 4];
+                out[o + 3] = hexd[c & 15];
+            }
+            o += 4;
+            i++;
+        } else {
+            if (out) memcpy(out + o, s + i, k);
+            o += k;
+            i += k;
+        }
+    }
+    return o;
+}
+
+/* "<dir>/<name>\t<reason>\t" with each part made visible; malloc'd,
+ * or NULL when out of memory.  *path_len gets the length of the path
+ * part. */
+static char *
+nr_row(const char *dir, const char *name, size_t name_len,
+       const char *reason, size_t *path_len)
+{
+    size_t dl = strlen(dir), rl = strlen(reason);
+    size_t pn = visible_text(NULL, dir, dl) + 1
+                + visible_text(NULL, name, name_len);
+    size_t total = pn + 1 + visible_text(NULL, reason, rl) + 1;
+    char *row = (char *)malloc(total + 1);
+    size_t o = 0;
+    if (!row) return NULL;
+    o += visible_text(row + o, dir, dl);
+    row[o++] = '/';
+    o += visible_text(row + o, name, name_len);
+    row[o++] = '\t';
+    o += visible_text(row + o, reason, rl);
+    row[o++] = '\t';
+    row[o] = '\0';
+    *path_len = pn;
+    return row;
+}
+
+/* Name one item that is not restored: a "NOT RESTORED" line on stderr,
+ * a row for RESTORE_FAILURES.txt, and a count of its kind. */
 static void
-print_visible(const char *s, size_t n)
+nr_report_item(nr_report *rep, int kind, const char *dir,
+               const char *name, size_t name_len, const char *reason)
+{
+    size_t plen = 0;
+    char *row = nr_row(dir, name, name_len, reason, &plen);
+    rep->count[kind]++;
+    if (!row) {
+        fprintf(stderr, "NOT RESTORED: %s/... (%s)\n", dir, reason);
+        rep->rows_lost++;
+        return;
+    }
+    /* The row is "<path>\t<reason>\t": print both parts as shown. */
+    fprintf(stderr, "NOT RESTORED: %.*s (%.*s)\n", (int)plen, row,
+            (int)(strlen(row) - plen - 2), row + plen + 1);
+    if (rep->nrows == rep->cap) {
+        size_t ncap = rep->cap ? rep->cap * 2 : 16;
+        char **p = (char **)realloc(rep->rows, ncap * sizeof(char *));
+        if (!p) {
+            free(row);
+            rep->rows_lost++;
+            return;
+        }
+        rep->rows = p;
+        rep->cap = ncap;
+    }
+    rep->rows[rep->nrows++] = row;
+}
+
+static void
+nr_report_free(nr_report *rep)
 {
     size_t i;
-    for (i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (c < 0x20 || c == 0x7F) fprintf(stderr, "\\x%02x", c);
-        else fputc(c, stderr);
-    }
+    for (i = 0; i < rep->nrows; i++) free(rep->rows[i]);
+    free(rep->rows);
+    rep->rows = NULL;
+    rep->nrows = rep->cap = 0;
 }
 
 /* Issue #781 -- the escaped text of the node name being decoded.  One
@@ -142,22 +267,29 @@ static char g_stored_name[1024];
  * to create.  The JSON string holds rustic's escaped text (see
  * lcsas_unescape_name), and the path-safety checks run on the DECODED
  * bytes, never on the escaped text.  Returns 0 with the name in
- * `out`; otherwise prints a "NOT RESTORED" line naming the node and
- * returns -1, and the caller counts the node as not restored. */
+ * `out`; otherwise reports the node as not restored (NR_FAILED) and
+ * returns -1. */
 static int
 decode_node_name(const char *src, const lcsas_json_tok *tok,
-                 const char *target_dir, char *out, size_t cap)
+                 const char *target_dir, char *out, size_t cap,
+                 nr_report *rep)
 {
     const char *why = NULL;
     const char *shown = g_stored_name;
     size_t shown_len = 0;
-    long n = lcsas_json_decode_string(src, tok, g_stored_name,
-                                      sizeof g_stored_name);
+    long n = -1;
+    char reason[160];
+    if (tok && tok->type == LCSAS_JSON_STRING) {
+        n = lcsas_json_decode_string(src, tok, g_stored_name,
+                                     sizeof g_stored_name);
+    }
     if (n < 0) {
         why = "the name is too long or badly stored";
-        shown = src + tok->start;
-        shown_len = tok->end > tok->start ? tok->end - tok->start : 0;
-        if (shown_len > 200) shown_len = 200;
+        if (tok) {
+            shown = src + tok->start;
+            shown_len = tok->end > tok->start ? tok->end - tok->start : 0;
+            if (shown_len > 200) shown_len = 200;
+        }
     } else {
         long m;
         shown_len = (size_t)n;
@@ -177,11 +309,8 @@ decode_node_name(const char *src, const lcsas_json_tok *tok,
         }
     }
     if (!why) return 0;
-    fprintf(stderr, "NOT RESTORED: ");
-    print_visible(target_dir, strlen(target_dir));
-    fputc('/', stderr);
-    print_visible(shown, shown_len);
-    fprintf(stderr, " (%s)\n", why);
+    sprintf(reason, "name refused: %.140s", why);
+    nr_report_item(rep, NR_FAILED, target_dir, shown, shown_len, reason);
     return -1;
 }
 
@@ -633,7 +762,13 @@ restore_file_node(const char *repo_path,
                     && expected_size >= 0) {
                 struct stat st;
                 int same = 0;
+                /* #784: lstat -- a symlink at the path is never taken
+                 * for this file (the walk has removed one already). */
+#ifndef _WIN32
+                if (lstat(target_path, &st) == 0
+#else
                 if (stat(target_path, &st) == 0
+#endif
                         && S_ISREG(st.st_mode)
                         && (long long)st.st_size == expected_size) {
                     same = 1;
@@ -874,37 +1009,199 @@ restore_file_node(const char *repo_path,
     }
     /* Issue #201 — re-apply mode (incl. setuid/setgid/sticky) AFTER
      * content writes.  The kernel strips setuid+setgid on write()
-     * for security; setting them here is the last touch before
-     * close so they stick.  Sticky is unaffected but harmless to
-     * re-apply.  Only chmods if the file was created in this call
-     * (rc still 0). */
+     * for security; setting them after the last write makes them
+     * stick.  Only when the file was written in full (rc still 0).
+     *
+     * Issue #785 — the order is owner, mode, xattrs, times (rustic's
+     * order).  A change of owner clears setuid/setgid on Linux, so the
+     * owner goes first and the mode after it; the times go last.
+     *
+     * Issue #188 — futimens() sets the times through the open fd. */
     if (rc == 0) {
-        int chmod_rc = fchmod(fd, (mode_t)final_posix_mode);
-        (void)chmod_rc;
-    }
-#endif
-
-#ifndef _WIN32
-    /* Issue #188 — restore the snapshot's mtime onto the file we just
-     * wrote.  futimens() updates timestamps via the open fd, which
-     * avoids a race with anything that might rename the file under us
-     * (and dodges the symlink-deref question entirely). */
-    {
         struct timespec ts[2];
+        apply_node_ownership(src, toks, node_idx, target_path);
+        {
+            int chmod_rc = fchmod(fd, (mode_t)final_posix_mode);
+            (void)chmod_rc;
+        }
+        apply_node_xattrs(src, toks, ntoks, node_idx, target_path);
         if (decode_node_mtime(src, toks, node_idx, ts) == 0) {
             (void)futimens(fd, ts);
         }
     }
-    /* Issues #189 + #190 — uid/gid + xattrs (best-effort).
-     * Ownership applied AFTER content + mode so the file exists at
-     * the path; xattrs go last so a setxattr-time hook won't observe
-     * a partially-restored file. */
-    apply_node_ownership(src, toks, node_idx, target_path);
-    apply_node_xattrs(src, toks, ntoks, node_idx, target_path);
 #endif
 
     close(fd);
     return rc;
+}
+
+/* Issue #784 -- what the snapshot has at a path, for make_way(). */
+#define WANT_DIR   0
+#define WANT_FILE  1
+#define WANT_OTHER 2   /* a symlink or a special file */
+
+/* Issue #784 -- make room at `path` (a path below the restore target)
+ * for the item the snapshot has there, when the target folder already
+ * holds an earlier restore.
+ *
+ * The rule (tier 3 follows the same one): whatever is in the way is
+ * replaced, except a folder.  A folder where the snapshot has a file,
+ * a link or a special file is never removed (it may hold anything);
+ * that item is reported instead.  A symlink is never followed: one at
+ * a file's or a folder's path is removed and the real item made in
+ * its place, so no data is written through it.  On Windows a reparse
+ * point (symlink, junction, mount point) is reported, not removed.  A
+ * regular file where the snapshot has a file is left to the caller
+ * (the resume check, then an overwrite).
+ *
+ * Returns NULL when the path is ready, else the reason it is not. */
+static const char *
+make_way(const char *path, int want)
+{
+    switch (lcsas_entry_kind(path)) {
+    case LCSAS_ENTRY_NONE:
+        return NULL;
+    case LCSAS_ENTRY_DIR:
+        return want == WANT_DIR
+            ? NULL : "a folder with this name is already there";
+    case LCSAS_ENTRY_FILE:
+        if (want == WANT_FILE) return NULL;
+        break;
+#ifdef _WIN32
+    case LCSAS_ENTRY_LINK:
+        return "a link or junction with this name is already there";
+#endif
+    default:
+        break;
+    }
+    if (unlink(path) != 0 && errno != ENOENT) {
+        return "the item already there with this name cannot be removed";
+    }
+    return NULL;
+}
+
+/* The node's "mode" as a POSIX mode word, or `dflt` when absent. */
+static unsigned int
+node_posix_mode(const char *src, const lcsas_json_tok *toks, long idx,
+                unsigned int dflt)
+{
+    long mode_i = lcsas_json_obj_get(src, toks, idx, "mode");
+    long long v = 0;
+    if (mode_i < 0 || toks[mode_i].type != LCSAS_JSON_NUMBER) return dflt;
+    if (lcsas_json_decode_int(src, &toks[mode_i], &v) != 0) return dflt;
+    return mode_from_go_filemode(v);
+}
+
+#ifndef _WIN32
+/* Issue #785 -- metadata of a folder, link or special file, in
+ * rustic's order: owner, mode (not for a link), xattrs, times.  The
+ * owner goes before the mode because a change of owner clears
+ * setuid/setgid; the times go last.  All best-effort. */
+static void
+apply_path_meta(const char *src, const lcsas_json_tok *toks, long ntoks,
+                long idx, const char *path, int is_link,
+                unsigned int posix_mode)
+{
+    struct timespec ts[2];
+    apply_node_ownership(src, toks, idx, path);
+    if (!is_link) (void)chmod(path, (mode_t)posix_mode);
+    apply_node_xattrs(src, toks, ntoks, idx, path);
+    if (decode_node_mtime(src, toks, idx, ts) == 0) {
+        (void)utimensat(AT_FDCWD, path, ts,
+                        is_link ? AT_SYMLINK_NOFOLLOW : 0);
+    }
+}
+#endif
+
+/* Symlink targets: one buffer each for the whole walk (a target is
+ * used before any recursion), so the per-frame stack the depth cap is
+ * sized for does not grow.  4095 bytes is the longest target Linux
+ * accepts. */
+static char g_link_target[4096];
+static char g_link_b64[5600];   /* base64 of up to 4095 bytes + slack */
+
+/* Read the node's link target into g_link_target.  rustic stores a
+ * target that is not valid UTF-8 twice: "linktarget" with each bad
+ * byte replaced by U+FFFD, and "linktarget_raw", the exact bytes in
+ * base64.  The raw bytes are used when present, so the link points
+ * at the same name as in the backup.  Returns NULL, or the reason the
+ * target cannot be used (tier 3 gives the same reasons). */
+static const char *
+decode_link_target(const char *src, const lcsas_json_tok *toks, long idx)
+{
+    long raw_i = lcsas_json_obj_get(src, toks, idx, "linktarget_raw");
+    long lt_i = lcsas_json_obj_get(src, toks, idx, "linktarget");
+    long n;
+    if (raw_i >= 0 && toks[raw_i].type == LCSAS_JSON_STRING) {
+        long need;
+        n = lcsas_json_decode_string(src, &toks[raw_i], g_link_b64,
+                                     sizeof g_link_b64);
+        if (n < 0) {
+            return toks[raw_i].end - toks[raw_i].start
+                       >= (long)sizeof g_link_b64 - 1
+                ? "the link target is too long"
+                : "the link target cannot be decoded";
+        }
+        need = lcsas_b64_decode(g_link_b64, (size_t)n, NULL);
+        if (need < 0) return "the link target cannot be decoded";
+        if ((size_t)need >= sizeof g_link_target) {
+            return "the link target is too long";
+        }
+        if (lcsas_b64_decode(g_link_b64, (size_t)n,
+                             (unsigned char *)g_link_target) != need) {
+            return "the link target cannot be decoded";
+        }
+        n = need;
+    } else if (lt_i >= 0 && toks[lt_i].type == LCSAS_JSON_STRING) {
+        n = lcsas_json_decode_string(src, &toks[lt_i], g_link_target,
+                                     sizeof g_link_target);
+        if (n < 0) {
+            return toks[lt_i].end - toks[lt_i].start
+                       >= (long)sizeof g_link_target - 1
+                ? "the link target is too long"
+                : "the link target cannot be decoded";
+        }
+    } else {
+        return "the link has no target";
+    }
+    g_link_target[n] = '\0';
+    if (n == 0) return "the link target is empty";
+    if ((size_t)n != strlen(g_link_target)) {
+        return "the link target holds a NUL byte";
+    }
+    return NULL;
+}
+
+/* Issue #783 -- the kind of special file a node type names, or NULL. */
+static const char *
+special_label(const char *type)
+{
+    if (strcmp(type, "fifo") == 0) return "FIFO";
+    if (strcmp(type, "socket") == 0) return "socket";
+    if (strcmp(type, "dev") == 0) return "block device";
+    if (strcmp(type, "chardev") == 0) return "character device";
+    return NULL;
+}
+
+/* Make a special file as rustic does (mkfifo, mknod).  A FIFO and a
+ * socket need no privilege on Linux; a device needs root. */
+static int
+make_special(const char *type, const char *path, long long device)
+{
+#ifdef _WIN32
+    (void)type; (void)path; (void)device;
+    errno = ENOSYS;
+    return -1;
+#else
+    if (strcmp(type, "fifo") == 0) return mkfifo(path, (mode_t)0600);
+    if (strcmp(type, "socket") == 0) {
+        return mknod(path, (mode_t)(S_IFSOCK | 0600), (dev_t)0);
+    }
+    if (strcmp(type, "dev") == 0) {
+        return mknod(path, (mode_t)(S_IFBLK | 0600), (dev_t)device);
+    }
+    return mknod(path, (mode_t)(S_IFCHR | 0600), (dev_t)device);
+#endif
 }
 
 static int
@@ -917,7 +1214,7 @@ tree_restore_recurse(const char *repo_path,
                      struct lcsas_disc_locator *locator,
                      lcsas_progress *progress,
                      hardlink_map *hlmap,
-                     unsigned long *not_restored,
+                     nr_report *rep,
                      int depth)
 {
     unsigned char tree_id[32];
@@ -1005,26 +1302,30 @@ tree_restore_recurse(const char *repo_path,
             long name_i = lcsas_json_obj_get((char *)blob, toks, t, "name");
             long type_i = lcsas_json_obj_get((char *)blob, toks, t, "type");
             long subtree_i = lcsas_json_obj_get((char *)blob, toks, t, "subtree");
-            long lt_i = lcsas_json_obj_get((char *)blob, toks, t, "linktarget");
             char name_buf[1024];
             char type_buf[32];
             char node_path[4096];
+            const char *why;
+            const char *special;
 
-            if (name_i < 0 || type_i < 0) continue;
             /* Issue #781: decode rustic's escaped name, then run the
              * path-safety checks (empty, ".", "..", '/', NUL; on
              * Windows also the characters NTFS cannot store) on the
              * decoded bytes.  A refused name is reported and counted,
              * and the walk carries on with the next node; the restore
              * then ends non-zero (see lcsas_tree_restore). */
-            if (decode_node_name((char *)blob, &toks[name_i], target_dir,
-                                 name_buf, sizeof name_buf) != 0) {
-                (*not_restored)++;
+            if (decode_node_name((char *)blob,
+                                 name_i >= 0 ? &toks[name_i] : NULL,
+                                 target_dir, name_buf, sizeof name_buf,
+                                 rep) != 0) {
                 continue;
             }
-            if (lcsas_json_decode_string((char *)blob, &toks[type_i],
-                                         type_buf, sizeof type_buf) < 0)
-                continue;
+            if (type_i < 0
+                    || lcsas_json_decode_string((char *)blob, &toks[type_i],
+                                                type_buf,
+                                                sizeof type_buf) < 0) {
+                strcpy(type_buf, "?");
+            }
 
             {
                 /* T1C-04: a silently-truncated path restores a file to
@@ -1038,6 +1339,30 @@ tree_restore_recurse(const char *repo_path,
                             "%.200s...\n", target_dir);
                     goto out;
                 }
+            }
+
+            special = special_label(type_buf);
+            /* Issue #784: never write through what an earlier restore
+             * left at this path (see make_way). */
+            if (strcmp(type_buf, "file") == 0) {
+                why = make_way(node_path, WANT_FILE);
+            } else if (strcmp(type_buf, "dir") == 0) {
+                why = make_way(node_path, WANT_DIR);
+            } else if (strcmp(type_buf, "symlink") == 0 || special) {
+                why = make_way(node_path, WANT_OTHER);
+            } else {
+                /* Issue #783: a type this reader does not know is not
+                 * restored, and that is an error. */
+                char reason[96];
+                sprintf(reason, "unknown item type: %.40s", type_buf);
+                nr_report_item(rep, NR_FAILED, target_dir, name_buf,
+                               strlen(name_buf), reason);
+                continue;
+            }
+            if (why) {
+                nr_report_item(rep, NR_FAILED, target_dir, name_buf,
+                               strlen(name_buf), why);
+                continue;
             }
 
             if (strcmp(type_buf, "file") == 0) {
@@ -1086,23 +1411,12 @@ tree_restore_recurse(const char *repo_path,
                  * the children are written the directory is owner
                  * rwx; this also re-opens a read-only directory left
                  * by an earlier run, so a resume gets past it. */
-                {
-                    long dmode_i = lcsas_json_obj_get((char *)blob, toks,
-                                                     t, "mode");
-                    long long dmode_v = 0755;
-                    if (dmode_i >= 0
-                            && toks[dmode_i].type == LCSAS_JSON_NUMBER) {
-                        (void)lcsas_json_decode_int((char *)blob,
-                                                    &toks[dmode_i], &dmode_v);
-                    }
-                    dir_final_mode = mode_from_go_filemode(dmode_v);
+                dir_final_mode = node_posix_mode((char *)blob, toks, t, 0755);
 #ifndef _WIN32
-                    (void)chmod(node_path,
-                                (mode_t)(dir_final_mode | 0700));
+                (void)chmod(node_path, (mode_t)(dir_final_mode | 0700));
 #else
-                    (void)dir_final_mode;
+                (void)dir_final_mode;
 #endif
-                }
                 if (subtree_i >= 0
                         && toks[subtree_i].type == LCSAS_JSON_STRING
                         && toks[subtree_i].size == 64) {
@@ -1112,108 +1426,106 @@ tree_restore_recurse(const char *repo_path,
                     if (tree_restore_recurse(repo_path, mk, ix, sub_hex,
                                              node_path, target_root,
                                              locator, progress,
-                                             hlmap, not_restored,
+                                             hlmap, rep,
                                              depth + 1) != 0) {
                         goto out;
                     }
                 }
 #ifndef _WIN32
-                /* Issue #654 — final directory mode, now that every
-                 * child exists.  chmod does not touch mtime, but keep
-                 * it before utimensat for clarity. */
-                (void)chmod(node_path, (mode_t)dir_final_mode);
-                /* Issue #188 — apply dir mtime AFTER recursing into the
-                 * subtree.  Otherwise creating children re-bumps the
-                 * parent's mtime to the restore-time clock. */
-                {
-                    struct timespec ts[2];
-                    if (decode_node_mtime((char *)blob, toks, t, ts) == 0) {
-                        (void)utimensat(AT_FDCWD, node_path, ts, 0);
-                    }
-                }
-                /* Issues #189 + #190 — uid/gid + xattrs on the dir.
-                 * Same ordering rationale as mtime: applied AFTER
-                 * children are restored so we don't fight the
-                 * recursive descent. */
-                apply_node_ownership((char *)blob, toks, t, node_path);
-                apply_node_xattrs((char *)blob, toks, ntoks, t, node_path);
+                /* Issues #654, #188, #189, #190, #785 — the folder's
+                 * owner, final mode, xattrs and times, now that every
+                 * child exists (creating a child would bump the mtime
+                 * again). */
+                apply_path_meta((char *)blob, toks, ntoks, t, node_path,
+                                0, dir_final_mode);
 #endif
             } else if (strcmp(type_buf, "symlink") == 0) {
-                if (lt_i >= 0) {
-                    char tgt[1024];
-                    long lrc = decode_path_component((char *)blob,
-                                                     &toks[lt_i],
-                                                     tgt, sizeof tgt);
-                    if (lrc == DECODE_PATH_NUL) {
-                        fprintf(stderr,
-                                "skip unsafe symlink "
-                                "(embedded NUL in target)\n");
-                        continue;
-                    }
-                    if (lrc < 0) continue;  /* overflow / bad escape */
-                    if (lcsas_path_safe_symlink(target_root,
-                                                target_dir, tgt) != 0) {
-                        fprintf(stderr, "skip unsafe symlink %s -> %s\n",
-                                node_path, tgt);
-                        continue;
-                    }
-                    /* Atomic create: unlink first if exists. */
-                    unlink(node_path);
-                    if (symlink(tgt, node_path) != 0) {
-                        int saved_errno = errno;
-                        if (saved_errno == ENOSPC
-                                || saved_errno == EDQUOT) {
-                            /* Issue #221 — out-of-space classifier. */
-                            fprintf(stderr,
-                                    "ERROR: target directory out of space "
-                                    "(symlink path=%s, errno=%d)\n",
-                                    node_path, saved_errno);
-                        } else if (saved_errno == EPERM
-                                || saved_errno == EOPNOTSUPP
-                                || saved_errno == ENOSYS) {
-                            /* Issue #224 — FAT32/exFAT/SMB targets cannot
-                             * store symlinks at all; symlink(2) returns
-                             * EPERM / EOPNOTSUPP / ENOSYS depending on
-                             * the filesystem driver.  Emit a clearer
-                             * warning per affected node so the heir
-                             * understands the lossy aspect of restoring
-                             * to a non-POSIX target, and continue with
-                             * the rest of the tree rather than aborting. */
-                            fprintf(stderr,
-                                    "WARNING: target filesystem does not "
-                                    "support symlinks; skipped %s -> %s\n",
-                                    node_path, tgt);
-                        } else {
-                            fprintf(stderr, "symlink failed: %s -> %s\n",
-                                    node_path, tgt);
-                        }
-                    }
-#ifndef _WIN32
-                    else {
-                        /* Issue #188 — set the symlink's OWN mtime,
-                         * not the target's (AT_SYMLINK_NOFOLLOW).
-                         * Best-effort: not all filesystems / kernels
-                         * support this; ignore failure. */
-                        struct timespec ts[2];
-                        if (decode_node_mtime((char *)blob, toks, t, ts) == 0) {
-                            (void)utimensat(AT_FDCWD, node_path, ts,
-                                            AT_SYMLINK_NOFOLLOW);
-                        }
-                        /* Issues #189 + #190 — symlink uid/gid +
-                         * xattrs.  apply_node_ownership uses
-                         * lchown() so the link's own ownership is
-                         * set (not the target's).  Similarly
-                         * lsetxattr() on a symlink path operates
-                         * on the link itself when the kernel
-                         * supports it. */
-                        apply_node_ownership((char *)blob, toks, t, node_path);
-                        apply_node_xattrs((char *)blob, toks, ntoks, t, node_path);
-                    }
-#endif
+                /* Issue #782: every link is restored with its stored
+                 * target, as rustic does: absolute, relative, pointing
+                 * up and out of the restore, or dangling.  Making a
+                 * link writes nothing outside the target folder; the
+                 * risk is a later write THROUGH a link, which make_way
+                 * and O_NOFOLLOW rule out (#784). */
+                why = decode_link_target((char *)blob, toks, t);
+                if (why) {
+                    char reason[96];
+                    sprintf(reason, "link refused: %.70s", why);
+                    nr_report_item(rep, NR_FAILED, target_dir, name_buf,
+                                   strlen(name_buf), reason);
+                    continue;
                 }
+                if (symlink(g_link_target, node_path) != 0) {
+                    int saved_errno = errno;
+                    if (saved_errno == ENOSPC
+                            || saved_errno == EDQUOT) {
+                        /* Issue #221 — out-of-space classifier. */
+                        fprintf(stderr,
+                                "ERROR: target directory out of space "
+                                "(symlink path=%s, errno=%d)\n",
+                                node_path, saved_errno);
+                        goto out;
+                    } else if (saved_errno == EPERM
+                            || saved_errno == EOPNOTSUPP
+                            || saved_errno == ENOSYS) {
+                        /* Issue #224 — FAT32/exFAT/SMB targets cannot
+                         * store symlinks at all; symlink(2) returns
+                         * EPERM / EOPNOTSUPP / ENOSYS depending on the
+                         * filesystem driver (and Windows tier 1 never
+                         * makes links).  Listed, and the restore goes
+                         * on: it is a limit of the target, not an
+                         * error in the backup (#783). */
+                        nr_report_item(rep, NR_LINK, target_dir, name_buf,
+                                       strlen(name_buf),
+                                       "link not created: the target file "
+                                       "system does not support symlinks");
+                    } else {
+                        char reason[160];
+                        sprintf(reason, "link not created: %.120s",
+                                strerror(saved_errno));
+                        nr_report_item(rep, NR_FAILED, target_dir,
+                                       name_buf, strlen(name_buf), reason);
+                    }
+                }
+#ifndef _WIN32
+                else {
+                    /* Issues #188, #189, #190, #785 — the link's own
+                     * owner (lchown), xattrs and times
+                     * (AT_SYMLINK_NOFOLLOW), never its target's. */
+                    apply_path_meta((char *)blob, toks, ntoks, t,
+                                    node_path, 1, 0);
+                }
+#endif
             } else {
-                fprintf(stderr, "skip unsupported node type %s: %s\n",
-                        type_buf, name_buf);
+                /* Issue #783: a FIFO, socket or device.  Made as rustic
+                 * makes it; when this system will not (a device needs
+                 * root, Windows has none of them) it is listed, and
+                 * the exit code is not affected: it holds no data. */
+                long long device = 0;
+                long dev_i = lcsas_json_obj_get((char *)blob, toks, t,
+                                                "device");
+                if (dev_i >= 0 && toks[dev_i].type == LCSAS_JSON_NUMBER) {
+                    (void)lcsas_json_decode_int((char *)blob, &toks[dev_i],
+                                                &device);
+                }
+                if (make_special(type_buf, node_path, device) != 0) {
+                    char reason[200];
+#ifdef _WIN32
+                    sprintf(reason, "special file (%s) not created: "
+                            "this system cannot create it", special);
+#else
+                    sprintf(reason, "special file (%s) not created: %.120s",
+                            special, strerror(errno));
+#endif
+                    nr_report_item(rep, NR_SPECIAL, target_dir, name_buf,
+                                   strlen(name_buf), reason);
+                }
+#ifndef _WIN32
+                else {
+                    apply_path_meta((char *)blob, toks, ntoks, t, node_path,
+                                    0, node_posix_mode((char *)blob, toks,
+                                                       t, 0600));
+                }
+#endif
             }
         }
         if (toks[t].start >= toks[nodes_arr].end) break;
@@ -1226,10 +1538,84 @@ out:
     return rc;
 }
 
+/* Issue #783 -- the first lines of RESTORE_FAILURES.txt.  Tier 3
+ * writes the same text (restic_fallback.py, _FAILURES_HEADER) with its
+ * own name on the second line. */
+static const char *const failures_header[] = {
+    "LCSAS restore: items that were NOT restored.",
+    "Written by lcsas-restore (tier 1).  Everything else was restored.",
+    "A row whose reason starts \"special file\" is a pipe, socket or",
+    "device that this system cannot create.  It holds no data.",
+    "A row whose reason starts \"link not created: the target file",
+    "system\" is a link that this file system cannot hold.",
+    "Every other row is an error: see \"ITEMS NOT RESTORED\" in RECOVER.txt.",
+    "",
+    "path\treason\tblob_id",
+    NULL
+};
+
+/* Write RESTORE_FAILURES.txt under `target_root`, one row per item not
+ * restored.  With no rows, remove one an earlier run left (only a file
+ * that starts with our header), so it never describes an older run. */
+static void
+write_failures_file(const char *target_root, const nr_report *rep)
+{
+    char path[4200];
+    int fd;
+    size_t i;
+    int plen = snprintf(path, sizeof path, "%s/%s", target_root,
+                        RESTORE_FAILURES_NAME);
+    if (plen < 0 || (size_t)plen >= sizeof path) return;
+    if (rep->nrows == 0) {
+        char head[6];
+        int n = -1;
+        if (lcsas_entry_kind(path) != LCSAS_ENTRY_FILE) return;
+        fd = open(path, O_RDONLY | O_BINARY | O_NOFOLLOW);
+        if (fd < 0) return;
+        n = (int)read(fd, head, sizeof head);
+        close(fd);
+        if (n == (int)sizeof head && memcmp(head, "LCSAS ", 6) == 0) {
+            (void)unlink(path);
+        }
+        return;
+    }
+    if (make_way(path, WANT_FILE) != NULL) {
+        fprintf(stderr, "[lcsas-restore] could not write %s\n", path);
+        return;
+    }
+    /* No O_BINARY: on Windows the C library writes CRLF line ends. */
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "[lcsas-restore] could not write %s (%s)\n",
+                path, strerror(errno));
+        return;
+    }
+    for (i = 0; failures_header[i]; i++) {
+        if (lcsas_write_exact(fd, failures_header[i],
+                              strlen(failures_header[i])) != 0
+                || lcsas_write_exact(fd, "\n", 1) != 0) {
+            goto fail;
+        }
+    }
+    for (i = 0; i < rep->nrows; i++) {
+        if (lcsas_write_exact(fd, rep->rows[i], strlen(rep->rows[i])) != 0
+                || lcsas_write_exact(fd, "\n", 1) != 0) {
+            goto fail;
+        }
+    }
+    close(fd);
+    return;
+fail:
+    fprintf(stderr, "[lcsas-restore] could not write %s (%s)\n",
+            path, strerror(errno));
+    close(fd);
+}
+
 /*
- * Public entry point.  Owns the per-restore hardlink map: allocates,
- * passes it through the recursive walk, frees on return.  The map is
- * INTENTIONALLY internal to tree.c so the public API stays stable.
+ * Public entry point.  Owns the per-restore hardlink map and the list
+ * of items not restored: allocates, passes them through the recursive
+ * walk, frees on return.  Both are INTERNAL to tree.c so the public
+ * API stays stable.
  */
 int
 lcsas_tree_restore(const char *repo_path,
@@ -1242,21 +1628,47 @@ lcsas_tree_restore(const char *repo_path,
                    lcsas_progress *progress)
 {
     hardlink_map hlmap;
-    unsigned long not_restored = 0;
+    nr_report rep;
     int rc;
+    memset(&rep, 0, sizeof rep);
     hardlink_map_init(&hlmap);
     rc = tree_restore_recurse(repo_path, mk, ix, tree_id_hex,
                               target_dir, target_root,
                               locator, progress, &hlmap,
-                              &not_restored, 0);
+                              &rep, 0);
     hardlink_map_free(&hlmap);
-    /* Issue #781: a node whose name was refused is not restored.  Say
-     * how many, and never report the restore as complete. */
-    if (not_restored > 0) {
+    /* Issues #781, #783: say how many items were not restored, of each
+     * kind, and where the list is.  Tier 3 prints the same sentences.
+     * Only errors make the restore "finished with errors". */
+    if (rep.count[NR_SPECIAL] > 0) {
         fprintf(stderr,
-                "ERROR: %lu item(s) were NOT restored (see the "
-                "\"NOT RESTORED\" lines above)\n", not_restored);
+                "[lcsas-restore] %lu special file(s) were not restored: "
+                "pipes, sockets or devices that this system cannot "
+                "create.  They hold no data.\n", rep.count[NR_SPECIAL]);
+    }
+    if (rep.count[NR_LINK] > 0) {
+        fprintf(stderr,
+                "[lcsas-restore] %lu link(s) were not restored: the target "
+                "file system does not support symlinks.\n",
+                rep.count[NR_LINK]);
+    }
+    if (rep.count[NR_FAILED] > 0) {
+        fprintf(stderr,
+                "[lcsas-restore] ERROR: %lu item(s) were NOT restored.\n",
+                rep.count[NR_FAILED]);
         if (rc == 0) rc = LCSAS_TREE_INCOMPLETE;
     }
+    write_failures_file(target_root, &rep);
+    if (rep.nrows > 0) {
+        fprintf(stderr, "[lcsas-restore] See %s/%s for the list.\n",
+                target_root, RESTORE_FAILURES_NAME);
+    }
+    if (rep.rows_lost > 0) {
+        fprintf(stderr,
+                "[lcsas-restore] %lu of them are missing from the list "
+                "(out of memory); see the NOT RESTORED lines above.\n",
+                rep.rows_lost);
+    }
+    nr_report_free(&rep);
     return rc;
 }
