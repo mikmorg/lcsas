@@ -93,6 +93,25 @@ _PROGRESS_BYTES_INTERVAL = 64 * 1024 * 1024  # 64 MiB
 # bytes of tree data.  Trees past the cap are read again, as before.
 _TREE_CACHE_MAX_BYTES = 128 * 1024 * 1024  # 128 MiB
 
+# The pack cache (#602), as in tier 1 (disc_locator.c, drain_disc).
+# When a pack is found on a data disc, every pack of this repository on
+# that disc is copied into <cache>/data/<XX>/<hex>, so the disc is not
+# asked for again.  A disc is copied only when the cache's drive keeps a
+# margin free afterwards: 5% of the drive, at most 1 GiB.
+_MIB = 1024 * 1024
+_DRAIN_MARGIN_MAX = 1024 * _MIB
+#: Progress lines while a disc is copied: one every 1/20 of the copy,
+#: but no more often than every 16 MiB and no less than every 256 MiB.
+_DRAIN_STEP_MIN = 16 * _MIB
+_DRAIN_STEP_MAX = 256 * _MIB
+#: A one-time note when the cache holds more than this.
+_DRAIN_BIG_CACHE = 1024 * _MIB
+
+# Resume (#729): a file already at its path with the node's size and an
+# mtime within this many seconds of the node's is kept, not read again.
+# FAT stores times in 2-second steps (#787).
+_RESUME_MTIME_SLACK = 2.0
+
 
 # ── Optional zstd ────────────────────────────────────────────────
 
@@ -296,6 +315,9 @@ class RestoreAbortedError(Exception):
 _DISK_FULL_ERRNOS = frozenset(
     {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
 )
+#: Errors copying into the pack cache that mean the cache's drive
+#: cannot take more (#602): stop copying that disc.
+_CACHE_SIDE_ERRNOS = _DISK_FULL_ERRNOS | {errno.EROFS}
 
 
 def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
@@ -951,6 +973,9 @@ class PurePythonRestorer:
         interactive: bool = True,
         catalog_path: Path | None = None,
         strict: bool = False,
+        pack_cache_dir: Path | None = None,
+        resume: bool = True,
+        meta_disc: Path | None = None,
     ) -> None:
         """Initialize the restorer.
 
@@ -1008,6 +1033,23 @@ class PurePythonRestorer:
                 the first such error aborts the restore.  Tier 3 (the
                 Python reader) defaults to tolerant; callers that
                 want all-or-nothing semantics opt in explicitly.
+            pack_cache_dir: Optional pack cache folder (#602), the
+                ``LCSAS_PACK_CACHE_DIR`` of tier 1.  When a pack is found
+                on a data disc, every pack of this repository on that
+                disc is copied into ``<cache>/data/<XX>/<hex>``, so each
+                data disc is needed once.  The cache is searched first.
+                ``None`` (the default): no cache.
+            resume: If True (default), a file already at its path with
+                the node's size and mtime (within 2 seconds, for FAT)
+                is kept and its data is not read (#729), as tier 1 and
+                rustic do.  False restores every file again.
+            meta_disc: Optional mount point of the meta disc (tier 1's
+                ``--meta-disc``).  While it is mounted, nothing on it is
+                searched, so it can be ejected and the drive reused.
+                Each root is also searched one level down (a disc
+                mounted at ``/media/<user>/<LABEL>`` under the root
+                ``/media/<user>``), as tier 1 searches its mount
+                parents.
         """
         self.repo_path = repo_path
         self.interactive = interactive
@@ -1057,6 +1099,32 @@ class PurePythonRestorer:
         self._tree_cache: dict[str, bytes] = {}
         self._tree_cache_bytes = 0
         self._snapshots: list[SnapshotMeta] | None = None
+
+        # Discs found one level below a root (refreshed on a miss), and
+        # the meta disc, which is skipped while it is mounted.
+        self._discovered: list[Path] = []
+        self._meta_disc = meta_disc if meta_disc and str(meta_disc) else None
+
+        # #729: keep files an earlier run finished; count them.
+        self._resume = resume
+        self._resumed = 0
+        # #602: the pack cache (None: off), this repository's pack ids
+        # (only those are copied), and the discs not copied for want of
+        # room, so they are not listed again for every pack.
+        self._pack_cache: Path | None = None
+        self._index_packs: frozenset[str] | None = None
+        self._drain_refused: set[tuple[str, int, int, int]] = set()
+        # Packs that could not be copied (read error, wrong bytes): not
+        # tried again, so a scratched pack is not re-read for each blob.
+        self._drain_failed: set[str] = set()
+        self._drain_warned: set[str] = set()
+        if pack_cache_dir is not None and str(pack_cache_dir):
+            try:
+                pack_cache_dir.mkdir(parents=True, exist_ok=True)
+                self._pack_cache = pack_cache_dir
+            except OSError as exc:
+                _log(f"Cannot create the pack cache {pack_cache_dir}: {exc}; "
+                     "the discs are read directly.")
 
         # Progress reporting state — reset at the top of every
         # restore() call.  _progress_enabled is read from the env once
@@ -1122,6 +1190,7 @@ class PurePythonRestorer:
         self._progress_last_emit_files = 0
         self._progress_last_emit_bytes = 0
         self._progress_total_files = 0
+        self._resumed = 0
         if self._progress_enabled:
             self._progress_total_files = self._count_files(snap.tree)
             _log(f"Counted {self._progress_total_files} file(s) to restore.")
@@ -1143,6 +1212,12 @@ class PurePythonRestorer:
         # the total — otherwise the heir sees e.g. 47/50 and
         # wonders if the last 3 files were skipped.
         self._emit_progress(force=True)
+
+        if self._resumed:
+            _log(
+                f"{self._resumed} file(s) were already restored by an "
+                "earlier run and were kept."
+            )
 
         # #783: how many items were not restored, of each kind, and
         # where the list is.  Tier 1 prints the same sentences.  Only
@@ -1398,19 +1473,295 @@ class PurePythonRestorer:
         Each root is probed for both the LCSAS data-disc ``data/<XX>/<hex>``
         / ``data/<hex>`` layout AND the legacy "root IS the data dir"
         layout (``<XX>/<hex>`` / ``<hex>``).  Returns the first hit or None.
+
+        With a pack cache (#602) the cache is searched first, and a hit
+        on a disc copies that disc's packs into the cache
+        (``_drain_disc``); the cached copy is returned then.
+
+        A disc mounted one level below a root (``/media/<user>/<LABEL>``,
+        ``/Volumes/<LABEL>``) is searched too, as tier 1 walks its
+        mount parents: the folders found last time first, then the
+        roots are listed again for a disc mounted since.  Nothing on
+        the meta disc is used while it is mounted.
         """
+        cached = self._cached_pack(pack_id)
+        if cached is not None:
+            return cached
+        hit = self._probe_roots(self._live_roots(), pack_id)
+        if hit is None and self._discovered:
+            hit = self._probe_roots(self._discovered, pack_id)
+        if hit is None:
+            known = set(self._discovered)
+            self._refresh_discovered()
+            fresh = [d for d in self._discovered if d not in known]
+            if fresh:
+                hit = self._probe_roots(fresh, pack_id)
+        return hit
+
+    def _probe_roots(self, roots: list[Path], pack_id: str) -> Path | None:
+        """The first copy of *pack_id* under *roots* (see
+        ``_scan_pack_search_paths``), copying its disc into the cache."""
         prefix = pack_id[:2]
-        for root in self._pack_search_paths:
+        for root in roots:
             # Legacy default (root = repo_path/"data"): no nested "data/".
-            for candidate in (
-                root / prefix / pack_id,
-                root / pack_id,
-                root / "data" / prefix / pack_id,
-                root / "data" / pack_id,
+            for candidate, data_dir in (
+                (root / prefix / pack_id, root),
+                (root / pack_id, root),
+                (root / "data" / prefix / pack_id, root / "data"),
+                (root / "data" / pack_id, root / "data"),
             ):
                 if candidate.is_file():
+                    if self._on_live_meta(candidate):
+                        continue
+                    if self._pack_cache is not None:
+                        self._drain_disc(data_dir)
+                        cached = self._cached_pack(pack_id)
+                        if cached is not None:
+                            return cached
                     return candidate
         return None
+
+    # ── Mount folders and the meta disc ──────────────────────────
+
+    def _meta_is_live(self) -> bool:
+        """Is the meta disc still mounted where we were told?  It is
+        while ``recovery/scripts/restore.sh`` is there, which no data
+        disc carries (tier 1: meta_disc_is_live).  Once it is ejected a
+        data disc may be mounted at the same place."""
+        meta = self._meta_disc
+        if meta is None:
+            return False
+        return (meta / "recovery" / "scripts" / "restore.sh").exists()
+
+    def _on_live_meta(self, path: Path) -> bool:
+        """Is *path* on the meta disc, while it is mounted?  (tier 1:
+        path_under, by the path's text.)"""
+        if self._meta_disc is None or not self._meta_is_live():
+            return False
+        meta = os.path.abspath(self._meta_disc).rstrip(os.sep) or os.sep
+        here = os.path.abspath(path)
+        return here == meta or here.startswith(meta.rstrip(os.sep) + os.sep)
+
+    def _live_roots(self) -> list[Path]:
+        """The configured roots, less any on the mounted meta disc."""
+        return [r for r in self._pack_search_paths if not self._on_live_meta(r)]
+
+    def _all_roots(self) -> list[Path]:
+        """The configured roots and the discs found one level below
+        them, less anything on the mounted meta disc."""
+        return self._live_roots() + [
+            d for d in self._discovered if not self._on_live_meta(d)
+        ]
+
+    def _refresh_discovered(self) -> None:
+        """List each root's folders again: a folder there may be a disc
+        mounted under a mount folder (tier 1: refresh_discovered, which
+        lists each mount parent one level deep).
+
+        A root that is itself a disc (it has ``data/``), the
+        repository's own data folder, the pack cache, folders named
+        like a pack folder (two hex digits) and the meta disc are not
+        listed.  Folders already among the roots are not added twice.
+        """
+        roots = self._live_roots()
+        have = {os.path.abspath(r) for r in roots}
+        skip = {os.path.abspath(self.repo_path / "data")}
+        if self._pack_cache is not None:
+            skip.add(os.path.abspath(self._pack_cache))
+        found: list[Path] = []
+        for root in roots:
+            if os.path.abspath(root) in skip or (root / "data").is_dir():
+                continue
+            try:
+                names = sorted(os.listdir(root))
+            except OSError:
+                continue
+            for name in names:
+                if name in (".", ".."):
+                    continue
+                if len(name) == 2 and all(c in "0123456789abcdef" for c in name):
+                    continue
+                child = root / name
+                key = os.path.abspath(child)
+                if key in have or key in skip:
+                    continue
+                if not child.is_dir() or self._on_live_meta(child):
+                    continue
+                have.add(key)
+                found.append(child)
+        self._discovered = found
+
+    # ── Pack cache (#602) ────────────────────────────────────────
+
+    def _cached_pack(self, pack_id: str) -> Path | None:
+        """The cache's copy of *pack_id*, or None (no cache, no copy)."""
+        if self._pack_cache is None:
+            return None
+        path = self._pack_cache / "data" / pack_id[:2] / pack_id
+        return path if path.is_file() else None
+
+    def _drain_visible_discs(self) -> None:
+        """Copy every data disc now in a search root into the cache.
+
+        Run after each ENTER at the disc prompt, so a disc is copied
+        the first time it is seen even if it is not the one asked for
+        (tier 1: visit_root).  No-op without a cache.
+        """
+        if self._pack_cache is None:
+            return
+        self._refresh_discovered()
+        for root in self._all_roots():
+            data_dir = root / "data"
+            if data_dir.is_dir():
+                self._drain_disc(data_dir)
+
+    def _is_not_a_disc(self, data_dir: Path) -> bool:
+        """True for the repository's own data folder and for the cache
+        (or a folder inside it): those are never copied."""
+        assert self._pack_cache is not None
+        try:
+            real = os.path.realpath(data_dir)
+            cache = os.path.realpath(self._pack_cache)
+            own = os.path.realpath(self.repo_path / "data")
+        except (OSError, ValueError):
+            return True
+        if real == own:
+            return True
+        return real == cache or real.startswith(cache.rstrip(os.sep) + os.sep)
+
+    def _repo_pack_ids(self) -> frozenset[str]:
+        """Every pack id this repository's index names."""
+        if self._index_packs is None:
+            index = self._blob_index or {}
+            self._index_packs = frozenset(
+                loc.pack_id for loc in index.values()
+            )
+        return self._index_packs
+
+    def _disc_packs(self, data_dir: Path) -> list[tuple[Path, str, int]]:
+        """(path, pack id, size) of each pack under *data_dir* that this
+        repository uses and the cache lacks.  ``data/<XX>/<hex>`` and
+        ``data/<hex>`` are both read."""
+        cache = self._pack_cache
+        assert cache is not None
+        wanted = self._repo_pack_ids()
+        found: list[tuple[Path, str, int]] = []
+
+        def consider(path: Path, name: str) -> None:
+            if name not in wanted or name in self._drain_failed:
+                return
+            if (cache / "data" / name[:2] / name).exists():
+                return
+            try:
+                st = path.stat()
+            except OSError:
+                return
+            if stat.S_ISREG(st.st_mode):
+                found.append((path, name, st.st_size))
+
+        for entry in sorted(os.listdir(data_dir)):
+            path = data_dir / entry
+            if len(entry) == 2 and path.is_dir():
+                for name in sorted(os.listdir(path)):
+                    consider(path / name, name)
+            else:
+                consider(path, entry)
+        return found
+
+    def _drain_disc(self, data_dir: Path) -> None:
+        """Copy the packs of this repository on the disc at *data_dir*
+        (its ``data/`` folder) into the cache: tier 1's drain_disc.
+
+        Copies are written to ``<pack>.part``, checked against the pack
+        id (the SHA-256 of the pack) and only then renamed, so the cache
+        never holds a short or damaged pack.  The copy is opportunistic:
+        any error stops it and the packs are read from the disc.
+        """
+        if self._pack_cache is None or self._is_not_a_disc(data_dir):
+            return
+        try:
+            st = os.stat(data_dir)
+            key = (str(data_dir), st.st_dev, st.st_ino, st.st_mtime_ns)
+            if key in self._drain_refused:
+                return
+            todo = self._disc_packs(data_dir)
+        except OSError:
+            return
+        if not todo:
+            return
+        need = sum(size for _path, _pid, size in todo)
+        name = _disc_name(data_dir.parent)
+        cache = self._pack_cache
+        self._note_big_cache(cache)
+        try:
+            usage = shutil.disk_usage(cache)
+        except OSError:
+            usage = None
+        if usage is not None and not _drain_fits(usage.free, usage.total, need):
+            self._drain_refused.add(key)
+            if "space" not in self._drain_warned:
+                self._drain_warned.add("space")
+                _log(
+                    f"WARNING: the cache at {cache} has "
+                    f"{usage.free // _MIB} MB free, too little to copy "
+                    f"disc {name} ({_mb_ceil(need)} MB) and keep some to "
+                    "spare; not copying discs that do not fit, so they "
+                    "may be asked for again.  Set LCSAS_PACK_CACHE_DIR "
+                    "to a folder on a roomier drive."
+                )
+            return
+
+        step = min(max(need // 20, _DRAIN_STEP_MIN), _DRAIN_STEP_MAX)
+        progress = {"done": 0, "next": step}
+
+        def tick(n: int) -> None:
+            progress["done"] += n
+            if progress["next"] <= progress["done"] < need:
+                _log(f"copying disc {name} to the cache: "
+                     f"{progress['done'] // _MIB} of {_mb_ceil(need)} MB")
+                while progress["next"] <= progress["done"]:
+                    progress["next"] += step
+
+        _log(f"copying disc {name} to the cache: {_mb_ceil(need)} MB.  "
+             "From a disc this can take several minutes.")
+        for src, pid, _size in todo:
+            dst = cache / "data" / pid[:2] / pid
+            try:
+                ok = _copy_pack(src, dst, pid, tick)
+            except OSError as exc:
+                if exc.errno in _CACHE_SIDE_ERRNOS:
+                    # The cache's drive is full or read-only: stop.
+                    self._drain_refused.add(key)
+                    _log(f"could not copy disc {name} to the cache "
+                         f"({exc}); its packs are read from the disc.")
+                    break
+                # One unreadable pack: copy the rest (tier 1 does).
+                self._drain_failed.add(pid)
+                _log(f"could not copy pack {pid[:16]}... of disc {name} "
+                     f"to the cache ({exc}); it is read from the disc.")
+                continue
+            if not ok:
+                self._drain_failed.add(pid)
+                _log(f"pack {pid[:16]}... on disc {name} does not match "
+                     "its id; not copied to the cache.")
+        _log(f"copied {_mb_ceil(progress['done'])} of {_mb_ceil(need)} MB "
+             f"from disc {name} to the cache.")
+
+    def _note_big_cache(self, cache: Path) -> None:
+        """Say once when the cache holds more than 1 GiB (tier 1 too)."""
+        if "big" in self._drain_warned:
+            return
+        used = 0
+        with contextlib.suppress(OSError):
+            for dirpath, _dirs, files in os.walk(cache / "data"):
+                for f in files:
+                    with contextlib.suppress(OSError):
+                        used += os.stat(os.path.join(dirpath, f)).st_size
+        if used > _DRAIN_BIG_CACHE:
+            self._drain_warned.add("big")
+            _log(f"WARNING: pack cache at {cache} is "
+                 f"{used / (1 << 30):.1f} GB; set LCSAS_PACK_CACHE_DIR= "
+                 "(empty) to disable further copies if disk is tight.")
 
     # Sentinels returned by _lookup_volume_labels to disambiguate the
     # three catalog states the framed prompt needs to print, mirroring
@@ -1459,7 +1810,7 @@ class PurePythonRestorer:
         """
         found: list[Path] = []
         seen: set[Path] = set()
-        for root in self._pack_search_paths:
+        for root in self._all_roots():
             for candidate in (
                 root / "catalog.db",
                 root.parent / "catalog.db",
@@ -1740,7 +2091,7 @@ class PurePythonRestorer:
             "|                                                          |",
             "| Currently searching:                                     |",
         ])
-        lines.extend(self._frame_indented(str(p)) for p in self._pack_search_paths)
+        lines.extend(self._frame_indented(str(p)) for p in self._all_roots())
         lines.extend([
             "|                                                          |",
             "| Insert the right disc and press ENTER to retry.          |",
@@ -1789,6 +2140,8 @@ class PurePythonRestorer:
                     "are kept.  To carry on, run the same command again.",
                     exit_code=EXIT_READER_QUIT,
                 )
+            # #602: copy whatever disc is in now, asked for or not.
+            self._drain_visible_discs()
             hit = self._scan_pack_search_paths(pack_id)
             if hit is not None:
                 sys.stderr.write(
@@ -2094,10 +2447,23 @@ class PurePythonRestorer:
         leaves a truncated file at the final path, and a re-run is
         idempotent.  On failure the partial is unlinked, the failure is
         recorded, and ``_NodeFailed`` is raised for the caller to log.
+
+        Resume (#729): a file an earlier run finished (see
+        ``_already_restored``) is kept and none of its data is read.
         """
         path.parent.mkdir(parents=True, exist_ok=True)
         content_ids: list[str] = node.get("content", [])
         tmp_path = path.with_name(path.name + ".lcsas-partial")
+
+        if self._resume and _already_restored(node, path):
+            self._resumed += 1
+            # A partial file left by a later, stopped run is not needed.
+            if _entry_kind(tmp_path) in ("file", "link"):
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+            self._progress_done_files += 1
+            self._emit_progress()
+            return
 
         bytes_written = 0
         try:
@@ -2429,6 +2795,99 @@ class PurePythonRestorer:
             "indexed_blobs": len(self._blob_index),
             "has_zstd": _HAS_ZSTD,
         }
+
+
+# ── Resume (#729) ────────────────────────────────────────────────
+
+
+def _already_restored(node: dict[str, Any], path: Path) -> bool:
+    """Did an earlier run finish this file?  True when a regular file
+    (not a link) is at *path* with the node's size and an mtime within
+    ``_RESUME_MTIME_SLACK`` seconds of the node's.
+
+    A finished file carries the node's mtime: it is set on the partial
+    file before the rename.  The mtime check is what tells this file
+    from a same-size file of another snapshot (#661).  A node with no
+    usable size or mtime is never skipped.  Tier 1 and rustic skip on
+    the same test.
+    """
+    size = node.get("size")
+    mtime = node.get("mtime")
+    if (not isinstance(size, int) or isinstance(size, bool) or size < 0
+            or not isinstance(mtime, str)):
+        return False
+    try:
+        st = os.lstat(path)
+    except (OSError, ValueError):
+        return False
+    if not stat.S_ISREG(st.st_mode) or st.st_size != size:
+        return False
+    try:
+        want = _parse_timestamp(mtime)
+    except (ValueError, OverflowError, OSError):
+        return False
+    return abs(st.st_mtime - want) <= _RESUME_MTIME_SLACK
+
+
+# ── Pack cache helpers (#602) ────────────────────────────────────
+
+
+def _drain_fits(free: int, total: int, need: int) -> bool:
+    """Is there room to copy *need* bytes and keep a margin free (5% of
+    the drive, at most 1 GiB)?  Tier 1: lcsas_drain_fits."""
+    margin = min(total // 20, _DRAIN_MARGIN_MAX)
+    return need <= free and free - need >= margin
+
+
+def _mb_ceil(n: int) -> int:
+    """*n* bytes in MiB, rounded up (as tier 1 prints them)."""
+    return (n + _MIB - 1) // _MIB
+
+
+def _disc_name(root: Path) -> str:
+    """The disc's label from its ``volume_info.json``, else its path."""
+    try:
+        with open(root / "volume_info.json", "rb") as f:
+            doc = json.loads(f.read(1024 * 1024))
+        label = doc.get("label") if isinstance(doc, dict) else None
+        if isinstance(label, str) and label.strip():
+            return _visible(label.strip())
+    except (OSError, ValueError):
+        pass
+    return str(root)
+
+
+def _copy_pack(
+    src: Path, dst: Path, pack_id: str, tick: Callable[[int], None],
+) -> bool:
+    """Copy one pack into the cache.  Returns False (and keeps nothing)
+    when the bytes read do not hash to *pack_id*.
+
+    Written to ``<dst>.part`` and renamed once complete, so a scratched
+    disc, a full drive or a killed run never leaves a short pack that
+    the cache would trust from then on.  Raises OSError.
+    """
+    part = dst.with_name(dst.name + ".part")
+    digest = hashlib.sha256()
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with open(src, "rb") as fin, open(part, "wb") as fout:
+            while True:
+                chunk = fin.read(_MIB)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                fout.write(chunk)
+                tick(len(chunk))
+        if digest.hexdigest() != pack_id:
+            part.unlink(missing_ok=True)
+            return False
+        os.replace(part, dst)
+    except OSError:
+        with contextlib.suppress(OSError):
+            part.unlink(missing_ok=True)
+        raise
+    return True
 
 
 # ── Utilities ────────────────────────────────────────────────────

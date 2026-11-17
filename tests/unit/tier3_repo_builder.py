@@ -51,15 +51,21 @@ class Blob:
 Tree = dict[str, Union[bytes, list[Blob], "Tree"]]
 
 
-def build_repo(tmp_path: Path, tree: Tree, *, name: str = "repo") -> Path:
-    """Write a repository holding one snapshot of *tree*; return its path."""
+def build_repo(
+    tmp_path: Path, tree: Tree, *, name: str = "repo",
+    pack_per_blob: bool = False,
+) -> Path:
+    """Write a repository holding one snapshot of *tree*; return its path.
+
+    All blobs go in one pack, or with *pack_per_blob* each blob in a
+    pack of its own (to spread a snapshot over several discs).
+    """
     repo = tmp_path / name
     repo.mkdir()
     mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
     _make_key_file(mk, PASSWORD, repo)
 
-    pack = bytearray()
-    entries: list[dict[str, object]] = []
+    packs: list[tuple[bytearray, list[dict[str, object]]]] = [(bytearray(), [])]
     seen: set[str] = set()
 
     def add_blob(stored: bytes, blob_id: str, btype: str,
@@ -67,6 +73,9 @@ def build_repo(tmp_path: Path, tree: Tree, *, name: str = "repo") -> Path:
         if blob_id in seen:
             return
         seen.add(blob_id)
+        if pack_per_blob and packs[-1][1]:
+            packs.append((bytearray(), []))
+        pack, entries = packs[-1]
         enc = _encrypt_with_master(stored)
         entry: dict[str, object] = {
             "id": blob_id, "type": btype,
@@ -87,9 +96,15 @@ def build_repo(tmp_path: Path, tree: Tree, *, name: str = "repo") -> Path:
             blobs = [Blob(item)] if isinstance(item, bytes) else item
             for b in blobs:
                 add_blob(b.stored, b.id(), "data", b.uncompressed_length)
+            size = sum(
+                b.uncompressed_length if b.uncompressed_length is not None
+                else len(b.stored)
+                for b in blobs
+            )
             nodes.append({
                 "name": nm, "type": "file", "mode": 0o644,
                 "mtime": "2026-01-15T10:00:00.000000000Z",
+                "size": size,
                 "content": [b.id() for b in blobs],
             })
         doc = json.dumps({"nodes": nodes}).encode()
@@ -99,9 +114,12 @@ def build_repo(tmp_path: Path, tree: Tree, *, name: str = "repo") -> Path:
 
     root = add_tree(tree)
 
-    pack_id = hashlib.sha256(bytes(pack)).hexdigest()
-    (repo / "data" / pack_id[:2]).mkdir(parents=True)
-    (repo / "data" / pack_id[:2] / pack_id).write_bytes(bytes(pack))
+    index_packs: list[dict[str, object]] = []
+    for pack, entries in packs:
+        pack_id = hashlib.sha256(bytes(pack)).hexdigest()
+        (repo / "data" / pack_id[:2]).mkdir(parents=True, exist_ok=True)
+        (repo / "data" / pack_id[:2] / pack_id).write_bytes(bytes(pack))
+        index_packs.append({"id": pack_id, "blobs": entries})
 
     def write_doc(sub: str, doc: dict[str, object]) -> None:
         raw = json.dumps(doc).encode()
@@ -110,7 +128,7 @@ def build_repo(tmp_path: Path, tree: Tree, *, name: str = "repo") -> Path:
         (d / hashlib.sha256(raw).hexdigest()).write_bytes(
             _encrypt_with_master(raw))
 
-    write_doc("index", {"packs": [{"id": pack_id, "blobs": entries}]})
+    write_doc("index", {"packs": index_packs})
     write_doc("snapshots", {
         "time": "2026-01-15T10:30:00.000000000Z", "tree": root,
         "paths": ["/home/test"], "hostname": "testhost",
