@@ -99,7 +99,7 @@ recovery and no warning until restore time. The weakest link is a human transcri
 20-word SLIP-0039 mnemonics off cards decades later — and that link is, again, only
 "tested" by an AI proxy (C1). A typo'd share is recoverable; a *lost* share threshold is not.
 *[2026-10-30 note. Decided against (#491): recording share drills would need schema v11;
-the annual checklist (`docs/development/recovery/READINESS_CHECKLIST.txt`) covers it.]*
+the annual checklist (`docs/development/recovery/READINESS_CHECKLIST.txt` in the source repository) covers it.]*
 
 ### C8 — The audit was self-graded.
 The 2026-06 deep audit (removed in #692; kept at tag `archive/pre-1.0-history`) found 78 issues; they were remediated and verified by the *same*

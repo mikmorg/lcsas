@@ -197,9 +197,10 @@ LCSAS_MOUNT_DIRS
   Default:  unset → /Volumes:/media/<user>:/media:/mnt:
             /run/media/<user>:/run/media
   Since:    Phase 20
-  Read by:  restore.sh and tier 1
+  Read by:  restore.sh, tier 1 and restore_auto.sh
   What:     Colon-separated list of directories scanned for mounted
-            data discs.  Overrides the compiled-in default list on
+            data discs.  restore_auto.sh lists the backup sets on the
+            discs found there, as well as the META disc's (#801).  Overrides the compiled-in default list on
             both the shell side (restore.sh) and the C side
             (lcsas-restore), which share the same value via export.
             Set to '' (empty string) to disable auto-scan entirely.
@@ -370,8 +371,12 @@ LCSAS_TOOLS_DIR
   Default:  unset → $HOME/lcsas-restore-tools; on Windows
             %LOCALAPPDATA%\LCSAS-restore  (opt-out / default ON)
   Since:    rc6 (#609)
-  Read by:  restore.sh and restore.bat
+  Read by:  restore.sh, restore.bat and restore_auto.sh
   What:     The tools folder restore.sh keeps a restore's own files in.
+            restore_auto.sh gives each backup set its own: this
+            folder's name with -<id> added, for example
+            $HOME/lcsas-restore-tools-<id>.  So a set that stopped
+            keeps its resume.sh while the next sets run (#801).
             Run off the META disc, it copies there: itself, this
             computer's binaries (bin/<triple>/ only), the docs and the
             disc's metadata/ folder; then it runs from the copy, so the

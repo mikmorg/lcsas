@@ -632,8 +632,8 @@ Two split-key blind variants now coexist with different jobs:
 **Acceptance policy.** Any PR that changes the heir-facing recovery
 contract — `src/lcsas/staging/metadata.py` heir text, the on-disc
 `keyshare_combine.py`, or `restore.sh` flags — MUST pass
-`make blind-restore-split-docs` at **15/15 twice consecutively** before
-merge. The cheap always-on pre-gate for every PR is KEY-02's
+`make blind-restore-split-docs` with **every check passing (16/16
+today) twice consecutively** before merge. The cheap always-on pre-gate for every PR is KEY-02's
 `tests/unit/test_heir_doc_commands.py` (contract check, no LLM cost) plus
 the prompt-hygiene unit test `tests/unit/test_blind_prompt_hygiene.py`
 (keeps the docs-driven prompt docs-driven, enforced by `make gate`).

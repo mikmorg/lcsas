@@ -91,6 +91,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_repo_marker_tolerance.py` | test_repo_marker_tolerance.py -- the real readers ignore LCSAS_REPO.txt. |
 | `test_restore_auto_gaps.py` | test_restore_auto_gaps.py -- restore_auto.sh usage-error exits and repo-discovery layouts. |
 | `test_restore_auto_repo_select.py` | test_restore_auto_repo_select.py -- restore_auto.sh per-repo selection. |
+| `test_restore_auto_stops_and_sets.py` | test_restore_auto_stops_and_sets.py -- restore_auto.sh's loop (#801). |
 | `test_restore_bat_ecc_dispatch_wine.py` | FMT-01: restore.bat --check-disc ECC repair path, end-to-end under wine. |
 | `test_restore_bat_free_space_wine.py` | restore.bat's free-space check, under wine (#660). |
 | `test_restore_bat_journey_wine.py` | restore.bat's questions under wine: disc, set, password, cards (#605-#608). |

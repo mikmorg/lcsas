@@ -677,7 +677,10 @@ class TestMovedRestoreScripts:
         pw = tmp_path / "pw"
         pw.write_text("pw\n")
         out = tmp_path / "restored"
-        env = {**os.environ, "LCSAS_PWFILE": str(pw), "RECORD": str(record)}
+        # LCSAS_MOUNT_DIRS="": no disc mounted on this machine joins the
+        # list (restore_auto.sh lists the mounted discs' sets too, #801).
+        env = {**os.environ, "LCSAS_PWFILE": str(pw), "RECORD": str(record),
+               "LCSAS_MOUNT_DIRS": ""}
         result = subprocess.run(
             ["sh", str(meta_tree / RESTORE_AUTO_SCRIPT_PATH),
              str(meta_tree / "recovery"), str(out)],
@@ -695,7 +698,7 @@ class TestMovedRestoreScripts:
         restore is an error, not a silent success (#689)."""
         pw = tmp_path / "pw"
         pw.write_text("pw\n")
-        env = {**os.environ, "LCSAS_PWFILE": str(pw)}
+        env = {**os.environ, "LCSAS_PWFILE": str(pw), "LCSAS_MOUNT_DIRS": ""}
         result = subprocess.run(
             ["sh", str(meta_tree / RESTORE_AUTO_SCRIPT_PATH),
              str(meta_tree / "recovery"), str(tmp_path / "restored")],

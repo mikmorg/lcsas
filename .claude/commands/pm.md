@@ -218,7 +218,7 @@ regression in one, file an issue instead of redoing the work.
    (no Linux emulator).
 2. **restore.sh shell-level coverage** — ✅ shipped as
    `make shell-coverage` (`tools/cov_shell.py`; part of
-   `make gate`, gates at 60%).
+   `make gate`, gates at 89%, the `--threshold` in the Makefile).
 3. **Adversarial blind-restore variants** — ✅ shipped as
    `make blind-restore-variants` (issue #214): single-tenant,
    5-tenant, no-catalog, tier1-missing, tier1+tier2-missing.
