@@ -44,8 +44,11 @@ _DOC_PREFIXES = ("docs/", "recovery/docs/")
 
 def _docs() -> list[Path]:
     """Every prose doc that may cross-reference another doc."""
-    return sorted((REPO_ROOT / "docs").rglob("*.md")) + sorted(
-        (REPO_ROOT / "recovery" / "docs").glob("*.txt")
+    return (
+        sorted((REPO_ROOT / "docs").rglob("*.md"))
+        + sorted((REPO_ROOT / "recovery" / "docs").glob("*.txt"))
+        # The owner's recovery docs moved here, off the disc (#724).
+        + sorted((REPO_ROOT / "docs" / "development" / "recovery").glob("*.txt"))
     )
 
 

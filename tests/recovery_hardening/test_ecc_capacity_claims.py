@@ -30,7 +30,7 @@ pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVER_TXT = REPO_ROOT / "recovery" / "docs" / "RECOVER.txt"
-READINESS_TXT = REPO_ROOT / "recovery" / "docs" / "READINESS_CHECKLIST.txt"
+READINESS_TXT = REPO_ROOT / "docs" / "development" / "recovery" / "READINESS_CHECKLIST.txt"
 
 # The configured redundancy is the source of truth the docs must track.
 # LCSASConfig is a frozen dataclass; read the field default directly.

@@ -817,7 +817,7 @@ def _key_combine(args: argparse.Namespace) -> int:
 def cmd_key_verify(args: argparse.Namespace) -> int:
     """Verify that shares (or a password file) unlock a repository.
 
-    The annual password drill (recovery/docs/READINESS_CHECKLIST.txt): reconstruct
+    The annual password drill (docs/development/recovery/READINESS_CHECKLIST.txt): reconstruct
     the password from the supplied shares/cards (or read --password-file), then
     authenticate it against the repo's real ``keys/`` files.  Exit code is the
     contract — rc 0 only when the password actually unlocks the repo.

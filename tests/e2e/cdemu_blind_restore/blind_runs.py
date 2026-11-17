@@ -16,12 +16,19 @@ usage:
   blind_runs.py score RUN_DIR --variant NAME [--verify CMD]
       Score one run: run verify.sh (or CMD) on RUN_DIR itself, never on
       "the newest folder".  Prints verify's output, a SCORE line and a
-      RESULT line (one line of JSON: run folder, score, cost, turns), and
-      saves the same JSON as RUN_DIR/score.json.
-      Exit 0: all EXPECTED_CHECKS checks ran and passed.
+      RESULT line (one line of JSON: run folder, score, cost, turns, the
+      OUTCOME and CONDUCT verdicts), and saves the same JSON as
+      RUN_DIR/score.json.
+      verify.sh's checks come in two groups (#827): OUTCOME (was every
+      file restored intact, from the discs, with the documented tools)
+      and CONDUCT (did the agent keep the rules).  A run passes when both
+      pass, that is when every check of both groups ran and passed.
+      Exit 0: all EXPECTED_CHECKS checks ran and passed (OUTCOME and
+      CONDUCT both pass).
       Exit 1: every check ran and at least one failed.
       Exit 2: the run cannot be scored: no run folder, no transcript, or
-      verify.sh did not report EXPECTED_CHECKS checks (a 0/0 score).
+      verify.sh did not report EXPECTED_CHECKS checks of each group (a
+      0/0 score).
 
 Runs remove their folder on success and keep it on failure (run_variant.sh
 decides, because only it knows the XFAIL ledger).  Set LCSAS_BLIND_KEEP_RUN=1
@@ -42,16 +49,20 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-# verify.sh's number of `check` calls.  A pass needs every one of them to
-# have run and passed; a 0/0 or 15/15 run is not a pass.  Pinned against
-# verify.sh by tests/unit/test_blind_runs.py.
-EXPECTED_CHECKS = 16
+# verify.sh's `check` calls of each group (#827).  A pass needs every one
+# of them to have run and passed; a 0/0 or 15/15 run is not a pass.
+# Pinned against verify.sh by tests/unit/test_blind_runs.py.
+EXPECTED_BY_KIND = {"OUTCOME": 9, "CONDUCT": 7}
+KINDS = tuple(EXPECTED_BY_KIND)
+EXPECTED_CHECKS = sum(EXPECTED_BY_KIND.values())
 
 RUN_PREFIXES = ("lcsas-blind-run-", "lcsas-blind-variant-")
 DEFAULT_KEEP_DAYS = 14.0
 
 _PASS = re.compile(r"^PASS\s")
 _FAIL = re.compile(r"^FAIL\s")
+# A verdict line: "PASS  [OUTCOME] name".
+_VERDICT = re.compile(r"^(?P<verdict>PASS|FAIL)\s+\[(?P<kind>[A-Z]+)\]\s")
 
 
 def base_dir(env: dict[str, str] | None = None) -> Path:
@@ -158,18 +169,42 @@ def count_checks(verify_output: str) -> tuple[int, int]:
     return passed, failed
 
 
+def count_by_kind(
+    verify_output: str, kinds: tuple[str, ...] = KINDS,
+) -> dict[str, dict[str, int]]:
+    """{kind: {"passed": n, "failed": m}} from verify.sh's verdict lines.
+    A verdict line with no group, or an unknown one, counts under "?"."""
+    counts: dict[str, dict[str, int]] = {}
+    for line in verify_output.splitlines():
+        if not (_PASS.match(line) or _FAIL.match(line)):
+            continue
+        m = _VERDICT.match(line)
+        kind = m.group("kind") if m and m.group("kind") in kinds else "?"
+        verdict = "passed" if line.startswith("PASS") else "failed"
+        tally = counts.setdefault(kind, {"passed": 0, "failed": 0})
+        tally[verdict] += 1
+    return counts
+
+
 def score(
     run_dir: Path,
     variant: str,
     verify_cmd: list[str],
     *,
-    expected: int = EXPECTED_CHECKS,
+    expected_by_kind: dict[str, int] | None = None,
 ) -> tuple[int, dict[str, object], str]:
-    """Score *run_dir*.  Returns (exit code, result, verify output)."""
+    """Score *run_dir*.  Returns (exit code, result, verify output).
+
+    The run passes (exit 0) when OUTCOME and CONDUCT both pass: every
+    check of each group ran, none failed, and verify.sh exited 0."""
+    by_kind_expected = dict(expected_by_kind or EXPECTED_BY_KIND)
+    expected = sum(by_kind_expected.values())
     result: dict[str, object] = {
         "variant": variant, "run_dir": str(run_dir),
         "passed": 0, "failed": 0, "expected": expected,
     }
+    for kind in by_kind_expected:
+        result[kind.lower()] = None  # "pass" / "fail" once scored
     if not run_dir.is_dir():
         result["error"] = f"run folder {run_dir} does not exist"
         return 2, result, ""
@@ -193,7 +228,19 @@ def score(
             f"{expected}: the run was not scored"
         )
         return 2, result, output
-    if failed == 0 and passed == expected and proc.returncode == 0:
+    by_kind = count_by_kind(proc.stdout, tuple(by_kind_expected))
+    for kind, want in by_kind_expected.items():
+        tally = by_kind.get(kind, {"passed": 0, "failed": 0})
+        result[f"{kind.lower()}_passed"] = tally["passed"]
+        result[f"{kind.lower()}_failed"] = tally["failed"]
+        if tally["passed"] + tally["failed"] != want:
+            result["error"] = (
+                f"verify.sh reported {tally['passed'] + tally['failed']} "
+                f"{kind} checks, expected {want}: the run was not scored"
+            )
+            return 2, result, output
+        result[kind.lower()] = "pass" if tally["failed"] == 0 else "fail"
+    if failed == 0 and proc.returncode == 0:
         return 0, result, output
     if failed == 0:
         result["error"] = f"verify.sh exited {proc.returncode} with no FAIL line"
@@ -208,8 +255,13 @@ def _cmd_score(args: argparse.Namespace) -> int:
     if output:
         sys.stdout.write(output if output.endswith("\n") else output + "\n")
     print()
+    # The sweep scripts read "SCORE: n/m (variant=...)"; the groups follow.
+    groups = "  ".join(
+        f"{kind} {str(result.get(kind.lower()) or 'not scored').upper()}"
+        for kind in KINDS
+    )
     print(f"SCORE: {result['passed']}/{result['expected']} "
-          f"(variant={args.variant})")
+          f"(variant={args.variant})  {groups}")
     if "error" in result:
         print(f"ERROR: {result['error']}", file=sys.stderr)
     result["score_exit"] = code

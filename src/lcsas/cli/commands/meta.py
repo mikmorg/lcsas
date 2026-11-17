@@ -302,7 +302,7 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
     a meta disc directory before it's mastered into an ISO, or
     for periodic disc-health checks on a mounted meta disc.
     """
-    import hashlib
+    from lcsas.utils.hashing import sha256_file
 
     out = args.output.resolve()
     manifest_path = out / "recovery" / "MANIFEST.sha256"
@@ -340,26 +340,47 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
         if not path.is_file():
             missing.append(rel)
             continue
-        h = hashlib.sha256()
-        with path.open("rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
-        got = h.hexdigest()
+        got = sha256_file(path)
         if got != want_sha:
             mismatched.append((rel, want_sha, got))
         else:
             checked += 1
 
     extras: list[str] = []
+    upstream_problems: list[str] = []
     if args.strict:
         # The two manifests are never counted: the curation rule in
         # recovery/Makefile keeps both out of MANIFEST.sha256 (a manifest
         # cannot list itself).  `meta build` warns with the same check.
         from lcsas.meta.builder import files_outside_manifest
         extras = files_outside_manifest(recovery_root, expected.keys())
+
+        # #832: the manifest above was written by the build, so it cannot
+        # show that rustic-static, restic, the python tree and the musl
+        # loader are the bytes of the archives pinned in
+        # recovery/UPSTREAM.sha256.  Unpack those archives from the
+        # recovery cache and compare.  A mounted disc carries no archives,
+        # so where the cache lacks one, say so and go on.
+        from lcsas.meta.required_contents import APPROVED_TARGETS
+        from lcsas.meta.upstream import check_bundled_upstream, default_cache_root
+        cache_root = default_cache_root()
+        upstream = check_bundled_upstream(
+            recovery_root, cache_root, APPROVED_TARGETS,
+        )
+        upstream_problems = upstream.problems
+        if upstream.unchecked:
+            logger.warning(
+                "Not checked against their pinned archives, which are not "
+                "in the recovery cache (%s): %s. Run `make fetch-recovery` "
+                "on this machine to check them.",
+                cache_root, ", ".join(upstream.unchecked),
+            )
+        if upstream.checked:
+            logger.info(
+                "%d bundled upstream file(s) match the archives pinned in "
+                "recovery/UPSTREAM.sha256.",
+                upstream.checked,
+            )
 
     # RST-05: required-contents check, independent of the manifest.  The
     # manifest is regenerated from whatever was bundled, so it cannot
@@ -387,13 +408,20 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
         logger.error("  EXTRA    %s  (present on disk but absent from manifest)", rel)
     for rel in sorted(absent):
         logger.error("  ABSENT   %s  (required by the meta disc contract)", rel)
+    for problem in upstream_problems:
+        logger.error("  UPSTREAM %s", problem)
 
-    total_issues = len(missing) + len(mismatched) + len(extras) + len(absent)
+    total_issues = (
+        len(missing) + len(mismatched) + len(extras) + len(absent)
+        + len(upstream_problems)
+    )
     if total_issues:
         logger.error(
             "Meta disc verify FAILED: %d issue(s) "
-            "(%d missing, %d mismatched, %d extra, %d absent).",
-            total_issues, len(missing), len(mismatched), len(extras), len(absent),
+            "(%d missing, %d mismatched, %d extra, %d absent, "
+            "%d not from the pinned upstream archives).",
+            total_issues, len(missing), len(mismatched), len(extras),
+            len(absent), len(upstream_problems),
         )
         if absent:
             logger.error("Note: %s", VINTAGE_NOTE)
