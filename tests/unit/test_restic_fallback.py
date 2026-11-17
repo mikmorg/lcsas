@@ -1286,6 +1286,68 @@ class TestUnsupportedNodeType:
         assert "ERROR: 1 item(s) were NOT restored." in captured.err
 
 
+    def test_node_with_no_type_is_not_restored(self, tmp_path, capsys):
+        """A node with no "type" is an error, as in tier 1: listed as
+        "unknown item type: ?", not restored as a file (it used to be
+        read as one), and not counted as a file to restore."""
+        repo = _build_test_repo(tmp_path)
+
+        file_content = b"Untyped content\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+        root_tree = json.dumps({
+            "nodes": [
+                {"name": "typed.txt", "type": "file", "mode": 0o644,
+                 "content": [file_id]},
+                {"name": "untyped", "mode": 0o644, "content": [file_id]},
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": len(pack_data), "length": len(enc),
+            })
+            pack_data.extend(enc)
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+        new_index = json.dumps(
+            {"packs": [{"id": pack_id, "blobs": blobs_info}]}
+        ).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+        snap_doc = json.dumps({
+            "time": "2026-03-04T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(
+            _encrypt_with_master(snap_doc)
+        )
+
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer._ensure_loaded()
+        snap = restorer._find_snapshot(snap_id)
+        assert restorer._count_files(snap.tree) == 1
+        target = tmp_path / "restored_untyped"
+        restorer.restore(target=target, snapshot_id=snap_id)
+        assert (target / "typed.txt").read_bytes() == file_content
+        assert not os.path.lexists(target / "untyped")
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        assert "untyped\tunknown item type: ?\t" in manifest
+        assert restorer.failures == 1
+
+
 # ── Extended Attributes Test ─────────────────────────────────────
 
 class TestXattrRestore:
@@ -2913,7 +2975,7 @@ class TestRestoreAborts:
         with pytest.raises(RestoreAbortedError) as ei:
             r.restore(target=target)
         assert len(calls) == 1, "must stop at the first full write"
-        assert ei.value.exit_code == 1
+        assert ei.value.exit_code == 74  # EX_IOERR, as tier 1
         msg = str(ei.value)
         assert f"filesystem that holds {target} is full" in msg
         assert "No space left on device" in msg
@@ -2940,7 +3002,7 @@ class TestRestoreAborts:
         with pytest.raises(RestoreAbortedError) as ei:
             r.restore(target=tmp_path / "out")
         assert len(calls) == 1
-        assert ei.value.exit_code == 1
+        assert ei.value.exit_code == 74  # EX_IOERR, as tier 1
         assert "Disk quota exceeded" in str(ei.value)
 
     def test_other_write_error_fails_only_that_file(
