@@ -716,7 +716,7 @@ coverage-c-run:
 	      || echo "[coverage-c] keyshare main.c success path skipped (non-fatal)"; \
 	    cat $$ksdir/shares/cov-share-1-card.txt $$ksdir/shares/cov-share-2-card.txt 2>/dev/null \
 	        | $(BUILD)/lcsas-keyshare-cov >/dev/null 2>&1 || true; \
-	    $(BUILD)/lcsas-keyshare-cov >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-keyshare-cov </dev/null >/dev/null 2>&1 || true; \
 	    $(BUILD)/lcsas-keyshare-cov --bogus-flag >/dev/null 2>&1 || true; \
 	    $(BUILD)/lcsas-keyshare-cov /nonexistent/card.txt >/dev/null 2>&1 || true; \
 	    echo "not a share" > $$ksdir/junk.txt; \
