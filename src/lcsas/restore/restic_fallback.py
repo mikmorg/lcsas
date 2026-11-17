@@ -285,6 +285,10 @@ class NoKeyUnlockedError(IntegrityError):
         self.corrupt = corrupt
 
 
+#: Exit code for "a key file rejected the password" (#805).  The same
+#: as tier 1's EXIT_WRONG_PASSWORD: sysexits.h EX_NOPERM.
+EXIT_WRONG_PASSWORD = 77
+
 #: Exit code for "the reader typed q at the disc prompt (or its input
 #: ended there)".  The same as tier 1's EXIT_READER_QUIT: sysexits.h
 #: EX_TEMPFAIL, "try again later".

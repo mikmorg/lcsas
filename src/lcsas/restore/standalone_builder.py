@@ -391,10 +391,21 @@ _CLI_BLOCK = textwrap.dedent("""\
             sys.exit(130)
         except RestoreAbortedError as exc:
             # #658: 'q' or end of input at the disc prompt (exit 75, as
-            # in tier 1), or a full target filesystem (exit 1).  Must
-            # come before the catch-all below.
+            # in tier 1), or a full target filesystem (exit 74, as in
+            # tier 1).  Must come before the catch-all below.
             print(f"[lcsas-restore] {exc}", file=sys.stderr)
             sys.exit(exc.exit_code)
+        except NoKeyUnlockedError as exc:
+            # #805: a key file rejected the password: exit 77, as tier 1
+            # does (EXIT_WRONG_PASSWORD), so restore.sh can ask again.
+            # Key files that are all unreadable are no password verdict:
+            # exit 1 below.
+            if not exc.rejected:
+                print(f"[lcsas-restore] restore could not start: {exc}",
+                      file=sys.stderr)
+                sys.exit(1)
+            print(f"[lcsas-restore] wrong password: {exc}", file=sys.stderr)
+            sys.exit(EXIT_WRONG_PASSWORD)
         except Exception as exc:
             print(
                 f"[lcsas-restore] restore could not start: {exc}\\n"

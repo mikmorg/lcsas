@@ -5,7 +5,8 @@ dynamically linked against the musl loader (/lib/ld-musl-<arch>.so.1).
 Stock Debian, Ubuntu and Fedora do not have it, so there the bundled
 interpreter is executable but fails with "not found" (exit 127).
 restore.sh used to pick it on `[ -x ]` alone and never tried the host
-python3.  Now a candidate counts only if it runs a Python 3.8+.
+python3.  Now a candidate counts only if it runs a Python 3.10+, the
+oldest the tier-3 reader runs on (#804).
 
 The lab VM has the musl loader, so these tests never rely on the real
 bundled binary failing: the "bundled" interpreter is a stub whose `#!`
@@ -35,8 +36,8 @@ HOST_TARGET = "x86_64-unknown-linux-musl"
 # with ENOENT and the shell reports "not found", exit 127 -- exactly
 # what the real bundled CPython does on a glibc-only host.
 NO_LOADER = "#!/nonexistent/lib/ld-musl-x86_64.so.1\n"
-# A Python that starts but is too old (e.g. 2.7 or 3.7): the probe's
-# `sys.exit(sys.version_info < (3, 8))` exits 1.
+# A Python that starts but is too old (e.g. 2.7 or 3.9): the probe's
+# `sys.exit(sys.version_info < (3, 10))` exits 1.
 TOO_OLD = "#!/bin/sh\nexit 1\n"
 
 
@@ -110,10 +111,14 @@ def _run(recovery: Path, tmp_path: Path, stub_dir: Path,
     )
 
 
-@pytest.mark.parametrize("bundled", [NO_LOADER, TOO_OLD],
-                         ids=["no-musl-loader", "too-old"])
+@pytest.mark.parametrize(("bundled", "why"), [
+    (NO_LOADER, "the musl loader it needs is missing on this host"),
+    (TOO_OLD, "it is older than Python 3.10"),
+], ids=["no-musl-loader", "too-old"])
 def test_bundled_python_that_cannot_run_falls_back_to_host(
-        tmp_path: Path, bundled: str) -> None:
+        tmp_path: Path, bundled: str, why: str) -> None:
+    """#804: the line names the real reason, not "missing musl loader?"
+    for every failure."""
     recovery = _fixture(tmp_path, bundled)
     stub_dir = tmp_path / "stubbin"
     log = tmp_path / "host-argv.log"
@@ -126,7 +131,7 @@ def test_bundled_python_that_cannot_run_falls_back_to_host(
     assert "HOST_PYTHON_RAN" in res.stdout, res.stdout
     assert log.read_text().splitlines()[0].endswith("standalone_restorer.py")
     assert ("[tier 3] the bundled Python cannot run on this host "
-            "(missing musl loader?); using the host python3") in res.stderr, (
+            f"({why}); using the host python3") in res.stderr, (
         res.stderr)
     assert "falling back to Python (python3 + " in res.stderr, res.stderr
 
@@ -163,8 +168,8 @@ def test_no_python_runs_guard_names_the_bundled_one(tmp_path: Path) -> None:
     assert res.returncode == 64, (
         f"rc={res.returncode}\nstderr:{res.stderr}")
     bundled = recovery / "bin" / HOST_TARGET / "python" / "bin" / "python3"
-    assert f"tier 3: the bundled Python {bundled} cannot run" in res.stderr, (
-        res.stderr)
+    assert f"  tier 3:\n    the bundled Python {bundled} cannot run" in (
+        res.stderr), res.stderr
     assert "no working python3 on PATH" in res.stderr, res.stderr
     assert "Password:" not in res.stderr, res.stderr
 
@@ -183,7 +188,8 @@ def test_no_python_runs_after_tier1_fails(tmp_path: Path) -> None:
 
     assert res.returncode == 1, (
         f"rc={res.returncode}\nstderr:{res.stderr}")
-    assert "[tier 3] cannot run: the bundled Python" in res.stderr, res.stderr
+    assert "[tier 3] cannot run:\n[tier 3]   the bundled Python" in (
+        res.stderr), res.stderr
     assert "ERROR: no recovery method available." in res.stderr, res.stderr
     assert "falling back to Python" not in res.stderr, res.stderr
 
@@ -357,8 +363,8 @@ def test_loader_that_cannot_help_after_tier1_fails(tmp_path: Path) -> None:
 
     assert res.returncode == 1, (
         f"rc={res.returncode}\nstderr:{res.stderr}")
-    assert ("[tier 3] (not even through its bundled musl loader), and "
-            "there is no working python3 on PATH.") in res.stderr, res.stderr
+    assert ("[tier 3]   (not even through its bundled musl loader), and "
+            "no working python3 on PATH.") in res.stderr, res.stderr
     assert "falling back to Python" not in res.stderr, res.stderr
 
 
@@ -387,7 +393,9 @@ def test_tier3_temporary_files_honour_tmpdir(tmp_path: Path) -> None:
 
     assert res.returncode == 0, res.stderr
     names = seen.read_text().split()
-    for prefix in ("lcsas-tier3-err.", "lcsas-tier3-rc.", "lcsas-pw."):
+    # The exit code comes back through a pipe (#799: a full disk could
+    # not hold it in a file), so only the copy of the messages is a file.
+    for prefix in ("lcsas-tier-err.", "lcsas-pw."):
         assert any(n.startswith(prefix) for n in names), (prefix, names)
     assert sorted(p.name for p in tmpdir.iterdir()) == []
     src = RESTORE_SH.read_text()

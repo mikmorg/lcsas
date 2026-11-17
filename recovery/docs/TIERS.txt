@@ -192,8 +192,8 @@ and the no-rotation reality are documented in
 TIER 3: WHICH PYTHON
 
 restore.sh tries, in this order, and takes the first one that
-actually STARTS and is Python 3.8 or newer (the reader itself needs
-3.10 and says so):
+actually STARTS and is Python 3.10 or newer, the oldest Python the
+reader runs on (#804):
 
   1. the CPython bundled for this computer, bin/<arch>/python/, on
      its own;
@@ -210,7 +210,25 @@ Debian, Ubuntu and Fedora do not have.  There the bundled python3
 fails with "not found" on its own.  musl's loader runs the program
 named after it, so the disc's copy runs the bundled Python with no
 root and nothing installed (#714).  restore.sh says in one line which
-one it used and why.  If none runs, tier 3 says so.
+one it used and why.  If none runs, tier 3 says so, with the reason for
+the bundled one: not executable here (no run permission, or a folder
+mounted noexec), a loader or library it needs is missing (the musl
+loader, on the musl builds), a program for another kind of computer,
+older than Python 3.10, or a processor too old for it (an illegal
+instruction).  A python3 on PATH that is older than 3.10 is named too.
+
+ARMV6 (RASPBERRY PI 1 AND ZERO)
+
+The 32-bit ARM programs on the disc (bin/armv7-*: lcsas-restore,
+rustic-static, lcsas-keyshare, lcsas-ecc and the bundled Python) are
+built for ARMv7.  On an ARMv6 processor (uname -m says armv6l: a
+Raspberry Pi 1 or Zero, not a Zero 2) each one stops at once with an
+illegal instruction (checked under qemu-arm -cpu arm1176, #803).
+restore.sh says so and does not run them.  What still works there:
+a python3 of 3.10 or newer installed on the computer (tier 3; slow on
+such a small computer), and the stock restic (tier 2b, built for ARMv6
+too) for a backup set that is in one folder on a disk.  Or restore on
+a newer computer (a Raspberry Pi 2 or newer is ARMv7 or later).
 
 The loader comes from a fixed Alpine Linux release (musl 1.2.6),
 pinned by SHA-256 in recovery/UPSTREAM.sha256 like the other
@@ -443,9 +461,40 @@ restic MULTI-KEY repository where the key matching the password is the
 one tier-1 cannot parse -- is not produced by LCSAS (one key file per
 repository) and is a documented limitation on issue #399.
 
-Scope: this guard lives in tier 1; if tier 1 is absent or skipped by
-pre-flight, a wrong password is only detected by a later tier, which
-can still leave a partial tree (issue #399).
+Tiers 2, 2b and 3 (rc10, #805): when one of them restores instead, a
+wrong password ends the run with exit 77 too.  Tier 3 exits 77 itself
+(a key file rejected the password, before anything is written).
+rustic (exit 1, "No suitable key found") and restic (exit 12, "wrong
+password or no key found") say it in their own words, so after a
+failure restore.sh asks them again by listing the snapshots.  On a
+terminal the password is asked for again, as for tier 1: restore.sh
+checks it with tier 2 or 2b (listing the snapshots) before the
+restore, and asks again when tier 3 exits 77.  restore.bat stops with
+77 when rustic-static says so.  A tier that writes files before it
+checks the password could still leave a partial tree (issue #399).
+
+EXIT 4 -- FINISHED, NOT EVERY ITEM RESTORED (rc10, #799): when tier 1
+ends "finished with errors" (exit 1, and it says so) or tier 3 exits 2
+with RESTORE_FAILURES.txt written by this run (restore.sh and
+restore.bat remove one an earlier run left before a tier starts),
+the restore FINISHED: every other item is restored.  restore.sh and
+restore.bat say "The restore finished, but N item(s) could not be
+restored", name the file, and exit 4.  That is the end of that backup
+set, as for a restore that succeeded: no resume.sh advice (a resume
+would skip the same items again), the tools folder goes, "Restore
+another backup set?" is asked, and the next tier is not tried, even
+with LCSAS_TIER_FALLBACK=1 (it would restore the whole set again).
+Tier 1's exit 1 for a damaged disc is not "finished with errors": that
+stays a failure, with the resume advice.  restore.bat cannot read tier
+1's words, so it takes exit 1 with a list of errors written by this
+run as "finished"; a run that stopped on a damaged disc after it had
+already listed an error is then reported as finished too.
+
+EXIT 74 -- THE DISK IS FULL: tiers 1 and 3 exit 74 when the disk they
+restore to fills up.  restore.sh and restore.bat say so, keep the
+tools folder, give the resume advice and exit 74, with or without
+LCSAS_TIER_FALLBACK: another tier would only fill the disk again.
+restore_auto.sh stops its loop on 74.
 
 EXIT 75 -- STOPPED AT THE DISC PROMPT (rc6): tier 1 exits 75 when the
 reader types q at its disc-swap prompt (or the prompt's input ends).
@@ -475,13 +524,14 @@ Tier 1 exit status, in full:
 Tier 3 (standalone_restorer.py) exit status:
   0   restored (or, with --list-snapshots, listed); as for tier 1,
       special files or links may be listed in RESTORE_FAILURES.txt
-  1   failed (setup: wrong password, no repository, Python older
-      than 3.10)
+  1   failed (setup: no repository, key files that cannot be read,
+      Python older than 3.10)
   2   usage error, or finished with some items not restored (listed
       in RESTORE_FAILURES.txt; see "TIER 3: SKIP-AND-CONTINUE" and
       "ITEMS NOT RESTORED")
   74  stopped because the disk restored to is full (as tier 1)
   75  stopped at the disc prompt (q, or the input ended)
+  77  wrong password: a key file rejected it (rc10, #805)
   130 stopped with Ctrl-C
 
 WHY PYTHON IS NOT ON THE BARE PATH
