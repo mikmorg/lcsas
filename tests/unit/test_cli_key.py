@@ -954,11 +954,12 @@ class TestCombineErrors:
         self, tmp_path: Path, capsys
     ) -> None:
         # A blank --share-file holds zero share words: the extractor names
-        # the file and the count rather than silently skipping it. [KEY-01]
+        # the file and says no share words were found in it (#844) rather
+        # than silently skipping it. [KEY-01]
         blank = tmp_path / "blank.txt"
         blank.write_text("   \n")
         assert main(["key", "combine", "--share-file", str(blank)]) == 1
-        _assert_stdout_clean(capsys, "0 share words")
+        _assert_stdout_clean(capsys, "no share words were found in this file")
 
     def test_stdout_holds_only_the_password_subprocess(self, tmp_path: Path) -> None:
         """A real `lcsas key combine` process, stdout and stderr captured

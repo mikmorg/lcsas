@@ -205,7 +205,8 @@ class TestExtractMnemonic:
         with pytest.raises(KeyShareError) as exc:
             extract_mnemonic("", source="empty.txt")
         assert "empty.txt" in str(exc.value)
-        assert "0 share words" in str(exc.value)
+        # #844: zero share words is said plainly.
+        assert "no share words were found in this file" in str(exc.value)
 
     def test_prose_only_rejected(self) -> None:
         text = "Repository : alpha\n(the holder lost the words)\n"
