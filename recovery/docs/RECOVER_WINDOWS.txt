@@ -859,6 +859,10 @@ restore.sh; see RECOVER.txt):
     1   a failure; the message above it says what
     2   --snapshot was given without an ID, or with something that is
         not one (an ID is made of the digits 0-9 and the letters a-f)
+    4   the restore finished, but some items could not be restored:
+        the message names the file RESTORE_FAILURES.txt in the folder
+        you restored into, which lists them and why (see "ITEMS NOT
+        RESTORED" in RECOVER.txt).  Nothing is left to carry on
     65  you typed Q at a question restore.bat asked (the newest data
         disc, the backup set, the restore folder), or you did not
         type YES at the warning about a folder that is not empty
@@ -867,6 +871,8 @@ restore.sh; see RECOVER.txt):
     64  lcsas-restore.exe is missing (antivirus may have removed
         it), so the backup set cannot be read from the discs; see
         "WHAT IF restore.bat DOES NOT RUN?", CASE E
+    74  the disk is full: free some space (or restore to a bigger
+        disk), then carry on as the message says
     77  the password was wrong, or you typed Q at the password or a
         share card
   Any other code is the one lcsas-restore.exe stopped with; the

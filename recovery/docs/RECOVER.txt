@@ -111,6 +111,13 @@ sticks, downloaded disc images, and locked-down computers.  (The
 binaries carry no Apple or Microsoft developer signature, so a
 cautious OS treats them as software from an unknown source.)
 
+A computer that is too old is different: copying does not help.  On
+an ARMv6 processor (a Raspberry Pi 1 or Zero; restore.sh says "This
+computer has an ARMv6 processor") the programs on the disc, built for
+ARMv7 or newer, cannot run.  restore.sh then uses Python 3.10 or
+newer if the computer has it (install python3 first; it is slow
+there), or restore on a newer computer.  See TIERS.txt, "ARMV6".
+
 WHAT restore.sh ASKS
 
 Run from the META disc on a terminal, restore.sh asks these questions,
@@ -224,8 +231,9 @@ Python dependency; the BARE MINIMUM restore path ends after tier 2.
                                        bin/<arch>/python/ -- on Linux
                                        through the musl loader next to
                                        it if needed -- or else
-                                       python3 on PATH.  See TIERS.txt,
-                                       "TIER 3: WHICH PYTHON".
+                                       python3 on PATH (3.10 or newer).
+                                       See TIERS.txt, "TIER 3: WHICH
+                                       PYTHON".
                                        It is SLOW: about 2 minutes per
                                        GB of photos and 20 minutes per
                                        GB of text when an OpenSSL is on
@@ -316,7 +324,9 @@ A restore can end with some items not restored.  Each one is named in
 a line that starts "NOT RESTORED:", and all of them are listed in the
 file RESTORE_FAILURES.txt in the folder you restored into: one line
 per item, with the path and the reason.  At the end the restore says
-how many there were.
+how many there were.  Each restore writes the file anew: one that an
+earlier restore left in the folder is removed when the next one
+starts.
 
 Not a problem (the restore still counts as complete, exit code 0):
 
@@ -328,7 +338,11 @@ Not a problem (the restore still counts as complete, exit code 0):
 
 Every other reason is an error.  The restore ends with "finished with
 errors" (exit code 1 from lcsas-restore, exit code 2 from tier 3).
-Everything not listed was restored.  What to do:
+Everything not listed was restored.  restore.sh and restore.bat then
+say "The restore finished, but N item(s) could not be restored", give
+the path of RESTORE_FAILURES.txt, and exit with code 4.  The restore
+is over: resume.sh would only skip the same items again, so it is not
+offered, and the tools folder is removed.  What to do:
 
   * "a folder with this name is already there": the folder you
     restored into holds an earlier restore, with a folder where this
@@ -700,21 +714,27 @@ EXIT CODES
     0  -- success (whichever tier ran)
     1  -- generic failure (no repo found, unsupported OS/arch, etc.)
     2  -- usage error
+    4  -- the restore finished, but some items could not be restored:
+          they are listed in RESTORE_FAILURES.txt in the folder you
+          restored into (see "ITEMS NOT RESTORED").  Nothing to carry
+          on; restore.bat uses the same code
     64 -- no recovery method available
     65 -- you stopped at a question restore.sh asked (the newest
           data disc, the backup set, the overwrite warning for a
           folder that is not empty, or "restore into RAM anyway?"), or
           the folder to restore into is inside the tools folder
+    74 -- the disk you restore to is full: free some space (or use a
+          bigger disk), then carry on with resume.sh
     75 -- you typed q at a disc prompt; carry on with resume.sh
-    77 -- a repository key rejected the password, or you typed q at
-          the password or a share card prompt
+    77 -- a repository key rejected the password (whichever tier
+          ran), or you typed q at the password or a share card prompt
     129 / 130 / 143 -- the terminal closed / Ctrl-C / killed; carry
           on with resume.sh, if the stop came after the backup set
           and the folder were chosen (see "STOPPING AND CARRYING ON
           LATER")
-  On every exit but 0 the tools folder stays (see "THE TOOLS FOLDER"),
-  except Ctrl-C at "Restore another backup set?" or the folder
-  question after it: that set is restored, nothing is left to
+  On every exit but 0 and 4 the tools folder stays (see "THE TOOLS
+  FOLDER"), except Ctrl-C at "Restore another backup set?" or the
+  folder question after it: that set is restored, nothing is left to
   carry on, and the folder goes.
 Exit 64 means every tier (1, 2, 2b, AND 3) was missing or unrunnable on
 the current meta disc, before any password was prompted.
