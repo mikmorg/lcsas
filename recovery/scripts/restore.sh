@@ -2570,7 +2570,7 @@ pending_kb() {
             --list-pending-packs "$@" 2>/dev/null </dev/null \
         | awk '/^Total:/ && $2 + 0 > 0 {
               for (i = 3; i < NF; i++)
-                  if ($(i+1) == "MB") { printf "%d\n", $i * 1024; exit }
+                  if ($(i+1) == "MB") { printf "%.0f\n", $i * 1024; exit }
           }' || true
 }
 
