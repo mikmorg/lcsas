@@ -84,9 +84,12 @@ def test_no_scratch_dir_warns_and_restores_from_the_disc(tmp_path: Path) -> None
     stubs, log = _refusing_mktemp(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
-    busy = tmp_path / "busy"
-    busy.mkdir()
-    (busy / "someone-elses-file").write_text("x")
+    # A tools folder that cannot be made (under a file), so the run looks
+    # for a temporary one.  (A folder holding other files used to serve;
+    # since #627 item 4 that is refused outright.)
+    blocker = tmp_path / "busy"
+    blocker.write_text("x")
+    busy = blocker / "tools"
     env = {
         "LCSAS_TOOLS_DIR": str(busy),
         **os.environ,

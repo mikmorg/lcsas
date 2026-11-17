@@ -71,14 +71,15 @@ A backup set read from the discs (the normal layout: `metadata\<id>\` on
 each disc, packs in each disc's `data\`) has no `data\` in its folder.
 `rustic-static.exe` cannot ask for discs, so for such a set a tier-1
 failure is final: the script stops at `:tier1_stopped`, keeps the tools
-folder and says how to carry on (#615). That `data\` check sits inside
-the tier-1 step (`if exist "%BIN%" ( ... )`), so when
-`lcsas-restore.exe` is missing (quarantined by antivirus, say) the
-script goes straight to tier 2 whatever the set. In a run that does not
-relocate, `rustic-static.exe` is there and then fails for a set read
-from the discs, against C5 ("never run tier 2 against a metadata-only
-set"); the relocated copy has `rustic-static.exe` only when a set holds
-`data\`. There is no tier 3 in the .bat:
+folder and says how to carry on (#615). When `lcsas-restore.exe` is
+missing (quarantined by antivirus, say), a set read from the discs stops
+at once, under the banner and before the folder and the password
+questions: `:tier1_missing` says the program is missing and may have
+been removed by antivirus, points to `RECOVER_WINDOWS.txt` and exits 64,
+as C5 ("never run tier 2 against a metadata-only set") wants (#631; up
+to rc9 the check sat inside the tier-1 step and the script went to tier
+2). A set with its own `data\` still goes to tier 2. There is no tier 3
+in the .bat:
 the Python reader ships on the disc, but `restore.bat` does not launch
 it (it would need a Python install the host may not have); heirs who
 need it run `standalone_restorer.py` by hand (see
@@ -348,7 +349,7 @@ layout) or several.
     (`:pw_check`): exit 77 means a key rejected it, and the script says
     `That password is wrong: it does not open the backup set <name>.`
     and asks again. A wrong or unreadable preset falls back to the
-    keyboard. An empty answer asks again; `Q`, or the third empty
+    keyboard, as in restore.sh when a person is there. An empty answer asks again; `Q`, or the third empty
     answer in a row, ends with exit 77 (`:pw_gave_up`).
     - **Share cards** (`:shares_ask`): `The password for <name> is
       split into N share cards; you need any K of them (Split ID
@@ -356,13 +357,17 @@ layout) or several.
       words on one line, then ENTER` / `(or Q to quit).` and `Words of
       card i:`. Each card goes in its own file in a new
       `%TEMP%\lcsas-shares-*` folder and is checked alone with
-      `lcsas-keyshare.exe <file>`: exit 3 or 2 names the problem and
-      asks for that card again. Then the K cards are combined; cards
-      that do not fit together are asked for again. `P` types the
-      rebuilt password instead.
+      `lcsas-keyshare.exe <file>`: exit 3 names the mistyped word and
+      asks for that card again; any code but 0, 1 and 3 means the
+      combiner does not work here (`:keyshare_broken`), and the rebuilt
+      password is asked for instead. Then the K cards are combined;
+      cards that do not fit together are asked for again. `P` types
+      the rebuilt password instead.
     - **`LCSAS_SHARES_DIR`**: every file in the folder is a card (more
-      than K is fine). One mistyped file makes `lcsas-keyshare` refuse
-      the whole folder, and the script falls back to the keyboard.
+      than K is fine). A file with a mistake (exit 3) is named and left
+      out, and the others are combined (`:shares_dir_one`, #627); when
+      they do not rebuild the password the script falls back to the
+      keyboard.
 14. **Tier 1** (section "Tier 1: prebuilt lcsas-restore.exe"). It runs
     `lcsas-restore.exe --repo ... --password-file ... --target ...
     --snapshot latest` with the arguments of steps 10-11. Its disc box
@@ -644,25 +649,30 @@ Windows workflow inherits. Source refs in parentheses.
 
 ## Where restore.bat and restore.sh differ
 
-Both scripts agree on the exit codes 0/65/75/77, the newest-disc merge
-rule, the catalog copy passed as `--catalog`, the marker names and the
-"carry on with the same snapshot" rule. These differences remain, by
-design or as open owner decisions (DESIGN "sh vs bat differences
-LEFT"):
+Both scripts agree on the exit codes 0/64/65/75/77, the newest-disc
+merge rule (also from a writable META copy), the catalog copy passed as
+`--catalog`, the marker names and the "carry on with the same snapshot"
+rule. Since rc10 (#627) they also agree on a wrong `LCSAS_PASSWORD` /
+`LCSAS_PWFILE` (asked again when a person is there, 77 when scripted),
+a bad card file in `LCSAS_SHARES_DIR` (left out), a `LCSAS_TOOLS_DIR`
+that holds other files (refused, exit 1), a name two sets share in
+`LCSAS_REPO` (refused, exit 1), a card check that is not the card's
+fault (the password is asked for), and two discs with the same label
+(the newer catalog.db wins). These differences remain, by design (the
+owner's #627 decisions):
 
 | Topic | restore.bat | restore.sh |
 |---|---|---|
 | Set menu | `[1] name`, a number only, ENTER means 1 | `  1) name`, "Choose a repository (number or name):", number, name, `name_cmd` or id; no default |
-| Wrong `LCSAS_PASSWORD` / `LCSAS_PWFILE` | says so, asks on the keyboard; reused for the next set | exits 77; dropped for the next set |
-| `LCSAS_SHARES_DIR` with one bad card file | refuses the folder, asks on the keyboard | leaves that file out, combines the rest; exits 77 if they cannot |
-| `LCSAS_TOOLS_DIR` naming a folder with other files | refused, exit 1 | a temporary folder: relocated, it is the tools folder and `resume.sh` carries on from it until it is cleared; run in place, it is deleted at exit and the run cannot be carried on |
-| `LCSAS_INTERACTIVE` | passed to tier 1 only; the script's own questions are always asked | also decides whether the script's own questions are asked |
-| Newest-disc step | also from a writable META copy; five ENTERs go on | only when the META mount is known and a terminal is there; end of input quits 65 |
+| `LCSAS_PASSWORD` / `LCSAS_PWFILE` / `LCSAS_SHARES_DIR` for the next set | reused (each is checked first) | dropped: the next set's password is asked |
+| `LCSAS_INTERACTIVE` | passed to tier 1 only; the script's own questions are always asked (cmd cannot test for a console) | also decides whether the script's own questions are asked |
+| Newest-disc step, end of input | five ENTERs go on with the META copies | quits 65 |
 | Another set | asks the set, then the folder (default `restored-<name>`) | asks the folder (default `<target>-2`), then the set |
-| `LCSAS_REPO` match | case-blind, first match | exact; none when two sets share the name |
-| Catalog copy | the newest label's disc | the freshest file by mtime |
+| `LCSAS_REPO` match | case-blind | exact |
+| Catalog copy with no labelled data disc | the last `catalog.db` by drive letter | the freshest file by mtime (tier 1 takes a newer one either way) |
+| Tools folder reuse | the same `restore.bat` from the same META disc (`created_at`) | the same build from any META disc of the archive (a set id in common) |
 | Tools folder marker | `.lcsas-tools` | `.lcsas-restore-tools` |
-| Tier cascade | after a tier-1 failure, tier 2 only for a set with its own `data\`; with no `lcsas-restore.exe`, tier 2 for any set; no tier 3 | `LCSAS_TIER_FALLBACK=1` walks tiers 2, 2b and 3 |
+| Tier cascade | after a tier-1 failure, tier 2 only for a set with its own `data\`; with no `lcsas-restore.exe`, a set read from the discs stops with 64; no tier 3 | `LCSAS_TIER_FALLBACK=1` walks tiers 2, 2b and 3 |
 
 ## Test coverage and gaps
 
