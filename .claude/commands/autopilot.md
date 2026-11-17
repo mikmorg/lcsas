@@ -30,7 +30,14 @@ run to *landed* or *escalated*, never to half-done.
   runnable variant (the nine in the `docs/development/recovery/READINESS_CHECKLIST.txt`
   drill log since rc5, with split-key-docs run twice) then runs on
   master before that rc is tagged, and a red sweep blocks the tag
-  until fixed.
+  until every variant has a green run.  A red run is never waved
+  through.  When a red run looks like a harness fault rather than a
+  restore-path bug (the rc9 split-key-docs reds: the agent read a
+  script or wrote a wrapper script), the lead classifies it with
+  evidence from that run's logs (verify.sh output, transcript), files
+  an issue or links the existing one, and re-runs that variant; the
+  tag waits for the green re-run.  If the lead is in doubt whether a
+  red is the harness or the product, the owner decides.
 - **Committed binaries:** any `recovery/src/**` C change regenerates the
   affected committed bins via the bin_parity recipe (drive
   `bin_parity.rebuild` + copy, then `bin_parity.py` must PASS).

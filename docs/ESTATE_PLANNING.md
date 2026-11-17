@@ -185,7 +185,7 @@ Procedure after any password change:
    `lcsas --config ... key verify --repo R --share-file CARD1 --share-file CARD2`
    (any K). Exit 0 + an `OK:` line means the new split is good.
 
-The annual READINESS drill (`docs/development/recovery/READINESS_CHECKLIST.txt`,
+The annual READINESS drill (`docs/development/recovery/READINESS_CHECKLIST.txt` in the source repository,
 "PASSWORD REDUNDANCY") runs that same `lcsas key verify` so a silent
 rotation drift is caught within a year, not at restore time. It is part
 of the [owner schedule](workflows/verify-and-audit.md#owner-schedule).
