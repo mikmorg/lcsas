@@ -14,6 +14,8 @@ prompt names.
 
 from __future__ import annotations
 
+import collections
+import errno
 import hashlib
 import json
 import os
@@ -276,3 +278,51 @@ def test_a_cache_that_cannot_be_made_is_turned_off(
     assert "Cannot create the pack cache" in capsys.readouterr().err
     restorer.restore(tmp_path / "out")
     assert (tmp_path / "out" / "a.txt").read_bytes() == b"alpha\n"
+
+
+def test_a_pack_that_cannot_be_copied_is_tried_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One unreadable pack (EIO) and one with bytes that do not match
+    its id: each is tried once, the other packs are still copied, and
+    the restore completes from the disc."""
+    repo = build_repo(
+        tmp_path, {f"f{i}.txt": f"file {i}\n".encode() for i in range(6)},
+        pack_per_blob=True,
+    )
+    disc = tmp_path / "disc"
+    shutil.move(str(repo / "data"), str(disc / "data"))
+    (repo / "data").mkdir()
+    packs = sorted(p for p in (disc / "data").rglob("*") if p.is_file())
+    unreadable, padded = packs[0].name, packs[1]
+    # Bytes after the last blob: every blob still reads, the hash does not.
+    with open(padded, "ab") as f:
+        f.write(b"\0")
+
+    tries: collections.Counter[str] = collections.Counter()
+    real_copy = fb._copy_pack
+
+    def copy(src: Path, dst: Path, pack_id: str, tick: object) -> bool:
+        tries[pack_id] += 1
+        if pack_id == unreadable:
+            raise OSError(errno.EIO, "Input/output error")
+        return real_copy(src, dst, pack_id, tick)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(fb, "_copy_pack", copy)
+    cache = tmp_path / "cache"
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD, pack_search_paths=[repo / "data", disc],
+        interactive=False, pack_cache_dir=cache,
+    )
+    restorer.restore(tmp_path / "out")
+    assert restorer.failures == 0
+    for i in range(6):
+        assert (tmp_path / "out" / f"f{i}.txt").read_bytes() == f"file {i}\n".encode()
+    assert tries[unreadable] == 1
+    assert tries[padded.name] == 1
+    cached = {p.name for p in (cache / "data").rglob("*") if p.is_file()}
+    assert cached == {p.name for p in packs} - {unreadable, padded.name}
+    err = capsys.readouterr().err
+    assert err.count("does not match its id") == 1
+    assert err.count("Input/output error") == 1

@@ -315,6 +315,9 @@ class RestoreAbortedError(Exception):
 _DISK_FULL_ERRNOS = frozenset(
     {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
 )
+#: Errors copying into the pack cache that mean the cache's drive
+#: cannot take more (#602): stop copying that disc.
+_CACHE_SIDE_ERRNOS = _DISK_FULL_ERRNOS | {errno.EROFS}
 
 
 def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
@@ -1098,6 +1101,9 @@ class PurePythonRestorer:
         self._pack_cache: Path | None = None
         self._index_packs: frozenset[str] | None = None
         self._drain_refused: set[tuple[str, int, int, int]] = set()
+        # Packs that could not be copied (read error, wrong bytes): not
+        # tried again, so a scratched pack is not re-read for each blob.
+        self._drain_failed: set[str] = set()
         self._drain_warned: set[str] = set()
         if pack_cache_dir is not None and str(pack_cache_dir):
             try:
@@ -1153,7 +1159,6 @@ class PurePythonRestorer:
         self._failures = []
         self._rows = []
         self._skipped = {_NR_SPECIAL: 0, _NR_LINK: 0}
-        self._resumed = 0
 
         if snapshot_id is not None:
             snap = self._find_snapshot(snapshot_id)
@@ -1172,6 +1177,7 @@ class PurePythonRestorer:
         self._progress_last_emit_files = 0
         self._progress_last_emit_bytes = 0
         self._progress_total_files = 0
+        self._resumed = 0
         if self._progress_enabled:
             self._progress_total_files = self._count_files(snap.tree)
             _log(f"Counted {self._progress_total_files} file(s) to restore.")
@@ -1536,7 +1542,7 @@ class PurePythonRestorer:
         found: list[tuple[Path, str, int]] = []
 
         def consider(path: Path, name: str) -> None:
-            if name not in wanted:
+            if name not in wanted or name in self._drain_failed:
                 return
             if (cache / "data" / name[:2] / name).exists():
                 return
@@ -1617,10 +1623,19 @@ class PurePythonRestorer:
             try:
                 ok = _copy_pack(src, dst, pid, tick)
             except OSError as exc:
-                _log(f"could not copy disc {name} to the cache ({exc}); "
-                     "its packs are read from the disc.")
-                break
+                if exc.errno in _CACHE_SIDE_ERRNOS:
+                    # The cache's drive is full or read-only: stop.
+                    self._drain_refused.add(key)
+                    _log(f"could not copy disc {name} to the cache "
+                         f"({exc}); its packs are read from the disc.")
+                    break
+                # One unreadable pack: copy the rest (tier 1 does).
+                self._drain_failed.add(pid)
+                _log(f"could not copy pack {pid[:16]}... of disc {name} "
+                     f"to the cache ({exc}); it is read from the disc.")
+                continue
             if not ok:
+                self._drain_failed.add(pid)
                 _log(f"pack {pid[:16]}... on disc {name} does not match "
                      "its id; not copied to the cache.")
         _log(f"copied {_mb_ceil(progress['done'])} of {_mb_ceil(need)} MB "
