@@ -11,19 +11,24 @@
 
 #include <string.h>
 
-int
-lcsas_path_safe_name(const char *name)
+/* Issue #619 -- one rule for both platforms.  With `windows` set, a
+ * backslash separates segments too, and a ':' anywhere (a drive prefix "X:", or
+ * a "name:stream" that would land in an NTFS alternate data stream)
+ * is refused. */
+static int
+safe_name(const char *name, int windows)
 {
     size_t i;
     size_t seg_start;
 
     if (!name || !name[0]) return -1;
-    if (name[0] == '/') return -1;
+    if (name[0] == '/' || (windows && name[0] == '\\')) return -1;
+    if (windows && strchr(name, ':') != NULL) return -1;
 
     seg_start = 0;
     for (i = 0; ; i++) {
         char c = name[i];
-        if (c == '\0' || c == '/') {
+        if (c == '\0' || c == '/' || (windows && c == '\\')) {
             size_t seglen = i - seg_start;
             if (seglen == 0 && i != 0) {
                 /* empty segment ("/foo//bar") -- reject */
@@ -38,6 +43,22 @@ lcsas_path_safe_name(const char *name)
             seg_start = i + 1;
         }
     }
+}
+
+int
+lcsas_path_safe_name(const char *name)
+{
+#ifdef _WIN32
+    return safe_name(name, 1);
+#else
+    return safe_name(name, 0);
+#endif
+}
+
+int
+lcsas_path_safe_name_windows(const char *name)
+{
+    return safe_name(name, 1);
 }
 
 /*
@@ -300,10 +321,40 @@ lcsas_name_is_utf8(const char *name, size_t len)
     return 1;
 }
 
+/* Issue #619 -- 1 when `stem` (`n` bytes) is a name Windows keeps for
+ * a device: CON PRN AUX NUL, COM1-COM9 and LPT1-LPT9 (and COM or LPT
+ * with a superscript 1, 2 or 3), in any case. */
+static int
+is_device_stem(const char *stem, size_t n)
+{
+    static const char *const words[] = { "CON", "PRN", "AUX", "NUL" };
+    char up[4];
+    size_t k;
+    if (n < 3 || n > 5) return 0;
+    for (k = 0; k < 3; k++) {
+        char c = stem[k];
+        up[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    up[3] = '\0';
+    if (n == 3) {
+        for (k = 0; k < sizeof words / sizeof words[0]; k++) {
+            if (strcmp(up, words[k]) == 0) return 1;
+        }
+        return 0;
+    }
+    if (strcmp(up, "COM") != 0 && strcmp(up, "LPT") != 0) return 0;
+    if (n == 4) return stem[3] >= '1' && stem[3] <= '9';
+    /* U+00B9, U+00B2, U+00B3: superscript one, two, three. */
+    return (unsigned char)stem[3] == 0xC2
+        && ((unsigned char)stem[4] == 0xB9
+            || (unsigned char)stem[4] == 0xB2
+            || (unsigned char)stem[4] == 0xB3);
+}
+
 const char *
 lcsas_name_windows_refusal(const char *name, size_t len)
 {
-    size_t i;
+    size_t i, stem, units;
     for (i = 0; i < len; i++) {
         unsigned char c = (unsigned char)name[i];
         if (c < 0x20 || strchr("\\:*?\"<>|", (int)c) != NULL) {
@@ -313,6 +364,30 @@ lcsas_name_windows_refusal(const char *name, size_t len)
     }
     if (!lcsas_name_is_utf8(name, len)) {
         return "Windows cannot store a name that is not valid UTF-8";
+    }
+    /* Issue #619 -- Windows drops a trailing dot or space when it makes
+     * the name, so the item would be restored under another name. */
+    if (len > 0 && (name[len - 1] == '.' || name[len - 1] == ' ')) {
+        return "Windows cannot store a name that ends in a dot or a space";
+    }
+    /* A device name, alone or with any extension ("NUL.txt",
+     * "con.tar.gz"): Windows opens the device, not a file. */
+    for (stem = 0; stem < len && name[stem] != '.'; stem++) {}
+    while (stem > 0 && name[stem - 1] == ' ') stem--;
+    if (is_device_stem(name, stem)) {
+        return "Windows keeps this name for a device "
+               "(CON, PRN, AUX, NUL, COM1-9, LPT1-9)";
+    }
+    /* NTFS holds at most 255 UTF-16 units in one name.  The name is
+     * valid UTF-8 here: a 4-byte sequence is two units, any other
+     * sequence one, so count the bytes that start a sequence. */
+    units = 0;
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if ((c & 0xC0) != 0x80) units += (c >= 0xF0) ? 2 : 1;
+    }
+    if (units > 255) {
+        return "Windows cannot store a name longer than 255 characters";
     }
     return NULL;
 }

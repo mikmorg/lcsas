@@ -284,7 +284,13 @@ PATH SAFETY
      a NUL byte.
    - On Windows also REJECT a name that holds \ : * ? " < > | or a
      control character, or that is not valid UTF-8 (NTFS cannot store
-     it).  On macOS REJECT a name that is not valid UTF-8.
+     it); a name that ends in a dot or a space (Windows drops them); a
+     device name (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9, and COM or
+     LPT with a superscript 1, 2 or 3), alone or with any extension,
+     in any case; and a name of more than 255 UTF-16 units (#619).
+     Create files through the wide (UTF-16) API, so a UTF-8 name is not
+     read in the ANSI code page, and give a path of 248 units or more
+     the \\?\ prefix.  On macOS REJECT a name that is not valid UTF-8.
    - A rejected name is never written under another name.  Tiers 1 and
      3 report each one ("NOT RESTORED"), restore everything else, and
      end with an error.

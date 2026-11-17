@@ -170,6 +170,29 @@ def test_rustic_escape_helper_matches_captured_vectors() -> None:
         (b"back\\slash", False, True, False),
         (b"\xed\xa0\x80", False, True, True),  # surrogate bytes
         (b"\xc0\xaf", False, True, True),      # overlong
+        # #619: a trailing dot or space, device names, long names.
+        (b"trail.", True, False, True),
+        (b"trail ", True, False, True),
+        (b"trail.", False, False, False),
+        (b".hidden", True, False, False),
+        (b"CON", True, False, True),
+        (b"con.txt", True, False, True),
+        (b"Nul.a.b", True, False, True),
+        (b"prn .x", True, False, True),
+        (b"COM1", True, False, True),
+        (b"lpt9.x", True, False, True),
+        (b"COM\xc2\xb9", True, False, True),     # COM + superscript one
+        (b"lpt\xc2\xb2.t", True, False, True),
+        (b"COM\xc2\xb4", True, False, False),    # an acute accent
+        (b"COM0", True, False, False),
+        (b"COM12", True, False, False),
+        (b"CONSOLE", True, False, False),
+        (b"my con.txt", True, False, False),
+        (b"CON", False, False, False),
+        (b"a" * 255, True, False, False),
+        (b"a" * 256, True, False, True),
+        ("\U0001f600".encode() * 127 + b"a", True, False, False),  # 255 units
+        ("\U0001f600".encode() * 128, True, False, True),          # 256 units
     ],
 )
 def test_name_refusal(raw: bytes, windows: bool, macos: bool,

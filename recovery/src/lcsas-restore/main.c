@@ -38,9 +38,9 @@
  * the cwd inside it, so an heir with a SINGLE optical drive can eject
  * the meta disc and reuse the same drive for data discs.
  *
- * Exit status: 0 restored (or listed); 1 failed, or finished with
- * some items not restored (each named on stderr); 2 usage error;
- * 74 the target disk is full (free space, then run the same command
+ * Exit status: 0 restored (or listed); 1 failed; 2 usage error;
+ * 4 finished, but some items were not restored (each named on stderr
+ * and in RESTORE_FAILURES.txt); 74 the target disk is full (free space, then run the same command
  * again); 75 the reader typed q at the disc prompt (run the same
  * command again to carry on); 77 wrong password.
  */
@@ -98,6 +98,13 @@
  * disk.  74 is sysexits.h EX_IOERR; defined here, as sysexits.h is not
  * on every system this is built for.  Tier 3 uses the same code. */
 #define EXIT_DISK_FULL 74
+
+/* Distinct exit status for "the restore finished, but some items could
+ * not be restored" (#872): each is named in a NOT RESTORED line and
+ * listed in RESTORE_FAILURES.txt.  Exit 1 stays "failed" (a damaged
+ * disc, a missing pack: run again to carry on).  restore.sh and
+ * restore.bat use 4 for this outcome too, so they pass it on. */
+#define EXIT_NOT_ALL_RESTORED 4
 
 #define MAX_PACK_SEARCH 64
 #define MAX_MOUNT_PARENTS 32
@@ -195,9 +202,11 @@ usage(const char *argv0)
         "\n"
         "Exit status:\n"
         "    0   restored (or listed)\n"
-        "    1   failed, or some items were not restored (each one\n"
-        "        is named in a NOT RESTORED line)\n"
+        "    1   failed\n"
         "    2   usage error\n"
+        "    4   finished, but some items were not restored (each one\n"
+        "        is named in a NOT RESTORED line and listed in\n"
+        "        RESTORE_FAILURES.txt)\n"
         "    74  the disk you restore to is full; free some space, then\n"
         "        run the same command again\n"
         "    75  you typed q at the disc prompt; run the same command\n"
@@ -259,6 +268,14 @@ main(int argc, char **argv)
     /* Probing an empty optical drive must fail quietly, not raise the
      * "There is no disk in the drive" dialog box and wait for a click. */
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    /* #619: every path is UTF-8 inside; the C library's argv is in the
+     * ANSI code page, which cannot hold every name a folder may have.
+     * Take the arguments from the UTF-16 command line instead. */
+    if (lcsas_w_utf8_argv(&argc, &argv) != 0) {
+        fprintf(stderr, "ERROR: cannot read the command line as "
+                        "Unicode\n");
+        return 1;
+    }
 #endif
 
     for (i = 1; i < argc; i++) {
@@ -681,11 +698,13 @@ main(int argc, char **argv)
         }
         if (tree_rc == LCSAS_TREE_INCOMPLETE) {
             /* Issue #781: the walk finished, but some items were not
-             * restored (each one is named above).  Exit 1, so the
-             * restore is never reported as complete. */
+             * restored (each one is named above).  Not 0, so the
+             * restore is never reported as complete; 4, not 1 (#872),
+             * so a script can tell it from a failed run. */
             fprintf(stderr,
                     "[lcsas-restore] finished with errors: every other "
                     "item was restored to %s\n", target);
+            rc = EXIT_NOT_ALL_RESTORED;
             goto out;
         }
         if (tree_rc != 0) {

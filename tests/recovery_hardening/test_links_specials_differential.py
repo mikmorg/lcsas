@@ -247,8 +247,9 @@ def test_restore_over_earlier_restore_writes_nothing_outside(
             res = _tier1(bin_path, repo, target, pwfile, snap_a)
             assert res.returncode == 0, res.stderr
             res = _tier1(bin_path, repo, target, pwfile, snap_b)
-            # The folder at "l" is kept and reported: an error.
-            assert res.returncode == 1, res.stderr
+            # The folder at "l" is kept and reported: an error, and
+            # the walk finishes (#872: exit 4).
+            assert res.returncode == 4, res.stderr
             assert "a folder with this name is already there" in res.stderr
         else:
             _tier3(repo, target, snap_a)

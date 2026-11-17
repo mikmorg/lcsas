@@ -27,9 +27,6 @@
 #  include <sys/select.h>  /* auto-detect poll (#455) */
 #  include <sys/statvfs.h>
 #  include <sys/time.h>
-#else
-#  include <direct.h>
-#  define chdir _chdir
 #endif
 
 /* Windows has no mount parents: every optical drive's root is searched
@@ -977,7 +974,10 @@ fs_space(const char *path, unsigned long long *free_bytes,
     *total_bytes = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
 #else
     ULARGE_INTEGER avail, total;
-    if (!path || !GetDiskFreeSpaceExA(path, &avail, &total, NULL)) return -1;
+    wchar_t *w = path ? lcsas_w_path(path) : NULL;   /* #619 */
+    BOOL ok = w && GetDiskFreeSpaceExW(w, &avail, &total, NULL);
+    free(w);
+    if (!ok) return -1;
     *free_bytes  = (unsigned long long)avail.QuadPart;
     *total_bytes = (unsigned long long)total.QuadPart;
 #endif
@@ -1590,12 +1590,8 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
      * disc itself, so go to the system drive's root instead. */
     if (l->meta_disc) {
         char cwd[4096];
-        const char *gcwd =
-#ifndef _WIN32
-            getcwd(cwd, sizeof cwd);
-#else
-            _getcwd(cwd, sizeof cwd);
-#endif
+        /* On Windows getcwd and chdir are the UTF-8 shims (#619). */
+        const char *gcwd = getcwd(cwd, sizeof cwd);
         if (gcwd && path_under(cwd, l->meta_disc)) {
 #ifdef _WIN32
             const char *sys = getenv("SystemDrive");
