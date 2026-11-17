@@ -391,8 +391,8 @@ _CLI_BLOCK = textwrap.dedent("""\
             sys.exit(130)
         except RestoreAbortedError as exc:
             # #658: 'q' or end of input at the disc prompt (exit 75, as
-            # in tier 1), or a full target filesystem (exit 1).  Must
-            # come before the catch-all below.
+            # in tier 1), or a full target filesystem (exit 74, as in
+            # tier 1).  Must come before the catch-all below.
             print(f"[lcsas-restore] {exc}", file=sys.stderr)
             sys.exit(exc.exit_code)
         except NoKeyUnlockedError as exc:
