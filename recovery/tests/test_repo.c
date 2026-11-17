@@ -1876,11 +1876,12 @@ main(void)
         lcsas_blob_index ix;
         unsigned char iv[16];
         unsigned char want[32];
-        char old_name[65], new_name[65];
-        char old_doc[1024], new_doc[512];
+        char old_name[65], new_name[65], two_name[65];
+        char old_doc[1024], new_doc[512], two_doc[1024];
         char hx[65], hy[65], hp[65], hbad[65];
         memset(old_name, 'c', 64); old_name[64] = '\0';
         memset(new_name, 'd', 64); new_name[64] = '\0';
+        memset(two_name, 'e', 64); two_name[64] = '\0';
         memset(hx, '1', 64); hx[64] = '\0';
         memset(hy, '2', 64); hy[64] = '\0';
         memset(hp, '3', 64); hp[64] = '\0';
@@ -1895,6 +1896,13 @@ main(void)
                 "{\"supersedes\":[\"%s\"],\"packs\":[{\"id\":\"%s\",\"blobs\":["
                 "{\"id\":\"%s\",\"type\":\"data\",\"offset\":10,\"length\":10}"
                 "]}]}", old_name, hp, hy);
+        /* A kept file with two entries of invalid length: both are
+         * skipped, the first named and the second counted. */
+        sprintf(two_doc,
+                "{\"packs\":[{\"id\":\"%s\",\"blobs\":["
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":0,\"length\":0},"
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":0,\"length\":-5}"
+                "]}]}", hp, hbad, hx);
         if (mkdtemp(tmp) == NULL) {
             fprintf(stderr, "FAIL: 789 supersede mkdtemp\n"); fails++;
         } else {
@@ -1909,6 +1917,10 @@ main(void)
             snprintf(ipath, sizeof ipath, "%s/%s", idir, new_name);
             if (enc_write(&mk, iv, (const unsigned char *)new_doc,
                           strlen(new_doc), ipath) != 0) ok = 0;
+            iv[1] = 3;
+            snprintf(ipath, sizeof ipath, "%s/%s", idir, two_name);
+            if (enc_write(&mk, iv, (const unsigned char *)two_doc,
+                          strlen(two_doc), ipath) != 0) ok = 0;
             if (!ok) {
                 fprintf(stderr, "FAIL: 789 supersede enc_write\n"); fails++;
             } else {
