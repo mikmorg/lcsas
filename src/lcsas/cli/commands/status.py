@@ -414,6 +414,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
         # #862: a stage killed hard leaves a session folder with no
         # session.json, and ISOs that look finished.  burn refuses it;
         # status names it with the way out, never as waiting to be burned.
+        # Its volumes the #665 warning names already are left out of it,
+        # and a session with no other volume gets no second warning.
         killed: list[tuple[str, str, list[str]]] = []
         for s in list_sessions(conn):
             if s.status == SESSION_CLEANED:
@@ -426,16 +428,12 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 "USING (volume_id) WHERE sv.session_id = ? "
                 "AND v.status IN ('STAGING', 'BURNING') ORDER BY v.label",
                 (s.session_id,),
-            )]
-            killed.append((s.session_id, refusal, labels))
+            ) if str(r["label"]) not in incomplete]
+            if labels or s.session_id not in incomplete_sessions:
+                killed.append((s.session_id, refusal, labels))
         killed_ids = {sid for sid, _, _ in killed}
         killed_labels = {label for _, _, labels in killed for label in labels}
         unburned = [v for v in unburned if v.label not in killed_labels]
-        # The #665 warning, less what the #862 one already names.
-        incomplete_text = [label for label in incomplete
-                           if label not in killed_labels]
-        incomplete_text_sessions = [sid for sid in incomplete_sessions
-                                    if sid not in killed_ids]
         with_iso = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
         # #671: a volume whose disc failed verification is listed under
         # "needs re-burn", not as waiting to be burned.
@@ -497,15 +495,15 @@ def _cmd_status(args: argparse.Namespace) -> int:
             "WARNING: do not burn session %s%s. %s", sid,
             f" ({', '.join(labels)})" if labels else "", refusal,
         )
-    if incomplete_text:
+    if incomplete:
         logger.warning(
             "WARNING: %d volume(s) are INCOMPLETE: their staging did not "
             "finish, so their ISOs may lack error-correction data: %s. Do "
             "not burn them. Run 'lcsas session abort <id>' for session %s, "
             "then 'lcsas stage' again. Until then their packs are NOT on "
             "any disc.",
-            len(incomplete_text), ", ".join(incomplete_text),
-            ", ".join(incomplete_text_sessions),
+            len(incomplete), ", ".join(incomplete),
+            ", ".join(incomplete_sessions),
         )
     if waiting:
         logger.warning(
