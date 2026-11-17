@@ -40,23 +40,6 @@ _METADATA_FILES = ["config"]
 # The LCSAS source subpackages copied onto production discs.
 _SOURCE_SUBPACKAGES = ("restore", "utils", "db")
 
-# Empirical lower-bound reserve for the repository metadata and disc
-# catalog injected for a single-repository fixture on TEST_TINY-class
-# media.  The injected payload is dominated by the SQLite catalog skeleton
-# + each repository's Rustic index/snapshots/keys + ISO 9660 filesystem
-# overhead — together that's about 650-700 KB even for a 1-repository /
-# few-packs fixture.  Production deployments don't care
-# (the LCSASConfig default of 100 MB swamps it), but test fixtures that
-# materialize an ISO on the 2 MB TEST_TINY media MUST budget at least
-# this much in ``metadata_reserve_bytes`` or the staging directory will
-# overflow capacity.  Bump if the injector grows.  850 KB since rc9: the
-# per-disc tier-3 reader grew ~20 KB with the fast-AES selector (#774),
-# which put the single-tenant blind fixture's second ISO one sector over
-# TEST_TINY (its 5 packs, 1.3 MB, plus ~800 KB of metadata and ISO
-# overhead); the reserve must exceed that metadata so the packer moves a
-# pack to the next volume.
-MIN_HOLOGRAPHIC_RESERVE_BYTES = 850_000
-
 # --- Measuring the disc metadata before bin-packing (#811) -----------------
 #
 # Every data disc carries the disc catalog, each repository's index,
