@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -100,7 +101,9 @@ def _run(recovery: Path, tmp_path: Path, stdin: str = "pw\n",
          **extra: str) -> subprocess.CompletedProcess[str]:
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir(exist_ok=True)
-    (tmp_path / "standalone_restorer.py").write_text("# stub\n")
+    reader = tmp_path / "standalone_restorer.py"
+    if not reader.exists():
+        reader.write_text("# stub\n")
     env = {
         **os.environ,
         # /usr/local/bin (a host restic/rustic) is left out: a stock
@@ -579,3 +582,127 @@ def test_probe_floor_is_the_readers_floor() -> None:
     assert probe.groups() == reader.groups(), (probe.groups(), reader.groups())
     major, minor = reader.groups()
     assert f"Python {major}.{minor} or newer" in RESTORE_SH.read_text()
+
+
+# ── The words restore.sh reads, from the real tiers ─────────────────
+
+TIER1_C = REPO_ROOT / "recovery" / "src" / "lcsas-restore"
+FALLBACK = REPO_ROOT / "src" / "lcsas" / "restore" / "restic_fallback.py"
+
+
+def test_tier_words_restore_sh_reads_are_still_printed() -> None:
+    """restore.sh tells "finished, not all restored" from a failure by
+    the tiers' own words and the list's header.  A tier that rewords
+    one would silently turn exit 4 back into "failed, run resume.sh"
+    while every stub test above stays green."""
+    main_c = (TIER1_C / "main.c").read_text()
+    tree_c = (TIER1_C / "tree.c").read_text()
+    fallback = FALLBACK.read_text()
+    sh = RESTORE_SH.read_text()
+    assert '"[lcsas-restore] finished with errors: every other "' in main_c
+    assert 'tier_said "finished with errors"' in sh
+    for src in (tree_c, fallback):
+        assert "item(s) were NOT restored." in src
+        assert '"LCSAS restore: items that were NOT restored."' in src
+        assert '"path\\treason\\tblob_id"' in src
+        # (tier 1 splits the C literal across lines)
+        joined = re.sub(r'"\s*"', "", src)
+        assert "special file" in joined
+        assert "link not created: the target file system" in joined
+    assert 'tier_said "item(s) were NOT restored."' in sh
+    assert "ERROR: \\([0-9][0-9]*\\) item(s) were NOT restored." in sh
+    assert '"LCSAS "*) rm -f "$FAILURES_FILE"' in sh
+    assert "/^link not created: the target file system/" in sh
+
+
+# ── End to end: the real tier 1 and the real tier-3 reader ──────────
+
+TIER1_BIN = REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("tier", ["1", "3"])
+def test_real_tier_finished_with_errors_exits_4(tmp_path: Path,
+                                                tier: str) -> None:
+    """A real backup restored over a folder that holds a folder where
+    the backup has a file: the tier restores everything else, lists that
+    item ("a folder with this name is already there") and ends "finished
+    with errors"; restore.sh reports it and exits 4."""
+    if not shutil.which("rustic"):
+        pytest.skip("rustic not on PATH")
+    if tier == "1" and not TIER1_BIN.is_file():
+        pytest.skip(f"{TIER1_BIN} not present")
+    from lcsas.restore.standalone_builder import build_standalone
+    from tests.recovery_hardening._diff_helpers import build_rustic_repo
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "kept.txt").write_text("kept\n")
+    (src / "clash").write_text("a file in the backup\n")
+    pw = tmp_path / "pw"
+    pw.write_text("test-password\n")
+    repo = tmp_path / "rusticrepo"
+    build_rustic_repo(src, repo, pw)
+
+    recovery = tmp_path / "recovery"
+    (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
+    (recovery / "metadata").mkdir()
+    shutil.copytree(repo, recovery / "metadata" / "alpha")
+    if tier == "1":
+        shutil.copy2(TIER1_BIN, recovery / "bin" / HOST_TARGET / "lcsas-restore")
+    else:
+        (tmp_path / "standalone_restorer.py").write_text(build_standalone())
+    target = tmp_path / "restored"
+    (target / str(src).lstrip("/") / "clash").mkdir(parents=True)
+
+    res = _run(recovery, tmp_path, stdin="test-password\n",
+               LCSAS_FORCE_NONEMPTY_TARGET="1", LCSAS_ANOTHER_SET="0")
+
+    assert res.returncode == 4, res.stderr
+    assert ("The restore finished, but 1 item(s) could not be restored."
+            in res.stderr), res.stderr
+    assert "a folder with this name is already there" in (
+        target / "RESTORE_FAILURES.txt").read_text()
+    assert (target / str(src).lstrip("/") / "kept.txt").read_text() == "kept\n"
+    assert "resume.sh" not in res.stderr, res.stderr
+    assert "[tier 3] FAILED" not in res.stderr, res.stderr
+
+
+def test_foreign_bundled_python_is_named_another_kind_of_computer(
+        tmp_path: Path) -> None:
+    """#804: a bundled interpreter for another kind of computer (here a
+    macOS program) gets exit 126 from sh, dash too, and is named so, not
+    "musl loader missing"."""
+    macho = REPO_ROOT / "recovery" / "bin" / "aarch64-macos" / "lcsas-restore"
+    if not macho.is_file():
+        pytest.skip(f"{macho} not present")
+    recovery = _fixture(tmp_path)
+    py = recovery / "bin" / HOST_TARGET / "python" / "bin" / "python3"
+    py.parent.mkdir(parents=True)
+    shutil.copy2(macho, py)
+    py.chmod(0o755)
+    _python(tmp_path / "stubbin", "echo HOST_PYTHON_RAN\nexit 0\n")
+
+    res = _run(recovery, tmp_path, LCSAS_ANOTHER_SET="0")
+
+    assert res.returncode == 0, res.stderr
+    assert ("the bundled Python cannot run on this host (this computer cannot "
+            "run it: a program for another kind of computer") in res.stderr, (
+        res.stderr)
+
+
+def test_armv6_relocated_run(tmp_path: Path) -> None:
+    """Without LCSAS_NO_RELOCATE the run copies itself to the tools
+    folder first (as off a disc); the ARMv6 rules hold there too."""
+    recovery = _fixture(tmp_path)
+    _stub(recovery / "bin" / ARMV7 / "lcsas-restore",
+          "echo TIER1_RAN_ON_ARMV6\nexit 0\n")
+    _python(tmp_path / "stubbin", "echo HOST_PYTHON_RAN\nexit 0\n")
+
+    res = _run(recovery, tmp_path, LCSAS_ANOTHER_SET="0",
+               LCSAS_NO_RELOCATE="<unset>", **_armv6(tmp_path))
+
+    assert res.returncode == 0, res.stderr
+    assert "TIER1_RAN_ON_ARMV6" not in res.stdout, res.stdout
+    assert "HOST_PYTHON_RAN" in res.stdout, res.stdout
+    assert "This computer has an ARMv6 processor" in res.stderr, res.stderr

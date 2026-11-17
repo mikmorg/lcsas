@@ -555,3 +555,32 @@ def test_finished_with_errors_is_reported_as_finished(tmp_path: Path) -> None:
     assert "[tier 2]" not in out and "trying tier 2" not in out, out
     restored = [p.name for p in (meta / "restored").rglob("*") if p.is_file()]
     assert "ok.txt" in restored, restored
+
+
+
+def test_old_failures_list_is_removed_before_tier1(tmp_path: Path) -> None:
+    """#799: a RESTORE_FAILURES.txt an earlier restore left (it starts
+    with the tiers' "LCSAS " header) is removed before tier 1 runs, so a
+    list there afterwards is this run's.  Here tier 1 fails before its
+    walk (no such snapshot) and writes nothing: with the old list left
+    in place, its exit 1 would read as "finished" (exit 4)."""
+    env, meta = _fixture_meta(tmp_path)
+    target = meta / "restored"
+    target.mkdir()
+    (target / "RESTORE_FAILURES.txt").write_text(
+        "LCSAS restore: items that were NOT restored.\n\npath\treason\tblob_id\n"
+        "old\tname refused: an earlier run\t\n")
+    run_env = {**env, "LCSAS_NO_RELOCATE": "1",
+               "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+               "LCSAS_NEWEST_DISC_PROMPT": "0", "LCSAS_PW": "test",
+               "LCSAS_FORCE_NONEMPTY_TARGET": "1"}
+    res = subprocess.run(
+        ["wine", "cmd", "/c", "E:\\recovery\\scripts\\restore.bat",
+         "--snapshot", "deadbeef"],
+        input="E:\\restored\n", env=run_env, capture_output=True,
+        text=True, timeout=TIMEOUT)
+    out = res.stdout + res.stderr
+    assert "[tier 1] running" in out, out
+    assert res.returncode not in (0, 4), f"rc={res.returncode}\n{out}"
+    assert not (target / "RESTORE_FAILURES.txt").exists(), out
+    assert "could not be restored" not in out, out

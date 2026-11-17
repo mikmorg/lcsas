@@ -2358,6 +2358,40 @@ echo ============================================================
 pause
 exit /b 64
 
+REM ----- RESTORE_FAILURES.txt (#799) -----------------------------------
+REM :drop_old_failures removes a RESTORE_FAILURES.txt an earlier restore
+REM left in the target (only one that starts with the tiers' header), so
+REM that one there after tier 1 has run was written by this run.
+:drop_old_failures
+if not exist "%TARGET%\RESTORE_FAILURES.txt" goto :eof
+set "DOF_LINE="
+set /p "DOF_LINE=" <"%TARGET%\RESTORE_FAILURES.txt"
+if "!DOF_LINE:~0,6!"=="LCSAS " del /f /q "%TARGET%\RESTORE_FAILURES.txt" >nul 2>nul
+goto :eof
+
+REM :count_failures sets NR_N to the rows of RESTORE_FAILURES.txt that are
+REM errors: not a special file Windows cannot create, nor a link (the
+REM rows are path TAB reason TAB blob id; the column line's reason is
+REM "reason", and the header lines have no TAB).  eol is the tab too:
+REM the default ; would skip a row whose path starts with ;.  Each
+REM reason is handed to :count_row in NR_R, never as an argument: it can
+REM hold " < > |, which CALL would parse again.  One test per line:
+REM wine's cmd cannot parse "if ... if /i not ..." chains.
+:count_failures
+set "NR_N=0"
+for /f "usebackq eol=	 tokens=2 delims=	" %%B in ("%TARGET%\RESTORE_FAILURES.txt") do (
+    set "NR_R=%%B"
+    call :count_row
+)
+goto :eof
+:count_row
+if "!NR_R!"=="" goto :eof
+if "!NR_R!"=="reason" goto :eof
+if /i "!NR_R:~0,12!"=="special file" goto :eof
+if /i "!NR_R:~0,40!"=="link not created: the target file system" goto :eof
+set /a NR_N+=1
+goto :eof
+
 REM Reached only via `goto` from tier 1 when it stopped with exit code 75
 REM (the reader typed q at the disc prompt) or 74 (the disk is full), or
 REM with any exit code but 0 or 77 when the backup set has no data\
@@ -2392,37 +2426,3 @@ if defined RESUME_CMD (
 echo ============================================================
 pause
 exit /b %RC%
-
-REM ----- RESTORE_FAILURES.txt (#799) -----------------------------------
-REM :drop_old_failures removes a RESTORE_FAILURES.txt an earlier restore
-REM left in the target (only one that starts with the tiers' header), so
-REM that one there after tier 1 has run was written by this run.
-:drop_old_failures
-if not exist "%TARGET%\RESTORE_FAILURES.txt" goto :eof
-set "DOF_LINE="
-set /p "DOF_LINE=" <"%TARGET%\RESTORE_FAILURES.txt"
-if "!DOF_LINE:~0,6!"=="LCSAS " del /f /q "%TARGET%\RESTORE_FAILURES.txt" >nul 2>nul
-goto :eof
-
-REM :count_failures sets NR_N to the rows of RESTORE_FAILURES.txt that are
-REM errors: not a special file Windows cannot create, nor a link (the
-REM rows are path TAB reason TAB blob id; the column line's reason is
-REM "reason", and the header lines have no TAB).  eol is the tab too:
-REM the default ; would skip a row whose path starts with ;.  Each
-REM reason is handed to :count_row in NR_R, never as an argument: it can
-REM hold " < > |, which CALL would parse again.  One test per line:
-REM wine's cmd cannot parse "if ... if /i not ..." chains.
-:count_failures
-set "NR_N=0"
-for /f "usebackq eol=	 tokens=2 delims=	" %%B in ("%TARGET%\RESTORE_FAILURES.txt") do (
-    set "NR_R=%%B"
-    call :count_row
-)
-goto :eof
-:count_row
-if "!NR_R!"=="" goto :eof
-if "!NR_R!"=="reason" goto :eof
-if /i "!NR_R:~0,12!"=="special file" goto :eof
-if /i "!NR_R:~0,40!"=="link not created: the target file system" goto :eof
-set /a NR_N+=1
-goto :eof

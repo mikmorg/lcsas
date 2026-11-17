@@ -3676,7 +3676,8 @@ tier_ended() {
                     not_all_restored "$1"
                 fi
                 if [ "$2" = python ] && [ "$_te_rc" -eq 2 ] \
-                   && tier_said "could NOT be restored"; then
+                   && { tier_said "item(s) were NOT restored." \
+                        || tier_said "could NOT be restored"; }; then
                     not_all_restored "$1"
                 fi
             fi
@@ -4073,7 +4074,8 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
            && [ "$TIER_RC" -ne 77 ] && [ "$TIER_RC" -ne 74 ] \
            && [ -n "$TIER_ERR" ] && [ -s "$TIER_ERR" ] \
            && ! { [ "$TIER_RC" -eq 2 ] && [ -f "$FAILURES_FILE" ] \
-                  && tier_said "could NOT be restored"; }; then
+                  && { tier_said "item(s) were NOT restored." \
+                       || tier_said "could NOT be restored"; }; }; then
             printf '\n[tier 3] FAILED (rc=%d)\n' "$TIER_RC" >&2
             printf '[tier 3] -------------- captured stderr --------------\n' >&2
             sed 's/^/[tier 3] /' "$TIER_ERR" >&2
