@@ -1,6 +1,6 @@
 """
 test_readiness_checklist.py -- static regression guard for the operator
-production-readiness checklist in recovery/docs/READINESS_CHECKLIST.txt.
+production-readiness checklist in docs/development/recovery/READINESS_CHECKLIST.txt.
 
 FAILURE MODE CAUGHT
 -------------------
@@ -29,7 +29,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-_CHECKLIST = REPO_ROOT / "recovery" / "docs" / "READINESS_CHECKLIST.txt"
+_CHECKLIST = REPO_ROOT / "docs" / "development" / "recovery" / "READINESS_CHECKLIST.txt"
 
 # Read the file once at module level — tests are static string checks only.
 _TEXT = _CHECKLIST.read_text(encoding="utf-8")
@@ -38,12 +38,12 @@ _TEXT = _CHECKLIST.read_text(encoding="utf-8")
 def test_readiness_checklist_exists_and_nonempty():
     """READINESS_CHECKLIST.txt must exist and contain operator-readable text."""
     assert _CHECKLIST.exists(), (
-        "recovery/docs/READINESS_CHECKLIST.txt is missing. "
+        "docs/development/recovery/READINESS_CHECKLIST.txt is missing. "
         "Operators have no documented pre-flight gate before relying on the "
         "archive. Re-create the file (see issue #112)."
     )
     assert len(_TEXT.strip()) > 0, (
-        "recovery/docs/READINESS_CHECKLIST.txt exists but is empty. "
+        "docs/development/recovery/READINESS_CHECKLIST.txt exists but is empty. "
         "The file was likely corrupted or truncated."
     )
 

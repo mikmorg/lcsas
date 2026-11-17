@@ -100,8 +100,14 @@ recovery/
 └── docs/
     ├── TIERS.txt                  # the tier cascade (+ disc-integrity layer)
     ├── BUILD.txt                  # toolchain prerequisites
-    └── RECOVER.txt / RECOVER_WINDOWS.txt / READINESS_CHECKLIST.txt / ...
+    ├── RECOVER.txt / RECOVER_WINDOWS.txt / ...
+    └── AUDIT.md / EXEMPTIONS.md / STATUS_LEDGER.md / SANITIZER_SUPPRESSIONS.txt
+                                   # audit-gate records; not burned (#724)
 ```
+
+The owner's other recovery records (`READINESS_CHECKLIST.txt`,
+`UX_CONCERNS.txt`, `WINDOWS_RECOVERY_PLAN.txt`) live in
+`docs/development/recovery/`, which the meta disc does not carry either.
 
 The Python orchestrator lives at `src/lcsas/recovery/build.py`
 (`RecoveryBuilder`); its CLI surface is the `recovery` subparser in
@@ -216,7 +222,7 @@ manifest — run `lcsas recovery manifest` for that.  Exit code 0.
 
 - The cross-build path is exercised in CI by the recovery-build /
   audit-gate workflows (zig cc, with qemu/wine checks for the
-  non-host targets); see `recovery/docs/READINESS_CHECKLIST.txt`.
+  non-host targets); see `docs/development/recovery/READINESS_CHECKLIST.txt` in the source repository.
 - C-side behaviour is covered by `make -C recovery test`
   (see [`recovery test`](#lcsas-recovery-test--run-the-recovery-test-suite)).
 
@@ -501,7 +507,7 @@ the full `(OS, machine)` matrix and explicit rejections.
 
 | Area | Test |
 |------|------|
-| Cross-build / per-arch binaries | recovery-build + audit-gate CI (zig cc + qemu/wine checks); `recovery/docs/READINESS_CHECKLIST.txt` |
+| Cross-build / per-arch binaries | recovery-build + audit-gate CI (zig cc + qemu/wine checks); `docs/development/recovery/READINESS_CHECKLIST.txt` in the source repository |
 | C-side behaviour | `make -C recovery test` (`RecoveryBuilder.run_tests`) |
 | Bare (Python-free) path | `recovery/tests/test_bare_path.sh` (`make -C recovery test-bare-path`) |
 | In-house RS03 ECC (FMT-01) | `tests/e2e/test_ecc_selfrepair_no_dvdisaster.py` + cross-conformance vs dvdisaster |

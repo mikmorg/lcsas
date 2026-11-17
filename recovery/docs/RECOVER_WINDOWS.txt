@@ -85,7 +85,13 @@ a tap inside the black window starts selecting text, and while text
 is selected Windows stops the restore from writing to the window,
 so it waits.  Nothing is lost: press Esc, or right-click, and it
 goes on where it was.  The script does not change this setting for
-you.
+you.  It says it again, in short, under its banner, after the copy:
+
+     Do not click inside this window: a click pauses the restore, and
+     the window title then starts with "Select".  Press Esc to go on.
+
+If the restore seems stuck, see "WHAT IF restore.bat DOES NOT RUN?",
+CASE D.
 
 ────────────────────────────────────────────────────────────────────
 THE COPY ON THIS COMPUTER (the tools folder)
@@ -413,7 +419,8 @@ wrong, it names the word and asks for that card again.  When it has
 K cards, it rebuilds the password with the bundled
 lcsas-keyshare.exe and goes on.  Cards from another backup set, or
 the same card typed twice, do not rebuild the password: the script
-says so and asks for the cards again.
+says so.  Press ENTER to type the cards again, or Q to stop (exit
+code 77).
 
 Each card you type is kept in a file of its own in %TEMP% only until
 the password is rebuilt, and then deleted.  If you have already
@@ -423,9 +430,10 @@ password.
 TO TYPE NO CARDS: put each card in a text file of its own, all in
 one folder (a retyped card, or the card file as it was printed: its
 other lines may stay in the file), and set LCSAS_SHARES_DIR to that
-folder before you start.  More than K cards is fine, but every file
-must be a card typed right: one wrong word in any file and the script
-says so and asks for the cards on the keyboard instead.
+folder before you start.  More than K cards is fine.  A file with a
+wrong word in it is named and left out, and the other files are
+used.  If they cannot rebuild the password, the script says so and
+asks for the cards on the keyboard instead.
 
     set LCSAS_SHARES_DIR=C:\Users\me\cards
     D:\restore.bat
@@ -496,7 +504,8 @@ set goes into a folder of its own by default
 and only then is the tools folder deleted.
 
 To choose a set without the menu, set LCSAS_REPO to its name or its
-code before you start (see ENV_VARS.txt).
+code before you start (see ENV_VARS.txt).  If two sets have the same
+name, the script stops and lists their codes: use the code.
 
 ────────────────────────────────────────────────────────────────────
 DESTINATION FOLDER NOTES
@@ -580,8 +589,11 @@ DESTINATION FOLDER NOTES
   * Symlinks in the original archive are NOT restored on Windows.
     Creating Windows symlinks requires the SeCreateSymbolicLink
     privilege which we do not request.  The corresponding restored
-    paths will simply be missing.  Affected paths are reported on
-    stderr.
+    paths will simply be missing.  Each one is named in a
+    "NOT RESTORED:" line and listed in RESTORE_FAILURES.txt in the
+    folder you restored into; the restore still counts as complete.
+    Pipes, sockets and devices from Linux or macOS are not restored
+    on Windows either, and are listed the same way.
 
   * Filename case: Windows is case-insensitive.  If the original
     archive contained two files differing only by case (foo.txt and
@@ -641,7 +653,30 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
                C:\lcsas-set, the password file and what
                --mount-point means.
 
-CASE D.  The restore completes but some files appear truncated.
+CASE D.  The restore seems stuck: nothing new appears in the window
+         for a long time, or the window's title starts with
+         "Select".
+         A click or a tap inside the black window starts selecting
+         text, and while it selects, the restore is paused (Windows
+         calls this QuickEdit).  Press Esc, or right-click inside the
+         window, and the restore carries on.  Do not click inside the
+         window while it runs.  Some steps are slow without being
+         stuck: copying the programs at the start, and reading a whole
+         data disc into the pack cache, can each take minutes with
+         only a line at the start and one at the end.
+
+CASE E.  "ERROR: the restore program is missing" (exit code 64).
+         lcsas-restore.exe is not in recovery\bin\x86_64-pc-windows-gnu\
+         (or in the copy in the tools folder).  Antivirus software
+         may have removed it: restore it from the antivirus
+         program's quarantine list, or allow it (see "SMARTSCREEN
+         WARNING" above), then run restore.bat again from the META
+         disc.  Only that program can read a backup set from the
+         discs, so restore.bat stops before it asks for the folder
+         and the password.  Without it, use the Python reader (CASE
+         C (c) above).
+
+CASE F.  The restore completes but some files appear truncated.
          File a bug report with the SHA-256 of the affected file
          and the disc serial number.  This should not happen --
          every blob is authenticated and checked against its
@@ -701,7 +736,26 @@ TROUBLESHOOTING -- error messages
 "Those share cards do not fit together"
    -> Each card is fine on its own, but together they do not rebuild
       the password: they come from different splits (compare the
-      Split ID on the cards), or one card was typed twice.
+      Split ID on the cards), or one card was typed twice.  Press
+      ENTER to type the cards again, or Q to stop (exit code 77).
+
+"lcsas-keyshare.exe does not work on this computer"
+   -> The program that rebuilds the password from the cards gave an
+      answer it never gives for a card, so the cards are not to
+      blame.  Rebuild the password another way (see "SHARE CARDS
+      (SPLIT PASSWORDS)") and type it at the password question.
+
+"leaving out <file>: it has a mistake"
+   -> A file in the LCSAS_SHARES_DIR folder holds a card with a word
+      that is not a share word (the next line names it).  The other
+      card files are used; if enough are left, they rebuild the
+      password.  Correct the file, or remove it from the folder.
+
+"ERROR: more than one backup set is called ..."
+   -> LCSAS_REPO names a backup set by its name, and two sets have
+      that name.  Set LCSAS_REPO to the id of the one you want (the
+      message lists the ids), or remove the setting and choose from
+      the list.
 
 "pack not found: <hex>"  or  "tree blob not found: <hex>"
    -> The pack is on a data disc that is not in a drive, and
@@ -810,6 +864,9 @@ restore.sh; see RECOVER.txt):
         type YES at the warning about a folder that is not empty
     75  you typed Q at a disc box; carry on with "Resume LCSAS
         restore.bat" (see "STOPPING AND CARRYING ON")
+    64  lcsas-restore.exe is missing (antivirus may have removed
+        it), so the backup set cannot be read from the discs; see
+        "WHAT IF restore.bat DOES NOT RUN?", CASE E
     77  the password was wrong, or you typed Q at the password or a
         share card
   Any other code is the one lcsas-restore.exe stopped with; the

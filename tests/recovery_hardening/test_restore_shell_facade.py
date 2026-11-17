@@ -294,3 +294,87 @@ def test_real_disc_prompt_round_trip(
     assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
     assert _DETECTED in done.stdout
     _verify_restore(target, files)
+
+
+# --- #827: restore-shell swap-loop --------------------------------------------
+#
+# The prompts' disc-swap loop is one command now, so the agent never types
+# it out or saves it to a file (three rc9 runs were failed for saving it).
+# Stub disc-loader and sudo on PATH record what the loop does; the
+# "restore" is a shell that asks for a disc N times, then says it is
+# complete and asks "Restore another backup set?".
+
+
+def _fake_restore(boxes: int, *, complete: bool = True) -> str:
+    end = (
+        'echo "[lcsas-restore] restore complete"; '
+        "printf 'Restore another backup set from these discs? [y/N] '; "
+        'read a; echo "answer=$a"'
+        if complete else 'echo "fatal: no more discs"; exit 3'
+    )
+    return (
+        f'i=0; while [ "$i" -lt {boxes} ]; do echo "box $i"; '
+        f'echo "{_SWAP}"; printf "> "; read x; i=$((i+1)); done; {end}'
+    )
+
+
+@pytest.fixture
+def swap_env(tmux_env: dict[str, str], tmp_path: Path) -> dict[str, str]:
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    log = tmp_path / "actions.log"
+    for name in ("disc-loader", "sudo"):
+        stub = stubs / name
+        stub.write_text(f'#!/bin/sh\necho "{name} $*" >> "{log}"\n')
+        stub.chmod(0o755)
+    labels = tmp_path / "disc-labels.txt"
+    labels.write_text("LCSAS_META\nLCSAS_D1\nLCSAS_D2\nLCSAS_D3\n")
+    return {**tmux_env, "PATH": f"{stubs}:{tmux_env['PATH']}",
+            "RESTORE_SHELL_DISC_LABELS": str(labels), "SWAP_LOG": str(log)}
+
+
+def _actions(env: dict[str, str]) -> list[str]:
+    path = Path(env["SWAP_LOG"])
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def test_swap_loop_cycles_the_data_discs_until_complete(
+    swap_env: dict[str, str],
+) -> None:
+    _start(swap_env, "sh", "-c", _fake_restore(4))
+    done = _rs(swap_env, "swap-loop")
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert "RESTORE COMPLETE" in done.stdout
+    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader")]
+    # Label order, LCSAS_META skipped, starting over after the last.
+    assert inserts == [f"disc-loader insert LCSAS_D{n}" for n in (1, 2, 3, 1)]
+    actions = _actions(swap_env)
+    assert actions[:3] == ["sudo umount /media", "disc-loader insert LCSAS_D1",
+                           "sudo mount /dev/sr0 /media"]
+    _wait_on_screen(swap_env, "answer=n")
+
+
+def test_swap_loop_takes_another_mount_point(swap_env: dict[str, str]) -> None:
+    _start(swap_env, "sh", "-c", _fake_restore(1))
+    done = _rs(swap_env, "swap-loop", "/mnt")
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert "sudo mount /dev/sr0 /mnt" in _actions(swap_env)
+
+
+def test_swap_loop_stops_when_the_session_ends(swap_env: dict[str, str]) -> None:
+    _start(swap_env, "sh", "-c", _fake_restore(1, complete=False))
+    t0 = time.monotonic()
+    gone = _rs(swap_env, "swap-loop")
+    assert gone.returncode == 2, f"{gone.stdout}\n{gone.stderr}"
+    assert time.monotonic() - t0 < 30
+    assert "fatal: no more discs" in gone.stdout
+    assert "stopped after 1 disc swaps" in gone.stderr
+
+
+def test_swap_loop_needs_a_data_disc(swap_env: dict[str, str], tmp_path: Path) -> None:
+    only_meta = tmp_path / "meta-only.txt"
+    only_meta.write_text("LCSAS_META\n")
+    rc = _rs({**swap_env, "RESTORE_SHELL_DISC_LABELS": str(only_meta)}, "swap-loop")
+    assert rc.returncode == 2
+    assert "no data disc" in rc.stderr
+    assert _actions(swap_env) == []

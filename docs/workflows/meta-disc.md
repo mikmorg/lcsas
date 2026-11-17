@@ -138,7 +138,21 @@ subcommand. `--output` / `-o` is required.
       `recovery/fuzz/corpus/` stay off the disc (#562). Outside a git
       checkout it copies the whole folder minus build debris and fuzzer
       output, and warns that any other stray file will fail
-      `lcsas meta verify --strict`.
+      `lcsas meta verify --strict`. The upstream binaries (`rustic-static`,
+      `restic`, the CPython tree, musl's loader) are unpacked from the
+      archives pinned in `recovery/UPSTREAM.sha256`, checked against the
+      pin in the same read, never copied from the folder
+      `fetch_upstream.sh` unpacks beside each archive. If that folder
+      differs from its archive, the build stops and names the file
+      (#832). `lcsas meta verify --strict` unpacks the same archives from
+      the recovery cache and compares them with the disc; archives the
+      cache lacks are listed as not checked. Developer records stay off
+      the disc (#724): the audit-gate files in `recovery/docs/`
+      (`AUDIT.md`, `EXEMPTIONS.md`, `STATUS_LEDGER.md`,
+      `SANITIZER_SUPPRESSIONS.txt`, listed in
+      `DEV_ONLY_RECOVERY_FILES`) are skipped and their rows dropped from
+      both on-disc manifests, and `_bundle_docs` skips
+      `docs/development/recovery/`.
    9. `_write_restore_script` — copy `recovery/scripts/restore.sh` to the
       disc root as `restore.sh`, the disc's one restore driver, stamped
       with the build SHA and date, and leave a two-line redirect stub in
@@ -212,6 +226,9 @@ The directory is ready to feed to `xorriso` for ISO mastering.
   `TestRecoveryBundleTrackedOnly`: only git-tracked `recovery/` files
   are bundled and a checkout with fuzzer output still passes
   `meta verify --strict`).
+- `tests/recovery_hardening/test_meta_upstream_provenance.py` (#832:
+  bundled upstream bytes come from the pinned archives; a changed
+  unpacked copy fails the build; `meta verify --strict` compares).
 - `tests/integration/test_meta_volume_restore.py` end-to-end (build a
   meta disc, nuke everything else, run its `restore.sh` against the
   unpacked data discs, check byte-for-byte file hashes).
@@ -302,7 +319,7 @@ required-contents contract (`required_meta_paths`,
 | `lcsas/src/lcsas/` | `_bundle_source` | LCSAS Python package source (no external deps). |
 | `docs/`, `README.md`, `pyproject.toml` | `_bundle_docs` | Project docs including the restic-format spec for last-resort decoding. |
 | `restore.sh` (root), `recovery/scripts/restore.sh` (redirect stub) | `_write_restore_script` | The one restore driver: the tier dispatcher heirs run (single-drive default). |
-| `restore.bat`, `recovery/scripts/restore.bat`, `recovery/scripts/restore_auto.sh` | `_bundle_recovery_toolchain_artifacts` (copied from the source tree) | Windows dispatcher; POSIX-sh wrapper that runs `restore.sh` once per backup set it finds in the disc root's `metadata/`, with no questions (automation only). |
+| `restore.bat`, `recovery/scripts/restore.bat`, `recovery/scripts/restore_auto.sh` | `_bundle_recovery_toolchain_artifacts` (copied from the source tree) | Windows dispatcher; POSIX-sh wrapper that runs `restore.sh` once per backup set it finds in the disc root's `metadata/` and on the mounted discs, with no questions (automation only). |
 | `standalone_restorer.py` | `_bundle_standalone_restorer` | The Python reader (tier 3), for when no binary works. |
 | `keyshare_combine.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (heir pre-step when a password was split). |
 | `README_RESTORE.md` / `README_RESTORE.txt` | `_write_readme` / `_write_readme_txt` | Short pointer to the restore manuals, `recovery/docs/RECOVER.txt` and `RECOVER_WINDOWS.txt`. |
@@ -565,7 +582,8 @@ Therefore:
 4. Tier 1 never swaps to a catalog older than the one it started with.
    `recovery/scripts/restore_auto.sh` runs `restore.sh` per backup set
    with the newest-disc question off, so mount the newest data disc
-   before running it.
+   before running it.  It lists the sets on the mounted discs too, so a
+   set added after the meta disc was made is restored (#801).
 
 **Net effect:** the meta disc never goes stale in a way that matters.
 Rustic keys never go stale (a 2020-burnt meta disc can still decrypt a

@@ -2,8 +2,8 @@
 
 This is the single tracker for tier-1 recovery audit findings and the
 deferred-work parking lot.  It folds together the content that used to
-live in `AUDIT_FINDINGS.md` and `DEFERRED_WORK.txt` (both now thin
-redirect stubs), reconciled against what has actually landed in `master`
+live in `AUDIT_FINDINGS.md` and `DEFERRED_WORK.txt` (both since
+deleted, #724), reconciled against what has actually landed in `master`
 as of the 2026-06 audit-remediation pass.
 
 Two sibling documents are **not** folded in here because they are live
@@ -221,6 +221,8 @@ corrections (T1C-03):
   restore-tree containment guarantee.  Only RELATIVE linktargets that
   lexically escape the restore root are rejected.  The code
   (`path.c:lcsas_path_safe_symlink`) never changed — only the doc.
+  Since #782 the tree walk restores every link as stored (relative
+  escapes too) and never writes through one (#784).
 - **NUL in names.**  The NUL-rejection claim was always in the spec but was
   not enforced for names until 2026-06-13
   (`tree.c:decode_path_component`).  Old discs' binaries do not reject

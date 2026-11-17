@@ -105,7 +105,7 @@ def rebuilt(tmp_path):
     _add_packs(conn, config, 1, 1, 50)
     session_a = orch.stage()
     orch.burn_session(session_a.session_id, location="Home", skip_burn=True)
-    _add_packs(conn, config, 2, 3, 800_000)
+    _add_packs(conn, config, 2, 3, 450_000)  # two volumes (#811)
     session_b = orch.stage()
     assert len(session_b.manifests) == 2
     conn.close()
@@ -300,7 +300,7 @@ def test_mixed_session_deletes_nothing(tmp_path):
     register_repo(conn, "family", "Family",
                   str(config.repositories["family"].mirror_path))
     conn.commit()
-    _add_packs(conn, config, 1, 3, 800_000)
+    _add_packs(conn, config, 1, 3, 450_000)  # two volumes (#811)
     orch = _orchestrator(config, conn)
     result = orch.stage()
     first, second = result.manifests

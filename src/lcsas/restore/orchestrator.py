@@ -1350,10 +1350,12 @@ def _restore_with_python_reader(
         logger.error("Python reader restore failed: %s", exc)
         return 1
     if restorer.failures:
-        # Tolerant traversal skipped one or more files; the bulk
-        # of the data is restored and a manifest lists the rest.
+        # Tolerant traversal could not restore one or more items;
+        # the bulk of the data is restored and a manifest lists
+        # the rest (special files alone do not end up here, #783).
         logger.error(
-            "Python reader restore finished with %d skipped file(s). "
+            "Python reader restore finished with %d item(s) not "
+            "restored. "
             "See %s/RESTORE_FAILURES.txt; the rest of your data is "
             "intact. Re-run from a newer meta disc or an undamaged "
             "disc of the affected volume to restore them.",

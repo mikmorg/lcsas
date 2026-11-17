@@ -60,7 +60,8 @@ REM window starts selecting text, and while it selects, the console
 REM stops whatever writes to it, so the restore looks hung.  The script
 REM does not change the reader's console settings to turn it off; it
 REM says so first, before the copy.  The copy that runs after the
-REM relocation does not say it again.
+REM relocation does not say it here, but the banner of every run says
+REM it again in short (see "LCSAS Restore (Windows)" below).
 if not defined LCSAS_RELOCATED (
     echo.
     echo  NOTE: do not click inside this window while the restore runs.
@@ -522,6 +523,9 @@ if defined RL_LABEL goto :newest_done
 call :find_newest
 if defined DATA_SEEN goto :newest_found
 if "%LCSAS_NEWEST_DISC_PROMPT%"=="0" goto :newest_done
+REM Without lcsas-restore.exe no data disc can be read (#631): do not ask
+REM the reader to swap discs first; the banner below says what is wrong.
+if not exist "%RECOVERY%\bin\%ARCH%\lcsas-restore.exe" goto :newest_done
 if defined STAYING_ON_DISC goto :newest_done
 echo.
 echo  Take the META disc out and put in your NEWEST data disc: the one
@@ -635,10 +639,22 @@ set "SEL="
 if not defined LCSAS_REPO goto :menu
 for /l %%I in (1,1,%NCAND%) do call :match_set %%I
 if defined SEL goto :repo_selected
+REM Not an id: a name_cmd or a name.  Two sets of the same name are both
+REM refused, as restore.sh refuses them (#627 item 8): up to rc9 the
+REM first one was restored, which may not be the one the reader meant.
+set "SEL_N=0"
 for /l %%I in (1,1,%NCAND%) do call :match_name %%I
+if %SEL_N% gtr 1 goto :repo_ambiguous
 if defined SEL goto :repo_selected
 echo ERROR: LCSAS_REPO=!LCSAS_REPO! is not among the backup sets on this archive:
 for /l %%I in (1,1,%NCAND%) do call :menu_line %%I
+pause
+exit /b 1
+:repo_ambiguous
+echo ERROR: more than one backup set is called !LCSAS_REPO!.  Set LCSAS_REPO
+echo to the id of the one to restore, or leave it unset and choose by
+echo number.  The ids and the names:
+for /l %%I in (1,1,%NCAND%) do call :id_line %%I
 pause
 exit /b 1
 
@@ -682,22 +698,27 @@ REM is: nothing in it is run.
 echo    [%~1] !CAND_LABEL_%~1!
 goto :eof
 
+:id_line
+REM %~1 = a candidate's number: its id, then its line in the menu.
+echo    !CAND_NAME_%~1!  !CAND_LABEL_%~1!
+goto :eof
+
 :match_set
 REM %~1 = a candidate's number.  SEL = it when LCSAS_REPO is its folder
-REM name (the id) or its name_cmd, case-blind.
+REM name (the id), case-blind.  Ids are unique.
 if defined SEL goto :eof
 if /i "!CAND_NAME_%~1!"=="!LCSAS_REPO!" set "SEL=%~1"
-if defined CAND_NC_%~1 if /i "!CAND_NC_%~1!"=="!LCSAS_REPO!" set "SEL=%~1"
 goto :eof
 
 :match_name
-REM %~1 = a candidate's number.  SEL = it when LCSAS_REPO is the name=
-REM line of its marker; tried only when no id or name_cmd matched.  That
-REM line may hold any character, "!" and "^" too, so it is compared with
-REM delayed expansion off, straight from the file (case-blind).  cmd
-REM reads the file in the console's code page, so a name with letters
-REM outside A-Z may not match: use the id or the name in the menu then.
-if defined SEL goto :eof
+REM %~1 = a candidate's number.  When LCSAS_REPO is its name_cmd or the
+REM name= line of its marker (case-blind), SEL = it and SEL_N counts it;
+REM tried only when no id matched.  The name= line may hold any
+REM character, "!" and "^" too, so it is compared with delayed expansion
+REM off, straight from the file.  cmd reads the file in the console's
+REM code page, so a name with letters outside A-Z may not match: use the
+REM id or the name in the menu then.
+if defined CAND_NC_%~1 if /i "!CAND_NC_%~1!"=="!LCSAS_REPO!" goto :match_hit
 if not defined CAND_MK_%~1 goto :eof
 set "MN_FILE=!CAND_%~1!\LCSAS_REPO.txt"
 setlocal disabledelayedexpansion
@@ -710,7 +731,10 @@ for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%MN_FILE%") do (
     )
 )
 endlocal & set "MN_HIT=%MN_HIT%"
-if defined MN_HIT set "SEL=%~1"
+if not defined MN_HIT goto :eof
+:match_hit
+set "SEL=%~1"
+set /a SEL_N+=1
 goto :eof
 
 :add_cand
@@ -842,6 +866,22 @@ echo Repo:          !REPO!
 echo Backup set:    !SET_NAME!
 echo Architecture:  %ARCH%
 echo.
+REM The QuickEdit note again, in short (#613): the relocated copy, which
+REM the reader watches for the rest of the restore, does not print the
+REM long one at the top.
+echo Do not click inside this window: a click pauses the restore, and
+echo the window title then starts with "Select".  Press Esc to go on.
+echo.
+REM Tier 1's program missing, for a backup set read from the discs (no
+REM data\ in its folder): tier 2 cannot ask for discs, so nothing here
+REM can restore the set (C5, #631).  Antivirus may have removed the
+REM program; say so now, before the folder and the password, and stop.
+REM Not inside the tier-1 step below: that runs only when the program
+REM is there.  A set with its own data\ still goes on to tier 2.
+if exist "%RECOVERY%\bin\%ARCH%\lcsas-restore.exe" goto :tier1_present
+if exist "%REPO%\data\" goto :tier1_present
+goto :tier1_missing
+:tier1_present
 REM A restore that carries on goes into the folder it was going into.
 if not defined RESUME goto :ask_target
 set "TARGET=!RESUME_TARGET!"
@@ -1266,6 +1306,11 @@ REM Every file in the folder is one card.  They are copied as card1.txt,
 REM card2.txt ... into a new folder under %TEMP% and combined there, so
 REM no name in the folder reaches the command line.  More than K cards
 REM is fine (lcsas-keyshare uses K of them).
+REM A card file with a mistake in it (lcsas-keyshare exit 3) is left out
+REM and the others are combined, as restore.sh does (#627 item 3); up to
+REM rc9 one bad file failed the whole folder.  When the cards do not
+REM rebuild the password, the script asks on the keyboard; a run whose
+REM input has ended stops there with 77.
 set "PW_SOURCE="
 set "SH_DIR="
 if not exist "%KS_EXE%" goto :shares_dir_bad
@@ -1274,6 +1319,7 @@ if not defined SH_DIR goto :shares_dir_bad
 set "SH_N=0"
 for /f "delims=" %%F in ('dir /b /a-d "%LCSAS_SHARES_DIR%" 2^>nul') do (
     set /a SH_N+=1
+    set "SH_NAME_!SH_N!=%%F"
     copy /y "%LCSAS_SHARES_DIR%\%%F" "!SH_DIR!\card!SH_N!.txt" >nul 2>nul
 )
 if "%SH_N%"=="0" goto :shares_dir_bad
@@ -1284,11 +1330,35 @@ pushd "%SH_DIR%"
 set "KRC=%ERRORLEVEL%"
 popd
 if "%KRC%"=="0" goto :shares_dir_ok
+if not "%KRC%"=="3" goto :shares_dir_failed
+REM Each card alone: :shares_dir_one keeps it, leaves it out, or finds
+REM that the combiner itself does not work here (SH_BROKEN).
+set "SH_ARGS="
+set "SH_KEPT=0"
+set "SH_BROKEN="
+for /l %%I in (1,1,%SH_N%) do call :shares_dir_one %%I
+if defined SH_BROKEN goto :shares_dir_broken
+if "%SH_KEPT%"=="0" goto :shares_dir_failed
+if %SH_KEPT% geq %SH_N% goto :shares_dir_failed
+echo [lcsas-restore] combining the other %SH_KEPT% card files
+del /f /q "%PWFILE%" >nul 2>nul
+pushd "%SH_DIR%"
+"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt" <nul
+set "KRC=%ERRORLEVEL%"
+popd
+if "%KRC%"=="0" goto :shares_dir_ok
+:shares_dir_failed
+del /f /q "%PWFILE%" >nul 2>nul
 echo [lcsas-restore] the share cards in LCSAS_SHARES_DIR did not rebuild
 echo                 the password:
 type "%SH_DIR%\keyshare.txt"
 rmdir /s /q "%SH_DIR%" 2>nul
 goto :pw_next
+:shares_dir_broken
+del /f /q "%PWFILE%" >nul 2>nul
+rmdir /s /q "%SH_DIR%" 2>nul
+set "KRC=%SH_BROKEN%"
+goto :keyshare_broken
 :shares_dir_bad
 if defined SH_DIR rmdir /s /q "%SH_DIR%" 2>nul
 echo [lcsas-restore] cannot use the share cards in LCSAS_SHARES_DIR:
@@ -1348,9 +1418,16 @@ pushd "%SH_DIR%"
 set "KRC=%ERRORLEVEL%"
 popd
 REM 0: a card that holds the whole password; 1: a good card that needs
-REM others (C1 amendment).  3: a word is wrong; 2: unreadable.
+REM others (C1 amendment).  3: a word is wrong.  Anything else (2: the
+REM file the script wrote cannot be read, or the program does not run
+REM here) is not the card's fault, and typing it again would not help:
+REM the password is asked for instead, as restore.sh does (#627 item 8).
 if "%KRC%"=="3" goto :share_bad
-if "%KRC%"=="2" goto :share_bad
+if "%KRC%"=="0" goto :share_good
+if "%KRC%"=="1" goto :share_good
+rmdir /s /q "%SH_DIR%" 2>nul
+goto :keyshare_broken
+:share_good
 set /a SI+=1
 goto :share_next
 
@@ -1383,6 +1460,12 @@ popd
 if "%KRC%"=="0" goto :shares_rebuilt
 del /f /q "%PWFILE%" >nul 2>nul
 rmdir /s /q "%SH_DIR%" 2>nul
+REM 1 (cannot combine) and 3 (a bad card) are the cards'; anything else
+REM is the program's.
+if "%KRC%"=="1" goto :shares_misfit
+if "%KRC%"=="3" goto :shares_misfit
+goto :keyshare_broken
+:shares_misfit
 echo.
 echo Those share cards do not fit together, so they do not rebuild the
 echo password.  Every card must have the same Split ID and belong to
@@ -1406,6 +1489,17 @@ goto :pw_next
 :shares_gave_up
 rmdir /s /q "%SH_DIR%" 2>nul
 goto :pw_gave_up
+
+:keyshare_broken
+REM lcsas-keyshare.exe answered with a code it never gives for a card
+REM (KRC): it does not work on this computer.  The cards are not to
+REM blame, so the rebuilt password is asked for instead.
+echo [lcsas-restore] lcsas-keyshare.exe does not work on this computer
+echo                 ^(exit %KRC%^); the cards are not to blame.  Rebuild the
+echo                 password as RECOVER_WINDOWS.txt "SHARE CARDS" says,
+echo                 then type it.
+set "PW_OWN=1"
+goto :pw_next
 
 :pw_check
 REM Try the password before the restore (#608).  77 = a key file
@@ -1816,6 +1910,28 @@ mkdir "%SH_DIR%" 2>nul
 if not exist "%SH_DIR%\" set "SH_DIR="
 goto :eof
 
+:shares_dir_one
+REM %1 = the number of a card file copied from LCSAS_SHARES_DIR into
+REM SH_DIR.  It is checked alone: 0 or 1 keeps it (SH_ARGS, SH_KEPT); 3,
+REM a mistake in it, leaves it out and says which file; anything else
+REM means lcsas-keyshare.exe does not work here (SH_BROKEN = the code).
+if defined SH_BROKEN goto :eof
+pushd "%SH_DIR%"
+"%KS_EXE%" "card%1.txt" >nul 2> "one.txt" <nul
+set "SH_RC=%ERRORLEVEL%"
+popd
+if "%SH_RC%"=="0" goto :shares_dir_keep
+if "%SH_RC%"=="1" goto :shares_dir_keep
+if not "%SH_RC%"=="3" set "SH_BROKEN=%SH_RC%"
+if not "%SH_RC%"=="3" goto :eof
+echo [lcsas-restore] leaving out !SH_NAME_%1!: it has a mistake:
+type "%SH_DIR%\one.txt"
+goto :eof
+:shares_dir_keep
+set /a SH_KEPT+=1
+set "SH_ARGS=!SH_ARGS! card%1.txt"
+goto :eof
+
 :find_newest
 REM DATA_SEEN = a drive D: to Z: holds a data disc.  NEWEST_ROOT ("E:\")
 REM and NEWEST_LABEL = the one whose label is newest, by year, then by
@@ -1842,11 +1958,35 @@ if not defined RL_LABEL goto :eof
 call :parse_label
 if not defined PL_YEAR goto :eof
 if %PL_YEAR% lss %NEWEST_Y% goto :eof
-if %PL_YEAR% equ %NEWEST_Y% if %PL_SEQ% leq %NEWEST_S% goto :eof
+if %PL_YEAR% gtr %NEWEST_Y% goto :consider_take
+if %PL_SEQ% lss %NEWEST_S% goto :eof
+if %PL_SEQ% gtr %NEWEST_S% goto :consider_take
+REM The same label on two discs (a disc and a copy of it, say): the one
+REM whose catalog.db is newer, as restore.sh ranks them (C2, #605).
+REM Else the first, by drive letter.
+call :file_newer "%1:\catalog.db" "!NEWEST_ROOT!"
+if not defined FN_NEWER goto :eof
+:consider_take
 set "NEWEST_ROOT=%1:\"
 set "NEWEST_LABEL=!RL_LABEL!"
 set "NEWEST_Y=%PL_YEAR%"
 set "NEWEST_S=%PL_SEQ%"
+goto :eof
+
+:file_newer
+REM %~1 = a file, %~2 = a folder ending in "\".  FN_NEWER = 1 when %~1
+REM is there and is newer than the file of the same name in %~2 (or
+REM that one is missing).  A file's date as cmd prints it depends on the
+REM computer's language (#482), so xcopy compares them: /D lists a file
+REM only when it is newer than the one it would replace, and /L only
+REM lists, it copies nothing.  The list names the file; its last line,
+REM the count, is in the computer's language and holds no file name.
+REM The folder goes as "%~2." ("E:\."): a program reads the \" of "E:\"
+REM as a quote and the rest of the line as part of the name.
+set "FN_NEWER="
+if not exist "%~1" goto :eof
+xcopy "%~1" "%~2." /D /L /Y 2>nul <nul | findstr /i /l /c:"%~nx1" >nul 2>nul
+if not errorlevel 1 set "FN_NEWER=1"
 goto :eof
 
 :read_label
@@ -2145,6 +2285,32 @@ REM reliably propagates to `cmd /c` (issue #384).  Normal flow stops at
 REM the `exit /b 1` above and never falls into this label.
 :wrong_password
 exit /b 77
+
+REM Reached only via `goto` from the banner, when lcsas-restore.exe is
+REM missing and the backup set has no data\ of its own (#631): before
+REM the folder and the password, so nothing was written.  The relocated
+REM copy has no lcsas-restore.exe either (:copy_one skips a file that is
+REM missing on the disc), so the reader starts again from the META
+REM disc once the program is back, not from "Resume LCSAS restore.bat".
+REM 64 as in restore.sh: no program here can restore this set.
+:tier1_missing
+for %%I in ("%RECOVERY%\bin\%ARCH%\lcsas-restore.exe") do set "TM_EXE=%%~fI"
+for %%I in ("%RECOVERY%\docs") do set "TM_DOCS=%%~fI"
+echo ============================================================
+echo  ERROR: the restore program is missing:
+echo    !TM_EXE!
+echo.
+echo  Antivirus software may have removed it ^(put it in
+echo  "quarantine"^).  Only that program can read a backup set from
+echo  the discs, so nothing was restored.
+echo.
+echo  Restore it from your antivirus program's quarantine list, or
+echo  allow it, then run restore.bat again from the META disc.  See
+echo  "SMARTSCREEN WARNING" in RECOVER_WINDOWS.txt, in the folder
+echo    !TM_DOCS!
+echo ============================================================
+pause
+exit /b 64
 
 REM Reached only via `goto` from tier 1 when it stopped with exit code 75
 REM (the reader typed q at the disc prompt), or with any exit code but 0

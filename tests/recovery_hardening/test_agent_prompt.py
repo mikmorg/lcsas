@@ -23,6 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 AGENT_PROMPT = (
     REPO_ROOT / "tests" / "e2e" / "cdemu_blind_restore" / "agent_prompt.txt"
 )
+RESTORE_SHELL = (
+    REPO_ROOT / "tests" / "e2e" / "cdemu_blind_restore" / "restore-shell"
+)
 
 
 def _text() -> str:
@@ -167,10 +170,32 @@ def test_agent_prompt_documents_media_mount_workflow() -> None:
     )
 
 
+def _step4() -> str:
+    text = _text()
+    step4_start = text.find("Step 4 — disc-swap LOOP")
+    assert step4_start != -1, (
+        "Step 4 disc-swap LOOP header missing from agent_prompt.txt; "
+        "this test cannot scope its check."
+    )
+    # The section ends at the next "Step 5" or at the WHAT YOU MAY NOT
+    # DO header, whichever comes first.
+    step5_idx = text.find("Step 5", step4_start)
+    whatnot_idx = text.find("WHAT YOU MAY NOT", step4_start)
+    section_end = min(
+        [i for i in (step5_idx, whatnot_idx, len(text)) if i > step4_start]
+    )
+    return text[step4_start: section_end]
+
+
+def _swap_loop_source() -> str:
+    src = RESTORE_SHELL.read_text()
+    start = src.index("    swap-loop)")
+    return src[start: src.index(";;\n", src.index("exit 1", start))]
+
+
 def test_agent_prompt_disc_swap_polling_is_bounded() -> None:
-    """The disc-swap polling pattern must be a BOUNDED for-loop with
-    a break on tmux death — never an unbounded `until ...; do sleep
-    ...; done`.
+    """The disc-swap polling must be BOUNDED and stop when the session
+    ends — never an unbounded `until ...; do sleep ...; done`.
 
     Why: in blind-restore run-fix2, the agent followed the prior
     prompt's `until tmux capture-pane -t r -p | grep -qE ...; do
@@ -183,51 +208,36 @@ def test_agent_prompt_disc_swap_polling_is_bounded() -> None:
     blind-test outer harness hung past the 6-minute restore for
     another ~14 minutes before being manually killed.
 
-    Fix: every polling block in the swap-loop section must be either
-    (a) inside a `for _ in $(seq 1 N)` or `for i in 1 2 3 ...` outer
-    cap that bounds the iteration count, or (b) include an `|| break`
-    on the `tmux capture-pane` so a dead tmux exits the loop.  This
-    test checks both signals.
+    Since #827 the loop is `restore-shell swap-loop`, one command, so
+    the agent never types it out or saves it to a file (three rc9 runs
+    were failed for saving it).  Step 4 must name it, and the helper
+    must (a) cap the number of swaps and (b) stop at once when
+    `expect` reports the session ended, instead of polling it.
     """
-    text = _text()
-    # The swap-loop section (between "Step 4" and the next major
-    # section) is what we care about; restrict the check to it.
-    step4_start = text.find("Step 4 — disc-swap LOOP")
-    assert step4_start != -1, (
-        "Step 4 disc-swap LOOP header missing from agent_prompt.txt; "
-        "this test cannot scope its check."
+    section = _step4()
+    assert "restore-shell swap-loop" in section, (
+        "Step 4 must run the disc-swap loop as `restore-shell swap-loop` "
+        "(#827), not a loop the agent types or saves to a file."
     )
-    # Heuristic: section ends at the next "Step 5" or at the WHAT YOU
-    # MAY NOT DO header.  Use whichever comes first.
-    step5_idx = text.find("Step 5", step4_start)
-    whatnot_idx = text.find("WHAT YOU MAY NOT", step4_start)
-    section_end = min(
-        [i for i in (step5_idx, whatnot_idx, len(text)) if i > step4_start]
+    assert "cap at 40 swaps" in section
+    loop = _swap_loop_source()
+    assert 'while [ "$swaps" -lt 40 ]' in loop, (
+        "restore-shell swap-loop must be bounded (40 swaps)."
     )
-    section = text[step4_start: section_end]
+    assert 'if [ "$rc" -ne 0 ]; then' in loop and 'exit "$rc"' in loop, (
+        "restore-shell swap-loop must stop as soon as expect fails "
+        "(timeout, or the session ended), not keep polling a dead session."
+    )
 
-    # The bounded-form signal: a `for _ in $(seq 1 N)` or `for i in
-    # 1 2 3 ...` somewhere in the swap section.
-    bounded = (
-        "for _ in $(seq" in section
-        or "for i in $(seq" in section
-        or "for _ in 1 2 3" in section
-        or "for i in 1 2 3" in section
-    )
-    assert bounded, (
-        "Step 4 swap loop must use a BOUNDED `for ... do ... done` "
-        "for polling tmux output, not an unbounded `until`.  An "
-        "unbounded until-loop orphans a sleep process when tmux dies, "
-        "blocking session finalization for the full 45-min wall-clock "
-        "cap.  See the run-fix2 retrospective."
-    )
-    # Defence-in-depth: the polling block should also `break` on
-    # capture failure so a dead tmux exits the loop immediately
-    # rather than waiting for the outer cap.
-    assert "|| break" in section, (
-        "Step 4 swap loop must `break` when `tmux capture-pane` "
-        "exits non-zero (the canonical 'tmux session ended' signal).  "
-        "Without this, every successful restore wastes the full "
-        "outer-cap timeout per swap because the until/for body keeps "
-        "polling a dead session."
-    )
+
+def test_swap_loop_mounts_data_discs_at_media() -> None:
+    """The helper's default mount point is /media (see
+    test_agent_prompt_documents_media_mount_workflow), and it chains
+    umount, disc-loader insert, mount and ENTER."""
+    loop = _swap_loop_source()
+    assert 'mnt="${2:-/media}"' in loop
+    order = [loop.index(s) for s in (
+        'sudo umount "$mnt"', 'disc-loader insert "$label"',
+        'sudo mount /dev/sr0 "$mnt"', 'sh "$0" send ""',
+    )]
+    assert order == sorted(order), loop

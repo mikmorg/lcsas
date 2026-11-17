@@ -31,10 +31,18 @@ class LeftOutSnapshot:
 
 @dataclass
 class SnapshotCoverage:
-    """The result for one repository."""
+    """The result for one repository.
+
+    ``missing`` maps every snapshot ID to the pack IDs it needs that are
+    not held (empty when it is complete).  ``stage`` uses it to decide,
+    volume by volume, which snapshots the packs staged so far complete
+    (#813).
+    """
 
     complete: set[str] = field(default_factory=set)
     left_out: list[LeftOutSnapshot] = field(default_factory=list)
+    missing: dict[str, frozenset[str]] = field(default_factory=dict)
+    times: dict[str, str] = field(default_factory=dict)
 
 
 def snapshot_coverage(
@@ -59,6 +67,8 @@ def snapshot_coverage(
     with quiet_log():
         per_snapshot = restorer.missing_packs_by_snapshot(held_packs)
     for snap, missing in per_snapshot:
+        result.missing[snap.snapshot_id] = missing
+        result.times[snap.snapshot_id] = snap.time
         if missing:
             result.left_out.append(LeftOutSnapshot(
                 snapshot_id=snap.snapshot_id, time=snap.time,

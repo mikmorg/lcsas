@@ -38,12 +38,10 @@ from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.models import Volume
 from lcsas.db.schema import create_all
-from lcsas.staging.metadata import (
-    MIN_HOLOGRAPHIC_RESERVE_BYTES,
-    HolographicInjector,
-)
+from lcsas.staging.metadata import HolographicInjector
 from lcsas.staging.repo_marker import make_repo_marker
 from lcsas.utils.fs import dir_size_bytes
+from tests.e2e.fixture_lib import MIN_HOLOGRAPHIC_RESERVE_BYTES
 
 # Empirically measured: xorriso -as mkisofs -r -J -joliet-long -iso-level 3
 # adds roughly 600-700 KB of ISO 9660 overhead on top of a small staging
@@ -220,7 +218,7 @@ def test_holographic_reserve_constant_covers_payload(tmp_path):
         f"Holographic payload is {staging_size:,} bytes but "
         f"MIN_HOLOGRAPHIC_RESERVE_BYTES is "
         f"{MIN_HOLOGRAPHIC_RESERVE_BYTES:,}.  Bump the constant in "
-        f"src/lcsas/staging/metadata.py or shrink the injector."
+        f"tests/e2e/fixture_lib.py or shrink the injector."
     )
 
 

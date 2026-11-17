@@ -49,15 +49,14 @@ TEST_DATA_DIR = BASE / "test_data"
 DB_PATH = DB_DIR / "archive_master.db"
 PASSWORD_FILE = DB_DIR / "test_password.txt"
 
-# Use TEST_TINY media type — 1 MB capacity, no ECC overhead
+# Use TEST_TINY media type — 2 MB capacity, no ECC overhead
 MEDIA_TYPE = "TEST_TINY"
 
 # Number of test files per "dataset" directory.
 # Sizes are kept small so packs + the disc catalog and repository metadata
-# fit inside TEST_TINY (1 MB).  The metadata injection (SQLite catalog + each
-# repository's index / snapshot / key files) is ~700 KB for this fixture,
-# leaving ~300 KB usable for pack data per volume.  Keep total pack data
-# under that budget.
+# fit inside TEST_TINY (2 MB).  The stage measures the metadata (SQLite
+# catalog + each repository's index / snapshot / key files + recovery
+# tools, about 800 KB here) and leaves the rest of each disc for packs.
 NUM_FILES = 8
 FILE_SIZE_RANGE = (256, 4_000)  # 256 B to 4 KB
 
@@ -366,7 +365,6 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     from lcsas.db.queries import get_total_unarchived_bytes, get_unarchived_packs
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
-    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
 
     mt = MediaType.TEST_TINY
     has_dvdisaster = tool_available("dvdisaster")
@@ -397,7 +395,8 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
         default_media_type=mt,
         default_ecc_redundancy_pct=10 if has_dvdisaster else 0,
         label_prefix="E2ETEST",
-        metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,
+        # The stage measures the metadata every disc carries (#811).
+        metadata_reserve_bytes=0,
         repositories=repo_configs,
     )
 

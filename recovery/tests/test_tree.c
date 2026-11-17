@@ -18,6 +18,17 @@
  *   - #661: the resume skip needs size AND mtime to match.
  *   - #781: escaped node names are decoded; refused names are named
  *     and make the walk return LCSAS_TREE_INCOMPLETE.
+ *   - #782: every symlink is restored with its stored target (up and
+ *     out, absolute, dangling, linktarget_raw); a target that cannot be
+ *     used is an error.
+ *   - #783: a FIFO is made; a device a non-root run cannot make is
+ *     listed without failing; an unknown type is an error; every item
+ *     not restored has a row in RESTORE_FAILURES.txt, and a clean run
+ *     removes an old one.
+ *   - #784: a restore over an earlier one never writes through a
+ *     symlink and never removes a folder.
+ *   - #785 (root only): the owner is set before the mode, so setuid
+ *     survives.
  */
 #include "tree.h"
 #include "repo.h"
@@ -29,6 +40,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <utime.h>
 
@@ -472,6 +485,60 @@ static int count_entries(const char *dir)
     return n;
 }
 
+/* ── #782-#785 helpers ──────────────────────────────────────────── */
+
+#define FAILURES "RESTORE_FAILURES.txt"
+
+static char g_list[16384];
+
+/* Read target/RESTORE_FAILURES.txt into g_list; 0 when absent. */
+static int read_failures(const char *target)
+{
+    char p[1024];
+    FILE *f;
+    size_t n;
+    g_list[0] = '\0';
+    sprintf(p, "%s/%s", target, FAILURES);
+    f = fopen(p, "rb");
+    if (!f) return 0;
+    n = fread(g_list, 1, sizeof g_list - 1, f);
+    fclose(f);
+    g_list[n] = '\0';
+    return 1;
+}
+
+/* Rows after the "path\treason\tblob_id" line; -1 when no file. */
+static int failure_rows(const char *target)
+{
+    const char *p;
+    int rows = 0;
+    if (!read_failures(target)) return -1;
+    p = strstr(g_list, "path\treason\tblob_id\n");
+    if (!p) return -2;
+    p = strchr(p, '\n') + 1;
+    while (*p) {
+        if (*p == '\n') rows++;
+        p++;
+    }
+    return rows;
+}
+
+static int failures_has(const char *target, const char *text)
+{
+    return read_failures(target) && strstr(g_list, text) != NULL;
+}
+
+static int link_is(const char *dir, const char *name, const char *want)
+{
+    char p[1024], got[1024];
+    ssize_t n;
+    sprintf(p, "%s/%s", dir, name);
+    n = readlink(p, got, sizeof got - 1);
+    if (n < 0) return 0;
+    got[n] = '\0';
+    return strcmp(got, want) == 0;
+}
+
 static void test_escaped_names(void)
 {
     /* #781: rustic stores a name that holds '"', '\', a control
@@ -536,10 +603,16 @@ static void test_escaped_names(void)
         fprintf(stderr, "FAIL escaped_names: subtree name not decoded\n");
         fails++;
     }
-    /* Nothing else: no escaped spelling, no refused node. */
-    if (count_entries(target) != 6) {
-        fprintf(stderr, "FAIL escaped_names: %d entries, want 6\n",
+    /* Nothing else: no escaped spelling, no refused node; only the
+     * list of the 7 refused ones (#783). */
+    if (count_entries(target) != 7) {
+        fprintf(stderr, "FAIL escaped_names: %d entries, want 7\n",
                 count_entries(target));
+        fails++;
+    }
+    if (failure_rows(target) != 7 || !failures_has(target, "name refused")) {
+        fprintf(stderr, "FAIL escaped_names: %d rows in %s, want 7\n",
+                failure_rows(target), FAILURES);
         fails++;
     }
     if (path_exists(target, "a") || path_exists(target, "n")) {
@@ -566,8 +639,474 @@ static void test_long_name_refused(void)
         fprintf(stderr, "FAIL long_name: not reported as incomplete\n");
         fails++;
     }
-    if (count_entries(target) != 0) {
+    /* Only the list of items not restored (#783). */
+    if (count_entries(target) != 1 || !path_exists(target, FAILURES)) {
         fprintf(stderr, "FAIL long_name: something was written\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
+
+static void test_links_as_stored(void)
+{
+    /* #782: links are made with the stored target, wherever it points;
+     * #841 finding: linktarget_raw (base64 of the exact bytes) wins
+     * over the lossy linktarget.  dGd06Q== is "tgt" + byte 0xE9. */
+    char *target = mktarget();
+    g_blobs[0] =
+        "{\"nodes\":["
+        "{\"name\":\"up\",\"type\":\"symlink\",\"linktarget\":\"../b/f\"},"
+        "{\"name\":\"out\",\"type\":\"symlink\","
+        "\"linktarget\":\"../../../../outside\"},"
+        "{\"name\":\"abs\",\"type\":\"symlink\","
+        "\"linktarget\":\"/etc/hostname\"},"
+        "{\"name\":\"dangling\",\"type\":\"symlink\","
+        "\"linktarget\":\"nowhere\"},"
+        "{\"name\":\"raw\",\"type\":\"symlink\","
+        "\"linktarget\":\"tgt\\ufffd\",\"linktarget_raw\":\"dGd06Q==\"}"
+        "]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != 0) {
+        fprintf(stderr, "FAIL links_as_stored: rc != 0\n");
+        fails++;
+    }
+    if (!link_is(target, "up", "../b/f")
+            || !link_is(target, "out", "../../../../outside")
+            || !link_is(target, "abs", "/etc/hostname")
+            || !link_is(target, "dangling", "nowhere")) {
+        fprintf(stderr, "FAIL links_as_stored: a link is missing or wrong\n");
+        fails++;
+    }
+    if (!link_is(target, "raw", "tgt\xe9")) {
+        fprintf(stderr, "FAIL links_as_stored: linktarget_raw not used\n");
+        fails++;
+    }
+    if (path_exists(target, FAILURES)) {
+        fprintf(stderr, "FAIL links_as_stored: %s written\n", FAILURES);
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_link_target_refused(void)
+{
+    /* #782/#783: a target that cannot be used is an error: reported,
+     * listed, no link made, and the walk ends incomplete. */
+    static char blob[12000];
+    char *target = mktarget();
+    char longt[5001];
+    int rc;
+    memset(longt, 'x', 5000);
+    longt[5000] = '\0';
+    sprintf(blob,
+            "{\"nodes\":["
+            "{\"name\":\"empty\",\"type\":\"symlink\",\"linktarget\":\"\"},"
+            "{\"name\":\"nul\",\"type\":\"symlink\","
+            "\"linktarget\":\"a\\u0000b\"},"
+            "{\"name\":\"none\",\"type\":\"symlink\"},"
+            "{\"name\":\"badraw\",\"type\":\"symlink\","
+            "\"linktarget\":\"x\",\"linktarget_raw\":\"*not base64*\"},"
+            "{\"name\":\"long\",\"type\":\"symlink\",\"linktarget\":\"%s\"},"
+            "{\"name\":\"ok\",\"type\":\"symlink\",\"linktarget\":\"t\"}"
+            "]}", longt);
+    g_blobs[0] = blob;
+    g_blobs[1] = NULL;
+    rc = run_scripted(target);
+    if (rc != LCSAS_TREE_INCOMPLETE) {
+        fprintf(stderr, "FAIL link_refused: rc %d, want %d\n", rc,
+                LCSAS_TREE_INCOMPLETE);
+        fails++;
+    }
+    if (path_exists(target, "empty") || path_exists(target, "nul")
+            || path_exists(target, "none") || path_exists(target, "badraw")
+            || path_exists(target, "long") || !link_is(target, "ok", "t")) {
+        fprintf(stderr, "FAIL link_refused: wrong links made\n");
+        fails++;
+    }
+    if (failure_rows(target) != 5
+            || !failures_has(target, "link refused: the link target is too long")
+            || !failures_has(target, "the link target holds a NUL byte")
+            || !failures_has(target, "the link target cannot be decoded")) {
+        fprintf(stderr, "FAIL link_refused: list is wrong:\n%s\n", g_list);
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_special_files(void)
+{
+    /* #783: a FIFO is made (as rustic does, no privilege needed); a
+     * device needs root: without it, it is listed and the walk still
+     * ends 0.  An unknown type is an error. */
+    char *target = mktarget();
+    char p[512];
+    struct stat st;
+    int rc;
+    g_blobs[0] =
+        "{\"nodes\":["
+        "{\"name\":\"ff\",\"type\":\"fifo\",\"mode\":33554868},"
+        "{\"name\":\"null\",\"type\":\"chardev\",\"mode\":420,"
+        "\"device\":259},"
+        "{\"name\":\"sock\",\"type\":\"socket\",\"mode\":16777725},"
+        "{\"name\":\"blk\",\"type\":\"dev\",\"mode\":420,"
+        "\"device\":1992}"
+        "]}";
+    g_blobs[1] = NULL;
+    rc = run_scripted(target);
+    if (rc != 0) {
+        fprintf(stderr, "FAIL special: rc %d, want 0\n", rc);
+        fails++;
+    }
+    sprintf(p, "%s/ff", target);
+    if (lstat(p, &st) != 0 || !S_ISFIFO(st.st_mode)
+            || (st.st_mode & 0777) != 0664) {
+        fprintf(stderr, "FAIL special: ff is not a 0664 FIFO\n");
+        fails++;
+    }
+    sprintf(p, "%s/null", target);
+    if (geteuid() == 0) {
+        if (lstat(p, &st) != 0 || !S_ISCHR(st.st_mode)
+                || st.st_rdev != (dev_t)259) {
+            fprintf(stderr, "FAIL special: root did not make the device\n");
+            fails++;
+        }
+    } else if (lstat(p, &st) == 0 || failure_rows(target) != 2
+               || !failures_has(target,
+                                "special file (character device) not "
+                                "created")
+               || !failures_has(target,
+                                "special file (block device) not created")) {
+        fprintf(stderr, "FAIL special: device not listed:\n%s\n", g_list);
+        fails++;
+    }
+    sprintf(p, "%s/sock", target);
+    if (lstat(p, &st) != 0 || !S_ISSOCK(st.st_mode)) {
+        fprintf(stderr, "FAIL special: sock is not a socket\n");
+        fails++;
+    }
+    rmrf(target);
+
+    target = mktarget();
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"d\",\"type\":\"door\"}]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != LCSAS_TREE_INCOMPLETE
+            || !failures_has(target, "unknown item type: door")) {
+        fprintf(stderr, "FAIL special: unknown type not an error\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_failures_file_lifecycle(void)
+{
+    /* #783: a clean run removes the list an earlier run wrote, and
+     * leaves alone a file of that name we did not write. */
+    char *target = mktarget();
+    char p[512];
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"d\",\"type\":\"door\"}]}";
+    g_blobs[1] = NULL;
+    (void)run_scripted(target);
+    if (!path_exists(target, FAILURES)) {
+        fprintf(stderr, "FAIL failures_file: not written\n");
+        fails++;
+    }
+    g_blobs[0] = "{\"nodes\":[]}";
+    if (run_scripted(target) != 0 || path_exists(target, FAILURES)) {
+        fprintf(stderr, "FAIL failures_file: old list kept\n");
+        fails++;
+    }
+    /* A folder of that name: the list cannot be written; no crash. */
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"d\",\"type\":\"door\"}]}";
+    sprintf(p, "%s/%s", target, FAILURES);
+    mkdir(p, 0700);
+    if (run_scripted(target) != LCSAS_TREE_INCOMPLETE) {
+        fprintf(stderr, "FAIL failures_file: folder case rc\n");
+        fails++;
+    }
+    rmdir(p);
+    g_blobs[0] = "{\"nodes\":[]}";
+    write_file(p, "my own notes\n", 0644);
+    (void)run_scripted(target);
+    if (!path_exists(target, FAILURES)) {
+        fprintf(stderr, "FAIL failures_file: removed a file not ours\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_restore_over_links(void)
+{
+    /* #784: the target holds an earlier restore with links where this
+     * snapshot has a file ("x"), a folder ("d") and a link ("l" is a
+     * folder here); "q" is a FIFO where the snapshot has a file.
+     * Nothing outside the target may change, no folder is removed. */
+    char *target = mktarget();
+    char outside[512], odir[512], p[512], q[512], buf[64];
+    struct stat st;
+    int rc;
+    sprintf(outside, "%s_outside", target);
+    sprintf(odir, "%s_odir", target);
+    rmrf(odir);
+    mkdir(odir, 0751);
+    write_file(outside, "OUTSIDE", 0644);
+    sprintf(p, "%s/x", target);
+    if (symlink(outside, p) != 0) perror("symlink x");
+    sprintf(p, "%s/d", target);
+    if (symlink(odir, p) != 0) perror("symlink d");
+    sprintf(p, "%s/l", target);
+    mkdir(p, 0700);
+    sprintf(q, "%s/l/keep", target);
+    write_file(q, "keep", 0644);
+    sprintf(p, "%s/q", target);
+    if (mkfifo(p, 0600) != 0) perror("mkfifo q");
+
+    g_blobs[0] =
+        "{\"nodes\":["
+        "{\"name\":\"x\",\"type\":\"file\",\"mode\":420,\"size\":0,"
+        "\"content\":[]},"
+        "{\"name\":\"d\",\"type\":\"dir\",\"mode\":448,"
+        "\"subtree\":\"" TREE_ID "\"},"
+        "{\"name\":\"l\",\"type\":\"symlink\",\"linktarget\":\"x\"},"
+        "{\"name\":\"q\",\"type\":\"file\",\"mode\":420,\"size\":0,"
+        "\"content\":[]}"
+        "]}";
+    g_blobs[1] = "{\"nodes\":[{\"name\":\"inner\",\"type\":\"file\","
+                 "\"mode\":420,\"size\":0,\"content\":[]}]}";
+    g_blobs[2] = NULL;
+    rc = run_scripted(target);
+    if (rc != LCSAS_TREE_INCOMPLETE) {
+        fprintf(stderr, "FAIL over_links: rc %d, want %d (folder at l)\n",
+                rc, LCSAS_TREE_INCOMPLETE);
+        fails++;
+    }
+    read_file(outside, buf, sizeof buf);
+    if (strcmp(buf, "OUTSIDE") != 0) {
+        fprintf(stderr, "FAIL over_links: wrote through the link x\n");
+        fails++;
+    }
+    if (path_exists(odir, "inner")
+            || stat(odir, &st) != 0 || (st.st_mode & 0777) != 0751) {
+        fprintf(stderr, "FAIL over_links: wrote through the link d\n");
+        fails++;
+    }
+    sprintf(p, "%s/x", target);
+    if (lstat(p, &st) != 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr, "FAIL over_links: x is not a regular file\n");
+        fails++;
+    }
+    sprintf(p, "%s/d", target);
+    if (lstat(p, &st) != 0 || !S_ISDIR(st.st_mode)
+            || !path_exists(p, "inner")) {
+        fprintf(stderr, "FAIL over_links: d is not a real folder\n");
+        fails++;
+    }
+    sprintf(p, "%s/q", target);
+    if (lstat(p, &st) != 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr, "FAIL over_links: the FIFO q was not replaced\n");
+        fails++;
+    }
+    if (lstat(q, &st) != 0
+            || !failures_has(target,
+                             "a folder with this name is already there")) {
+        fprintf(stderr, "FAIL over_links: folder l removed or not listed\n");
+        fails++;
+    }
+    rmrf(target);
+    rmrf(odir);
+    unlink(outside);
+}
+
+
+static void test_malformed_nodes(void)
+{
+    /* #783: a node with no name or no type is an error, not a silent
+     * skip; a link whose name the file system refuses (over 255 bytes)
+     * is an error too. */
+    static char blob[2048];
+    char *target = mktarget();
+    char longname[301];
+    memset(longname, 'n', 300);
+    longname[300] = '\0';
+    sprintf(blob,
+            "{\"nodes\":["
+            "{\"type\":\"file\",\"content\":[]},"
+            "{\"name\":\"notype\"},"
+            "{\"name\":\"%s\",\"type\":\"symlink\",\"linktarget\":\"t\"}"
+            "]}", longname);
+    g_blobs[0] = blob;
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != LCSAS_TREE_INCOMPLETE
+            || failure_rows(target) != 3
+            || !failures_has(target, "unknown item type: ?")
+            || !failures_has(target, "link not created: ")) {
+        fprintf(stderr, "FAIL malformed_nodes: list is wrong:\n%s\n", g_list);
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_read_only_target(void)
+{
+    /* #784: a link that cannot be removed is reported, never written
+     * through; #783: when the list cannot be written the restore says
+     * so and carries on.  Root ignores the read-only mode: skip. */
+    char *target;
+    char outside[512], p[512], buf[64];
+    if (geteuid() == 0) return;
+    target = mktarget();
+    sprintf(outside, "%s_outside", target);
+    write_file(outside, "OUTSIDE", 0644);
+    sprintf(p, "%s/x", target);
+    if (symlink(outside, p) != 0) perror("symlink x");
+    chmod(target, 0555);
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"x\",\"type\":\"symlink\","
+                 "\"linktarget\":\"y\"}]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != LCSAS_TREE_INCOMPLETE) {
+        fprintf(stderr, "FAIL read_only_target: not incomplete\n");
+        fails++;
+    }
+    read_file(outside, buf, sizeof buf);
+    if (strcmp(buf, "OUTSIDE") != 0 || !link_is(target, "x", outside)) {
+        fprintf(stderr, "FAIL read_only_target: link touched\n");
+        fails++;
+    }
+    rmrf(target);
+    unlink(outside);
+}
+
+
+static void test_list_rows_visible(void)
+{
+    /* #783: a row shows a name the way tier 3's _visible() does: valid
+     * UTF-8 as is, every other byte as \xNN.  The refused name holds
+     * '/' and raw bytes: e-acute, euro, U+0800, U+D7FF, U+10000,
+     * U+10FFFF (all valid), then 0xFF, a bad second byte, a bad third
+     * byte and a truncated sequence (all not). */
+    static const char name[] =
+        "\xc3\xa9\xe2\x82\xac\xe0\xa0\x80\xed\x9f\xbf"
+        "\xf0\x90\x80\x80\xf4\x8f\xbf\xbf"
+        "\xff\xe2\x28\xe2\x82\x28/\xc3";
+    static const char want[] =
+        "\xc3\xa9\xe2\x82\xac\xe0\xa0\x80\xed\x9f\xbf"
+        "\xf0\x90\x80\x80\xf4\x8f\xbf\xbf"
+        "\\xff\\xe2(\\xe2\\x82(/\\xc3\t"
+        "name refused: the name holds '/'\t\n";
+    static char blob[512];
+    char *target = mktarget();
+    const char *row;
+    sprintf(blob, "{\"nodes\":[{\"name\":\"%s\",\"type\":\"file\","
+            "\"content\":[]}]}", name);
+    g_blobs[0] = blob;
+    g_blobs[1] = NULL;
+    (void)run_scripted(target);
+    (void)read_failures(target);
+    row = strstr(g_list, "blob_id\n");
+    row = row ? strchr(row, '\n') + 1 : "";
+    if (strncmp(row, target, strlen(target)) == 0) {
+        row += strlen(target) + 1;                    /* past "<target>/" */
+    }
+    if (strcmp(row, want) != 0) {
+        fprintf(stderr, "FAIL list_rows_visible: row is %s\n", row);
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_link_target_raw_limits(void)
+{
+    /* #852: linktarget_raw too long for the base64 buffer, decoding to
+     * more than 4095 bytes, or badly stored; and a badly stored plain
+     * linktarget.  Each is an error; nothing is made. */
+    static char blob[16384];
+    char *target = mktarget();
+    char a6000[6001], a5500[5501];
+    memset(a6000, 'A', 6000);
+    a6000[6000] = '\0';
+    memset(a5500, 'A', 5500);
+    a5500[5500] = '\0';
+    sprintf(blob,
+            "{\"nodes\":["
+            "{\"name\":\"r1\",\"type\":\"symlink\",\"linktarget_raw\":\"%s\"},"
+            "{\"name\":\"r2\",\"type\":\"symlink\",\"linktarget_raw\":\"%s\"},"
+            "{\"name\":\"r3\",\"type\":\"symlink\","
+            "\"linktarget_raw\":\"QQ\\q\"},"
+            "{\"name\":\"t1\",\"type\":\"symlink\",\"linktarget\":\"a\\q\"}"
+            "]}", a6000, a5500);
+    g_blobs[0] = blob;
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != LCSAS_TREE_INCOMPLETE
+            || failure_rows(target) != 4
+            || path_exists(target, "r1") || path_exists(target, "r2")
+            || path_exists(target, "r3") || path_exists(target, "t1")) {
+        fprintf(stderr, "FAIL raw_limits: list is wrong:\n%s\n", g_list);
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_file_at_link_path(void)
+{
+    /* #784: a regular file where the snapshot has a link or a folder
+     * is replaced (only folders are never removed). */
+    char *target = mktarget();
+    char p[512];
+    struct stat st;
+    sprintf(p, "%s/l", target);
+    write_file(p, "old", 0644);
+    sprintf(p, "%s/d", target);
+    write_file(p, "old", 0644);
+    g_blobs[0] = "{\"nodes\":["
+                 "{\"name\":\"l\",\"type\":\"symlink\",\"linktarget\":\"t\"},"
+                 "{\"name\":\"d\",\"type\":\"dir\",\"mode\":493}"
+                 "]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != 0 || !link_is(target, "l", "t")
+            || lstat(p, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "FAIL file_at_link_path\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_root_setuid_kept(void)
+{
+    /* #785: as root, the owner is set before the mode (a change of
+     * owner clears setuid/setgid).  Go mode: bit 23 setuid, bit 22
+     * setgid; 8389101 = setuid + 0755, 4194797 = setgid + 0755. */
+    char *target;
+    char p[512];
+    struct stat st;
+    if (geteuid() != 0) {
+        printf("test_tree: root_setuid SKIP (not root)\n");
+        return;
+    }
+    target = mktarget();
+    g_blobs[0] =
+        "{\"nodes\":["
+        "{\"name\":\"su\",\"type\":\"file\",\"mode\":8389101,"
+        "\"uid\":1234,\"gid\":1234,\"size\":0,\"content\":[]},"
+        "{\"name\":\"sg\",\"type\":\"file\",\"mode\":4194797,"
+        "\"uid\":1234,\"gid\":1234,\"size\":0,\"content\":[]}"
+        "]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != 0) {
+        fprintf(stderr, "FAIL root_setuid: rc != 0\n");
+        fails++;
+    }
+    sprintf(p, "%s/su", target);
+    if (stat(p, &st) != 0 || (st.st_mode & 07777) != 04755
+            || st.st_uid != 1234) {
+        fprintf(stderr, "FAIL root_setuid: su mode %o uid %ld\n",
+                (unsigned)(st.st_mode & 07777), (long)st.st_uid);
+        fails++;
+    }
+    sprintf(p, "%s/sg", target);
+    if (stat(p, &st) != 0 || (st.st_mode & 07777) != 02755
+            || st.st_gid != 1234) {
+        fprintf(stderr, "FAIL root_setuid: sg mode %o gid %ld\n",
+                (unsigned)(st.st_mode & 07777), (long)st.st_gid);
         fails++;
     }
     rmrf(target);
@@ -749,6 +1288,17 @@ int main(void)
     test_blob_failure_message();
     test_escaped_names();
     test_long_name_refused();
+    test_links_as_stored();
+    test_link_target_refused();
+    test_special_files();
+    test_failures_file_lifecycle();
+    test_restore_over_links();
+    test_malformed_nodes();
+    test_read_only_target();
+    test_list_rows_visible();
+    test_link_target_raw_limits();
+    test_file_at_link_path();
+    test_root_setuid_kept();
     if (fails) {
         fprintf(stderr, "test_tree: %d FAIL\n", fails);
         return 1;

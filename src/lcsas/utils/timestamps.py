@@ -23,6 +23,7 @@ sorts before ``T``, and offsets differ), so:
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 
@@ -49,10 +50,28 @@ def parse_utc(value: object) -> datetime | None:
     return when.astimezone(UTC)
 
 
+_FRACTION = re.compile(r"\d:\d\d\.(\d+)")
+
+
 def to_utc_iso(value: object) -> str | None:
-    """*value* rewritten in the catalog's format, or None if unreadable."""
+    """*value* rewritten as UTC ISO-8601 with an offset, or None if
+    unreadable.
+
+    The fraction of a second keeps the digits *value* had (none, three
+    as :func:`utc_now` writes, or six), so a time recorded in the catalog
+    and in a burn receipt stays the same text in both (#826).  Python's
+    own ``isoformat()`` would widen milliseconds to six digits, and drop
+    a fraction that happens to be zero.
+    """
     when = parse_utc(value)
-    return when.isoformat() if when is not None else None
+    if when is None:
+        return None
+    assert isinstance(value, str)  # parse_utc reads only text
+    match = _FRACTION.search(value)
+    digits = len(match.group(1)) if match else 0
+    timespec = ("seconds" if digits == 0
+                else "milliseconds" if digits <= 3 else "microseconds")
+    return when.isoformat(timespec=timespec)
 
 
 def same_instant(a: object, b: object) -> bool:

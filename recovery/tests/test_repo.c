@@ -37,9 +37,9 @@ static int fails = 0;
 #define FIXTURE_DATA_BLOB_HEX  \
     "6565160e5ca15054fd190b02fab20e4e7daf41e54d19e649d0798d7aca56c5b2"
 #define FIXTURE_TREE_BLOB_HEX  \
-    "237a180d730dec85d965f258133ab21344bc8c8e838d15f46e7bb3265055169c"
+    "7964d0c4508a9fde2708a1c0cf9be5e268912c1ae3cf6a915e8271ee4bdc581b"
 #define FIXTURE_PACK_HEX       \
-    "296d51e56553e37195dd7db46e4731b5ba661f757f503effc7df5022b4bf682d"
+    "52eb6be8aff2e1cf6f05eeee789d68dc26f5a5a4d50d5674e7bfea8d881b899f"
 /* RST-02: a data blob stored UNcompressed whose plaintext is itself a
  * zstd frame; index entry has no uncompressed_length.  read_blob must
  * return it verbatim (no false decompression). */
@@ -792,13 +792,22 @@ main(void)
             }
         }
 
-        /* Unsupported chardev node must be skipped (not crash). */
+        /* #783: a chardev node is made as rustic makes it (mknod).
+         * This one has no "device" field, so it is device 0:0, which
+         * Linux lets anyone make (the overlayfs whiteout); a real
+         * device needs root, and without it is listed (test_tree.c).
+         * Either way the restore ends 0 (checked above), and whatever
+         * was made is a character device. */
         {
             char dev[1024];
             struct stat ds;
             snprintf(dev, sizeof dev, "%s/device.dev", target);
-            if (stat(dev, &ds) == 0) {
-                fprintf(stderr, "FAIL: chardev node was materialized\n");
+            if (lstat(dev, &ds) == 0 && !S_ISCHR(ds.st_mode)) {
+                fprintf(stderr, "FAIL: device.dev is not a chardev\n");
+                fails++;
+            }
+            if (geteuid() == 0 && lstat(dev, &ds) != 0) {
+                fprintf(stderr, "FAIL: root did not make the chardev\n");
                 fails++;
             }
         }
@@ -990,8 +999,10 @@ main(void)
             }
         }
 
-        /* Tree with a node type > 32 bytes — exercises tree.c line 243
-         * (type decode_string returns -1, loop continues). */
+        /* Tree with a node type > 32 bytes: the type cannot be read,
+         * so the node is an unknown type -- an error since #783 (it
+         * was skipped silently): reported, and the walk carries on and
+         * ends LCSAS_TREE_INCOMPLETE. */
         {
             char tdir[] = "/tmp/lcsas_test_long_type_XXXXXX";
             if (mkdtemp(tdir)) {
@@ -999,9 +1010,10 @@ main(void)
                     repo, &mk, &ix, FIXTURE_LONG_TYPE_TREE_HEX,
                     tdir, tdir, NULL, NULL
                 );
-                if (rc2 != 0) {
+                if (rc2 != LCSAS_TREE_INCOMPLETE) {
                     fprintf(stderr,
-                            "FAIL: long-type tree should rc=0, got %d\n", rc2);
+                            "FAIL: long-type tree should rc=%d, got %d\n",
+                            LCSAS_TREE_INCOMPLETE, rc2);
                     fails++;
                 }
                 {

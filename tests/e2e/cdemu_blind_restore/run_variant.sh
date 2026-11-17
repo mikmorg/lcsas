@@ -45,12 +45,15 @@
 #                          once the manual Windows drill (#476) passes.  It
 #                          fails loud, spending nothing, until then.
 #
-# Exits 0 with `SCORE: 16/16 (variant=<name>)` on full pass.
+# Exits 0 with `SCORE: 16/16 (variant=<name>)  OUTCOME PASS  CONDUCT PASS`
+# on full pass: verify.sh's checks come in two groups, OUTCOME (every file
+# restored intact, from the discs, with the documented tools) and CONDUCT
+# (the rules kept), and a run passes when both pass (#827).
 # Exits non-zero on any failure; the score line still prints.
 #
 # The run is scored on its OWN run folder ($RUN_DIR), never "the newest
 # /tmp/lcsas-blind-* folder" (#830).  A pass needs all 16 of verify.sh's
-# checks to run and pass; a run that cannot be scored (no folder, no
+# checks (9 OUTCOME, 7 CONDUCT) to run and pass; a run that cannot be scored (no folder, no
 # transcript, a 0/0 score) fails, XFAIL-listed or not.  Besides the
 # SCORE line it prints `RUN_DIR: <path>` before the agent starts and one
 # `RESULT: {json}` line (run folder, score, cost, turns) at the end, for
@@ -178,6 +181,9 @@ fi
 # fixed).  The LCSAS_VARIANT_XFAIL env var (comma-separated) still
 # overrides the ledger for ad-hoc runs.
 #
+# Promotion log.  The 2026-05 entries were scored when verify.sh ran 15
+# checks; it runs 16 today (9 OUTCOME, 7 CONDUCT), and a pass needs all
+# of them.
 # Promoted out of xfail (cycle 7 sweep, 2026-05-27):
 #   5-tenant     — 15/15 confirmed.
 #   no-catalog   — 15/15 confirmed.
@@ -188,13 +194,13 @@ fi
 #   tier1-tier2-missing — 15/15 confirmed after PR #285 (zstandard into
 #     RAM dir) + PR #286 (immutable=1 + conn.close() for catalog on
 #     iso9660, fixes EBUSY preventing disc swaps).
-# Still in the ledger (XFAIL.list):
-#   tier1-missing — cascade reaches tier-2 fallback but tier-2 (rustic)
-#     cannot drive multi-disc archives (issue #227 partial fix: falls to
-#     tier-3, but tier-3 disc-swap protocol still needs verification in
-#     this variant).  Deterministic coverage of the chain is pinned by
-#     tests/recovery_hardening/test_restore_sh_tier1_missing_multidisc.py;
-#     this variant stays listed until a live 15/15 is recorded.
+# Promoted out of xfail (2026-06-15):
+#   tier1-missing — 16/16 on two consecutive runs (issue #227): with the
+#     tier-1 binary gone, restore.sh rides the fallback path and
+#     recovers all data.
+#     Deterministic coverage of the chain is pinned by
+#     tests/recovery_hardening/test_restore_sh_tier1_missing_multidisc.py.
+# The ledger (XFAIL.list) is empty today.
 XFAIL_LIST="$HERE/XFAIL.list"
 if [ -n "${LCSAS_VARIANT_XFAIL+x}" ]; then
     # Env override (comma-separated) for ad-hoc runs.

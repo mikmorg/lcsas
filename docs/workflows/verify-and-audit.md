@@ -372,7 +372,7 @@ Follow this schedule while you, the owner, maintain the archive.
    lcsas --config lcsas.toml restore exec latest <SCRATCH_DIR> --repo <REPO> --password-file <PASSWORD_FILE>
    ```
 
-   This is the MONTHLY TEST-RESTORE item in [`recovery/docs/READINESS_CHECKLIST.txt`](../../recovery/docs/READINESS_CHECKLIST.txt).
+   This is the MONTHLY TEST-RESTORE item in `docs/development/recovery/READINESS_CHECKLIST.txt` (in the source repository, not on this disc).
 
 4. **Once a year, run the drill and `lcsas key verify`.** The drill is the BLIND RESTORE DRILL in the checklist's EMERGENCY DRILL section. `lcsas key verify` checks that the share cards (any K of them), or a stored copy of the password, still unlock each repository:
 
@@ -407,7 +407,7 @@ For whoever holds the archive after the owner. Every disc carries this schedule 
 
 **Source refs:**
 - `src/lcsas/staging/metadata.py` (`write_disc_care`: the long-term schedule on every disc)
-- `recovery/docs/READINESS_CHECKLIST.txt` (the owner's checklist; its HOW OFTEN lines follow the owner schedule)
+- `docs/development/recovery/READINESS_CHECKLIST.txt` in the source repository (the owner's checklist; its HOW OFTEN lines follow the owner schedule)
 - `_print_stale_copies` / `find_stale_copies` (`src/lcsas/cli/commands/status.py`, `src/lcsas/db/volume_copies.py`)
 - `src/lcsas/db/volume_events.py` (queries for "when was this last verified")
 

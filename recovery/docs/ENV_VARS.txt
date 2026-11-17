@@ -44,11 +44,13 @@ LCSAS_PASSWORD
             restore.sh writes it to a temp file (mode 600) instead of
             reading interactively.  When LCSAS_PWFILE (or --key) is
             set too, the file wins and this is not used.
-            A wrong one is not asked for again: the run stops with
-            exit 77.  (Typed at the prompt, a wrong password is caught
-            before the restore starts and asked for again; since rc6,
-            #608.)  restore.sh uses it for the first backup set only:
-            the "Restore another backup set?" run asks again.
+            A wrong one is caught before the restore starts and, when
+            a person is there (a terminal, or LCSAS_INTERACTIVE=on),
+            said plainly and the password asked on the keyboard (since
+            rc10, #627, as restore.bat).  In a script it is not
+            checked: the run stops with exit 77.  restore.sh uses it
+            for the first backup set only: the "Restore another backup
+            set?" run asks again.
   Windows:  restore.bat honours it too (since rc6, #608), after
             LCSAS_PWFILE.  It writes it to a temp file in %TEMP%,
             deleted on every way out, and tries it with
@@ -68,9 +70,10 @@ LCSAS_PWFILE
             is the password, exactly.  Preferred over LCSAS_PASSWORD
             in scripts because the secret stays in a file rather than
             a shell variable.  restore.sh hands the file itself to the
-            restore.  A wrong password stops the run with exit 77, as
-            for LCSAS_PASSWORD, and restore.sh asks again for the
-            next backup set.
+            restore, and never writes to it.  A wrong password is
+            handled as for LCSAS_PASSWORD (asked on the keyboard when a
+            person is there, else exit 77), and restore.sh asks again
+            for the next backup set.
   Windows:  restore.bat honours it too (since rc6, #608), before
             LCSAS_PASSWORD: it copies the file's exact bytes (copy /b)
             to its own temp file in %TEMP% and never deletes yours.
@@ -105,21 +108,25 @@ LCSAS_SHARES_DIR
             rebuilds the password from every file in it with the
             bundled lcsas-keyshare (more than K cards is fine) and asks
             nothing.  A file with a mistake is named and left out, and
-            the rest are combined.  If they cannot rebuild it, the run
-            stops with exit 77.  LCSAS_PWFILE and LCSAS_PASSWORD come
-            first.  restore.sh uses it for the first backup set only.
+            the rest are combined.  If they cannot rebuild it, or the
+            password they rebuild is wrong, the cards (or P and the
+            password) are asked on the keyboard when a person is there;
+            in a script the run stops with exit 77 (since rc10, #627).
+            LCSAS_PWFILE and LCSAS_PASSWORD come first.  restore.sh
+            uses it for the first backup set only.
             Unset, restore.sh asks for exactly K cards, one per line,
             when the set's marker (metadata/<id>/LCSAS_REPO.txt) says
             split=K-of-N; P at that prompt types the password instead.
   Windows:  restore.bat combines the files in a new folder under
             %TEMP% that it then deletes.  It uses the folder when
             LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW are not set, for
-            any backup set, split or not in its marker.  Every file
-            must be a card typed right: one mistyped word in any file
-            makes lcsas-keyshare refuse the whole folder (exit 3,
-            naming the word), even when K good cards remain.  If the
-            cards do not rebuild the password, it says why and asks on
-            the keyboard (the cards, or P and the password).
+            any backup set, split or not in its marker.  A file with a
+            mistake is named and left out, and the rest are combined,
+            as in restore.sh (since rc10, #627; up to rc9 one bad file
+            failed the whole folder).  If the cards do not rebuild the
+            password, it says why and asks on the keyboard (the cards,
+            or P and the password); a run whose input has ended stops
+            there with 77.
   Why:      Opt-in — the cards are secrets; scripted use needs an
             explicit choice, like LCSAS_PWFILE.  The folder also serves
             a set whose marker does not say its password is split.
@@ -136,13 +143,15 @@ LCSAS_REPO
             by its name (name= in that folder's LCSAS_REPO.txt) or its
             plain-letters name (name_cmd=, as restore.bat shows it).
             Skips the numbered list on archives with several sets.  A
-            name two sets share matches neither: use the id.  The list
-            itself shows each set's name (its id when it has no marker).
+            name two sets share matches neither: the run stops (exit
+            1); use the id.  The list itself shows each set's name (its
+            id when it has no marker).
   Windows:  restore.bat (since rc6, #606) matches the id, then the
-            name or name_cmd, case-blind, and takes the first set that
-            matches: with two sets of the same name, use the id.  A
-            name with letters outside A-Z may not match in cmd's code
-            page; use the id or the name the menu shows.
+            name or name_cmd, case-blind.  A name two sets share stops
+            the run with exit 1 and lists the ids, as in restore.sh
+            (since rc10, #627; up to rc9 it took the first).  A name
+            with letters outside A-Z may not match in cmd's code page;
+            use the id or the name the menu shows.
   Why:      Opt-in — omitting it is correct and safe; it just shows an
             interactive prompt.  Setting it changes which repository's
             data is restored; wrong value exits with an error.
@@ -188,9 +197,10 @@ LCSAS_MOUNT_DIRS
   Default:  unset → /Volumes:/media/<user>:/media:/mnt:
             /run/media/<user>:/run/media
   Since:    Phase 20
-  Read by:  restore.sh and tier 1
+  Read by:  restore.sh, tier 1 and restore_auto.sh
   What:     Colon-separated list of directories scanned for mounted
-            data discs.  Overrides the compiled-in default list on
+            data discs.  restore_auto.sh lists the backup sets on the
+            discs found there, as well as the META disc's (#801).  Overrides the compiled-in default list on
             both the shell side (restore.sh) and the C side
             (lcsas-restore), which share the same value via export.
             Set to '' (empty string) to disable auto-scan entirely.
@@ -271,13 +281,15 @@ LCSAS_INTERACTIVE
             on no inserted disc fails at once.  restore.sh passes it to
             tier 1 the same way (since rc6, #617) and prints a line
             when it ignores a value.  restore.sh's own extra questions
-            follow it too: the newest data disc, the check that asks a
-            typed password again, and "Restore another backup set?"
-            are asked on auto only when stdin is a terminal, on on
-            always (a test rig answers them through a pipe), never on
-            off.  So a piped or scripted run never waits for them.
-            restore.bat's own questions do not follow it: it does not
-            test for a console, so it asks them whatever the value
+            follow it too: the newest data disc, the check that asks
+            again for a wrong password (typed, or from LCSAS_PASSWORD,
+            LCSAS_PWFILE or LCSAS_SHARES_DIR), and "Restore another
+            backup set?" are asked on auto only when stdin is a
+            terminal, on on always (a test rig answers them through a
+            pipe), never on off.  So a piped or scripted run never
+            waits for them.  restore.bat's own questions do not follow
+            it (kept so in rc10, #627 item 5): cmd cannot test for a
+            console, so it asks them whatever the value
             (LCSAS_NEWEST_DISC_PROMPT=0 and LCSAS_ANOTHER_SET=0 turn
             off the two extra ones).
   Why:      Opt-in.  auto is right for a person at a console; the knob
@@ -288,10 +300,11 @@ LCSAS_NEWEST_DISC_PROMPT
   Since:    rc6 (#605)
   Read by:  restore.sh and restore.bat
   What:     Run off the META disc on a terminal with no data disc in
-            yet (relocated off the disc, or with LCSAS_META_DISC set;
-            not for a copy of the META disc run where it is),
-            restore.sh first asks the reader to take the META disc
-            out and put in the NEWEST data disc (the latest year, then
+            yet (relocated off the disc, with LCSAS_META_DISC set, or,
+            since rc10 (#627), from a copy of the META disc that can be
+            written to, run where it is: a USB stick, or
+            LCSAS_NO_RELOCATE=1), restore.sh first asks the reader to
+            put in the NEWEST data disc (the latest year, then
             the highest number in its label, read from the disc's
             VOLUME_INFO.txt, never the drive's 16-character name for
             it).  That disc's copy of each backup set it holds (its
@@ -358,8 +371,12 @@ LCSAS_TOOLS_DIR
   Default:  unset → $HOME/lcsas-restore-tools; on Windows
             %LOCALAPPDATA%\LCSAS-restore  (opt-out / default ON)
   Since:    rc6 (#609)
-  Read by:  restore.sh and restore.bat
+  Read by:  restore.sh, restore.bat and restore_auto.sh
   What:     The tools folder restore.sh keeps a restore's own files in.
+            restore_auto.sh gives each backup set its own: this
+            folder's name with -<id> added, for example
+            $HOME/lcsas-restore-tools-<id>.  So a set that stopped
+            keeps its resume.sh while the next sets run (#801).
             Run off the META disc, it copies there: itself, this
             computer's binaries (bin/<triple>/ only), the docs and the
             disc's metadata/ folder; then it runs from the copy, so the
@@ -377,19 +394,22 @@ LCSAS_TOOLS_DIR
             only when both come from the same build).  restore.sh
             writes the file .lcsas-restore-tools in a folder it uses,
             and later uses only an empty folder or one with that file.
-            A folder that already holds other files is never used or
-            deleted, and restore.sh falls back to a temporary folder,
-            as it does when there is no $HOME.  Run off the META disc
-            (relocated), that temporary folder becomes the tools
-            folder: a stopped restore carries on from it with the
-            resume.sh the script prints, until the folder is cleared
-            (most systems empty /tmp at power-off).  Run in place, the
-            run's own files go to a temporary folder that is deleted
-            when it exits, so a stopped restore cannot be carried on.
-            Run off the META disc, the programs run from the tools
-            folder, so it must allow that (a FAT32 USB stick as a
-            desktop mounts it does not); otherwise restore.sh falls
-            back the same way.  On a live USB stick $HOME is in
+            A folder that already holds other files is refused with
+            exit 1 before anything in it changes, whether the run
+            relocates or not, as restore.bat refuses it (since rc10,
+            #627; up to rc9 restore.sh used a temporary folder
+            instead).  When the folder cannot be made (no $HOME, say),
+            restore.sh falls back to a temporary folder.  Run off the
+            META disc (relocated), that temporary folder becomes the
+            tools folder: a stopped restore carries on from it with
+            the resume.sh the script prints, until the folder is
+            cleared (most systems empty /tmp at power-off).  Run in
+            place, the run's own files go to a temporary folder that
+            is deleted when it exits, so a stopped restore cannot be
+            carried on.  Run off the META disc, the programs run from
+            the tools folder, so it must allow that (a FAT32 USB stick
+            as a desktop mounts it does not), and have room for them;
+            otherwise restore.sh falls back the same way.  On a live USB stick $HOME is in
             RAM: the folder is lost at power-off, and restore.sh says
             so.
   Windows:  restore.bat copies itself into it from a disc, with this
@@ -501,12 +521,13 @@ LCSAS_TIER_FALLBACK
             folder holds its own data\ (rustic-static cannot ask for
             discs), and never after exit 75 or 77.  A set read from
             the discs stops after tier 1 and keeps the tools folder.
-            That check sits inside the tier-1 step, so when
-            lcsas-restore.exe is missing (say, quarantined by
-            antivirus) in a run that does not relocate, restore.bat
-            goes straight to tier 2 whatever the set, and tier 2
-            fails for a set read from the discs.  restore.bat has no
-            tier 3.
+            When lcsas-restore.exe is missing (say, quarantined by
+            antivirus), a set read from the discs stops at once, before
+            the folder and the password, with exit 64 and a message
+            that names the program and points to RECOVER_WINDOWS.txt
+            (since rc10, #631; up to rc9 it went to tier 2, which
+            failed).  A set with its own data\ still goes to tier 2.
+            restore.bat has no tier 3.
   Why:      Opt-IN.  The default (tier 1 only, its exit code returned)
             preserves the bare-minimum restore story: tier 1 IS the
             restore path, and failures must surface immediately so you
@@ -541,9 +562,11 @@ LCSAS_TIER3_AES
             backend that fails its test falls back to pure).
   Why:      Pure Python decrypts at about 0.15 MB/s (2 hours per GB);
             the native backends run at tens to hundreds of MB/s.  The
-            `openssl` command takes the key on its command line, which
-            other local users can read in /proc on a shared machine:
-            set LCSAS_TIER3_AES=pure there.
+            `openssl` command takes the repository's data key (not the
+            password) on its command line.  Other local users can read
+            it in /proc while it runs, and a host with process
+            accounting or an exec audit log keeps it in that log.  Set
+            LCSAS_TIER3_AES=pure on a shared or audited machine.
 
 LCSAS_PROGRESS
   Default:  unset → ON (opt-out / default ON)

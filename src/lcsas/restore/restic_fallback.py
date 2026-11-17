@@ -25,7 +25,8 @@ Crypto stack (all self-contained — no pip packages required):
     AES-128-ECB (Poly1305)    ``lcsas.restore._aes_pure``
     Poly1305-AES (MAC)        Implemented below
     SHA-256                   ``hashlib`` (stdlib)
-    zstd (optional decomp.)   ``zstandard`` if installed
+    zstd decompression        ``zstandard`` if importable, else
+                              ``lcsas.restore._zstd_pure``
     ========================  ================================
 
 Usage::
@@ -45,6 +46,7 @@ from __future__ import annotations
 
 import atexit
 import base64
+import binascii
 import contextlib
 import errno
 import hashlib
@@ -53,13 +55,14 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import sys
 import tempfile
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from lcsas.restore._aes_fast import FastAesCtr
 from lcsas.restore._aes_pure import (
@@ -82,6 +85,13 @@ from lcsas.restore._aes_pure import (
 # to silence progress output entirely.
 _PROGRESS_FILES_INTERVAL = 50
 _PROGRESS_BYTES_INTERVAL = 64 * 1024 * 1024  # 64 MiB
+
+# The file-count pass reads every tree blob; the restore pass then needs
+# the same trees again.  On a multi-disc archive a second read can mean
+# a second disc prompt (#602), so the count pass keeps the trees it read
+# (checked against their hash) for the restore pass, up to this many
+# bytes of tree data.  Trees past the cap are read again, as before.
+_TREE_CACHE_MAX_BYTES = 128 * 1024 * 1024  # 128 MiB
 
 
 # ── Optional zstd ────────────────────────────────────────────────
@@ -135,8 +145,9 @@ except ImportError:
         if not _warned_pure_zstd:
             _warned_pure_zstd = True
             _log(
-                "using slow built-in zstd decoder — install 'zstandard' "
-                "for ~100x faster restore"
+                "zstd: using the slow built-in zstd decoder (about "
+                "1.2 MB/s of text); the 'zstandard' package is not "
+                "available to this Python"
             )
         return _pure_zstd_decompress(data, max_output_size)
 
@@ -436,6 +447,167 @@ def _visible(text: str) -> str:
     return "".join(out)
 
 
+# ── Items not restored, links, special files (#782-#785) ─────────
+#
+# The same rules as tier 1 (recovery/src/lcsas-restore/tree.c); the
+# reasons and summary sentences are word for word the same.
+
+#: First lines of RESTORE_FAILURES.txt (tier 1 writes the same text,
+#: with its own name on the second line).
+_FAILURES_HEADER = (
+    "LCSAS restore: items that were NOT restored.",
+    "Written by the Python reader (tier 3).  Everything else was restored.",
+    'A row whose reason starts "special file" is a pipe, socket or',
+    "device that this system cannot create.  It holds no data.",
+    'A row whose reason starts "link not created: the target file',
+    'system" is a link that this file system cannot hold.',
+    'Every other row is an error: see "ITEMS NOT RESTORED" in RECOVER.txt.',
+    "",
+    "path\treason\tblob_id",
+)
+_FAILURES_NAME = "RESTORE_FAILURES.txt"
+
+#: Kinds of item not restored: an error, a special file this system
+#: will not create, a link the target file system cannot hold.  Only
+#: errors make the restore end non-zero.
+_NR_FAILED, _NR_SPECIAL, _NR_LINK = "failed", "special", "link"
+
+_LINK_UNSUPPORTED = (
+    "link not created: the target file system does not support symlinks"
+)
+#: symlink() errors that mean "this file system cannot hold links"
+#: (FAT32, exFAT, most SMB shares), as in tier 1.
+_LINK_UNSUPPORTED_ERRNOS = frozenset(
+    {errno.EPERM, errno.ENOSYS, getattr(errno, "EOPNOTSUPP", errno.ENOSYS)}
+)
+#: The longest link target Linux accepts is 4095 bytes; tier 1 refuses
+#: a longer one the same way.
+_LINK_TARGET_MAX = 4095
+
+_SPECIAL_LABELS = {
+    "fifo": "FIFO",
+    "socket": "socket",
+    "dev": "block device",
+    "chardev": "character device",
+}
+
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _mode_from_go(mode: int) -> int:
+    """The POSIX mode word for a node's ``mode`` (Go ``os.FileMode``).
+
+    rustic stores setuid, setgid and sticky at bits 23, 22 and 20, not
+    at the POSIX bits 11, 10 and 9; a plain ``& 0o7777`` drops them.
+    The POSIX bits are honoured too.  Tier 1: mode_from_go_filemode.
+    """
+    posix = mode & 0o777
+    if mode & (1 << 23):
+        posix |= 0o4000
+    if mode & (1 << 22):
+        posix |= 0o2000
+    if mode & (1 << 20):
+        posix |= 0o1000
+    return posix | (mode & 0o7000)
+
+
+def _entry_kind(path: Path | str) -> str | None:
+    """What is at *path* now, without following a link there: ``None``
+    (nothing), ``"dir"``, ``"link"`` (a symlink; on Windows any reparse
+    point: symlink, junction), ``"file"`` or ``"other"`` (pipe, socket,
+    device)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode) or (
+        getattr(st, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
+    ):
+        return "link"
+    if stat.S_ISDIR(st.st_mode):
+        return "dir"
+    if stat.S_ISREG(st.st_mode):
+        return "file"
+    return "other"
+
+
+def _make_way(path: Path, want: str) -> str | None:
+    """Issue #784: make room at *path* for the item the snapshot has
+    there (*want* is ``"dir"``, ``"file"`` or ``"other"``: a link or a
+    special file).  Returns ``None`` when the path is ready, else the
+    reason it is not.
+
+    Whatever is in the way is replaced, except a folder: a folder where
+    the snapshot has a file, link or special file is never removed.  A
+    symlink is never followed: it is removed and the real item made in
+    its place, so no data is written through it.  On Windows a reparse
+    point is reported, not removed.  A regular file where the snapshot
+    has a file is left (it is replaced when the new one is complete).
+    """
+    kind = _entry_kind(path)
+    if kind is None:
+        return None
+    if kind == "dir":
+        return None if want == "dir" else "a folder with this name is already there"
+    if kind == "file" and want == "file":
+        return None
+    if kind == "link" and os.name == "nt":
+        return "a link or junction with this name is already there"
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return "the item already there with this name cannot be removed"
+    return None
+
+
+def _link_target(node: dict[str, Any]) -> tuple[bytes, str | None]:
+    """The bytes a symlink node points at, and ``None``; or ``b""`` and
+    the reason the target cannot be used.
+
+    rustic stores a target that is not valid UTF-8 twice: ``linktarget``
+    with each bad byte replaced by U+FFFD, and ``linktarget_raw``, the
+    exact bytes in base64.  The raw bytes win when present.
+    """
+    raw = node.get("linktarget_raw")
+    if raw is not None:
+        if not isinstance(raw, str):
+            return b"", "the link target cannot be decoded"
+        try:
+            data = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError):
+            return b"", "the link target cannot be decoded"
+    else:
+        text = node.get("linktarget")
+        if not isinstance(text, str):
+            return b"", "the link has no target"
+        data = text.encode("utf-8", "surrogatepass")
+    if len(data) > _LINK_TARGET_MAX:
+        return b"", "the link target is too long"
+    if not data:
+        return b"", "the link target is empty"
+    if b"\0" in data:
+        return b"", "the link target holds a NUL byte"
+    return data, None
+
+
+def _make_special(node_type: str, path: Path, device: int) -> None:
+    """Make a FIFO, socket or device as rustic does.  A FIFO and a
+    socket need no privilege on Linux; a device needs root.  Raises
+    OSError, or NotImplementedError where the system has no such call."""
+    if not hasattr(os, "mknod") or not hasattr(os, "mkfifo"):
+        raise NotImplementedError
+    if node_type == "fifo":
+        os.mkfifo(path, 0o600)
+    elif node_type == "socket":
+        os.mknod(path, 0o600 | stat.S_IFSOCK)
+    elif node_type == "dev":
+        os.mknod(path, 0o600 | stat.S_IFBLK, device)
+    else:
+        os.mknod(path, 0o600 | stat.S_IFCHR, device)
+
+
 def _decrypt_authenticated(
     encrypt_key: bytes,
     mac_k: bytes,
@@ -482,6 +654,82 @@ def _decrypt_authenticated(
     if pure:
         return aes_ctr(encrypt_key, iv, ciphertext)
     return _aes_ctr_fast()(encrypt_key, iv, ciphertext)
+
+
+#: What parsing a decrypted key, index, snapshot or config file raises
+#: when its plaintext is wrong: bad UTF-8 or JSON, bad base64 (all
+#: ValueError), a wrong shape, or (index, snapshot) a bad zstd frame.
+_PARSE_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError, TypeError, KeyError, AttributeError, *_ZSTD_ERRORS,
+)
+
+_T = TypeVar("_T")
+
+
+def _decrypt_and_parse(  # noqa: UP047 — the reader must run on Python 3.10
+    encrypt_key: bytes,
+    mac_k: bytes,
+    mac_r: bytes,
+    data: bytes,
+    parse: Callable[[bytes], _T],
+    what: str,
+) -> _T:
+    """Decrypt *data* and return ``parse(plaintext)``, with a second attempt.
+
+    Key, index, snapshot and config files carry no content hash, so a
+    native AES that turned wrong after its self-test would show only as
+    a file that will not parse (#793).  When parsing fails and a native
+    AES did the decryption, decrypt once more with the pure-Python AES.
+    If that parses, the native AES was wrong: it is switched off for the
+    rest of the run.  If not, the first parse error is raised: the file
+    itself is damaged.
+
+    Raises:
+        IntegrityError: the MAC check failed.
+        One of ``_PARSE_ERRORS``: *parse* failed on both attempts.
+    """
+    plaintext = _decrypt_authenticated(encrypt_key, mac_k, mac_r, data)
+    try:
+        return parse(plaintext)
+    except _PARSE_ERRORS:
+        if not _aes_ctr_fast().is_native(len(data) - 32):
+            raise
+        second = _decrypt_authenticated(
+            encrypt_key, mac_k, mac_r, data, pure=True,
+        )
+        if second == plaintext:
+            raise
+        try:
+            result = parse(second)
+        except _PARSE_ERRORS:
+            pass
+        else:
+            _aes_ctr_fast().disable(f"gave wrong output for {what}")
+            return result
+        raise
+
+
+def _unpack_repo_file(data: bytes) -> bytes:
+    """Strip the repository-v2 compression byte; decompress if zstd.
+
+    Restic repository format v2 prepends a compression-type byte
+    after decryption:
+      - ``\\x00``  → uncompressed (strip the prefix)
+      - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
+      - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
+      - ``{``       → v1 repository, raw JSON, no prefix
+
+    After the prefix byte the data is either raw JSON or a
+    zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
+    """
+    # Repo v2: first byte is a compression-type indicator
+    if len(data) > 5 and data[1:5] == _ZSTD_MAGIC:
+        # Byte 0 is compression type (1 or 2), rest is zstd frame
+        return _decompress_zstd(data[1:])
+    if len(data) > 1 and data[0:1] in (b"\x00", b"\x01", b"\x02"):
+        # Compression type present but no zstd magic → just strip
+        return data[1:]
+    return data
 
 
 def _constant_time_eq(a: bytes, b: bytes) -> bool:
@@ -585,19 +833,22 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     kek_mac_k = derived[32:48]
     kek_mac_r = derived[48:64]
 
-    # Decrypt the master key
-    master_json = _decrypt_authenticated(
-        kek_encrypt, kek_mac_k, kek_mac_r, encrypted_master
-    )
-
-    try:
+    def parse(master_json: bytes) -> MasterKey:
         master = json.loads(master_json)
         return MasterKey(
             encrypt=base64.b64decode(master["encrypt"]),
             mac_k=base64.b64decode(master["mac"]["k"]),
             mac_r=base64.b64decode(master["mac"]["r"]),
         )
-    except (ValueError, TypeError, KeyError, AttributeError) as e:
+
+    # Decrypt the master key (the MAC check raises IntegrityError: a
+    # wrong password) and parse it, with a pure-AES second attempt.
+    try:
+        return _decrypt_and_parse(
+            kek_encrypt, kek_mac_k, kek_mac_r, encrypted_master, parse,
+            f"key file {key_file.name}",
+        )
+    except _PARSE_ERRORS as e:
         raise KeyFileCorruptError(
             f"key file {key_file}: the password is right, but the master "
             f"key inside is malformed ({type(e).__name__}: {e})"
@@ -766,6 +1017,11 @@ class PurePythonRestorer:
         # could not be restored under tolerant traversal.  Reset at the
         # top of every restore() call.
         self._failures: list[tuple[str, str, str]] = []
+        # Every item not restored, errors or not, in walk order: the rows
+        # of RESTORE_FAILURES.txt (#783).  _skipped counts the ones that
+        # are not errors (special files, links the target cannot hold).
+        self._rows: list[tuple[str, str, str]] = []
+        self._skipped: dict[str, int] = {_NR_SPECIAL: 0, _NR_LINK: 0}
         # Search-path resolution: callers can either rely on the legacy
         # ``repo_path/data`` location or pass an explicit list of mount
         # points (typically each currently-inserted data disc's root).
@@ -796,6 +1052,10 @@ class PurePythonRestorer:
 
         self._master_key: MasterKey | None = None
         self._blob_index: dict[str, BlobLocation] | None = None
+        # Tree blobs kept from the count pass for the restore pass
+        # (#602); emptied when restore() returns.
+        self._tree_cache: dict[str, bytes] = {}
+        self._tree_cache_bytes = 0
         self._snapshots: list[SnapshotMeta] | None = None
 
         # Progress reporting state — reset at the top of every
@@ -842,6 +1102,8 @@ class PurePythonRestorer:
         """
         self._ensure_loaded()
         self._failures = []
+        self._rows = []
+        self._skipped = {_NR_SPECIAL: 0, _NR_LINK: 0}
 
         if snapshot_id is not None:
             snap = self._find_snapshot(snapshot_id)
@@ -868,28 +1130,40 @@ class PurePythonRestorer:
         try:
             self._restore_tree(snap.tree, target)
         except RestoreAbortedError:
-            # #658: the restore stops here; still list the files that
-            # failed before the stop.
-            if self._failures:
+            # #658: the restore stops here; still list the items that
+            # were not restored before the stop.
+            if self._rows:
                 self._write_failure_manifest(target)
             raise
+        finally:
+            self._tree_cache.clear()
+            self._tree_cache_bytes = 0
 
         # Force a final 100% line so the last reported count matches
         # the total — otherwise the heir sees e.g. 47/50 and
         # wonders if the last 3 files were skipped.
         self._emit_progress(force=True)
 
-        if self._failures:
-            self._write_failure_manifest(target)
-            restored = self._progress_done_files
-            total = restored + len(self._failures)
+        # #783: how many items were not restored, of each kind, and
+        # where the list is.  Tier 1 prints the same sentences.  Only
+        # errors keep the restore from being complete.
+        if self._skipped[_NR_SPECIAL]:
             _log(
-                f"Restored {restored:,} of {total:,} files. "
-                f"{len(self._failures)} file(s) FAILED — see "
-                f"RESTORE_FAILURES.txt. The rest of your data is intact "
-                f"in {target}."
+                f"{self._skipped[_NR_SPECIAL]} special file(s) were not "
+                "restored: pipes, sockets or devices that this system "
+                "cannot create.  They hold no data."
             )
-        else:
+        if self._skipped[_NR_LINK]:
+            _log(
+                f"{self._skipped[_NR_LINK]} link(s) were not restored: the "
+                "target file system does not support symlinks."
+            )
+        if self._failures:
+            _log(f"ERROR: {len(self._failures)} item(s) were NOT restored.")
+        self._write_failure_manifest(target)
+        if self._rows:
+            _log(f"See {target}/{_FAILURES_NAME} for the list.")
+        if not self._failures:
             _log("Restore complete.")
         return snap
 
@@ -898,32 +1172,47 @@ class PurePythonRestorer:
         """Number of nodes that could not be restored in the last run.
 
         Zero on a clean restore.  Non-zero under tolerant mode when one
-        or more files were skipped; ``RESTORE_FAILURES.txt`` under the
-        target lists them.
+        or more items could not be restored because of an error;
+        ``RESTORE_FAILURES.txt`` under the target lists them.  Special
+        files this system cannot create and links the target file
+        system cannot hold are not counted here (see ``skipped``).
         """
         return len(self._failures)
 
-    def _write_failure_manifest(self, target: Path) -> None:
-        """Write the per-file failure list to ``RESTORE_FAILURES.txt``.
+    @property
+    def skipped(self) -> int:
+        """Items not restored in the last run that are not errors (#783):
+        special files this system cannot create, and links the target
+        file system cannot hold.  Listed in ``RESTORE_FAILURES.txt``."""
+        return sum(self._skipped.values())
 
-        One line per failure: relative path, reason, and the blob id
-        implicated (empty when the failure was not blob-scoped, e.g. a
-        whole-subtree tree-blob read failure).
+    def _write_failure_manifest(self, target: Path) -> None:
+        """Write ``RESTORE_FAILURES.txt``: one row per item not restored.
+
+        Each row is the path, the reason and the blob id implicated
+        (empty when the failure was not blob-scoped), tab-separated,
+        exactly as tier 1 writes them.  With no rows, a file of that
+        name left by an earlier run is removed (only one that starts
+        with our header), so it never describes an older run.
         """
-        manifest = target / "RESTORE_FAILURES.txt"
-        lines = [
-            "LCSAS tier-3 restore (the Python reader) — files that could NOT be restored.",
-            "Every OTHER file in this directory restored successfully.",
-            "Re-running tier 3 from a newer meta disc, or mounting another",
-            "undamaged disc with the same label, is the remedy.",
-            "",
-            "path\treason\tblob_id",
-        ]
-        for path, blob_id, reason in self._failures:
+        manifest = target / _FAILURES_NAME
+        if not self._rows:
+            try:
+                if _entry_kind(manifest) == "file":
+                    with open(manifest, "rb") as f:
+                        if f.read(6) == b"LCSAS ":
+                            manifest.unlink()
+            except OSError:
+                pass
+            return
+        lines = list(_FAILURES_HEADER)
+        for path, blob_id, reason in self._rows:
             # _visible: a tab or newline in a restored name (#781) must
             # not split the row.
             lines.append(f"{_visible(path)}\t{_visible(reason)}\t{blob_id}")
         try:
+            if _make_way(manifest, "file") is not None:
+                raise IsADirectoryError(str(manifest))
             # backslashreplace: a restored name that is not valid UTF-8
             # (#781) reaches here as a surrogate-escaped str.
             manifest.write_text(
@@ -980,27 +1269,23 @@ class PurePythonRestorer:
     def _decrypt_file(self, path: Path) -> bytes:
         """Read, decrypt, and (if needed) decompress a repository file.
 
-        Restic repository format v2 prepends a compression-type byte
-        after decryption:
-          - ``\\x00``  → uncompressed (strip the prefix)
-          - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
-          - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
-          - ``{``       → v1 repository, raw JSON, no prefix
-
-        After the prefix byte the data is either raw JSON or a
-        zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
+        See ``_unpack_repo_file`` for the compression byte.  No second
+        AES attempt here: ``_read_json_file`` is the reader with one.
         """
-        data = self._decrypt(path.read_bytes())
+        return _unpack_repo_file(self._decrypt(path.read_bytes()))
 
-        # Repo v2: first byte is a compression-type indicator
-        if len(data) > 5 and data[1:5] == _ZSTD_MAGIC:
-            # Byte 0 is compression type (1 or 2), rest is zstd frame
-            data = _decompress_zstd(data[1:])
-        elif len(data) > 1 and data[0:1] in (b"\x00", b"\x01", b"\x02"):
-            # Compression type present but no zstd magic → just strip
-            data = data[1:]
+    def _read_json_file(self, path: Path) -> Any:
+        """Decrypt, decompress and parse an index, snapshot or config file.
 
-        return data
+        With a pure-AES second attempt when it will not parse (#793).
+        """
+        assert self._master_key is not None
+        mk = self._master_key
+        return _decrypt_and_parse(
+            mk.encrypt, mk.mac_k, mk.mac_r, path.read_bytes(),
+            lambda plain: json.loads(_unpack_repo_file(plain)),
+            f"{path.parent.name}/{path.name[:12]}",
+        )
 
     def _load_index(self) -> None:
         """Read and decrypt all index files → build blob location map."""
@@ -1017,8 +1302,7 @@ class PurePythonRestorer:
         for idx_file in index_files:
             if not idx_file.is_file():
                 continue
-            plaintext = self._decrypt_file(idx_file)
-            idx_doc = json.loads(plaintext)
+            idx_doc = self._read_json_file(idx_file)
             index_data.append((idx_file.name, idx_doc))
             for sup in idx_doc.get("supersedes", []):
                 supersedes.add(sup)
@@ -1052,8 +1336,7 @@ class PurePythonRestorer:
         for snap_file in sorted(snap_dir.iterdir()):
             if not snap_file.is_file():
                 continue
-            plaintext = self._decrypt_file(snap_file)
-            snap_doc = json.loads(plaintext)
+            snap_doc = self._read_json_file(snap_file)
             self._snapshots.append(
                 SnapshotMeta(
                     snapshot_id=snap_file.name,
@@ -1165,29 +1448,15 @@ class PurePythonRestorer:
         heir inserts a data disc -- restore.sh's one-shot startup scan
         cannot, because no data disc is mounted yet at that point.
         """
-        seen: set[Path] = set()
-        for root in self._pack_search_paths:
-            for candidate in (
-                root / "catalog.db",
-                root.parent / "catalog.db",
-                root / "recovery" / "catalog.db",
-            ):
-                # Resolve only the parent to keep symlinks under control
-                # without forcing the file itself to exist (resolve(strict=False)
-                # may not be portable on every libc).
-                try:
-                    key = candidate.resolve(strict=False)
-                except OSError:
-                    key = candidate
-                if key in seen:
-                    continue
-                seen.add(key)
-                if candidate.is_file():
-                    return candidate
-        return None
+        found = self._discover_catalogs()
+        return found[0] if found else None
 
     def _discover_catalogs(self) -> list[Path]:
-        """Every ``catalog.db`` reachable now, in ``_discover_catalog`` order."""
+        """Every ``catalog.db`` reachable now, in ``_discover_catalog`` order.
+
+        A path reached twice (the same root listed twice, or a root and
+        its ``data/`` subdirectory) is listed once.
+        """
         found: list[Path] = []
         seen: set[Path] = set()
         for root in self._pack_search_paths:
@@ -1196,6 +1465,7 @@ class PurePythonRestorer:
                 root.parent / "catalog.db",
                 root / "recovery" / "catalog.db",
             ):
+                # resolve(strict=False): the file itself need not exist.
                 try:
                     key = candidate.resolve(strict=False)
                 except OSError:
@@ -1237,10 +1507,21 @@ class PurePythonRestorer:
     ) -> tuple[list[str], bool, int, str | None]:
         """(labels, pack known, number of discs listed, newest disc listed).
 
-        Raises sqlite3.Error on an unreadable catalog.
+        The one place the catalog is queried.  Raises sqlite3.Error on an
+        unreadable catalog.
         """
+        # immutable=1: ISO 9660 is read-only so SQLite must not try to
+        # create WAL/shm sidecar files.  Without this, sqlite3.connect()
+        # with mode=ro raises OperationalError on iso9660 mounts AND
+        # (critically) leaves a kernel reference on the mount point that
+        # makes `umount /media` fail with EBUSY, preventing disc swaps.
+        # Issue #284 root cause 2.
         conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
         try:
+            # Three-table join: volume_packs.pack_id is the INT FK, not
+            # the sha256 hex we have in hand -- so we go through
+            # packs.sha256.  ORDER BY label keeps the output stable
+            # across SQLite query-planner versions.
             labels = [row[0] for row in conn.execute(
                 "SELECT v.label FROM volumes v "
                 "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
@@ -1257,6 +1538,10 @@ class PurePythonRestorer:
             ).fetchone()
             return labels, known, int(n_vols), newest[0] if newest else None
         finally:
+            # Explicit close is required: `with sqlite3.connect() as c:`
+            # is a transaction context manager, not a connection closer.
+            # Leaving the connection open keeps a fd on the iso9660 mount
+            # and prevents `umount /media` during disc swaps.
             conn.close()
 
     def _lookup_volume_labels(
@@ -1348,46 +1633,9 @@ class PurePythonRestorer:
                 f"[lcsas-restore] auto-discovered catalog at {discovered}\n"
             )
         try:
-            # immutable=1: ISO 9660 is read-only so SQLite must not try to
-            # create WAL/shm sidecar files.  Without this, sqlite3.connect()
-            # with mode=ro raises OperationalError on iso9660 mounts AND
-            # (critically) leaves a kernel reference on the mount point that
-            # makes `umount /media` fail with EBUSY, preventing disc swaps.
-            # Issue #284 root cause 2.
-            uri = f"file:{self.catalog_path}?mode=ro&immutable=1"
-            conn = sqlite3.connect(uri, uri=True)
-            try:
-                # Three-table join: volume_packs.pack_id is the INT FK,
-                # not the sha256 hex we have in hand -- so we go through
-                # packs.sha256.  ORDER BY label keeps the output stable
-                # across SQLite query-planner versions.
-                cur = conn.execute(
-                    "SELECT v.label "
-                    "FROM volumes v "
-                    "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
-                    "JOIN packs p ON p.pack_id = vp.pack_id "
-                    "WHERE p.sha256 = ? "
-                    "ORDER BY v.label",
-                    (pack_id,),
-                )
-                labels = [row[0] for row in cur.fetchall()]
-                if labels:
-                    return labels, ""
-                # Pack ID present in the catalog but no volume mapping?
-                # Disambiguate that from "pack ID absent from catalog".
-                cur = conn.execute(
-                    "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1",
-                    (pack_id,),
-                )
-                if cur.fetchone() is not None:
-                    return [], self._CATALOG_HIT_NO_VOLS
-                return [], self._CATALOG_MISS
-            finally:
-                # Explicit close is required: `with sqlite3.connect() as c:`
-                # is a transaction context manager, not a connection closer.
-                # Leaving the connection open keeps a fd on the iso9660 mount
-                # and prevents `umount /media` during disc swaps.
-                conn.close()
+            labels, known, _n, _newest = self._query_catalog(
+                self.catalog_path, pack_id,
+            )
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog: treat as "no
             # catalog" so the heir at least sees the legacy prompt.
@@ -1401,6 +1649,11 @@ class PurePythonRestorer:
             if was_auto_discovered:
                 self.catalog_path = None
             return None
+        if labels:
+            return labels, ""
+        # Pack ID present in the catalog but no volume mapping?
+        # Disambiguate that from "pack ID absent from catalog".
+        return [], self._CATALOG_HIT_NO_VOLS if known else self._CATALOG_MISS
 
     @staticmethod
     def _frame_indented(text: str) -> str:
@@ -1561,6 +1814,9 @@ class PurePythonRestorer:
         Returns:
             Raw blob content (file data or tree JSON).
         """
+        cached = self._tree_cache.get(blob_id)
+        if cached is not None:
+            return cached  # a tree the count pass read and checked (#602)
         assert self._blob_index is not None
         if blob_id not in self._blob_index:
             raise KeyError(f"Blob not found in index: {blob_id}")
@@ -1653,14 +1909,16 @@ class PurePythonRestorer:
         to the next sibling.  ``strict=True`` restores the legacy
         raise-first behaviour.
 
-        Symlink policy (RST-06): restic restores symlinks verbatim; we
-        deliberately diverge for this last-resort tier.  Absolute targets
-        and relative targets that resolve outside *target_dir* are
-        **skipped and logged** (and recorded in RESTORE_FAILURES.txt as
-        ``skipped-symlink`` entries).  Skipping beats create-and-warn
-        because tier-3 may run as root from a rescue environment, where an
-        escaping link is a sandbox-escape primitive.  In-tree relative
-        links are restored normally.
+        Links (#782): every symlink is restored with its stored target,
+        as tier 1 and rustic do: absolute, relative, pointing up and out
+        of the restore, or dangling.  Making a link writes nothing
+        outside the target folder; the risk is a later write THROUGH a
+        link, which ``_make_way`` rules out (#784).
+
+        Items not restored (#783): an error (refused name, unusable link
+        target, unknown type, a folder in the way) is listed and makes
+        ``failures`` non-zero; a special file this system will not make
+        and a link the target file system cannot hold are listed only.
         """
         try:
             tree_data = self._read_blob(tree_id)
@@ -1679,7 +1937,7 @@ class PurePythonRestorer:
             hardlink_map = {}
 
         for node in tree_doc.get("nodes", []):
-            name = node["name"]
+            name = node.get("name")
             node_type = node.get("type", "file")
             # Issue #781: decode rustic's escaped name to raw bytes, then
             # run the path-safety checks (empty, ".", "..", "/", NUL; on
@@ -1690,6 +1948,26 @@ class PurePythonRestorer:
             if safe_name is None:
                 continue
             node_path = target_dir / safe_name
+
+            # #784: never write through what an earlier restore left at
+            # this path (see _make_way).  #783: an unknown type is an
+            # error.
+            special = _SPECIAL_LABELS.get(node_type)
+            if node_type == "file":
+                want = "file"
+            elif node_type == "dir":
+                want = "dir"
+            elif node_type == "symlink" or special:
+                want = "other"
+            else:
+                self._not_restored(
+                    node_path, f"unknown item type: {node_type}"
+                )
+                continue
+            why = _make_way(node_path, want)
+            if why is not None:
+                self._not_restored(node_path, why)
+                continue
 
             # Per-node containment: one bad node never aborts the rest of
             # the tree.  ``_restore_file`` and the subtree recursion have
@@ -1710,6 +1988,9 @@ class PurePythonRestorer:
                         src = hardlink_map[hl_key]
                         try:
                             node_path.parent.mkdir(parents=True, exist_ok=True)
+                            # An older file of this name is replaced
+                            # (os.link never overwrites).
+                            node_path.unlink(missing_ok=True)
                             os.link(src, node_path)
                             continue
                         except OSError:
@@ -1727,7 +2008,7 @@ class PurePythonRestorer:
                         hardlink_map[hl_key] = node_path
 
                 elif node_type == "dir":
-                    node_path.mkdir(parents=True, exist_ok=True)
+                    node_path.mkdir(exist_ok=True)
                     if "subtree" in node:
                         self._restore_tree(
                             node["subtree"], node_path, hardlink_map
@@ -1735,49 +2016,28 @@ class PurePythonRestorer:
                     # Restore directory permissions after contents
                     self._apply_metadata(node, node_path)
                 elif node_type == "symlink":
-                    link_target = node.get("linktarget", "")
-                    # Validate symlink target: only allow relative links
-                    # to stay within target_dir
-                    if Path(link_target).is_absolute():
-                        _log(
-                            f"Skipping symlink {node_path.name} with absolute "
-                            f"target (security: {link_target!r})"
-                        )
-                        continue
-                    # Resolve the symlink target relative to the node's
-                    # parent directory.  ``is_relative_to`` returns a bool
-                    # and never raises — branch on the value (RST-06: the
-                    # old try/except ValueError was dead code, so escaping
-                    # links were created).
-                    resolved = (node_path.parent / link_target).resolve()
-                    if not resolved.is_relative_to(target_dir.resolve()):
-                        # Symlink resolves outside target directory.  We
-                        # deliberately diverge from restic's verbatim
-                        # restore: for the last-resort tier-3 path (which
-                        # may run as root from a rescue environment) an
-                        # escaping link is skipped, logged, and recorded in
-                        # RESTORE_FAILURES.txt so the fidelity loss is
-                        # visible rather than planting a sandbox escape.
-                        msg = (
-                            f"Skipping symlink {node_path.name} with "
-                            f"out-of-bounds target (would escape to {resolved})"
-                        )
-                        _log(msg)
-                        self._failures.append(
-                            (str(node_path), "", f"skipped-symlink: {link_target}")
-                        )
-                        continue
-                    # Target is valid; create the symlink
-                    if node_path.is_symlink() or node_path.exists():
-                        if node_path.is_dir() and not node_path.is_symlink():
-                            shutil.rmtree(node_path)
-                        else:
-                            node_path.unlink()
-                    node_path.symlink_to(link_target)
+                    self._restore_symlink(node, node_path)
                 else:
-                    _log(
-                        f"Skipping unsupported node type {node_type!r}: {name}"
-                    )
+                    # #783: a FIFO, socket or device, made as rustic
+                    # makes it; when this system will not, it is listed
+                    # and the exit code is not affected.
+                    try:
+                        _make_special(
+                            node_type, node_path, int(node.get("device", 0))
+                        )
+                    except (OSError, NotImplementedError, ValueError,
+                            TypeError) as exc:
+                        if isinstance(exc, OSError) and exc.errno:
+                            why = os.strerror(exc.errno)
+                        else:
+                            why = "this system cannot create it"
+                        self._not_restored(
+                            node_path,
+                            f"special file ({special}) not created: {why}",
+                            _NR_SPECIAL,
+                        )
+                    else:
+                        self._apply_metadata(node, node_path)
             except _NodeFailed:
                 # Already recorded + logged by the failing leaf; the
                 # subtree recursion records its own. Keep going.
@@ -1790,6 +2050,40 @@ class PurePythonRestorer:
                     raise
                 self._record_failure(node_path, "", exc)
                 continue
+
+    def _restore_symlink(self, node: dict[str, Any], path: Path) -> None:
+        """#782: make the link with its stored target (raw bytes when
+        rustic kept them in ``linktarget_raw``).  A target that cannot
+        be used is an error; a target file system without links is
+        listed only (#783).  Raises OSError for a full disk."""
+        data, why = _link_target(node)
+        if why is not None:
+            self._not_restored(path, f"link refused: {why}")
+            return
+        try:
+            target = os.fsdecode(data)
+        except UnicodeDecodeError:
+            self._not_restored(
+                path, "link refused: this system cannot hold the link target"
+            )
+            return
+        try:
+            os.symlink(target, path)
+        except NotImplementedError:
+            self._not_restored(path, _LINK_UNSUPPORTED, _NR_LINK)
+            return
+        except OSError as exc:
+            if exc.errno in _DISK_FULL_ERRNOS:
+                raise
+            if exc.errno in _LINK_UNSUPPORTED_ERRNOS or os.name == "nt":
+                self._not_restored(path, _LINK_UNSUPPORTED, _NR_LINK)
+            else:
+                self._not_restored(
+                    path,
+                    f"link not created: {os.strerror(exc.errno or 0)}",
+                )
+            return
+        self._apply_metadata(node, path, is_link=True)
 
     def _restore_file(self, node: dict[str, Any], path: Path) -> None:
         """Extract a file from its content blobs.
@@ -1807,7 +2101,20 @@ class PurePythonRestorer:
 
         bytes_written = 0
         try:
-            with open(tmp_path, "wb") as f:
+            # #784: never write through a link at the partial file's
+            # path: remove whatever is there, and open without following
+            # one.  os.replace below swaps a link at the final path for
+            # the file itself.
+            if _make_way(tmp_path, "file") is not None:
+                raise IsADirectoryError(errno.EISDIR, "a folder is in the way",
+                                        str(tmp_path))
+            fd = os.open(
+                tmp_path,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+            with os.fdopen(fd, "wb") as f:
                 for blob_id in content_ids:
                     try:
                         chunk = self._read_blob(blob_id)
@@ -1868,17 +2175,30 @@ class PurePythonRestorer:
         where = f"{_visible(str(target_dir))}/{shown}"
         if self._strict:
             raise IntegrityError(f"NOT RESTORED: {where} ({why})")
-        self._failures.append((where, "", f"name refused: {why}"))
-        _log(f"NOT RESTORED: {where} ({why})")
+        self._not_restored(where, f"name refused: {why}")
         return None
+
+    def _not_restored(
+        self, path: Path | str, reason: str, kind: str = _NR_FAILED
+    ) -> None:
+        """#783: one item not restored: a "NOT RESTORED" line (worded as
+        tier 1's) and a row in RESTORE_FAILURES.txt.  Only *kind*
+        ``_NR_FAILED`` counts as a failure."""
+        row = (str(path), "", reason)
+        self._rows.append(row)
+        if kind == _NR_FAILED:
+            self._failures.append(row)
+        else:
+            self._skipped[kind] += 1
+        _log(f"NOT RESTORED: {_visible(str(path))} ({_visible(reason)})")
 
     def _record_failure(
         self, path: Path, blob_id: str, exc: BaseException
     ) -> None:
         """Record one per-node failure for the manifest + summary."""
-        self._failures.append(
-            (str(path), blob_id, f"{type(exc).__name__}: {exc}")
-        )
+        row = (str(path), blob_id, f"{type(exc).__name__}: {exc}")
+        self._failures.append(row)
+        self._rows.append(row)
         _log(f"FAILED (continuing): {path} — {exc}")
 
     def _count_files(self, tree_id: str) -> int:
@@ -1887,6 +2207,9 @@ class PurePythonRestorer:
         Only tree blobs are read (which are typically a small
         fraction of total bytes), so this is cheap even on large
         repositories.  Used to provide N/M-style progress reporting.
+
+        The trees read are kept, up to ``_TREE_CACHE_MAX_BYTES``, so the
+        restore pass does not read them (and ask for their disc) again.
         """
         total = 0
         # Iterative DFS to avoid recursion-depth limits on deep trees.
@@ -1906,6 +2229,9 @@ class PurePythonRestorer:
                 # records the failure.  Missing OSError here aborted the
                 # whole restore before the tolerant pass began (#481).
                 return total
+            if self._tree_cache_bytes + len(tree_data) <= _TREE_CACHE_MAX_BYTES:
+                self._tree_cache[tid] = tree_data
+                self._tree_cache_bytes += len(tree_data)
             for node in tree_doc.get("nodes", []):
                 ntype = node.get("type", "file")
                 if ntype == "file":
@@ -2028,27 +2354,35 @@ class PurePythonRestorer:
         self._progress_last_emit_files = done_files
         self._progress_last_emit_bytes = done_bytes
 
-    def _apply_metadata(self, node: dict[str, Any], path: Path) -> None:
-        """Best-effort metadata restoration (permissions, timestamps, xattrs)."""
+    def _apply_metadata(
+        self, node: dict[str, Any], path: Path, *, is_link: bool = False
+    ) -> None:
+        """Best-effort metadata: owner (root only), mode, xattrs, times.
+
+        #785: rustic's order, as in tier 1.  A change of owner clears
+        setuid/setgid, so the owner goes before the mode; the times go
+        last.  Nothing here follows a link (*is_link*: the link's own
+        owner, xattrs and times; a link has no mode of its own).
+        """
+        uid, gid = node.get("uid"), node.get("gid")
+        if (
+            hasattr(os, "geteuid") and os.geteuid() == 0
+            and isinstance(uid, int) and isinstance(gid, int)
+            and uid >= 0 and gid >= 0
+        ):
+            try:
+                os.chown(path, uid, gid, follow_symlinks=False)
+            except (OSError, NotImplementedError) as exc:
+                _log(f"Could not set the owner of {path}: {exc}")
+
         try:
-            if "mode" in node and not path.is_symlink():
-                os.chmod(path, node["mode"] & 0o7777)
-        except OSError as exc:
+            if "mode" in node and not is_link and not path.is_symlink():
+                os.chmod(path, _mode_from_go(int(node["mode"])))
+        except (OSError, TypeError, ValueError) as exc:
             _log(f"Could not set permissions on {path}: {exc}")
 
-        try:
-            mtime = node.get("mtime")
-            atime = node.get("atime")
-            if mtime:
-                # Parse ISO 8601 nanosecond timestamp → epoch float
-                mt = _parse_timestamp(mtime)
-                at = _parse_timestamp(atime) if atime else mt
-                os.utime(path, (at, mt), follow_symlinks=False)
-        except (OSError, ValueError) as exc:
-            _log(f"Could not set timestamps on {path}: {exc}")
-
         # Extended attributes (restic stores as list of {name, value})
-        for xa in node.get("extended_attributes", []):
+        for xa in node.get("extended_attributes") or []:
             try:
                 xa_name = xa.get("name", "")
                 xa_value = base64.b64decode(xa.get("value", ""))
@@ -2057,10 +2391,21 @@ class PurePythonRestorer:
                         str(path), xa_name, xa_value,
                         follow_symlinks=False,
                     )
-            except OSError:
+            except (OSError, ValueError, AttributeError):
                 _log(
                     f"Could not set xattr {xa.get('name')} on {path}"
                 )
+
+        try:
+            mtime = node.get("mtime")
+            atime = node.get("atime")
+            if mtime and (not is_link or os.utime in os.supports_follow_symlinks):
+                # Parse ISO 8601 nanosecond timestamp → epoch float
+                mt = _parse_timestamp(mtime)
+                at = _parse_timestamp(atime) if atime else mt
+                os.utime(path, (at, mt), follow_symlinks=False)
+        except (OSError, ValueError, NotImplementedError) as exc:
+            _log(f"Could not set timestamps on {path}: {exc}")
 
     # ── Diagnostic / Info ────────────────────────────────────────
 
@@ -2073,7 +2418,7 @@ class PurePythonRestorer:
         if config_path.is_file():
             import contextlib
             with contextlib.suppress(Exception):
-                config_doc = json.loads(self._decrypt_file(config_path))
+                config_doc = self._read_json_file(config_path)
 
         assert self._snapshots is not None
         assert self._blob_index is not None

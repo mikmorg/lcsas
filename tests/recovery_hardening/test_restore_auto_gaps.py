@@ -70,6 +70,10 @@ class _Run:
         env = {k: v for k, v in os.environ.items() if k != "LCSAS_PWFILE"}
         env["LCSAS_PWFILE"] = str(self.pwfile)
         env["RECORD"] = str(self.record)
+        # No mounted disc: restore_auto.sh also lists the sets on the
+        # discs in LCSAS_MOUNT_DIRS (#801), and this machine's /mnt or
+        # /media must not join the list.
+        env["LCSAS_MOUNT_DIRS"] = ""
         for key, value in overrides.items():
             if value is None:
                 env.pop(key, None)

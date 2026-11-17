@@ -134,9 +134,11 @@ in this order.  Each one says how to answer.
      the restore then asks for a disc that does not exist.  Skip only
      when you have no data disc at hand.  Q then ENTER stops (exit
      code 65).
-     Only a run off the META disc itself asks this: a copy of the
-     disc in a folder on this computer, run where it is, does not
-     (set LCSAS_META_DISC to that folder to have it asked).
+     A run off the META disc asks this, and so does a copy of the
+     disc that can be written to (a USB stick, or a folder on this
+     computer) run where it is, as restore.bat does.  A run from the
+     META disc itself that does not move off it (LCSAS_NO_RELOCATE=1)
+     does not ask: that disc cannot come out of the drive.
 
   2. The backup set, when the discs hold more than one.  The sets are
      listed by name, with a note when a set's password is split into
@@ -153,7 +155,9 @@ in this order.  Each one says how to answer.
      accept: it is checked before the restore starts.  Q then ENTER
      stops (exit code 77).  A password that is just the letter q
      cannot be typed here: put it in a file and use --key FILE,
-     with FILE as a full path such as ~/pw.txt.
+     with FILE as a full path such as ~/pw.txt.  A wrong password
+     from --key FILE, LCSAS_PWFILE or LCSAS_PASSWORD is caught the
+     same way: restore.sh says so and asks for it here.
      When the set's password is split, restore.sh asks for the share
      cards instead (see "SHARE CARDS (SPLIT PASSWORDS)").
 
@@ -306,15 +310,53 @@ a message identifying the bad blob.  Re-run the restore with another
 disc that has the same label (LCSAS burns more than one disc with
 each label).
 
+ITEMS NOT RESTORED
+
+A restore can end with some items not restored.  Each one is named in
+a line that starts "NOT RESTORED:", and all of them are listed in the
+file RESTORE_FAILURES.txt in the folder you restored into: one line
+per item, with the path and the reason.  At the end the restore says
+how many there were.
+
+Not a problem (the restore still counts as complete, exit code 0):
+
+  * "special file ... not created": a pipe, socket or device that this
+    computer will not create.  It holds no data.  Devices need root:
+    run the restore as root if you need them back.
+  * "link not created: the target file system does not support
+    symlinks": see TARGET FILESYSTEM LIMITATIONS below.
+
+Every other reason is an error.  The restore ends with "finished with
+errors" (exit code 1 from lcsas-restore, exit code 2 from tier 3).
+Everything not listed was restored.  What to do:
+
+  * "a folder with this name is already there": the folder you
+    restored into holds an earlier restore, with a folder where this
+    backup has a file or a link.  The restore never deletes a folder.
+    Restore into a new, empty folder instead.
+  * A file whose data could not be read (tier 3): re-run from the
+    newest meta disc, or with another disc that has the same label.
+  * "name refused" or "link refused": the backup holds a name or a
+    link this computer cannot use.  Try another computer (for example
+    Linux instead of Windows), or restore with rustic (tier 2).
+
+The restore never writes through a link: a link left by an earlier
+restore where this backup has a file or a folder is replaced by the
+real file or folder.  Links themselves are restored exactly as they
+were backed up, even links that point outside the restore folder.
+
 TARGET FILESYSTEM LIMITATIONS (FAT32 / EXFAT / SMB)
 
 If your target directory lives on a filesystem that cannot store
 symbolic links (FAT32, exFAT, most SMB shares, some FUSE mounts),
-lcsas-restore emits a per-affected-node warning:
-    WARNING: target filesystem does not support symlinks; skipped <path>
-The restore then continues with the rest of the tree.  The restored
-output is intentionally LOSSY on these filesystems: symlinks are
-dropped, and POSIX modes / ownership may also degrade silently.
+each link is named in a line like this one and listed in
+RESTORE_FAILURES.txt:
+    NOT RESTORED: <path> (link not created: the target file system
+    does not support symlinks)
+The restore then continues with the rest of the tree, and still counts
+as complete.  The restored output is intentionally LOSSY on these
+filesystems: symlinks are dropped, and POSIX modes / ownership may
+also degrade silently.
 This is by design, not a corruption indicator -- the alternative
 (materialising the symlink target as a regular file containing the
 link string) would silently rewrite the restored data.
@@ -439,17 +481,22 @@ carry on; delete it yourself when you no longer need it:
 The copies are made writable even though a disc is read-only, so the
 folder can always be removed.  A folder left by another restore.sh, or
 holding the backup sets of another archive, is emptied and used again.
-A folder that holds files of your own is never used or deleted.
-Run off the META disc, restore.sh then says "cannot use ... for the
-recovery tools; trying a temporary folder", and that temporary
-folder (in /tmp, or another place with room) becomes the tools
-folder: a stopped restore carries on with the resume.sh command the
-script prints, until the folder is cleared (most computers empty
-/tmp when they are turned off).  Run where it is (a copy of the META
-disc on this computer), it says "cannot use ... as the tools folder;
-using a temporary one": the run's own files go to a temporary folder
-that is deleted when it ends, so a stopped restore cannot be carried
-on.
+A folder that holds files of your own is never used or deleted:
+restore.sh stops at once with "ERROR: the tools folder ... already
+holds other files" (exit code 1), before anything in it changes, as
+restore.bat does.  Set LCSAS_TOOLS_DIR to a new or empty folder, or
+leave it unset.
+When the tools folder cannot be made (no home folder, say), or run
+off the META disc it has no room or cannot run programs, restore.sh
+says "cannot use ... for the recovery tools; trying a temporary
+folder", and that temporary folder (in /tmp, or another place with
+room) becomes the tools folder: a stopped restore carries on with the
+resume.sh command the script prints, until the folder is cleared
+(most computers empty /tmp when they are turned off).  Run where it
+is (a copy of the META disc on this computer), it says "cannot use
+... as the tools folder; using a temporary one": the run's own files
+go to a temporary folder that is deleted when it ends, so a stopped
+restore cannot be carried on.
 Never restore INTO the tools folder: it is deleted at the end, so
 restore.sh refuses such a target (exit code 65).
 
@@ -570,11 +617,12 @@ folder, and name that folder:
 
 A card file with a mistake in it is named and left out, and the other
 cards are combined if enough of them are left.  If they cannot be
-combined, restore.sh stops with exit code 77.  If lcsas-keyshare
-itself does not work on this computer, restore.sh says so (the cards
-are not to blame): with LCSAS_SHARES_DIR it stops with exit code 77,
-and with typed cards it asks for the password instead.  Rebuild the
-password as below.
+combined, or the password they rebuild is not accepted, restore.sh
+says so and asks for the cards (or P and the password) instead; run
+from a script, with nobody to answer, it stops with exit code 77.  If
+lcsas-keyshare itself does not work on this computer, restore.sh says
+so (the cards are not to blame), and asks for the password instead
+(a script stops with exit code 77).  Rebuild the password as below.
 
 Discs made by an older LCSAS have no marker, and a set whose split was
 never recorded says it is not split: restore.sh then asks for the
@@ -632,9 +680,12 @@ src/, and the documents under docs/ are everything you need.
 EXIT CODES
 
   lcsas-restore exits:
-    0  -- success (restored, or listed)
+    0  -- success (restored, or listed); special files or links this
+          computer cannot hold may be listed in RESTORE_FAILURES.txt
+          (see "ITEMS NOT RESTORED")
     1  -- failed (missing file, integrity failure, a pack on no disc
-          it can see)
+          it can see), or finished with errors: some items were not
+          restored (listed in RESTORE_FAILURES.txt)
     2  -- usage error
     75 -- you typed q at its disc prompt (or its input ended); run the
           same command again to carry on
@@ -730,8 +781,11 @@ before invoking restore.sh.
 
   LCSAS_PASSWORD=<password>   LCSAS_PWFILE=<file>
       The password, or a file holding it (--key FILE is the same as
-      LCSAS_PWFILE); skips the password prompt.  A wrong one is not
-      asked for again: the run stops with exit code 77.
+      LCSAS_PWFILE); skips the password prompt.  A wrong one is
+      caught before the restore starts and asked for on the keyboard
+      when someone can answer (see LCSAS_INTERACTIVE); run from a
+      script, the run stops with exit code 77.  The file itself is
+      never changed.
 
   LCSAS_SHARES_DIR=<folder>
       A folder of share card files, one card per file: the password
@@ -853,8 +907,7 @@ Automated tests use a setuid C wrapper called disc-loader to simulate
 disc swaps without human interaction.  In a real restore you must do
 the eject/insert step by hand.  A passing test therefore does NOT
 guarantee that the UX is smooth for a real heir — this section exists
-because the test rig hid the gap for some time (see UX_CONCERNS.txt
-ID 011).
+because the test rig hid the gap for some time.
 
 EXPECTED SWAP COUNT (FIRST-CONTACT COST)
 

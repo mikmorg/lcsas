@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 import sqlite3
 import textwrap
@@ -38,23 +37,192 @@ _logger = logging.getLogger(__name__)
 # Repository subdirectories that make up the repository metadata
 _METADATA_DIRS = list(METADATA_SUBDIRS)
 _METADATA_FILES = ["config"]
+# The LCSAS source subpackages copied onto production discs.
+_SOURCE_SUBPACKAGES = ("restore", "utils", "db")
 
-# Empirical lower-bound reserve for the repository metadata and disc
-# catalog injected for a single-repository fixture on TEST_TINY-class
-# media.  The injected payload is dominated by the SQLite catalog skeleton
-# + each repository's Rustic index/snapshots/keys + ISO 9660 filesystem
-# overhead — together that's about 650-700 KB even for a 1-repository /
-# few-packs fixture.  Production deployments don't care
-# (the LCSASConfig default of 100 MB swamps it), but test fixtures that
-# materialize an ISO on the 2 MB TEST_TINY media MUST budget at least
-# this much in ``metadata_reserve_bytes`` or the staging directory will
-# overflow capacity.  Bump if the injector grows.  850 KB since rc9: the
-# per-disc tier-3 reader grew ~20 KB with the fast-AES selector (#774),
-# which put the single-tenant blind fixture's second ISO one sector over
-# TEST_TINY (its 5 packs, 1.3 MB, plus ~800 KB of metadata and ISO
-# overhead); the reserve must exceed that metadata so the packer moves a
-# pack to the next volume.
-MIN_HOLOGRAPHIC_RESERVE_BYTES = 850_000
+# --- Measuring the disc metadata before bin-packing (#811) -----------------
+#
+# Every data disc carries the disc catalog, each repository's index,
+# snapshot and key files, the recovery tools and the text files.  stage()
+# measures them before it packs volumes, so a growing archive never
+# overflows a disc.  The figures below were measured against
+# ``xorriso -as mkisofs -r -J -joliet-long -iso-level 3`` (iso/xorriso.py).
+
+#: ISO 9660 sector: every file takes whole sectors on the disc.
+ISO_SECTOR_BYTES = 2048
+#: An ISO of an empty folder is 374,784 bytes (system area, volume
+#: descriptors, path tables and xorriso's tail padding); rounded up.
+ISO_FIXED_BYTES = 400 * 1024
+#: The directory records of one file or folder (ISO 9660, Joliet and Rock
+#: Ridge together): about 390 bytes measured; rounded up.
+ISO_ENTRY_BYTES = 512
+#: A folder: its own sector in the ISO 9660 tree and in the Joliet tree,
+#: plus its records in its parent (about 4,200 bytes measured).
+ISO_DIR_BYTES = 2 * ISO_SECTOR_BYTES + ISO_ENTRY_BYTES
+#: Catalog growth for each pack linked to a volume in this stage (one
+#: ``volume_packs`` row and its index entry: about 36 bytes measured).
+CATALOG_BYTES_PER_PACK = 64
+#: Catalog growth for each volume of this stage (volume, session and event
+#: rows: about 200 bytes measured for the volume row alone).
+CATALOG_BYTES_PER_VOLUME = 4096
+#: volume_info.json lists every pack of the disc by its SHA-256.
+VOLUME_INFO_BYTES_PER_PACK = 80
+#: START_HERE.txt, RESTORE_INSTRUCTIONS.txt, PASSWORD_INFO.txt,
+#: CONFIG_SUMMARY.txt, DISC_CARE.txt, VOLUME_INFO.txt and the fixed part
+#: of volume_info.json: about 25 KB together; with headroom for long
+#: owner-written hints.
+TEXT_FILES_BYTES = 64 * 1024
+#: Each repository's LCSAS_REPO.txt.
+REPO_MARKER_BYTES = 4096
+
+
+def iso_file_bytes(size: int) -> int:
+    """What a file of *size* bytes takes on an ISO: whole sectors plus its
+    directory records."""
+    sectors = -(-max(0, size) // ISO_SECTOR_BYTES)
+    return sectors * ISO_SECTOR_BYTES + ISO_ENTRY_BYTES
+
+
+def pack_disc_bytes(size: int) -> int:
+    """What a pack of *size* bytes takes on an ISO, at most: its sectors,
+    its records, and the ``data/<xx>/`` folder it may be the first in."""
+    return iso_file_bytes(size) + ISO_DIR_BYTES
+
+
+def _tree_iso_bytes(root: Path, *, skip_bytecode: bool = False) -> int:
+    """ISO bytes of *root* and every file and folder under it (0 if
+    missing)."""
+    if not root.is_dir():
+        return 0
+    total = ISO_DIR_BYTES
+    for dirpath, dirnames, filenames in os.walk(root):
+        if skip_bytecode:
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        total += ISO_DIR_BYTES * len(dirnames)
+        for name in filenames:
+            if skip_bytecode and name.endswith((".pyc", ".pyo")):
+                continue
+            try:
+                total += iso_file_bytes(os.path.getsize(os.path.join(dirpath, name)))
+            except OSError:
+                continue
+    return total
+
+
+def live_catalog_bytes(conn: sqlite3.Connection) -> int:
+    """Bytes of the catalog's used pages, as of *conn*'s latest commit.
+
+    Read through the connection, so rows still in the WAL count and an
+    in-memory catalog works too; free pages do not count (the disc copy
+    is vacuumed).
+    """
+    page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+    pages = int(conn.execute("PRAGMA page_count").fetchone()[0])
+    free = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+    return max(0, pages - free) * page_size
+
+
+@dataclass(frozen=True)
+class DiscMetadataSize:
+    """What the metadata of one data disc takes on the ISO (#811).
+
+    An upper bound: the catalog as it will be after this stage's rows
+    are added, every snapshot file (the #657 filter may leave some off),
+    and the ISO 9660 overhead of all of it.
+    """
+
+    catalog: int
+    repositories: int
+    tools: int
+    texts: int
+    iso_overhead: int
+
+    @property
+    def total(self) -> int:
+        return (self.catalog + self.repositories + self.tools + self.texts
+                + self.iso_overhead)
+
+    @property
+    def margin(self) -> int:
+        """Headroom on top of the measurement: a tenth of it."""
+        return self.total // 10
+
+    @property
+    def reserve(self) -> int:
+        """The measured reserve: the measurement plus its margin."""
+        return self.total + self.margin
+
+    def describe(self) -> str:
+        return (
+            f"catalog {self.catalog:,}, repository files "
+            f"{self.repositories:,}, recovery tools {self.tools:,}, text "
+            f"files {self.texts:,}, ISO overhead {self.iso_overhead:,} bytes"
+        )
+
+
+def measure_disc_metadata(
+    conn: sqlite3.Connection,
+    mirror_paths: Mapping[str, Path],
+    *,
+    pack_count: int,
+    volume_count: int,
+    with_source: bool,
+) -> DiscMetadataSize:
+    """Measure the metadata every data disc of a stage carries (#811).
+
+    Args:
+        conn: The master catalog.  Its size now, plus the rows this
+            stage adds (*pack_count* volume links, *volume_count*
+            volumes): the last disc of the stage carries all of them.
+        mirror_paths: Every repository's mirror, by repo_id.  Every disc
+            carries each repository's index, snapshot and key files and
+            its config (``inject_metadata``).
+        pack_count: Packs this stage puts on discs (an upper bound for
+            one disc's volume_info.json too).
+        volume_count: Volumes this stage is expected to make.
+        with_source: The LCSAS source is copied (production media).
+    """
+    catalog = iso_file_bytes(
+        live_catalog_bytes(conn)
+        + pack_count * CATALOG_BYTES_PER_PACK
+        + volume_count * CATALOG_BYTES_PER_VOLUME
+    )
+
+    repositories = 0
+    if mirror_paths:
+        repositories += ISO_DIR_BYTES  # metadata/
+    for mirror in mirror_paths.values():
+        repo = ISO_DIR_BYTES + iso_file_bytes(REPO_MARKER_BYTES)
+        found = False
+        for name in _METADATA_DIRS:
+            if (mirror / name).is_dir():
+                found = True
+                repo += _tree_iso_bytes(mirror / name)
+        for name in _METADATA_FILES:
+            path = mirror / name
+            if path.is_file():
+                found = True
+                repo += iso_file_bytes(path.stat().st_size)
+        if found:
+            repositories += repo
+
+    tools = iso_file_bytes(len(build_standalone().encode("utf-8")))
+    if with_source:
+        lcsas_pkg = Path(__file__).parent.parent
+        tools += ISO_DIR_BYTES  # lcsas_src/
+        for subpkg in _SOURCE_SUBPACKAGES:
+            tools += _tree_iso_bytes(lcsas_pkg / subpkg, skip_bytecode=True)
+
+    texts = TEXT_FILES_BYTES + pack_count * VOLUME_INFO_BYTES_PER_PACK
+    return DiscMetadataSize(
+        catalog=catalog,
+        repositories=repositories,
+        tools=tools,
+        texts=texts,
+        # The ISO's fixed part, and data/ itself (each pack's own
+        # data/<xx>/ folder is counted with the pack: pack_disc_bytes).
+        iso_overhead=ISO_FIXED_BYTES + ISO_DIR_BYTES,
+    )
 
 
 @dataclass(frozen=True)
@@ -239,6 +407,36 @@ def _share_card_section(
         "",
         *(f"  {line}" if line else "" for line in body),
     ]
+
+
+#: START_HERE.txt on a data disc is at most this wide (#854).
+START_HERE_WIDTH = 78
+
+
+def _wrap_text(
+    text: str, indent: str, *, first: str | None = None,
+    width: int = START_HERE_WIDTH,
+) -> list[str]:
+    """*text* as lines no wider than *width*, each starting with *indent*.
+
+    Keeps the text's own line breaks, and the indent of its lines
+    relative to each other; a blank line stays blank.  *first*, when
+    given, starts the first line in place of *indent* (a label such as
+    ``"  Contents: "``).  A word longer than a line is broken.
+    """
+    out: list[str] = []
+    for raw in textwrap.dedent(text.expandtabs(4)).splitlines():
+        if not raw.strip():
+            out.append("")
+            continue
+        own = raw[: len(raw) - len(raw.lstrip())]
+        start = first if first is not None else indent + own
+        first = None
+        out += textwrap.wrap(
+            raw.strip(), width=width, initial_indent=start,
+            subsequent_indent=indent + own, break_on_hyphens=False,
+        )
+    return out
 
 
 def share_recovery_lines(
@@ -431,6 +629,24 @@ def _password_note(config: LCSASConfig) -> list[str]:
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 
 
+def _backup_to(src: sqlite3.Connection, dst: Path) -> None:
+    """Copy the database of *src* to a new file *dst* (#812).
+
+    SQLite's online backup: a consistent copy of every row committed
+    as *src* sees it, whatever other connections are doing.  No
+    ``-wal`` or ``-shm`` file is left beside *dst*.
+    """
+    if dst.exists():
+        dst.unlink()
+    out = sqlite3.connect(dst)
+    try:
+        src.backup(out)
+    finally:
+        out.close()
+    with open(dst, "rb+") as fh:
+        os.fsync(fh.fileno())
+
+
 def _use_rollback_journal(db: Path) -> None:
     """Switch the SQLite file *db* from WAL to a rollback journal (#534)."""
     conn = sqlite3.connect(db)
@@ -594,11 +810,21 @@ class HolographicInjector:
             if marker is not None:
                 write_repo_marker(repo_meta_dir, marker)
 
-    def inject_catalog(self, db_path: Path) -> None:
-        """Copy the master catalog to the staging root as the disc catalog.
+    def inject_catalog(self, source: sqlite3.Connection | Path) -> None:
+        """Write the disc catalog to the staging root.
+
+        *source* is the master catalog: an open connection (what
+        ``stage`` passes) or the path of the catalog file.  The copy is
+        made with SQLite's online backup (#812), which copies every
+        committed row the connection sees, including rows still in the
+        write-ahead log.  A plain file copy after a WAL checkpoint missed
+        the newest rows (the volume being staged) whenever another
+        process held a read transaction, because the checkpoint then
+        stops early.  A path that is not an SQLite file is copied as it
+        is.
 
         The owner's master catalog runs in WAL mode (``db/connection.py``)
-        and a byte copy keeps that mode in the file header.  SQLite cannot
+        and the copy keeps that mode in the file header.  SQLite cannot
         open a WAL-mode file on read-only media without ``immutable=1`` (it must
         create the ``-shm``/``-wal`` files beside it), so tier 1's
         disc-swap hints and a stock ``sqlite3`` could not read the catalog
@@ -609,14 +835,24 @@ class HolographicInjector:
         descriptions (#733): those columns are blanked, so a disc shows
         them only to someone with the repository password, inside
         rustic's encrypted snapshot files.  The master catalog keeps them.
+        The blanking ends with ``VACUUM``, so the copy has no free pages.
         """
         dst = self._root / "catalog.db"
-        copy_file(db_path, dst)
-        with dst.open("rb") as fh:
-            is_sqlite = fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
-        if is_sqlite:
-            _use_rollback_journal(dst)
-            _blank_snapshot_columns(dst)
+        if isinstance(source, Path):
+            with source.open("rb") as fh:
+                is_sqlite = fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
+            if not is_sqlite:
+                copy_file(source, dst)
+                return
+            src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+            try:
+                _backup_to(src, dst)
+            finally:
+                src.close()
+        else:
+            _backup_to(source, dst)
+        _use_rollback_journal(dst)
+        _blank_snapshot_columns(dst)
 
     def write_volume_info(
         self,
@@ -689,7 +925,7 @@ class HolographicInjector:
         lcsas_pkg = Path(__file__).parent.parent  # src/lcsas/
         dst_root = self._root / "lcsas_src"
 
-        for subpkg in ("restore", "utils", "db"):
+        for subpkg in _SOURCE_SUBPACKAGES:
             src = lcsas_pkg / subpkg
             if src.is_dir():
                 dst = dst_root / subpkg
@@ -854,7 +1090,11 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 
         This file is written in simple English for a non-technical
         person (e.g. a family member who finds these discs after the
-        owner's death).
+        owner's death).  It is built line by line (#854): headings at
+        column 0, text at column 2 or deeper, nothing past column
+        :data:`START_HERE_WIDTH`.  The owner's own text (name,
+        description, password hint, contact) is wrapped to fit, keeping
+        its line breaks.
 
         Args:
             config: LCSAS configuration with survivability fields.
@@ -869,122 +1109,112 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         )
         key_hints = config.key_storage_hints or (
             "The archive's owner should have stored the password in a safe place.\n"
-            "  Check for a USB drive, paper printout, or password manager entry\n"
-            "  labeled 'LCSAS', 'backup password', or 'archive password'."
+            "Check for a USB drive, paper printout, or password manager entry\n"
+            "labeled 'LCSAS', 'backup password', or 'archive password'."
         )
         contact = config.technical_contact or (
             "Any Linux system administrator or IT professional should be\n"
-            "  able to follow the instructions in RESTORE_INSTRUCTIONS.txt."
+            "able to follow the instructions in RESTORE_INSTRUCTIONS.txt."
         )
 
-        # Build repo section if available
-        repo_lines = ""
+        bar = "═" * 58
+        lines = [
+            f"╔{bar}╗",
+            f"║{'START HERE':^58}║",
+            f"╚{bar}╝",
+            "",
+            "WHAT ARE THESE DISCS?",
+            "---------------------",
+            "",
+            "  These discs contain backup copies of digital files created",
+            *_wrap_text(f"by {owner}.", "  "),
+            "",
+            *_wrap_text(description, "  ", first="  Contents: "),
+            "",
+        ]
         if config.repositories:
-            repo_names = ", ".join(sorted(config.repositories.keys()))
-            repo_lines = f"\n  Repositories on these discs: {repo_names}\n"
+            names = ", ".join(sorted(config.repositories))
+            lines += [
+                *_wrap_text(names, "    ",
+                            first="  Repositories on these discs: "),
+                "",
+            ]
+        lines += [
+            "  VOLUME_INFO.txt on this disc gives this disc's label,",
+            "  when it was prepared, and what it holds.",
+            "",
+        ]
 
         # Archives with a split password need an extra "rebuild the password
         # first" pre-step: the same section as PASSWORD_INFO.txt, under
         # this file's own heading (#819).  Archives whose password is not
         # split must NOT show share instructions.
-        split_block = ""
         view = split_view(config, escrow_override, recorded)
         if view is not None:
-            section = "\n".join(_share_card_section(view, start_here=True))
-            # Indent to match the surrounding START_HERE section headers;
-            # a blank line separates it from the next section.
-            split_block = (
-                "\n" + textwrap.indent(section, "          ") + "\n\n"
-            )
+            lines += [*_share_card_section(view, start_here=True), ""]
 
-        text = textwrap.dedent(f"""\
-            ╔══════════════════════════════════════════════════════════╗
-            ║                    START HERE                           ║
-            ╚══════════════════════════════════════════════════════════╝
-
-            WHAT ARE THESE DISCS?
-            ---------------------
-
-              These discs contain backup copies of digital files created
-              by {owner}.
-
-              Contents: {description}
-            {repo_lines}
-              VOLUME_INFO.txt on this disc gives this disc's label,
-              when it was prepared, and what it holds.
-
-            {{SPLIT_BLOCK}}
-            HOW TO GET YOUR FILES BACK
-            --------------------------
-
-              1. You need the ENCRYPTION PASSWORD to unlock the data on
-                 these discs.  Your password is NOT written on any disc.
-                 The discs DO carry password-locked key files — that is
-                 what your password opens.  Anyone who holds a disc can
-                 try password guesses against it forever, so the password
-                 must be long and random.  (For the full stolen-disc
-                 threat model, see docs/DISC_CONFIDENTIALITY.md on the
-                 META disc.)
-
-                 Where to find the password:
-                 {key_hints}
-
-              2. You need ALL of the discs (or at least the ones containing
-                 the files you want).
-
-              3. You need a computer running Windows, macOS, or Linux
-                 (or someone who can help you use one).
-
-            IMPORTANT: If this is confusing, take ALL the discs and the
-            password to a computer professional.  They do NOT need
-            to understand this system — the instructions are on the discs.
-
-              Who can help:
-              {contact}
-
-            WARNING: WITHOUT THE PASSWORD, THE DATA ON THESE DISCS
-            CANNOT BE RESTORED.  EVER.  BY ANYONE.  Keep the password safe.
-
-            WHAT TO DO NEXT
-            ----------------
-
-              - Look for a disc labeled "META" — it contains the recovery
-                tools and a script called restore.sh that automates
-                everything.  If you find more than one, use the newest.
-
-              - If you cannot find the meta disc, the file
-                RESTORE_INSTRUCTIONS.txt on this disc has step-by-step
-                manual restore instructions.
-
-            ABOUT THIS DISC'S CATALOG
-            -------------------------
-
-              NOTE: this disc's catalog was written BEFORE this disc
-              was burned.  It cannot list where the discs burned with
-              this one are kept.  Check the printed receipt filed with
-              the discs, or the catalog on any NEWER disc (one whose
-              label has a later year or a higher number).
-
-            DISC CARE
-            ---------
-
-              - Store discs vertically (like books), not stacked flat.
-              - Keep in a cool, dry, dark place.
-              - Handle by the edges — do not touch the data surface.
-              - No kind of disc is proven to last 100 years, M-DISC
-                included.  See DISC_CARE.txt for how to check them.
-        """)
-        # Drop the entire placeholder line (incl. any leading indent that
-        # textwrap.dedent left behind) and substitute the (possibly empty)
-        # zero-indented split block in its place.
-        text = re.sub(
-            r"^[ \t]*\{SPLIT_BLOCK\}\n",
-            lambda _m: split_block,
-            text,
-            flags=re.MULTILINE,
-        )
-
-        self._write_text("START_HERE.txt", text)
+        lines += [
+            "HOW TO GET YOUR FILES BACK",
+            "--------------------------",
+            "",
+            "  1. You need the ENCRYPTION PASSWORD to unlock the data on",
+            "     these discs.  Your password is NOT written on any disc.",
+            "     The discs DO carry password-locked key files — that is",
+            "     what your password opens.  Anyone who holds a disc can",
+            "     try password guesses against it forever, so the password",
+            "     must be long and random.  (For the full stolen-disc",
+            "     threat model, see docs/DISC_CONFIDENTIALITY.md on the",
+            "     META disc.)",
+            "",
+            "     Where to find the password:",
+            *_wrap_text(key_hints, "     "),
+            "",
+            "  2. You need ALL of the discs (or at least the ones containing",
+            "     the files you want).",
+            "",
+            "  3. You need a computer running Windows, macOS, or Linux",
+            "     (or someone who can help you use one).",
+            "",
+            "IMPORTANT: If this is confusing, take ALL the discs and the",
+            "password to a computer professional.  They do NOT need",
+            "to understand this system — the instructions are on the discs.",
+            "",
+            "  Who can help:",
+            *_wrap_text(contact, "  "),
+            "",
+            "WARNING: WITHOUT THE PASSWORD, THE DATA ON THESE DISCS",
+            "CANNOT BE RESTORED.  EVER.  BY ANYONE.  Keep the password safe.",
+            "",
+            "WHAT TO DO NEXT",
+            "----------------",
+            "",
+            "  - Look for a disc labeled \"META\" — it contains the recovery",
+            "    tools and a script called restore.sh that automates",
+            "    everything.  If you find more than one, use the newest.",
+            "",
+            "  - If you cannot find the meta disc, the file",
+            "    RESTORE_INSTRUCTIONS.txt on this disc has step-by-step",
+            "    manual restore instructions.",
+            "",
+            "ABOUT THIS DISC'S CATALOG",
+            "-------------------------",
+            "",
+            "  NOTE: this disc's catalog was written BEFORE this disc",
+            "  was burned.  It cannot list where the discs burned with",
+            "  this one are kept.  Check the printed receipt filed with",
+            "  the discs, or the catalog on any NEWER disc (one whose",
+            "  label has a later year or a higher number).",
+            "",
+            "DISC CARE",
+            "---------",
+            "",
+            "  - Store discs vertically (like books), not stacked flat.",
+            "  - Keep in a cool, dry, dark place.",
+            "  - Handle by the edges — do not touch the data surface.",
+            "  - No kind of disc is proven to last 100 years, M-DISC",
+            "    included.  See DISC_CARE.txt for how to check them.",
+        ]
+        self._write_text("START_HERE.txt", "\n".join(lines) + "\n")
 
     def write_key_info(
         self,

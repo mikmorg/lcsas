@@ -89,4 +89,4 @@ heir on a machine with nothing else installed:
 ## Project root
 
 - [../README.md](../README.md) — developer intro and usage guide.
-- [../CLAUDE.md](../CLAUDE.md) — architecture map and contributor guidance.
+- `CLAUDE.md` at the top of the source repository (not on this disc) — architecture map and contributor guidance.

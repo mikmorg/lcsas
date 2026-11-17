@@ -141,7 +141,7 @@ blind-restore:
 # product-UX change "shipped".  Cost: ~5× normal blind-restore.
 blind-restore-x5:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-x5 costs USD ~25 per invocation." >&2; \
+		echo "ERROR: blind-restore-x5 runs 5 blind agents (about USD 1-4 in all)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi
@@ -180,9 +180,11 @@ blind-restore-teardown:
 #
 # XFAIL set lives in the ledger tests/e2e/cdemu_blind_restore/XFAIL.list
 # (GATE-06); run_variant.sh reads it.  Each variant is one blind run
-# (real API spend; variant costs are unmeasured); remove a variant's line from the ledger once a green
-# 15/15 score has been recorded (a 15/15 while still listed is a strict
-# XPASS — run_variant.sh exits 1 to force the cleanup).
+# (real API spend: USD 0.12-0.54 a variant in the rc9 sweep, logged in
+# docs/development/recovery/READINESS_CHECKLIST.txt); remove a variant's
+# line from the ledger once a full score (16/16 today) has been recorded
+# (a full score while still listed is a strict XPASS — run_variant.sh
+# exits 1 to force the cleanup).
 #
 # Cost: five blind runs per full sweep.  The default run measured
 # USD 0.2-0.7 on haiku (2026-10).
@@ -235,7 +237,8 @@ blind-restore-split-2of5:
 # instructions.  haiku-only, same cost guard.  NOT XFAIL'd: until
 # KEY-01/02/05 land it is expected to fail at STEP 1/STEP 2, and that
 # failure is the signal.  Acceptance gate for heir-doc / keyshare /
-# restore.sh changes: 15/15 twice consecutively before merge.
+# restore.sh changes: every check (16/16 today) twice consecutively
+# before merge.
 blind-restore-split-docs:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
 		echo "ERROR: blind-restore-split-docs spawns a real Claude sub-agent (real API spend)." >&2; \

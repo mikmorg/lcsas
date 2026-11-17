@@ -58,11 +58,16 @@ def test_temp_password_file_is_shredded_after_restore(tmp_path: Path) -> None:
 
     before = set(glob.glob(PW_GLOB))
     # Password supplied via env so no prompt; LCSAS_PWFILE deliberately
-    # unset so restore.sh creates its own /tmp/lcsas-pw.XXXXXX temp file.
+    # unset so restore.sh creates its own lcsas-pw.XXXXXX temp file, in
+    # $TMPDIR since #806's follow-up (a private one here, so a leak is
+    # seen whatever else runs on the machine).
+    tmpdir = tmp_path / "tmpdir"
+    tmpdir.mkdir()
     env = {
         **os.environ,
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_PASSWORD": "stub-password",
+        "TMPDIR": str(tmpdir),
     }
     env.pop("LCSAS_PWFILE", None)
     res = subprocess.run(
@@ -74,7 +79,7 @@ def test_temp_password_file_is_shredded_after_restore(tmp_path: Path) -> None:
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     after = set(glob.glob(PW_GLOB))
-    leaked = after - before
+    leaked = (after - before) | set(glob.glob(str(tmpdir / "lcsas-pw.*")))
     assert not leaked, (
         "restore.sh left a plaintext password file behind after the "
         f"restore (exec leaked it; the EXIT trap must fire): {leaked}"

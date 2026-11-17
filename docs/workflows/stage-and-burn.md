@@ -50,11 +50,23 @@ The end-to-end flow inside a single session:
 1. **Gather packs** — `BurnOrchestrator._gather_packs_for_staging`
    queries the catalog for unarchived packs, optionally filtered by repository
    and/or "missing at location".
-2. **Bin-pack** — `_multi_bin_pack` wraps `first_fit_decreasing`
-   (`src/lcsas/binpack/algorithm.py`), producing one volume plan per disc
-   until all packs are placed. Oversize packs (larger than
-   `usable_bytes - metadata_reserve_bytes`) raise `ValueError` because they
-   can never fit on the chosen media.
+2. **Measure the disc metadata, then bin-pack** (#811) — every disc
+   carries the disc catalog, each repository's index, snapshot and key
+   files, the tier-3 reader (and on production media the LCSAS source),
+   and the text files.  `measure_disc_metadata`
+   (`src/lcsas/staging/metadata.py`) sizes them as they will be on the
+   ISO: the catalog's used pages plus the rows this stage adds, each file
+   rounded up to whole sectors with its directory records, and xorriso's
+   fixed overhead.  The reserve kept free on each volume is
+   `max(metadata_reserve_mb, measured + 10 %)`; `lcsas stage` prints it.
+   When one disc cannot hold the reserve and the smallest pack, the
+   stage stops with `DiscMetadataTooLargeError` before anything is
+   staged, naming the size and the media type.  `_multi_bin_pack` then
+   wraps `first_fit_decreasing` (`src/lcsas/binpack/algorithm.py`),
+   producing one volume plan per disc until all packs are placed; each
+   pack counts with its own ISO overhead (`pack_disc_bytes`).  Oversize
+   packs (larger than `usable_bytes` less the reserve) raise `ValueError`
+   because they can never fit on the chosen media.
 3. **Disk-space pre-flight** — `stage()` computes
    `total_data_bytes × (1.05 × (1 + ecc%/100) + 1)` and refuses if
    `staging_path` does not have that much free space
@@ -94,15 +106,28 @@ The end-to-end flow inside a single session:
      dvdisaster-free fallback, FMT-01). Test media (`TEST_TINY`) is
      implicitly skipped — see `MediaType.ecc_overhead_pct`.
    - Before mastering, the staging tree (packs + disc metadata) must fit
-     in `media_type.usable_bytes`, the capacity less the ECC share. It
-     only fails when the disc metadata outgrew `metadata_reserve_mb`
-     (#674).
+     in `media_type.usable_bytes`, the capacity less the ECC share. Since
+     the reserve is measured (#811) this is a last check: it fails only
+     when the disc metadata is larger than measured (#674).
    - Before ECC, the RS03 redundancy is computed from the ISO size: RS03
-     pads the image to the smallest fitting medium, and the padding is
-     the parity. Below 5 % (`MIN_EFFECTIVE_REDUNDANCY_PCT`) the stage
-     fails and names the volume and the percentage (#674). This also
-     catches a small last volume that lands just under a smaller rung
-     (a 4.6 GB ISO pads to a DVD, not to a BD).
+     pads the image up to a medium on dvdisaster's ladder, and the
+     padding is the parity. dvdisaster moves an image up a rung once the
+     smaller medium would leave it fewer than 8 parity roots (about
+     96.5 % full), so the parity on a rung never drops below about 3.7 %.
+   - A part-filled last volume can still land in the thin band just
+     under a smaller rung (a 4.5 GB ISO on a BD25 volume gets about 4.4 %
+     on the DVD rung). Stage then masters the ISO again with zero padding
+     inside the ISO volume (xorriso `-padding`), just enough that
+     dvdisaster moves it up one rung (4.5 GB becomes 4.53 GB and lands on
+     DVD9 with about 88 % parity), as long as that rung still fits the
+     medium. The padding is recorded as a `NOTE` event on the volume
+     (#732). It pads to the next rung only, not to the medium's own rung:
+     the parity there is already far above the floor, and a full pad
+     would turn a tiny last volume into a 24 GB image.
+   - When no rung that fits the medium clears 5 %
+     (`MIN_EFFECTIVE_REDUNDANCY_PCT`), the stage fails and names the
+     volume and the percentage (#674). That happens only on the medium's
+     own rung (an over-full volume).
      `lcsas stage --allow-low-redundancy` stages it anyway and records
      the percentage as a `NOTE` event on the volume. Not recommended.
    - Post-ECC validation: rejects an ISO larger than
@@ -115,7 +140,14 @@ The end-to-end flow inside a single session:
      refuses it. Run `lcsas session abort <id>`, then `lcsas stage` again.
 6. **Write session manifest** — `session.json` lists volume ids, labels,
    uuids, ISO paths, and pack row numbers (`pack_ids`)
-   (`BurnOrchestrator.stage`).
+   (`BurnOrchestrator.stage`). It is written last, so it also marks a
+   finished stage (#862). A stage killed hard (SIGKILL, power loss)
+   while it hard-linked the packs of a later volume leaves the earlier
+   volumes with snapshot files whose packs are on no disc, and no
+   `session.json`. `lcsas burn` refuses such a session, and
+   `lcsas burn-iso` refuses an ISO still in its staging folder. Run
+   `lcsas session abort <id>` (or `lcsas stage --clean --session <id>
+   --force`), then `lcsas stage` again.
 7. **Burn (separate phase, `burn_session`)** — for each session-volume:
    - Transition `STAGING → BURNING` (`BurnOrchestrator.burn_session`).
    - `xorriso burn_iso` writes the ISO to `/dev/srN`
@@ -270,7 +302,14 @@ A disc carries a snapshot only when every pack the snapshot needs is on
 a burned disc or on one of the discs of the session being staged.
 Before it builds the discs, `lcsas stage` reads each repository's
 snapshot trees with the repository's `password_file` (tree data only,
-never file content) and leaves out every other snapshot (#657).
+never file content) and leaves out every other snapshot (#657).  Every
+disc of a session carries the same snapshots, so any of them is a
+starting point.
+
+When a stage stops part-way (an error, Ctrl-C), the volumes it keeps
+are mastered again without the snapshots whose packs were only on the
+volumes it never staged; a kept volume that cannot be mastered again is
+removed (#813).
 
 Why: someone restoring "latest" from the discs gets the newest snapshot
 on the discs.  If that snapshot needed a pack that is on no disc, the
@@ -533,9 +572,12 @@ The orchestrator's media handling rules:
   is what appears in the disc label. It defaults to the enum member name.
 - **Bin-pack capacity** — `usable_bytes` is `capacity_bytes × (100 −
   ecc_overhead_pct) / 100` (`MediaType.usable_bytes`).
-- **Hard reject on oversize packs** — A pack larger than `usable_bytes −
-  metadata_reserve_bytes` raises `ValueError` from `_multi_bin_pack`
+- **Hard reject on oversize packs** — A pack larger than `usable_bytes`
+  less the metadata reserve raises `ValueError` from `_multi_bin_pack`
   before any side effects (`BurnOrchestrator._multi_bin_pack`).
+- **Hard reject on oversized metadata** — When the measured disc
+  metadata leaves no room for the smallest pack, `stage()` raises
+  `DiscMetadataTooLargeError` before any side effects (#811).
 - **Hard reject on oversized ISO** — Post-ECC ISO larger than
   `capacity_bytes` aborts the burn with a clear error
   (`BurnOrchestrator._stage_single_volume`).
@@ -553,9 +595,11 @@ The orchestrator's media handling rules:
 | `MDISC100` | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Same geometry as `BDXL100`; longevity-rated. |
 
 Every production capacity above is a rung on dvdisaster's RS03 medium ladder
-(`RS03_MEDIUM_LADDER_BYTES`). Media types must not be added off the ladder: an
-off-rung capacity pads up to the next rung, burning a disc mostly full of
-padding. Same-capacity media types (M-Disc vs BD-R) must also differ in the enum's
+(`RS03_MEDIUM_LADDER_BYTES`, the nominal capacities). Media types must not be
+added off the ladder: an off-rung capacity pads up to the next rung, burning a
+disc mostly full of padding. dvdisaster's own medium sizes
+(`RS03_MEDIUM_SECTORS`) are a little smaller: a BD image is 24,219,924,480
+bytes, because dvdisaster uses the BD-R size with defect management. Same-capacity media types (M-Disc vs BD-R) must also differ in the enum's
 `family` field, or `Enum` collapses them into aliases.
 
 ### Test media
@@ -579,12 +623,17 @@ the burn pipeline can run dvdisaster-free. See
 [`docs/DVDISASTER_RS03_FORMAT.md`](../DVDISASTER_RS03_FORMAT.md) for the
 on-disc RS03 layout. No `-n` is passed (BURN-07): RS03
 augmented images cannot take a redundancy setting — dvdisaster pads the
-image to the smallest fitting medium (CD → DVD → DVD9 → BD25 → BD50 →
-BDXL100) and the padding *is* the effective redundancy (logged per
-volume after augmentation). The `default_ecc_redundancy_pct` config
-knob is deprecated/ignored, and the staging disk-space pre-flight
-budgets the *padded* ISO size per volume
-(`smallest_fitting_medium_bytes`) plus one temp copy for augmentation.
+image to the smallest medium (CD → DVD → DVD9 → BD25 → BD50 →
+BDXL100) that leaves it at least 8 parity roots, and the padding *is*
+the effective redundancy (logged per volume after augmentation).
+dvdisaster 0.79.10 does take `--debug -n <sectors>` to force a medium
+size, but `lcsas-ecc augment` has no such option, and dvdisaster warns
+that a forced size can make a damaged image harder to recover; so
+LCSAS pads the ISO instead (#732, above). The `default_ecc_redundancy_pct`
+config knob is deprecated/ignored, and the staging disk-space pre-flight
+budgets the augmented size per volume, after any #732 padding
+(`rs03_staged_image_bytes`, which follows dvdisaster's own rule), plus one temp copy for
+augmentation.
 
 Test media (`TEST_TINY`, `ecc_overhead_pct == 0`) is **implicitly
 skipped**: `_stage_single_volume` only

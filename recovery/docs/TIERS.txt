@@ -88,14 +88,14 @@ RESTORE").  It has no LCSAS_TIER_FALLBACK knob:
     folder): stop, keep the tools folder and say how to carry on.
     Tier 2 could only fail there (#615).
   * any other exit, for a set with its own data\: try tier 2.
-  * no lcsas-restore.exe at all (antivirus quarantined it, say):
-    the data\ check above is part of the tier-1 step, so restore.bat
-    goes straight to tier 2 whatever the set.  In a run that does not
-    relocate, rustic-static.exe is there and then fails for a set
-    read from the discs; the relocated copy holds rustic-static.exe
-    only when a set has its own data\.  Either way, restore the .exe
-    (RECOVER_WINDOWS.txt, "SMARTSCREEN WARNING") or use the Python
-    reader.
+  * no lcsas-restore.exe at all (antivirus quarantined it, say), for
+    a set read from the discs: stop at once, before the folder and
+    the password, with exit 64 and a message that the program is
+    missing and may have been removed by antivirus (#631).  Tier 2
+    cannot ask for discs, so it never runs.  Restore the .exe
+    (RECOVER_WINDOWS.txt, "SMARTSCREEN WARNING") and start again from
+    the META disc, or use the Python reader.  For a set with its own
+    data\: try tier 2.
 
 TIER 2b: STOCK RESTIC / RUSTIC (INDEPENDENT AUDITED READER)
 
@@ -233,9 +233,16 @@ cross-check against the built-in code:
      crash there cannot stop the restore.
   2. the openssl command (OpenSSL or LibreSSL), if it is on PATH.
      Linux and macOS hosts usually have it.  NOTE: openssl takes the
-     raw key only on its command line, so while it runs, other users
-     of the same computer can read that key (ps, /proc).  Restore on
-     a computer only you use, or set LCSAS_TIER3_AES=pure to skip it.
+     key only on its command line.  That key is the repository's data
+     key, not your password, but with it and the discs anyone can read
+     every file in that repository.  While openssl runs, other users
+     of the same computer can read it (ps, /proc).  A computer that
+     logs the commands it runs (process accounting, an audit log)
+     also writes it to that log, where it stays.  So restore on a
+     computer only you use and that keeps no such log, or skip the
+     openssl command with LCSAS_TIER3_AES=pure:
+       LCSAS_TIER3_AES=pure sh restore.sh ...
+     The pure-Python AES is slow (about 2 hours per GB).
   3. the built-in pure-Python AES (slow, always there).
 
 The reader prints one line saying which it uses, for example
@@ -277,12 +284,13 @@ of an otherwise-intact family archive.
     file is NEVER left at a final restore path, and re-running is
     idempotent.
   * After traversal, ``RESTORE_FAILURES.txt`` is written under the
-    target listing each skipped file (path, reason, blob id), and a
-    plain-English summary line is printed ("Restored N of M files ...").
-  * Exit code 2 means "finished, but K file(s) were skipped" (distinct
-    from exit 1, a setup-level failure like a bad password or missing
-    repository).  The generated script prints a plain-English message,
-    never a raw Python traceback, for any outcome.
+    target listing each item not restored (path, reason, blob id), and
+    plain-English summary lines are printed (see "ITEMS NOT RESTORED"
+    below).
+  * Exit code 2 means "finished, but K item(s) could not be restored"
+    (distinct from exit 1, a setup-level failure like a bad password or
+    missing repository).  The generated script prints a plain-English
+    message, never a raw Python traceback, for any outcome.
 
 NOTE for ALREADY-BURNED data discs: standalone_restorer.py is
 generated from the LCSAS source, so newer meta discs carry this
@@ -293,26 +301,69 @@ packs come from the data discs, the script comes from the meta disc.
 An heir always starts from the newest meta disc: every generation of
 meta disc reads every disc.
 
-TIER 3: SYMLINK POLICY (deliberate divergence from restic)
+LINKS, SPECIAL FILES AND ITEMS NOT RESTORED (TIERS 1 AND 3)
 
-restic restores symlinks verbatim.  Tier 3 does NOT: it may run as root
-from a rescue environment, where a symlink whose target escapes the
-restore root is a sandbox-escape primitive (a later write through the
-link lands outside the restore directory).  So tier 3 SKIPS and LOGS:
+Tiers 1 and 3 follow the same rules, with the same wording.
 
-  * symlinks with an ABSOLUTE target (e.g. /etc/passwd), and
-  * RELATIVE symlinks that resolve OUTSIDE the restore target
-    (e.g. linktarget ../../../../etc).
+Links.  Every symbolic link is restored with the target stored in the
+backup, as rustic (tier 2) does: a relative link, one that points up
+and out of the restore folder, an absolute one, and one that points at
+nothing.  A target that is not valid UTF-8 is restored byte for byte
+(rustic keeps those bytes in "linktarget_raw").  Making a link writes
+nothing outside the restore folder.  The danger is a later write
+THROUGH a link, so neither tier ever writes through one:
 
-Each skipped link is recorded in RESTORE_FAILURES.txt as a
-``skipped-symlink`` entry so the fidelity loss is visible (and counts
-toward the exit-2 "K file(s) skipped" outcome) rather than silently
-planting an escape.  In-tree relative symlinks restore normally.
+  * Restoring into a folder that already holds an earlier restore: a
+    link (or a pipe, socket or device) where the backup has a file or a
+    folder is removed, and the real file or folder is made in its
+    place.  Files are opened so that a link is never followed.
+  * A folder is never removed.  A folder where the backup has a file, a
+    link or a special file is left as it is, and that item is reported
+    as not restored ("a folder with this name is already there").
+  * Windows: a link or junction in the way is reported, not removed.
 
-NOTE for ALREADY-BURNED data discs: the same generation rule applies --
-discs burned before RST-06 carry a dead guard that created escaping
-links; restore those from the newest meta disc to get the skip
-behaviour.
+Special files.  A FIFO (named pipe), a socket or a device is made as
+rustic makes it.  A FIFO and a socket need no special rights on Linux;
+a device needs root.  When the system will not make one (a device
+without root; Windows has none of them), it is listed and the restore
+still counts as complete: a special file holds no data.  Run the
+restore as root to get devices back.
+
+Links on a file system without links (FAT32, exFAT, most network
+shares; tier 1 on Windows) are listed the same way: not restored, but
+the restore still counts as complete.  Restore to ext4, xfs, btrfs or
+APFS to keep them.
+
+Every other item that is not restored is an error: a name that cannot
+be decoded or that this system cannot hold, a link target that cannot
+be used (empty, holding a NUL byte, longer than 4095 bytes, or badly
+stored), an item type the reader does not know, a folder in the way,
+or (tier 3) a file whose data could not be read.  Tier 1 then ends with
+"finished with errors" and exit code 1; tier 3 with exit code 2.
+
+Both tiers name each item in a line "NOT RESTORED: <path> (<reason>)",
+write the list to RESTORE_FAILURES.txt in the restore folder (one row
+per item: path, reason and blob id, separated by tabs), and end with
+these lines (only those that apply):
+
+  N special file(s) were not restored: pipes, sockets or devices that
+  this system cannot create.  They hold no data.
+  N link(s) were not restored: the target file system does not support
+  symlinks.
+  ERROR: N item(s) were NOT restored.
+  See <restore folder>/RESTORE_FAILURES.txt for the list.
+
+A run with nothing to list removes a RESTORE_FAILURES.txt that an
+earlier run left in the restore folder.
+
+As root, both tiers set each item's owner before its mode (a change of
+owner clears the setuid and setgid bits) and its times last, as rustic
+does.
+
+NOTE for ALREADY-BURNED data discs: the tier-3 script on a data disc
+is the one that disc was burned with; an older one skipped absolute
+links and links pointing out of the restore folder.  Restore from the
+newest meta disc to get these rules.
 
 TIER 3: ZSTD DECOMPRESSION (rustic v2 default)
 
@@ -328,8 +379,7 @@ be able to decompress zstd to be useful.  Two backends, fast-path first:
     inlined into the per-disc standalone_restorer.py, so it works under
     ANY of the bundled per-target CPython interpreters (all six approved
     targets) and on any future CPython -- slower, but always available.
-    A startup log line notes the slow path; install 'zstandard' for the
-    fast one.
+    The reader prints one line when it uses the slow decoder.
 
 The build records native-zstd capability per meta disc in
 volume_info.json ("zstd_support"); ``lcsas meta build`` fails loud if
@@ -397,18 +447,24 @@ no "FAILED" report, the tools folder stays, and it exits 75.
 restore.bat runs no tier 3, so it has no such case.
 
 Tier 1 exit status, in full:
-  0   restored (or, with --list-snapshots, listed)
-  1   failed (setup, a disc read error, a pack on no disc it can see)
+  0   restored (or, with --list-snapshots, listed); special files or
+      links this system cannot hold may be listed in
+      RESTORE_FAILURES.txt (see "ITEMS NOT RESTORED")
+  1   failed (setup, a disc read error, a pack on no disc it can see),
+      or finished with errors: some items were not restored (listed in
+      RESTORE_FAILURES.txt)
   2   usage error
   75  stopped at the disc prompt (q, or the input ended)
   77  wrong password (see above)
 
 Tier 3 (standalone_restorer.py) exit status:
-  0   restored (or, with --list-snapshots, listed)
+  0   restored (or, with --list-snapshots, listed); as for tier 1,
+      special files or links may be listed in RESTORE_FAILURES.txt
   1   failed (setup: wrong password, no repository, Python older
       than 3.10; or a full disk)
-  2   usage error, or finished with some files skipped (listed in
-      RESTORE_FAILURES.txt; see "TIER 3: SKIP-AND-CONTINUE")
+  2   usage error, or finished with some items not restored (listed
+      in RESTORE_FAILURES.txt; see "TIER 3: SKIP-AND-CONTINUE" and
+      "ITEMS NOT RESTORED")
   75  stopped at the disc prompt (q, or the input ended)
   130 stopped with Ctrl-C
 

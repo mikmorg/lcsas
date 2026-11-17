@@ -368,9 +368,11 @@ unless noted otherwise.
 **Expected outcome:** Files restored to `target_path`, log line
 identifying the snapshot ID and hostname
 (the pure-Python success log in `_restore_with_python_reader()`).
-A partial pure-Python restore — some files skipped under tolerant
-traversal — exits `2` and leaves a `RESTORE_FAILURES.txt` manifest
-under the target.  `q` (or the end of input) at the Python reader's
+A partial pure-Python restore — some items not restored under
+tolerant traversal — exits `2` and leaves a `RESTORE_FAILURES.txt`
+manifest under the target (special files this system cannot create
+and links the target cannot hold are listed there too, with exit
+`0`).  `q` (or the end of input) at the Python reader's
 disc box stops the whole restore with exit code `75`, as the bundled
 `standalone_restorer.py` does.  A full disk stops it with exit code `1`.
 
@@ -649,8 +651,9 @@ built-in "extract one path" flag.
    `src/lcsas/restore/restic_fallback.py`).
 3. The restorer recursively walks the snapshot's root tree
    (`restore()` → `_restore_tree()`), reconstructing
-   directories, files, symlinks (validated against path traversal
-   inside `_restore_tree()`), and hardlinks.
+   directories, files, symlinks (restored as stored; nothing is
+   ever written through a link, `_make_way()`), special files and
+   hardlinks.
    Metadata (mode, mtime, atime, xattrs) is restored
    best effort (`_apply_metadata()`).
 

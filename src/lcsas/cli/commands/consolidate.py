@@ -56,9 +56,30 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             return 1
         args.volume_ids = volume_ids
 
+        # With a config the preview plans as --execute stages: the
+        # measured disc metadata and the stage's bin-packing (#862).
+        orch = None
+        if config is not None:
+            from lcsas.burn.orchestrator import BurnOrchestrator
+            from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+            from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+            orch = BurnOrchestrator(
+                config, conn,
+                SubprocessXorrisoRunner(tmpdir=config.staging_path),
+                SubprocessDVDisasterRunner(tmpdir=config.staging_path),
+            )
         reserve = config.metadata_reserve_bytes if config else 104_857_600
-        merger = VolumeMerger(conn, metadata_reserve_bytes=reserve)
-        plan = merger.plan_consolidation(args.volume_ids, media_type)
+        merger = VolumeMerger(
+            conn, metadata_reserve_bytes=reserve,
+            plan_volumes=orch.plan_volumes if orch is not None else None,
+        )
+        from lcsas.exceptions import LcsasError
+        try:
+            plan = merger.plan_consolidation(args.volume_ids, media_type)
+        except (ValueError, LcsasError) as e:
+            logger.error("Cannot plan the consolidation: %s", e)
+            return 1
 
         logger.info("Consolidation Plan:")
         logger.info(f"  Source volumes: {', '.join(plan.source_labels)}")
@@ -102,7 +123,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
                         "consolidate --deprecate %s", source_labels)
             return 0
 
-        if config is None:
+        if config is None or orch is None:
             logger.error("--config is required for --execute.")
             return 1
 
@@ -150,19 +171,8 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             logger.error("Run it again from a terminal so it can ask for confirmation.")
             return 1
 
-        # Execute: stage the active packs via the burn orchestrator
-        from lcsas.burn.orchestrator import BurnOrchestrator
-        from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
-        from lcsas.iso.xorriso import SubprocessXorrisoRunner
-
-        orch = BurnOrchestrator(
-            config, conn,
-            SubprocessXorrisoRunner(tmpdir=config.staging_path),
-            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
-        )
-
-        # Stage exactly the active packs from the consolidation plan
-        # (#677: stage() used to intersect them with the unarchived pool,
+        # Execute: stage exactly the active packs from the consolidation
+        # plan (#677: stage() used to intersect them with the unarchived pool,
         # which never holds packs of VERIFIED volumes).  The sources stay
         # VERIFIED until staging succeeded, so a failed stage changes
         # nothing.

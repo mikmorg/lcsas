@@ -26,7 +26,13 @@ restore using nothing but what the meta disc ships out of the box.
 ## Success Criteria
 
 A run passes iff **all** of the following hold after the agent declares
-`RESTORE COMPLETE`:
+`RESTORE COMPLETE`.  `verify.sh` reports its checks in two groups
+(#827): **OUTCOME** (was every file restored intact, from the discs, with
+the documented tools) and **CONDUCT** (did the agent keep the rules).  A
+run passes when both pass.  The CONDUCT checks ignore files the test rig
+made: the prompt's disc-swap loop saved to a file, and the `resume.sh`
+that `restore.sh` writes (`harness_files.py`).  A failed check prints its
+checker's reason under its FAIL line.
 
 1. Every file originally backed up for **repository alpha** exists under
    `~agent/restored/` with byte-identical contents (SHA-256 match against
@@ -45,7 +51,10 @@ A run passes iff **all** of the following hold after the agent declares
    `LCSAS_META`. Proves the agent honoured the one hint in the prompt.
 6. The set of inserted disc labels is a **superset** of the
    pre-computed `expected_alpha_volumes.txt` (every required disc was
-   visited). Bounded above by `5 × needed` to catch thrashing.
+   visited). Bounded above, to catch thrashing, by the number of
+   distinct discs a correct in-order sweep inserts on this fixture's
+   layout: `setup.py` computes it and writes `thrash_allowance.txt`, and
+   refuses a layout where that bound could never be exceeded (#836).
 7. The full transcript is captured to `transcript.jsonl` for review.
 8. **(v2)** The agent invoked the interactive `restore.sh`.  Direct
    invocation of `restore-auto.sh`, `restore_legacy.sh`,
@@ -110,7 +119,7 @@ A run passes iff **all** of the following hold after the agent declares
 │                                                                            │
 │  run.sh    spawns headless `claude -p` as user lcsas-blind, captures       │
 │            stream-json to transcript.jsonl, allowed-tools = Bash           │
-│  verify.sh runs the success checks above (16 checks as of now)             │
+│  verify.sh runs the success checks above (16: 9 OUTCOME, 7 CONDUCT)        │
 └────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -387,6 +396,9 @@ Key flags:
 
 ## Verification (`verify.sh`)
 
+The sketch below is the original design; the real checks are in
+`verify.sh` itself.
+
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
@@ -463,7 +475,7 @@ tests/e2e/cdemu_blind_restore/
 ├── agent_prompt.txt       # the ~120-word initial prompt
 ├── run.sh                 # spawns headless claude, captures transcript
 ├── merge_timeline.py      # interleaves transcript + disc-loader log
-├── verify.sh              # the success checks (16 today; see the criteria list)
+├── verify.sh              # the success checks (16: 9 OUTCOME, 7 CONDUCT)
 └── teardown.sh            # unmount, clear vault, drop agent home, stop cdemu
 ```
 
@@ -513,12 +525,14 @@ LCSAS_BLIND_ACK_COST=1 make blind-restore   # setup → run (capped) → verify
 ```
 
 **Cost gate.** Every `make blind-restore*` target spawns a real headless
-Claude sub-agent and burns API credits (≈ USD 5 per run), so it refuses
+Claude sub-agent and burns API credits (about USD 0.25 per haiku run: the
+rc9 sweep spent USD 8.22 on 33 runs), so it refuses
 to run unless `LCSAS_BLIND_ACK_COST=1` is set. The target drives
 `setup.py`, then `run.sh` under a 45-minute wall-clock `timeout`
 (`RUN_DIR=<base>/lcsas-blind-run-$$`), then scores that same run dir with
 `blind_runs.py score` (never "the newest run dir", #830): a pass needs all
-16 of `verify.sh`'s checks to run and pass. The base is
+16 of `verify.sh`'s checks to run and pass, that is OUTCOME and CONDUCT
+both pass. The base is
 `$LCSAS_BLIND_TMPDIR`, else `$TMPDIR`, else `/tmp` (`sudo -E` drops
 `TMPDIR`). A passing run removes its run dir, a failing one keeps it, and
 `run.sh` prunes kept run dirs older than `LCSAS_BLIND_KEEP_DAYS` (default
@@ -618,8 +632,8 @@ Two split-key blind variants now coexist with different jobs:
 **Acceptance policy.** Any PR that changes the heir-facing recovery
 contract — `src/lcsas/staging/metadata.py` heir text, the on-disc
 `keyshare_combine.py`, or `restore.sh` flags — MUST pass
-`make blind-restore-split-docs` at **15/15 twice consecutively** before
-merge. The cheap always-on pre-gate for every PR is KEY-02's
+`make blind-restore-split-docs` with **every check passing (16/16
+today) twice consecutively** before merge. The cheap always-on pre-gate for every PR is KEY-02's
 `tests/unit/test_heir_doc_commands.py` (contract check, no LLM cost) plus
 the prompt-hygiene unit test `tests/unit/test_blind_prompt_hygiene.py`
 (keeps the docs-driven prompt docs-driven, enforced by `make gate`).

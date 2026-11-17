@@ -27,7 +27,7 @@ from lcsas.staging.metadata import HolographicInjector
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VERIFY_DOC = REPO_ROOT / "docs" / "workflows" / "verify-and-audit.md"
-CHECKLIST = REPO_ROOT / "recovery" / "docs" / "READINESS_CHECKLIST.txt"
+CHECKLIST = REPO_ROOT / "docs" / "development" / "recovery" / "READINESS_CHECKLIST.txt"
 
 
 def _squash(text: str) -> str:
