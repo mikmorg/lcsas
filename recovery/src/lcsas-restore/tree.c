@@ -778,16 +778,18 @@ restore_file_node(const char *repo_path,
                      * snapshot into the same folder would keep the old
                      * content of every same-size file.  A finished file
                      * carries the node's mtime (applied last, below),
-                     * so require that too, to the second (some
-                     * filesystems drop sub-second precision).  Same
-                     * rule as rustic's default.  Windows tier 1 does
+                     * so require that too, to within a second.  Issue
+                     * #787 -- FAT keeps times in 2-second steps, so a
+                     * file with an odd-second mtime comes back 1 s off
+                     * on a FAT or exFAT stick; a tolerance of less than
+                     * 2 s lets a resume skip it.  Windows tier 1 does
                      * not restore mtimes, so it stays size-only. */
                     {
                         struct timespec nts[2];
-                        if (decode_node_mtime(src, toks, node_idx, nts) == 0
-                                && (long long)st.st_mtime
-                                       != (long long)nts[1].tv_sec) {
-                            same = 0;
+                        if (decode_node_mtime(src, toks, node_idx, nts) == 0) {
+                            long long d = (long long)st.st_mtime
+                                        - (long long)nts[1].tv_sec;
+                            if (d >= 2 || d <= -2) same = 0;
                         }
                     }
 #endif
