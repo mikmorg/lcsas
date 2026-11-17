@@ -7,15 +7,21 @@ One test archive with the default label prefix and two repositories:
                   own ``[repos.photos]`` table (#587);
 - ``documents`` — an ordinary password, with a password card.
 
-The corpus is fixed and non-personal: generated from ``--seed``, so every
-build has the same files and the same sha256 manifest.  It is sized for two
-CD700 data discs.  The meta disc is built from the drill config and catalog
-(owner decision Q19) and labelled ``LCSAS_META`` (#588).
+The corpus (corpus.py) is fixed and non-personal: generated from ``--seed``,
+so every build has the same files.  It holds the names, links, modes,
+folders and file sizes that restores get wrong (#834); ``--profile windows``
+(the default) keeps to names NTFS can store, ``--profile posix`` adds the
+rest.  Each set is backed up twice, and each backup goes onto discs in a
+burn session of its own, so a restore must take "latest" from the newest
+disc.  The meta disc is built from the drill config and catalog (owner
+decision Q19) and labelled ``LCSAS_META`` (#588).
 
 It drives the real CLI (``python3 -m lcsas`` from ``--project-root``) the
 way an owner would: rustic init/backup, ``init``, ``repo add``, ``key
-split``, ``key card``, ``scan``, ``stage --media CD700``, ``estate card``,
-``meta build`` + ``meta verify --strict``, and xorriso for the meta ISO.
+split``, ``key card``, ``scan``, ``stage --media CD700``; then a second
+rustic backup, ``scan`` and ``stage``; ``estate card``, ``meta build`` +
+``meta verify --strict``, and xorriso for the meta ISO.  manifest.json is
+written from the corpus tree as it was backed up the second time.
 
 Everything lands in ``--workdir``, which must be OUTSIDE this checkout: it
 holds passwords and share cards, and the repo is public (HANDOFF rule 1).
@@ -26,9 +32,7 @@ lab's build lock; see README.md.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
-import random
 import secrets
 import shutil
 import subprocess
@@ -37,24 +41,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE))
+
+import corpus  # noqa: E402  (tests/e2e/drill_kit/corpus.py)
 
 SPLIT_K, SPLIT_N = 2, 3
-
-# (repository, text files, bulk files, bulk file size).  ~630 MiB in all:
-# CD700 holds ~522 MB of packs per disc after the default 100 MB metadata
-# reserve, so this is two data discs.
-CORPUS = (
-    ("photos", 4, 64, 6 * 1024 * 1024),
-    ("documents", 6, 40, 6 * 1024 * 1024),
-)
-
-_WORDS = (
-    "archive", "disc", "drill", "restore", "sample", "record", "family",
-    "garden", "harbour", "lantern", "meadow", "orchard", "pebble", "river",
-    "season", "summer", "timber", "valley", "window", "winter", "letter",
-    "notebook", "journal", "recipe", "ledger", "map", "album", "page",
-    "chapter", "note",
-)
 
 
 def log(msg: str) -> None:
@@ -62,54 +53,51 @@ def log(msg: str) -> None:
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    log("$ " + " ".join(cmd))
+    log("$ " + " ".join("<script>" if "\n" in a else a for a in cmd))
     return subprocess.run(cmd, check=True, **kw)
 
 
-def _text(rng: random.Random, title: str) -> bytes:
-    lines = [
-        title,
-        "",
-        "This file is TEST DATA for an LCSAS restore drill.",
-        "It contains no personal information.",
-        "",
-    ]
-    for _ in range(40):
-        lines.append(" ".join(rng.choice(_WORDS) for _ in range(12)).capitalize() + ".")
-    return ("\n".join(lines) + "\n").encode()
-
-
-def build_corpus(root: Path, seed: str) -> dict[str, str]:
-    """Write the fixed corpus under *root*; return {"<repo>/<file>": sha256}."""
-    manifest: dict[str, str] = {}
-    for repo, n_text, n_bulk, bulk_size in CORPUS:
-        d = root / repo
-        d.mkdir(parents=True)
-        for i in range(1, n_text + 1):
-            name = f"{'album-notes' if repo == 'photos' else 'letter'}-{i:02d}.txt"
-            data = _text(random.Random(f"{seed}:{repo}:text:{i}"), f"{repo} {name}")
-            (d / name).write_bytes(data)
-            manifest[f"{repo}/{name}"] = hashlib.sha256(data).hexdigest()
-        for i in range(1, n_bulk + 1):
-            name = f"{'scan' if repo == 'photos' else 'document'}-{i:03d}.dat"
-            # Incompressible, so the packs really fill two discs.
-            data = random.Random(f"{seed}:{repo}:bulk:{i}").randbytes(bulk_size)
-            (d / name).write_bytes(data)
-            manifest[f"{repo}/{name}"] = hashlib.sha256(data).hexdigest()
-    return manifest
-
-
-def write_manifest(path: Path, manifest: dict[str, str]) -> None:
-    """sha256sum -c format, paths relative to the restore target."""
-    path.write_text(
-        "".join(f"{h}  {p}\n" for p, h in sorted(manifest.items()))
+# `lcsas burn` without a disc writer: burn_session(skip_burn=True) records
+# each volume of the session VERIFIED with a disc at the default location,
+# as the test fixtures do (tests/e2e/fixture_lib.py burn_to_isos).  A
+# snapshot goes on a disc only when its packs are on burned discs or on that
+# session's own discs, so the first session must be "burned" before the
+# second is staged, or the second session's discs would carry no snapshot.
+_MARK_BURNED = """
+import argparse, sys
+from lcsas.burn.orchestrator import BurnOrchestrator
+from lcsas.cli.common import _load_config_opt, _open_catalog
+from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+from lcsas.iso.xorriso import SubprocessXorrisoRunner
+args = argparse.Namespace(config=sys.argv[1], db=None)
+config = _load_config_opt(args)
+with _open_catalog(args, config) as conn:
+    orch = BurnOrchestrator(
+        config, conn,
+        SubprocessXorrisoRunner(tmpdir=config.staging_path),
+        SubprocessDVDisasterRunner(tmpdir=config.staging_path),
     )
+    receipts = orch.burn_session(
+        "latest", location=config.default_location, skip_burn=True,
+        interactive=False,
+    )
+print("recorded as burned (no disc written):",
+      ", ".join(r.volume_label for r in receipts))
+"""
+
+
+def use_small_corpus() -> None:
+    """--small: a few small bulk files instead of ~670 MiB of them, for a
+    quick local check of the kit.  The big file (over 100 MB) stays."""
+    corpus.CORPUS = tuple((repo, n_text, 2, corpus.MiB)
+                          for repo, n_text, _n, _size in corpus.CORPUS)
+    corpus.ADDED = tuple((repo, 1, corpus.MiB) for repo, _n, _s in corpus.ADDED)
 
 
 def write_config(work: Path) -> Path:
     cfg = work / "drill.toml"
     repos = []
-    for repo, *_ in CORPUS:
+    for repo, *_ in corpus.CORPUS:
         repos += [
             f"[repos.{repo}]",
             f'mirror_path = "{work / "mirror" / repo}"',
@@ -157,6 +145,13 @@ def main() -> int:
     ap.add_argument("--seed", default="lcsas-drill-v1",
                     help="Corpus seed (default: %(default)s).")
     ap.add_argument("--media", default="CD700")
+    ap.add_argument("--profile", choices=corpus.PROFILES, default="windows",
+                    help="windows (default): names NTFS can store, for the "
+                         "Windows drills; posix: also the names, links and "
+                         "long path only Linux/macOS can hold.")
+    ap.add_argument("--small", action="store_true",
+                    help="Few small bulk files (the big file stays): a quick "
+                         "local check of the kit, not a drill kit.")
     args = ap.parse_args()
 
     work = args.workdir.resolve()
@@ -176,34 +171,56 @@ def main() -> int:
         run([sys.executable, "-m", "lcsas", "--config", str(cfg), *a],
             env=env, cwd=work)
 
+    def rustic_env(repo: str) -> dict[str, str]:
+        return {**os.environ, "RUSTIC_REPOSITORY": str(work / "mirror" / repo),
+                "RUSTIC_PASSWORD_FILE": str(work / "secrets" / f"{repo}.pw")}
+
+    def backup(src: Path) -> None:
+        for repo, *_ in corpus.CORPUS:
+            # --as-path/--host: the snapshot says /photos on host "drill",
+            # not the lab's path and hostname.
+            run(["rustic", "backup", str(src / repo),
+                 "--as-path", f"/{repo}", "--host", "drill"],
+                env=rustic_env(repo))
+
+    def stage() -> list[Path]:
+        """One burn session: `lcsas stage`, then record its volumes as
+        burned (no disc is written).  Returns its ISOs."""
+        before = set((work / "staging").rglob("*.iso"))
+        lcsas("stage", "--media", args.media)
+        new = sorted(set((work / "staging").rglob("*.iso")) - before,
+                     key=lambda p: p.name)
+        if not new:
+            sys.exit("stage produced no ISO")
+        run([sys.executable, "-c", _MARK_BURNED, str(cfg)], env=env, cwd=work)
+        return new
+
     log(f"workdir {work}; code from {root}")
     for sub in ("corpus", "mirror", "staging", "secrets", "cards", "iso"):
         (work / sub).mkdir(parents=True, exist_ok=True)
     os.chmod(work / "secrets", 0o700)
     os.chmod(work / "cards", 0o700)
 
-    log("1. corpus")
-    manifest = build_corpus(work / "corpus", args.seed)
-    write_manifest(work / "manifest.sha256", manifest)
-    log(f"   {len(manifest)} files")
+    log(f"1. corpus (profile {args.profile})")
+    if args.small:
+        use_small_corpus()
+    src = work / "corpus"
+    corpus.build_corpus(src, args.seed, args.profile)
+    first = corpus.scan_sets(src)
+    log(f"   {sum(len(v) for v in first.values())} items")
 
-    log("2. passwords and rustic repositories")
-    for repo, *_ in CORPUS:
+    log("2. passwords, rustic repositories, first backup")
+    for repo, *_ in corpus.CORPUS:
         pw = work / "secrets" / f"{repo}.pw"
         pw.write_text(secrets.token_urlsafe(32) + "\n")
         os.chmod(pw, 0o600)
-        renv = {**os.environ, "RUSTIC_REPOSITORY": str(work / "mirror" / repo),
-                "RUSTIC_PASSWORD_FILE": str(pw)}
-        run(["rustic", "init"], env=renv)
-        # --as-path/--host: the snapshot says /photos on host "drill", not
-        # the lab's path and hostname.
-        run(["rustic", "backup", str(work / "corpus" / repo),
-             "--as-path", f"/{repo}", "--host", "drill"], env=renv)
+        run(["rustic", "init"], env=rustic_env(repo))
+    backup(src)
 
     log("3. catalog, repositories, split, cards")
     cfg = write_config(work)
     lcsas("init")
-    for repo, *_ in CORPUS:
+    for repo, *_ in corpus.CORPUS:
         lcsas("repo", "add", repo, str(work / "mirror" / repo))
     lcsas("key", "split", "--repo", "photos",
           "--out", str(work / "cards" / "photos-shares"))
@@ -211,19 +228,31 @@ def main() -> int:
           "--out", str(work / "cards" / "documents-password-card.txt"))
     lcsas("scan")
 
-    log(f"4. stage the data discs ({args.media})")
-    lcsas("stage", "--media", args.media)
-    isos = sorted((work / "staging").rglob("*.iso"))
-    if not isos:
-        sys.exit("stage produced no ISO")
+    log(f"4. first burn session: stage the data discs ({args.media})")
+    first_isos = stage()
+
+    log("5. change the corpus, second backup, second burn session")
+    corpus.change_corpus(src, args.seed)
+    backup(src)
+    lcsas("scan")
+    second_isos = stage()
+    if any(i.name in {f.name for f in first_isos} for i in second_isos):
+        sys.exit("the second session reused a disc label of the first")
+    isos = first_isos + second_isos
     for iso in isos:
         shutil.copy2(iso, work / "iso" / iso.name)
-    log(f"   {len(isos)} data disc(s): {', '.join(i.name for i in isos)}")
+    log(f"   {len(first_isos)} + {len(second_isos)} data disc(s): "
+        f"{', '.join(i.name for i in isos)}")
 
-    log("5. estate card")
+    log("6. manifest (from the corpus as the second backup saw it)")
+    manifest = corpus.make_manifest(src, first, profile=args.profile,
+                                    seed=args.seed)
+    corpus.write_manifest(work / "manifest.json", manifest)
+
+    log("7. estate card")
     lcsas("estate", "card", "--output", str(work / "cards" / "estate-card.txt"))
 
-    log("6. meta disc (from the drill config and catalog)")
+    log("8. meta disc (from the drill config and catalog)")
     meta = work / "meta-tree"
     lcsas("meta", "build", "--project-root", str(root), "--output", str(meta))
     lcsas("meta", "verify", "--strict", str(meta))
@@ -238,14 +267,14 @@ def main() -> int:
         print(f"  {iso.name}")
     print("Hand the stand-in (#474) these printouts, and nothing else:")
     print(f"  {work / 'cards' / 'estate-card.txt'}")
-    print(f"    (write the disc count by hand: {len(isos)} data discs + 1 meta disc)")
+    print(f"    (it counts the {len(isos)} data discs; the meta disc comes with them)")
     for card in shares[:SPLIT_K]:
         print(f"  {card}")
     print(f"  {work / 'cards' / 'documents-password-card.txt'}")
     print(f"    (write the password from {work / 'secrets' / 'documents.pw'} "
           "into its box)")
     print("Check a restore with:")
-    print(f"  python3 {HERE / 'verify_restore.py'} {work / 'manifest.sha256'} "
+    print(f"  python3 {HERE / 'verify_restore.py'} {work / 'manifest.json'} "
           "<restored dir>")
     return 0
 
