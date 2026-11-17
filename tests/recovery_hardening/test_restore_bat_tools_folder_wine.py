@@ -519,7 +519,12 @@ def test_stop_and_carry_on_from_the_tools_folder(fx: _Fixture) -> None:
         rc = run.finish()
     out = run.text
     _assert_quiet(out)
-    assert "PAUSES the restore" not in out, "the copy said the note again"
+    # The long note is said once, before the copy; the copy's banner
+    # says it again in short (#613: the reader watches this window for
+    # the rest of the restore).
+    assert "PAUSES the restore" not in out, "the copy said the long note again"
+    assert out.count("a click pauses the restore") == 1, out
+    assert out.index("a click pauses the restore") < out.index("[tier 1] running"), out
     assert len(boxes) == 2, out
     assert rc == 75, f"rc={rc}\n{out}"
     assert "The restore stopped before it finished (code 75)." in out, out

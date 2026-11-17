@@ -1987,6 +1987,9 @@ to restore the files on the LCSAS archive discs.
   >>> Windows 10 or 11 <<<
        Open this disc in File Explorer and double-click
        restore.bat
+       Do not click inside its black window: a click pauses
+       the restore (the title starts with "Select").  Press
+       Esc to let it go on.
        (See recovery/docs/RECOVER_WINDOWS.txt for details.)
 
   >>> macOS <<<

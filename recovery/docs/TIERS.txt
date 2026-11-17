@@ -88,14 +88,14 @@ RESTORE").  It has no LCSAS_TIER_FALLBACK knob:
     folder): stop, keep the tools folder and say how to carry on.
     Tier 2 could only fail there (#615).
   * any other exit, for a set with its own data\: try tier 2.
-  * no lcsas-restore.exe at all (antivirus quarantined it, say):
-    the data\ check above is part of the tier-1 step, so restore.bat
-    goes straight to tier 2 whatever the set.  In a run that does not
-    relocate, rustic-static.exe is there and then fails for a set
-    read from the discs; the relocated copy holds rustic-static.exe
-    only when a set has its own data\.  Either way, restore the .exe
-    (RECOVER_WINDOWS.txt, "SMARTSCREEN WARNING") or use the Python
-    reader.
+  * no lcsas-restore.exe at all (antivirus quarantined it, say), for
+    a set read from the discs: stop at once, before the folder and
+    the password, with exit 64 and a message that the program is
+    missing and may have been removed by antivirus (#631).  Tier 2
+    cannot ask for discs, so it never runs.  Restore the .exe
+    (RECOVER_WINDOWS.txt, "SMARTSCREEN WARNING") and start again from
+    the META disc, or use the Python reader.  For a set with its own
+    data\: try tier 2.
 
 TIER 2b: STOCK RESTIC / RUSTIC (INDEPENDENT AUDITED READER)
 
