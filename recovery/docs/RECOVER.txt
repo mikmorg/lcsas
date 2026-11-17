@@ -378,6 +378,11 @@ silently treated as complete.  Files that finished cleanly on the
 first pass (size matches manifest) are skipped; files that failed
 are retried.  No "delete the target directory first" dance.
 
+The Python reader (tier 3) carries on the same way.  It writes each
+file under a name ending .lcsas-partial and renames it only when the
+file is complete.  On the next run it keeps every file that already
+has the size and time the backup gives it, and restores the rest.
+
 The first restore into a folder drops a hidden marker
 (.lcsas-restore-marker) in it, naming the backup set restored there.
 Because the marker is present, every re-run of that set into that SAME
@@ -915,6 +920,9 @@ Even with the pack cache enabled, the first contact with each DATA disc
 always requires a physical swap — one swap per disc, minimum.  For an
 archive spread across N data discs, expect at least N swap prompts.
 With the cache active each disc is needed only once (O(N) total swaps).
+This holds for tier 1 (lcsas-restore) and for tier 3 (the Python
+reader): both copy each data disc into the cache.  Tier 2 never runs
+on an archive of more than one data disc.
 A restore that stopped and is carried on (resume.sh) finds the discs
 it already copied in the cache and does not ask for them again.  The
 cache is deleted with the tools folder once a restore succeeds, so a
@@ -928,6 +936,8 @@ By default restore.sh keeps an opportunistic pack cache in its tools
 folder (LCSAS_PACK_CACHE_DIR=auto; see "THE TOOLS FOLDER").  The first
 time lcsas-restore sees a DATA disc, it copies the entire data/
 subtree of that disc into the cache, and says how many MB it copies.
+The Python reader (tier 3) does the same, but copies only the packs of
+the backup set it is restoring.
 Later packs from the same disc are served from the local cache, not
 the disc, so each DATA disc typically needs to be inserted only ONCE
 regardless of how many packs it contributes to the restore.

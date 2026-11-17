@@ -219,3 +219,37 @@ def test_tier1_missing_multidisc_falls_to_tier3_byte_identical(
         assert _sha256(original) == _sha256(restored[original.name]), (
             f"{original.name} restored bytes differ from source"
         )
+
+
+def test_tier3_under_restore_sh_uses_the_pack_cache(tmp_path: Path) -> None:
+    """#602: restore.sh exports LCSAS_PACK_CACHE_DIR and tier 3 reads
+    it, as tier 1 does: each data disc it finds is copied into the
+    cache.  (The test above, with the variable empty, is the "off"
+    case.)"""
+    _require_zstandard()
+    recovery, mounts, src, _pwfile = _build_multidisc_fixture(tmp_path)
+    target = tmp_path / "restored"
+    cache = tmp_path / "cache"
+    env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": str(mounts),
+        "LCSAS_REPO": "alpha",
+        "LCSAS_TIER_FALLBACK": "1",
+        "LCSAS_PASSWORD": "test-password",
+        "LCSAS_PACK_CACHE_DIR": str(cache),
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+    assert res.returncode == 0, (
+        f"rc={res.returncode}\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+    assert "[tier 3] falling back to Python" in res.stderr
+    assert "to the cache" in res.stderr, res.stderr
+    disc_packs = {p.name for p in mounts.rglob("*") if p.is_file()}
+    cached = {p.name for p in (cache / "data").rglob("*") if p.is_file()}
+    assert cached == disc_packs
+    restored = {p.name: p for p in target.rglob("*") if p.is_file()}
+    for original in sorted(src.iterdir()):
+        assert _sha256(original) == _sha256(restored[original.name])

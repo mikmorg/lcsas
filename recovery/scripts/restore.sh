@@ -780,6 +780,7 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           when unset) → <tools>/pack-cache;
                           a path → that path; '' (empty) → cache off.
                           Trades disk space for fewer disc swaps.
+                          Tiers 1 and 3 both use it.
   LCSAS_INTERACTIVE       on / off / auto, passed to tier 1 as
                           --interactive.  auto (default) asks at the
                           disc prompt only on a terminal.  The script's
@@ -1446,7 +1447,9 @@ export LCSAS_MOUNT_DIRS="$LCSAS_MOUNT_DIRS_EFFECTIVE"
 # case (the v3 blind run took 16 swaps for 3 discs).  With it, the
 # rest of each disc's data/ subtree is drained into a local cache
 # on first contact; subsequent packs from the same disc resolve
-# locally and the disc-swap count drops to O(N_discs).
+# locally and the disc-swap count drops to O(N_discs).  Tier 3 (the
+# Python reader) reads the same exported variable and copies the
+# same way (#602); tier 2 never runs on a multi-disc archive.
 #
 # Three equivalent values:
 #   LCSAS_PACK_CACHE_DIR=/abs/path   use that path (advanced)
@@ -3608,6 +3611,10 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         #   --repo DIR --password-file FILE --target DIR [--snapshot ID]
         #   [--mount-point DIR ...] [--interactive on|off|auto]
         # See src/lcsas/restore/standalone_builder.py:_cli_main.
+        # The pack cache reaches it as the exported LCSAS_PACK_CACHE_DIR
+        # (set above; empty: off), as for tier 1 (#602).  A file a
+        # stopped run finished is kept, so running again carries on
+        # (#729).
         # The non-"latest" sentinel is passed straight through.
         TIER3_SNAP_ARGS=""
         if [ -n "$SNAP" ] && [ "$SNAP" != "latest" ]; then
