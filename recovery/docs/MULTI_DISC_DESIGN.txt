@@ -775,14 +775,16 @@ LCSAS_TOOLS_DIR names another folder for both.
     before anything else, and later uses only a folder that is new,
     empty or carries its marker.  Any other folder (one holding the
     reader's own files, or a whole drive such as E:\) is never used
-    and never deleted: restore.bat refuses it with exit 1 before
-    changing anything; restore.sh falls back to a temporary folder.
-    Relocated off the META disc, that temporary folder becomes the
-    tools folder, and a stopped restore carries on from it with the
-    resume.sh the script prints, until the folder is cleared (most
-    systems empty /tmp at power-off).  Run in place, the run's files
-    go to a temporary folder deleted at exit, and that run cannot be
-    carried on.
+    and never deleted: both scripts refuse it with exit 1 before
+    changing anything (restore.sh since rc10, #627).  When restore.sh
+    cannot make the folder, or (relocating) it has no room or cannot
+    run programs, it falls back to a temporary folder.  Relocated off
+    the META disc, that temporary folder becomes the tools folder,
+    and a stopped restore carries on from it with the resume.sh the
+    script prints, until the folder is cleared (most systems empty
+    /tmp at power-off).  Run in place, the run's files go to a
+    temporary folder deleted at exit, and that run cannot be carried
+    on.
   * Reuse: a later run from the META disc reuses the copy only when
     it is whole and was made by the very same script and tier-1
     binary for the same archive (restore.sh: .lcsas-build,

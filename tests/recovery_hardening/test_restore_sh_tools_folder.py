@@ -230,17 +230,34 @@ def test_no_home_keeps_the_run_files_in_a_temporary_folder(tmp_path: Path) -> No
     assert "resume.sh" not in res.stderr
 
 
-def test_a_folder_with_other_files_is_never_used(tmp_path: Path) -> None:
+@pytest.mark.parametrize("run", ["in-place", "relocated"])
+def test_a_folder_with_other_files_is_never_used(tmp_path: Path, run: str) -> None:
     """LCSAS_TOOLS_DIR pointing at a folder that holds other files (say
-    $HOME itself) is refused, so it is never emptied or deleted."""
-    recovery = _meta_disc(tmp_path / "disc")
+    $HOME itself, or a copy of the META disc) is refused with exit 1
+    before anything changes, whether the run relocates or not, as
+    restore.bat refuses it (#627 item 4).  Up to rc9 restore.sh used a
+    temporary folder instead, which a run that did not relocate removed
+    at the end, so a stop there could not be carried on."""
     mine = tmp_path / "mine"
     mine.mkdir()
     (mine / "letter.txt").write_text("keep me")
-    res = _run(recovery, tmp_path / "out", _env(tmp_path, LCSAS_TOOLS_DIR=str(mine)))
-    assert res.returncode == 0, res.stderr
-    assert f"cannot use {mine} as the tools folder; using a temporary one" in res.stderr
+    if run == "in-place":
+        recovery = _meta_disc(tmp_path / "disc")
+        res = _run(recovery, tmp_path / "out", _env(tmp_path, LCSAS_TOOLS_DIR=str(mine)))
+    else:
+        meta = tmp_path / "meta"
+        _meta_disc(meta, script=True)
+        res = subprocess.run(
+            ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+            env=_env(tmp_path, LCSAS_TOOLS_DIR=str(mine), LCSAS_META_DISC=str(meta)),
+        )
+    assert res.returncode == 1, res.stderr
+    assert f"ERROR: the tools folder {mine}\nalready holds other files." in res.stderr
+    assert "copying the recovery tools" not in res.stderr
     assert sorted(p.name for p in mine.iterdir()) == ["letter.txt"]
+    assert not (tmp_path / "out").exists()
+    assert sorted(p.name for p in _tmpdir(tmp_path).iterdir()) == []
 
 
 def test_a_run_that_stops_before_it_starts_leaves_no_empty_folder(tmp_path: Path) -> None:
@@ -502,8 +519,16 @@ def test_success_removes_only_what_the_script_put_in_the_tools_folder(tmp_path: 
     res = subprocess.run(["sh", str(tools / "resume.sh")], stdin=subprocess.DEVNULL,
                          capture_output=True, text=True, env=_env(tmp_path), timeout=60)
     assert res.returncode == 0, res.stderr
-    assert sorted(p.name for p in tools.iterdir()) == ["notes.txt"]
+    # The marker stays with the folder (it was removed up to rc9): since
+    # #627 item 4 a folder without it that holds files is refused, and
+    # this one is still the restore's own.
+    assert sorted(p.name for p in tools.iterdir()) == [".lcsas-restore-tools", "notes.txt"]
     assert f"{tools} holds other files, so the folder is kept" in res.stderr
+    res = _run(recovery, tmp_path / "out2",
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools)))
+    assert res.returncode == 0, res.stderr
+    assert "already holds other files" not in res.stderr
+    assert (tools / "notes.txt").read_text() == "mine"
 
 
 # ── resume.sh carries on the SAME restore (#609 review) ──────────────

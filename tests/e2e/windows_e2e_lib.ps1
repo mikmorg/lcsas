@@ -317,6 +317,12 @@ function Get-TempNames {
 # same") rather than run it; wine's fc cannot tell, so only this proves it.
 # The folder holds .lcsas-tools, as every tools folder restore.bat has
 # made since rc6 does: without it restore.bat refuses the folder.
+#
+# -WrongFirst (#608): the answers file gives a wrong password before the
+# right one.  restore.bat must catch it before tier 1 runs (--list-
+# snapshots), say so, ask again with no `pause` on the way (a pause would
+# eat the right password from the answers file), and then restore: rc 0,
+# the tree byte-exact, tier 1 run once, no lcsas-pw-* file left.
 # ---------------------------------------------------------------------
 function Invoke-RelocationLeg {
     param(
@@ -324,6 +330,7 @@ function Invoke-RelocationLeg {
         [string]$BatRel,        # path of restore.bat relative to the meta-disc root
         [string]$TargetName,
         [switch]$SeedStale,
+        [switch]$WrongFirst,
         # LCSAS_REPO names the set by its id, or by the name restore.bat
         # shows (name_cmd), which it must match too (#606).
         [ValidateSet('id', 'name_cmd')]
@@ -362,7 +369,10 @@ function Invoke-RelocationLeg {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $pw = (Get-Content (Join-Path $Fixture 'repo.pw') -Raw).Trim()
     $answers = Join-Path $env:RUNNER_TEMP "answers-$TargetName.txt"
-    @($target, $pw, '', '', '', '', '', '') | Set-Content -Path $answers -Encoding ascii
+    $lines = @($target)
+    if ($WrongFirst) { $lines += 'definitely-the-wrong-password' }
+    $lines += @($pw, '', '', '', '', '', '')
+    $lines | Set-Content -Path $answers -Encoding ascii
     $outFile = Join-Path $env:RUNNER_TEMP "out-$TargetName.txt"
 
     $pwBefore  = Get-TempNames 'lcsas-pw-*'
@@ -396,6 +406,19 @@ function Invoke-RelocationLeg {
     }
     if ($out -match 'STALE COPY RAN') { $problems.Add('the stale restore.bat in the tools folder ran') }
     if ($out -notmatch 'PAUSES the restore') { $problems.Add('no QuickEdit note (#613)') }
+    if ($out -notmatch 'a click pauses the restore') {
+        $problems.Add("the relocated copy's banner does not repeat the QuickEdit note (#613)")
+    }
+    if ($WrongFirst) {
+        if ($out -notmatch 'That password is wrong: it does not open the backup set') {
+            $problems.Add('the wrong password was not caught and said before the restore (#608)')
+        }
+        $t1runs = ([regex]::Matches($out, '\[tier 1\] running')).Count
+        if ($t1runs -ne 1) { $problems.Add("tier 1 ran $t1runs times (want once, with the right password)") }
+        if ($out -match 'could not decrypt the repository') {
+            $problems.Add('the run gave up after the wrong password instead of asking again')
+        }
+    }
     Assert-OnlyThisPlatform -Out $out -Problems $problems
     Assert-NoAccessDenied -Out $out -Problems $problems
     Assert-SetNamed -Out $out -Sets $sets -Problems $problems

@@ -360,3 +360,35 @@ def test_loader_that_cannot_help_after_tier1_fails(tmp_path: Path) -> None:
     assert ("[tier 3] (not even through its bundled musl loader), and "
             "there is no working python3 on PATH.") in res.stderr, res.stderr
     assert "falling back to Python" not in res.stderr, res.stderr
+
+
+def test_tier3_temporary_files_honour_tmpdir(tmp_path: Path) -> None:
+    """#806's class: tier 3's two capture files (its stderr and its exit
+    code) were made in a hard-coded /tmp, which may be read-only or
+    missing on a rescue system, while every other temporary file of
+    restore.sh honoured TMPDIR.  They are now made in $TMPDIR, as is the
+    password file, and all three are gone after the run."""
+    recovery = _fixture(tmp_path, None)
+    stub_dir = tmp_path / "stubbin"
+    stub_dir.mkdir()
+    seen = tmp_path / "tmpdir-while-tier3-ran.txt"
+    stub = stub_dir / "python3"
+    stub.write_text(textwrap.dedent(f"""\
+        #!/bin/sh
+        case "$1" in -c) exit 0 ;; esac
+        ls "$TMPDIR" > {seen}
+        exit 0
+    """))
+    stub.chmod(0o755)
+    tmpdir = tmp_path / "tmpdir"
+    tmpdir.mkdir()
+
+    res = _run(recovery, tmp_path, stub_dir, TMPDIR=str(tmpdir))
+
+    assert res.returncode == 0, res.stderr
+    names = seen.read_text().split()
+    for prefix in ("lcsas-tier3-err.", "lcsas-tier3-rc.", "lcsas-pw."):
+        assert any(n.startswith(prefix) for n in names), (prefix, names)
+    assert sorted(p.name for p in tmpdir.iterdir()) == []
+    src = RESTORE_SH.read_text()
+    assert "mktemp /tmp/" not in src, "a temporary file in a hard-coded /tmp"

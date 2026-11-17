@@ -425,6 +425,22 @@ jobs:
           Invoke-HiddenPasswordLeg -Fixture (Join-Path $PWD 'fixture') `
             -BatRel 'restore.bat' -TargetName 'restored-doc-password'
 
+      # ---- #608: a wrong password, then the right one, on real cmd ----------
+      # The answers file gives a wrong password before the right one.  The
+      # relocated restore.bat must catch it before tier 1 (--list-snapshots),
+      # say so and ask again with no `pause` on the way (a pause would eat
+      # the right password from the piped answers), then restore: rc 0, the
+      # tree byte-exact, tier 1 run once, no lcsas-pw-* left in %TEMP%.
+      # wine's set /p reads its input differently, so only real cmd shows it.
+      - name: Wrong-then-right password leg — asked again from an answers file
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-RelocationLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'restore.bat' -TargetName 'restored-wrong-then-right' -WrongFirst
+
       # ---- #517: eject the meta disc after relocation ------------------------
       # LAST before the dismount step, because it ejects the meta ISO (the
       # wrong-password step re-finds the meta drive by scanning volumes).

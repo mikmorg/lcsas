@@ -195,19 +195,21 @@ def test_same_build_keeps_the_pack_cache(tmp_path: Path, shm_dir: Path) -> None:
 def test_unusable_tools_folder_falls_back_to_a_temporary_one(
     tmp_path: Path, shm_dir: Path,
 ) -> None:
-    """A tools folder that holds other files is never used (nor deleted):
-    the copy goes to a temporary folder, removed after a success."""
+    """A tools folder that cannot be made is not used: the copy goes to a
+    temporary folder, removed after a success.  (A folder that holds
+    other files used to be the example here; since #627 item 4 it is
+    refused outright, see test_restore_sh_tools_folder.py.)"""
     meta = _stick(tmp_path)
-    mine = tmp_path / "my-files"
-    mine.mkdir()
-    (mine / "letter.txt").write_text("mine")
+    blocker = tmp_path / "my-files"
+    blocker.write_text("a file: no folder can be made under it")
+    mine = blocker / "tools"
     res = _run(meta, tmp_path, shm_dir, tools=mine)
     assert res.returncode == 0, res.stderr
     assert f"cannot use {mine} for the recovery tools" in res.stderr, res.stderr
     assert f"copied recovery binaries to {shm_dir}/lcsas-restore." in res.stderr, (
         res.stderr
     )
-    assert sorted(p.name for p in mine.iterdir()) == ["letter.txt"]
+    assert blocker.read_text() == "a file: no folder can be made under it"
     assert sorted(p.name for p in shm_dir.iterdir()) == []
 
 
@@ -219,11 +221,13 @@ def test_temporary_tools_folder_can_be_carried_on(
     resume.sh that carries the restore on (#609).  The docs used to say
     such a run could not be carried on (ENV_VARS.txt LCSAS_TOOLS_DIR,
     RECOVER.txt "THE TOOLS FOLDER", MULTI_DISC_DESIGN.txt, the sh-vs-bat
-    table in restore-windows.md); only a run in place cannot."""
+    table in restore-windows.md); only a run in place cannot.  (The
+    LCSAS_TOOLS_DIR here cannot be made; one that holds other files is
+    refused since #627 item 4.)"""
     meta = _stick(tmp_path)
-    mine = tmp_path / "my-files"
-    mine.mkdir()
-    (mine / "letter.txt").write_text("mine")
+    blocker = tmp_path / "my-files"
+    blocker.write_text("a file: no folder can be made under it")
+    mine = blocker / "tools"
     first = _run(meta, tmp_path, shm_dir, tools=mine, stub_rc=75)
     assert first.returncode == 75, first.stderr
     assert f"cannot use {mine} for the recovery tools" in first.stderr, first.stderr
@@ -232,7 +236,7 @@ def test_temporary_tools_folder_can_be_carried_on(
     resume = temps[0] / "resume.sh"
     assert resume.is_file(), sorted(p.name for p in temps[0].iterdir())
     assert f"sh {resume}" in first.stderr, first.stderr
-    assert sorted(p.name for p in mine.iterdir()) == ["letter.txt"]
+    assert blocker.is_file() and not mine.exists()
 
     env = {
         **os.environ,
@@ -253,7 +257,7 @@ def test_temporary_tools_folder_can_be_carried_on(
     assert "[tier 1] using prebuilt lcsas-restore" in again.stderr, again.stderr
     assert "copying the recovery tools" not in again.stderr, again.stderr
     assert not temps[0].exists(), "the tools folder must go after a success"
-    assert sorted(p.name for p in mine.iterdir()) == ["letter.txt"]
+    assert blocker.is_file()
 
 
 def test_run_from_recovery_scripts_copies_the_docs_and_root_metadata(

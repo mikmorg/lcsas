@@ -108,6 +108,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_catalog_pick.py` | restore.sh: which catalog.db it picks, and from where (#517 gaps). |
 | `test_restore_sh_ecc_dispatch.py` | Hardening tests: restore.sh --check-disc ECC dispatch [FMT-01]. |
 | `test_restore_sh_journey.py` | Hardening (#605 #606 #607 #608 #609 #617): restore.sh's journey. |
+| `test_restore_sh_newest_snapshot_real.py` | Hardening (#605): "latest" is the newest data disc's, with the real tier 1. |
 | `test_restore_sh_nonexec_bins.py` | Hardening (#496): tier binaries that are present but can't be run. |
 | `test_restore_sh_password_hygiene.py` | test_restore_sh_password_hygiene.py -- restore.sh password-file cleanup. |
 | `test_restore_sh_relocate.py` | Hardening tests: restore.sh relocation path (read-only SCRIPT_DIR). |

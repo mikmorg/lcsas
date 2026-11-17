@@ -195,6 +195,13 @@ def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
                 "LCSAS_ANOTHER_SET", "LCSAS_SHARES_DIR", "LCSAS_PACK_CACHE_DIR"):
         if var not in extra:
             env.pop(var, None)
+    # The META fixtures here are copies that can be written to, run where
+    # they are, and since #627 item 6 such a run asks for the newest data
+    # disc as a relocated one does.  Only the tests of that step see it:
+    # the relocated ones (LCSAS_RELOCATED) and those that name
+    # LCSAS_NEWEST_DISC_PROMPT.
+    if "LCSAS_RELOCATED" not in extra and "LCSAS_NEWEST_DISC_PROMPT" not in extra:
+        env["LCSAS_NEWEST_DISC_PROMPT"] = "0"
     return env
 
 
@@ -569,7 +576,10 @@ def test_the_newest_disc_step_waits_for_a_labelled_data_disc(tmp_path: Path) -> 
     copied = tmp_path / "tools" / "metadata"
     assert sorted(p.name for p in (copied / DOCS_ID / "index").iterdir()) == ["index-new"]
     assert sorted(p.name for p in (copied / DOCS_ID / "snapshots").iterdir()) == ["snapshots-new"]
-    assert sorted(p.name for p in (copied / DOCS_ID / "keys").iterdir()) == ["keys-new"]
+    # keys/ from both: here the tools folder had no copy yet (the run is
+    # not really relocated), so the META disc's copy is the base.
+    assert sorted(p.name for p in (copied / DOCS_ID / "keys").iterdir()) == [
+        "keys-meta", "keys-new"]
     assert (copied / ".from" / DOCS_ID).read_text().strip() == "LCSAS_TEST_TINY_2026_0002"
     assert not (copied / PHOTOS_ID).exists(), "no data disc holds that set"
     assert "LCSAS_NEWEST_DISC_PROMPT=0" in (tmp_path / "tools" / "resume.sh").read_text()
@@ -626,11 +636,14 @@ def test_the_newest_disc_step_skip_and_quit(
         assert not _runs(tmp_path)
 
 
-@pytest.mark.parametrize("case", ["pipe", "off", "prompt-off", "disc-in", "no-meta"])
+@pytest.mark.parametrize("case", ["pipe", "off", "prompt-off", "disc-in", "no-meta",
+                                  "read-only-meta"])
 def test_the_newest_disc_step_is_asked_only_when_it_can_be(tmp_path: Path, case: str) -> None:
     """Not for a pipe (the blind harness's restore_auto.sh, automation),
     not with LCSAS_INTERACTIVE=off or LCSAS_NEWEST_DISC_PROMPT=0, not
-    when a data disc is already mounted, and not without a META disc."""
+    when a data disc is already mounted, not without a META disc, and
+    not run where it is from a META disc that cannot be written to (the
+    disc itself, which cannot come out while the script runs from it)."""
     meta, recovery = _single_drive(tmp_path)
     extra = {"LCSAS_INTERACTIVE": "on", "LCSAS_RELOCATED": str(meta)}
     if case == "pipe":
@@ -643,11 +656,73 @@ def test_the_newest_disc_step_is_asked_only_when_it_can_be(tmp_path: Path, case:
         _set(_data_disc(tmp_path / "media", "D", "LCSAS_TEST_TINY_2026_0001"),
              DOCS_ID, DOCS, tag="disc")
     else:
+        if case == "read-only-meta" and os.geteuid() == 0:
+            pytest.skip("root writes to a 0555 folder")
         del extra["LCSAS_RELOCATED"]
-    res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID, **extra))
+        extra["LCSAS_NEWEST_DISC_PROMPT"] = "1"
+        if case == "no-meta":
+            # Not a META disc: no recovery/scripts/restore.sh at its root.
+            (recovery / "scripts" / "restore.sh").unlink()
+        else:
+            meta.chmod(0o555)
+    try:
+        res = _run(recovery, tmp_path / "out",
+                   _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID, **extra))
+    finally:
+        meta.chmod(0o755)
     assert res.returncode == 0, res.stderr
     assert "NEWEST data disc" not in res.stderr
+
+
+@pytest.mark.parametrize(("answer", "rc", "said"), [
+    ("s\n", 0, "Skipped: using the copies on the META disc."),
+    ("q\n", 65, "Stopped at your request."),
+])
+def test_the_newest_disc_step_from_a_meta_copy_run_in_place(
+    tmp_path: Path, answer: str, rc: int, said: str,
+) -> None:
+    """#627 item 6: run where it is from a copy of the META disc that can
+    be written to (a USB stick, LCSAS_NO_RELOCATE=1), restore.sh asks for
+    the newest data disc as restore.bat does; up to rc9 it needed a
+    relocation (META_DISC).  The META disc is not in a drive, so the box
+    does not say to take it out."""
+    meta, recovery = _single_drive(tmp_path)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_NEWEST_DISC_PROMPT="1",
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID),
+               stdin=answer)
+    assert res.returncode == rc, res.stderr
+    assert "Put your NEWEST data disc in the drive" in res.stderr
+    assert "Take the META disc out" not in res.stderr
+    assert "sudo eject" not in res.stderr
+    assert said in res.stderr
+    if rc == 0:
+        assert f"repo={meta}/metadata/{DOCS_ID} " in _runs(tmp_path)[0]
+    else:
+        assert not _runs(tmp_path)
+
+
+def test_a_meta_copy_run_in_place_merges_the_newest_disc(tmp_path: Path) -> None:
+    """#627 item 6, the other half: with the newest data disc in, a run
+    where it is from a META copy brings the tools folder's copy of each
+    set up to date from that disc (C2): index/ and snapshots/ from the
+    disc, keys/ from both (a key only the META copy holds is kept), so a
+    run carried on with that disc out of the drive sees the same snapshot."""
+    meta, recovery = _single_drive(tmp_path)
+    new = _data_disc(tmp_path / "media", "NEW", "LCSAS_TEST_TINY_2026_0002")
+    _set(new, DOCS_ID, DOCS, tag="new")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID, STUB_RC="1"))
+    assert res.returncode == 1, res.stderr
+    assert "copying the backup sets' metadata from the disc labelled" in res.stderr
+    copied = tmp_path / "tools" / "metadata" / DOCS_ID
+    assert sorted(p.name for p in (copied / "keys").iterdir()) == ["keys-meta", "keys-new"]
+    assert sorted(p.name for p in (copied / "index").iterdir()) == ["index-new"]
+    assert sorted(p.name for p in (copied / "snapshots").iterdir()) == ["snapshots-new"]
+    assert f"repo={new}/metadata/{DOCS_ID} " in _runs(tmp_path)[0]
+    # The META copy itself is never changed.
+    assert sorted(p.name for p in (meta / "metadata" / DOCS_ID / "keys").iterdir()) == [
+        "keys-meta"]
 
 
 def _pty_run(argv: list[str], env: dict[str, str], steps: list[tuple[str, bytes]],
@@ -768,15 +843,59 @@ def test_a_piped_password_is_not_checked_first_and_77_is_explained(tmp_path: Pat
     assert "[tier 1] wrong password" in res.stderr
 
 
-def test_a_password_from_the_environment_is_not_asked_again(tmp_path: Path) -> None:
+def test_a_wrong_password_from_the_environment_is_asked_again_when_someone_is_there(
+    tmp_path: Path,
+) -> None:
+    """#627 item 2 (and #608 C4 as amended): a wrong password from
+    LCSAS_PASSWORD or LCSAS_PWFILE is caught before tier 1 and asked for
+    again when a person is there, as restore.bat does.  Up to rc9 this
+    test pinned the opposite: restore.sh never asked, and stopped with
+    77.  In a script (no terminal) it is not checked: tier 1 rejects it
+    and the run ends with 77, the scripted contract (#384).  The reader's
+    password file is never written to.  A right one is not asked again."""
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
-                    LCSAS_PASSWORD="not-it"), stdin=f"{GOOD_PW}\n")
+                    LCSAS_PASSWORD="not-it", LCSAS_ANOTHER_SET="0"),
+               stdin=f"{GOOD_PW}\n")
+    assert res.returncode == 0, res.stderr
+    assert f"The password from LCSAS_PASSWORD was not accepted for {DOCS}." in res.stderr
+    assert "Password:" in res.stderr
+    assert len(_checks(tmp_path)) == 2
+    assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
+
+    # The input ends at that question: 77, nothing restored.
+    (tmp_path / "stub.log").unlink()
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
+                    LCSAS_PASSWORD="not-it"))
+    assert res.returncode == 77, res.stderr
+    assert not _runs(tmp_path)
+
+    # Scripted: not checked, not asked; tier 1 says it and exits 77.
+    (tmp_path / "stub.log").unlink()
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_REPO=DOCS_ID, LCSAS_PASSWORD="not-it"),
+               stdin=f"{GOOD_PW}\n")
     assert res.returncode == 77, res.stderr
     assert "Password:" not in res.stderr
     assert not _checks(tmp_path)
+
+    # LCSAS_PWFILE with a wrong password: asked again; the file is kept.
+    (tmp_path / "stub.log").unlink()
     pwfile = tmp_path / "pw"
+    pwfile.write_text("not-it\n")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
+                    LCSAS_PWFILE=str(pwfile), LCSAS_ANOTHER_SET="0"),
+               stdin=f"{GOOD_PW}\n")
+    assert res.returncode == 0, res.stderr
+    assert f"The password from the password file {pwfile} was not accepted" in res.stderr
+    assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
+    assert pwfile.read_text() == "not-it\n", "the reader's password file was changed"
+    assert list((tmp_path / "tmpdir").iterdir()) == [], "a password file was left"
+
+    # The right one is not asked again.
     pwfile.write_text(GOOD_PW + "\n")
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
@@ -852,20 +971,29 @@ def test_cards_from_two_splits_or_another_set_start_again(tmp_path: Path) -> Non
 @needs_keyshare
 @pytest.mark.parametrize(("answer", "rc"), [
     ("P\n" + GOOD_PW + "\n", 0), ("p\n" + GOOD_PW + "\n", 0),
-    ("Q\n", 77), ("", 77),
+    ("Q\n", 77), ("", 77), ("CARD1\nQ\n", 77), ("CARD1\n", 77),
 ])
 def test_p_types_the_password_and_q_quits(tmp_path: Path, answer: str, rc: int) -> None:
-    _, split_id = _shares(GOOD_PW.encode(), 2, 3)
+    """P types the password; Q, or the end of the input, at a card ends
+    with 77 (#607).  CARD1: one good card is typed first, so a card file
+    was written: no lcsas-shares.* folder (and no password file) is left
+    in $TMPDIR."""
+    cards, split_id = _shares(GOOD_PW.encode(), 2, 3)
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
-                    LCSAS_ANOTHER_SET="0"), stdin=answer)
+                    LCSAS_ANOTHER_SET="0"), stdin=answer.replace("CARD1", cards[0]))
     assert res.returncode == rc, res.stderr
     if rc == 0:
         assert "Password: " in res.stderr
         assert _runs(tmp_path)[0].endswith(f"pw={GOOD_PW}")
     else:
         assert not _runs(tmp_path)
+        assert "Stopped at your request; no password was given." in res.stderr
+    if answer.startswith("CARD1"):
+        assert "Share card 2 of 2" in res.stderr, res.stderr
+    left = sorted(p.name for p in (tmp_path / "tmpdir").iterdir())
+    assert left == [], f"left in $TMPDIR: {left}"
 
 
 @needs_keyshare
@@ -899,6 +1027,36 @@ def test_lcsas_shares_dir_that_cannot_rebuild_exits_77(tmp_path: Path, case: str
                _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
     assert res.returncode == 77, res.stderr
     assert not _runs(tmp_path)
+
+
+@needs_keyshare
+def test_lcsas_shares_dir_that_cannot_rebuild_asks_when_someone_is_there(
+    tmp_path: Path,
+) -> None:
+    """#627 item 3: cards in LCSAS_SHARES_DIR that do not rebuild the
+    password fall back to the questions when a person is there, as in
+    restore.bat (in a script: 77, above).  Here one card of a 2-of-3
+    split, then P and the password; then the same with the cards typed."""
+    cards, split_id = _shares(GOOD_PW.encode(), 2, 3)
+    shares = tmp_path / "cards"
+    shares.mkdir()
+    (shares / "card1.txt").write_text(_card(cards[0]))
+    recovery = _split_sets(tmp_path, split_id)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+                    LCSAS_SHARES_DIR=str(shares), LCSAS_ANOTHER_SET="0"),
+               stdin=f"P\n{GOOD_PW}\n")
+    assert res.returncode == 0, res.stderr
+    assert "Could not rebuild the password from the cards in" in res.stderr
+    assert "Type the cards or the password instead." in res.stderr
+    assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+                    LCSAS_SHARES_DIR=str(shares), LCSAS_ANOTHER_SET="0"),
+               stdin=f"{cards[1]}\n{cards[2]}\n")
+    assert res.returncode == 0, res.stderr
+    assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
+    assert sorted(p.name for p in shares.iterdir()) == ["card1.txt"]
 
 
 @needs_keyshare
@@ -1181,13 +1339,15 @@ def test_a_folder_holding_another_sets_restore_is_warned_about(tmp_path: Path) -
 def test_another_set_with_no_tools_folder_leaves_no_cache_behind(tmp_path: Path) -> None:
     """No usable tools folder: each run keeps its pack cache in its own
     temporary folder.  The next set's run used to inherit the first run's
-    cache path, under a folder already removed, and leave it behind."""
+    cache path, under a folder already removed, and leave it behind.
+    (A folder that cannot be made: under a file.  Up to rc9 this used a
+    folder holding other files, which is now refused, #627 item 4.)"""
     recovery = _two_sets(tmp_path)
-    mine = tmp_path / "mine"
-    mine.mkdir()
-    (mine / "letter.txt").write_text("keep me")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so no folder can be made under it")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_TOOLS_DIR=str(mine)),
+               _env(tmp_path, LCSAS_INTERACTIVE="on",
+                    LCSAS_TOOLS_DIR=str(blocker / "tools")),
                stdin=f"1\n{GOOD_PW}\ny\n{tmp_path}/second\n2\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
     caches = [ln[6:] for ln in _log(tmp_path) if ln.startswith("CACHE ")]
