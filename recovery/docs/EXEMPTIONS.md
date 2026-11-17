@@ -64,6 +64,9 @@ catalog.c:343   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:344   INTRACTABLE   "
 
 # disc_locator.c
+disc_locator.c:480   VOLATILE   consider_catalog path_dup malloc fail after a good catalog opened: only the fault-inject sweep can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries (#788 added allocations before it)
+disc_locator.c:481   VOLATILE   "
+disc_locator.c:482   VOLATILE   "
 disc_locator.c:1117  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
 disc_locator.c:1119  DEFENSIVE   "
 disc_locator.c:1126  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)

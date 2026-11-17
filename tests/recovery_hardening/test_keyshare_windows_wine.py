@@ -24,7 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from lcsas.cli.main import main as cli_main
+from lcsas.cli.main import _share_card_text
+from lcsas.keyshare import encode_master_secret, split_secret
 from tests.recovery_hardening._wine_helpers import stop_wineserver
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,13 +52,17 @@ ENV = {**os.environ, "WINEPREFIX": WINEPREFIX, "WINEDEBUG": "-all", "DISPLAY": "
 @pytest.fixture(scope="module")
 def cards(tmp_path_factory) -> list[Path]:
     base = tmp_path_factory.mktemp("ks_wine")
-    pw = base / "pw"
-    pw.write_bytes(PASSWORD)
     out = base / "shares"
-    assert cli_main([
-        "key", "split", "--repo", "alpha", "--threshold", "2", "--shares", "4",
-        "--password-file", str(pw), "--out", str(out),
-    ]) == 0
+    out.mkdir()
+    # The cards are made from the library, not `lcsas key split`: since
+    # #641 a password FILE gives only its first line (as rustic reads
+    # it), and this password must keep its newline and CR to prove the
+    # binary writes exact bytes.
+    mnemonics = split_secret(encode_master_secret(PASSWORD), 2, 4)
+    for i, words in enumerate(mnemonics, start=1):
+        (out / f"alpha-share-{i}-card.txt").write_text(
+            _share_card_text("alpha", i, 2, 4, words, "2026-01-01", 1)
+        )
     os.makedirs(WINEPREFIX, exist_ok=True)
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         subprocess.run(["wine", "wineboot", "--init"], env=ENV,
