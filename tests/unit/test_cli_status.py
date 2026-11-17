@@ -115,8 +115,12 @@ def test_status_reports_staged_unburned_bucket(tmp_path, capsys):
     assert "catalog reconcile" in out
 
 
-def _give_staged_iso(db: str, tmp_path, label: str = "GHOST_VOL") -> object:
-    """Record a burn session for ``label`` whose ISO exists on disk."""
+def _give_staged_iso(db: str, tmp_path, label: str = "GHOST_VOL", *,
+                     finished: bool = True) -> object:
+    """Record a burn session for ``label`` whose ISO exists on disk.
+
+    A finished stage leaves its session.json (#862); ``finished=False``
+    stands for a stage killed hard, which leaves none."""
     from lcsas.db.connection import get_connection
     from lcsas.db.sessions import add_session_volume, create_session
     from lcsas.db.volumes import get_volume_by_label
@@ -125,6 +129,8 @@ def _give_staged_iso(db: str, tmp_path, label: str = "GHOST_VOL") -> object:
     session_dir.mkdir(parents=True)
     iso = session_dir / f"{label}.iso"
     iso.write_bytes(b"\x00" * 64)
+    if finished:
+        (session_dir / "session.json").write_text("{}\n")
     conn = get_connection(db)
     try:
         vol = get_volume_by_label(conn, label)
@@ -169,6 +175,61 @@ def test_status_names_what_reconcile_fix_deletes_once_the_iso_is_gone(
     assert "ISOs are gone: GHOST_VOL" in out
     assert "'lcsas catalog reconcile --fix' deletes them" in out
     assert "waiting to be burned" not in out
+
+
+def test_status_names_a_killed_stage_with_its_way_out(tmp_path, capsys):
+    """#862: a stage killed hard leaves a session folder with no
+    session.json, whose ISOs look finished.  burn refuses it, so status
+    must not call its volumes waiting to be burned: it names the session
+    and the command that removes it."""
+    import json
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    _give_staged_iso(str(db), tmp_path, finished=False)
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "status"]) == 0
+    out = capsys.readouterr().out
+    assert "do not burn session sess-GHOST_VOL (GHOST_VOL)" in out, out
+    assert "has no session.json" in out, out
+    assert "'lcsas session abort sess-GHOST_VOL'" in out, out
+    assert "then run 'lcsas stage' again" in out, out
+    assert "waiting to be burned" not in out, out
+    assert "reconcile" not in out, out
+    # The #665 warning (an ISO never finished) is not given as well.
+    assert "INCOMPLETE" not in out, out
+
+    assert main(["--db", str(db), "status", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["waiting"] == []
+    assert doc["incomplete"] == {"labels": ["GHOST_VOL"],
+                                 "sessions": ["sess-GHOST_VOL"]}
+
+
+def test_status_ignores_a_cleaned_session_without_session_json(
+    tmp_path, capsys,
+):
+    """A CLEANED session is done with: its folder is not looked at."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.sessions import update_session_status
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    _give_staged_iso(str(db), tmp_path, finished=False)
+    conn = get_connection(str(db))
+    try:
+        update_session_status(conn, "sess-GHOST_VOL", "CLEANED")
+        conn.commit()
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "status"]) == 0
+    out = capsys.readouterr().out
+    assert "do not burn session" not in out, out
 
 
 def _fma05_catalog(db_path, volumes):

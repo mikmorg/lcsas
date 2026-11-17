@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lcsas.cli.common import _open_catalog, _reburn_hint
+from lcsas.constants import SESSION_CLEANED
 from lcsas.log import get_logger, log_to_stderr
 
 if TYPE_CHECKING:
@@ -216,6 +218,11 @@ def _status_json(
     lists volumes that were burned but have no disc recorded, and
     ``burn_unknown`` (#758) those a catalog rebuild left with no record
     of whether they were burned; ``reconcile --fix`` deletes neither.
+
+    ``incomplete`` lists the volumes and sessions whose stage did not
+    finish, never to be burned: an ISO never finished (#665), or a
+    session folder with no session.json, left by a stage killed hard
+    (#862).
     """
     from lcsas.db.locations import list_locations
 
@@ -296,6 +303,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
+    from lcsas.burn.orchestrator import unfinished_stage_refusal
     from lcsas.db.queries import (
         get_archive_status_summary,
         get_ghost_volumes,
@@ -403,6 +411,31 @@ def _cmd_status(args: argparse.Namespace) -> int:
             )
         }) if incomplete else []
         unburned = [v for v in unburned if v.label not in incomplete]
+        # #862: a stage killed hard leaves a session folder with no
+        # session.json, and ISOs that look finished.  burn refuses it;
+        # status names it with the way out, never as waiting to be burned.
+        killed: list[tuple[str, str, list[str]]] = []
+        for s in list_sessions(conn):
+            if s.status == SESSION_CLEANED:
+                continue
+            refusal = unfinished_stage_refusal(Path(s.staging_dir), s.session_id)
+            if refusal is None:
+                continue
+            labels = [str(r["label"]) for r in conn.execute(
+                "SELECT v.label FROM session_volumes sv JOIN volumes v "
+                "USING (volume_id) WHERE sv.session_id = ? "
+                "AND v.status IN ('STAGING', 'BURNING') ORDER BY v.label",
+                (s.session_id,),
+            )]
+            killed.append((s.session_id, refusal, labels))
+        killed_ids = {sid for sid, _, _ in killed}
+        killed_labels = {label for _, _, labels in killed for label in labels}
+        unburned = [v for v in unburned if v.label not in killed_labels]
+        # The #665 warning, less what the #862 one already names.
+        incomplete_text = [label for label in incomplete
+                           if label not in killed_labels]
+        incomplete_text_sessions = [sid for sid in incomplete_sessions
+                                    if sid not in killed_ids]
         with_iso = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
         # #671: a volume whose disc failed verification is listed under
         # "needs re-burn", not as waiting to be burned.
@@ -427,8 +460,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
                               for v in volumes},
                 disc_locations=disc_locations,
                 waiting=[v for v in unburned if v.label in waiting],
-                incomplete=incomplete,
-                incomplete_sessions=incomplete_sessions,
+                incomplete=sorted({*incomplete, *killed_labels}),
+                incomplete_sessions=sorted({*incomplete_sessions, *killed_ids}),
                 ghost_labels=ghost_labels,
                 burned_unrecorded=[label for label, _ in burned_unrecorded],
                 burn_unknown=burn_unknown,
@@ -459,15 +492,20 @@ def _cmd_status(args: argparse.Namespace) -> int:
             where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
                      else "(no disc in service)")
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
-    if incomplete:
+    for sid, refusal, labels in killed:
+        logger.warning(
+            "WARNING: do not burn session %s%s. %s", sid,
+            f" ({', '.join(labels)})" if labels else "", refusal,
+        )
+    if incomplete_text:
         logger.warning(
             "WARNING: %d volume(s) are INCOMPLETE: their staging did not "
             "finish, so their ISOs may lack error-correction data: %s. Do "
             "not burn them. Run 'lcsas session abort <id>' for session %s, "
             "then 'lcsas stage' again. Until then their packs are NOT on "
             "any disc.",
-            len(incomplete), ", ".join(incomplete),
-            ", ".join(incomplete_sessions),
+            len(incomplete_text), ", ".join(incomplete_text),
+            ", ".join(incomplete_text_sessions),
         )
     if waiting:
         logger.warning(
@@ -511,7 +549,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     # re-burn" with their step.
     if summary["staged"] > 0 and not (
         with_iso or ghost_labels or incomplete or burn_unknown
-        or staged_but_burned or reburn_hints
+        or staged_but_burned or reburn_hints or killed
     ):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
