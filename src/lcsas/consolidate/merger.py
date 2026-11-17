@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from lcsas.config.media import MediaType
 from lcsas.db.models import Pack
 from lcsas.db.queries import get_packs_on_volumes
 from lcsas.db.volumes import get_volume_by_id, update_status
+
+#: Plans the volumes a stage makes of some packs on a media type
+#: (``BurnOrchestrator.plan_volumes``): one ``(packs, bytes)`` per volume.
+VolumePlanner = Callable[[list[Pack], MediaType], list[tuple[list[Pack], int]]]
 
 
 def consolidation_note(session_id: str) -> str:
@@ -69,9 +74,16 @@ class VolumeMerger:
         self,
         conn: sqlite3.Connection,
         metadata_reserve_bytes: int = 104_857_600,
+        plan_volumes: VolumePlanner | None = None,
     ) -> None:
+        """*plan_volumes*, when given, counts the volumes the way
+        ``consolidate --execute`` stages them: the measured disc metadata
+        (#811) and the stage's bin-packing (#862).  Without it (no
+        config) the count is an estimate from *metadata_reserve_bytes*.
+        """
         self._conn = conn
         self._metadata_reserve_bytes = metadata_reserve_bytes
+        self._plan_volumes = plan_volumes
 
     def plan_consolidation(
         self,
@@ -102,14 +114,17 @@ class VolumeMerger:
             self._conn, source_volume_ids, pruned=True,
         )
 
-        # Estimate volumes needed
-        from lcsas.binpack.algorithm import estimate_volumes_needed
-        volumes_needed = estimate_volumes_needed(
-            total_bytes,
-            target_media_type.capacity_bytes,
-            reserved=self._metadata_reserve_bytes,
-            ecc_overhead_pct=target_media_type.ecc_overhead_pct,
-        )
+        if self._plan_volumes is not None and active_packs:
+            volumes_needed = len(
+                self._plan_volumes(active_packs, target_media_type))
+        else:
+            from lcsas.binpack.algorithm import estimate_volumes_needed
+            volumes_needed = estimate_volumes_needed(
+                total_bytes,
+                target_media_type.capacity_bytes,
+                reserved=self._metadata_reserve_bytes,
+                ecc_overhead_pct=target_media_type.ecc_overhead_pct,
+            )
 
         return ConsolidationPlan(
             source_volume_ids=source_volume_ids,
