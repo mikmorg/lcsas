@@ -251,8 +251,10 @@ _CLI_BLOCK = textwrap.dedent("""\
             "--mount-point", action="append", default=None,
             help=(
                 "Additional root to scan for pack files (each may contain "
-                "data/<XX>/<hex> or data/<hex>).  Pass once per data disc; "
-                "the disc-swap prompt also re-scans these on retry.  "
+                "data/<XX>/<hex> or data/<hex>).  Pass once per data disc "
+                "or mount folder: a disc mounted one level below it "
+                "(/media/<user>/<LABEL>) is found too.  The disc-swap "
+                "prompt re-scans these on retry.  "
                 "Defaults to <repo>/data only."
             ),
         )
@@ -274,6 +276,28 @@ _CLI_BLOCK = textwrap.dedent("""\
                 "corrupt catalog falls back silently to the legacy "
                 "prompt that shows only the pack ID."
             ),
+        )
+        parser.add_argument(
+            "--meta-disc", default=os.environ.get("LCSAS_META_DISC") or None,
+            help=(
+                "Mount point of the meta disc (default: LCSAS_META_DISC).  "
+                "While it is mounted nothing on it is searched, so it can "
+                "come out and the drive be used for data discs."
+            ),
+        )
+        parser.add_argument(
+            "--no-resume", action="store_true",
+            help=(
+                "Restore every file again.  By default a file that is "
+                "already in the target with the size and modification "
+                "time it has in the snapshot is kept, so a stopped "
+                "restore carries on where it stopped."
+            ),
+        )
+        parser.epilog += (
+            "  LCSAS_PACK_CACHE_DIR names a folder to copy each data "
+            "disc into once it is found, so no disc has to go back in "
+            "later (unset or empty: no copy)."
         )
 
         args = parser.parse_args()
@@ -318,12 +342,20 @@ _CLI_BLOCK = textwrap.dedent("""\
         # for AES (see _aes_fast; its argv carries the key).
         allow_openssl_command()
 
+        # #602: the pack cache, read from the environment as tier 1
+        # reads it (restore.sh exports it).  Unset or empty: off.
+        cache_env = os.environ.get("LCSAS_PACK_CACHE_DIR", "")
+        pack_cache = Path(cache_env) if cache_env else None
+
         restorer = PurePythonRestorer(
             repo_path=repo_path,
             password_file=pw_file,
             pack_search_paths=mount_points,
             interactive=interactive,
             catalog_path=catalog_path,
+            pack_cache_dir=pack_cache,
+            resume=not args.no_resume,
+            meta_disc=Path(args.meta_disc) if args.meta_disc else None,
         )
 
         if args.info:

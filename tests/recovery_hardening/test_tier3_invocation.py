@@ -287,3 +287,36 @@ def test_standalone_restorer_cli_uses_named_flags() -> None:
             f"standalone_restorer.py's argparse spec does not register "
             f"{flag} — restore.sh's tier-3 fallback will break."
         )
+
+
+def test_tier3_is_told_the_meta_disc(tmp_path: Path) -> None:
+    """Tier 3 gets --meta-disc as tier 1 does, so it searches nothing on
+    the meta disc while it is mounted (and finds a data disc mounted one
+    level below a mount folder without mistaking the meta disc for one)."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
+    _make_minimal_repo(recovery)
+    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    pybin_dir = tmp_path / "stubbin"
+    argv_log = _install_python_stub(pybin_dir)
+    meta = tmp_path / "media" / "LCSAS-META"
+    meta.mkdir(parents=True)
+    env = {
+        **os.environ,
+        "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
+        "LCSAS_MOUNT_DIRS": str(tmp_path / "media"),
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "LCSAS_META_DISC": str(meta),
+        "LCSAS_NO_RELOCATE": "1",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"),
+         "latest"],
+        input="stub-password\n", capture_output=True, text=True,
+        env=env, timeout=15,
+    )
+    assert res.returncode == 0, res.stderr
+    args = argv_log.read_text().splitlines()
+    assert "--meta-disc" in args, f"--meta-disc missing: {args}"
+    assert args[args.index("--meta-disc") + 1] == str(meta), args
