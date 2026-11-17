@@ -366,7 +366,10 @@ REM
 REM When the copy returns, the tools folder goes only if the restore
 REM finished: the copy then leaves .done in it (a running batch file
 REM cannot delete its own folder), and only if it is the restore's own
-REM (.lcsas-tools, see "The tools folder" above).  A restore that
+REM (.lcsas-tools, see "The tools folder" above).  A folder that is
+REM still there after rmdir (Windows had a file in it open: a virus
+REM scanner reading the program that just ran) is removed again after
+REM two seconds (ping).  A restore that
 REM stopped keeps the folder, for "Resume LCSAS restore.bat" (#609).  A
 REM command after the `call` replaces its exit code (a trailing `set`
 REM turned 7 into 0), so keep the code in LCSAS_RC first and end with
@@ -380,7 +383,7 @@ REM missing", skips the rest of the line and goes on with the next one,
 REM so under wine the run carries on from the disc, not relocated.  The
 REM wine tests check the copy that way; windows-e2e runs this line.
 :relaunch
-(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%TOOLS%\recovery\scripts\restore.bat" %* & call set "LCSAS_RC=%%ERRORLEVEL%%" & (if exist "%TOOLS%\.done" if exist "%TOOLS%\.lcsas-tools" rmdir /s /q "%TOOLS%") 2>nul & cmd /c exit %%LCSAS_RC%%
+(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%TOOLS%\recovery\scripts\restore.bat" %* & call set "LCSAS_RC=%%ERRORLEVEL%%" & (if exist "%TOOLS%\.done" if exist "%TOOLS%\.lcsas-tools" (rmdir /s /q "%TOOLS%"&if exist "%TOOLS%\" (ping -n 3 127.0.0.1 >nul&rmdir /s /q "%TOOLS%"))) 2>nul & cmd /c exit %%LCSAS_RC%%
 
 :after_relocate
 REM ----- Auto-discover recovery root from this script's path --------
@@ -2285,7 +2288,7 @@ set "LAUNCHER=%TOOLS%\Resume LCSAS restore.bat"
 >>"%LAUNCHER%" echo pause
 >>"%LAUNCHER%" echo exit /b 1
 >>"%LAUNCHER%" echo :carry_on
->>"%LAUNCHER%" echo (goto) 2^>nul ^& cd /d %%SystemDrive%%\ ^& call "%%TOOLS%%\recovery\scripts\restore.bat" --resume ^& call set "LCSAS_RC=%%%%ERRORLEVEL%%%%" ^& (if exist "%%TOOLS%%\.done" del /f /q "%%~f0") 2^>nul ^& (if exist "%%TOOLS%%\.done" if exist "%%TOOLS%%\.lcsas-tools" rmdir /s /q "%%TOOLS%%") 2^>nul ^& cmd /c exit %%%%LCSAS_RC%%%%
+>>"%LAUNCHER%" echo (goto) 2^>nul ^& cd /d %%SystemDrive%%\ ^& call "%%TOOLS%%\recovery\scripts\restore.bat" --resume ^& call set "LCSAS_RC=%%%%ERRORLEVEL%%%%" ^& (if exist "%%TOOLS%%\.done" del /f /q "%%~f0") 2^>nul ^& (if exist "%%TOOLS%%\.done" if exist "%%TOOLS%%\.lcsas-tools" (rmdir /s /q "%%TOOLS%%"^&if exist "%%TOOLS%%\" (ping -n 3 127.0.0.1 ^>nul^&rmdir /s /q "%%TOOLS%%"))) 2^>nul ^& cmd /c exit %%%%LCSAS_RC%%%%
 if not exist "%LAUNCHER%" goto :resume_unsaved
 set "RESUME_CMD=%LAUNCHER%"
 REM The Desktop: where Explorer has it (OneDrive may have moved it),
