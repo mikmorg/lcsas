@@ -43,6 +43,13 @@ _SMALL_ADDED = (("photos", 1, 512), ("documents", 1, 256))
 _SMALL_BIG = ("photos", "videos/home movie (test data).bin", 4096)
 
 
+# The posix corpus has a name that is not UTF-8 and a case-only twin, which
+# only a Linux file system holds (and cp -a keeps hardlinks only on GNU).
+_LINUX = sys.platform.startswith("linux")
+linux_only = pytest.mark.skipif(
+    not _LINUX, reason="the posix corpus needs a Linux file system")
+
+
 @pytest.fixture
 def small(monkeypatch) -> None:
     monkeypatch.setattr(corpus, "CORPUS", _SMALL)
@@ -77,6 +84,7 @@ def tree(tmp_path: Path, small):
 # --- the corpus -------------------------------------------------------------
 
 
+@linux_only
 def test_corpus_is_deterministic_for_a_seed(tree: Path) -> None:
     _, a = _both_states(tree / "a", "seed-1", "posix")
     _, b = _both_states(tree / "b", "seed-1", "posix")
@@ -150,6 +158,7 @@ def test_windows_profile_names_are_ntfs_safe(tree: Path) -> None:
     assert longest > corpus.WINDOWS_MAX_SET_PATH - 40   # it is a long path
 
 
+@linux_only
 def test_posix_profile_holds_what_windows_cannot(tree: Path) -> None:
     _, manifest = _both_states(tree, "s", "posix")
     for name, s in manifest["sets"].items():
@@ -231,6 +240,8 @@ def test_refuses_a_workdir_inside_the_checkout(tmp_path: Path) -> None:
 def restored(tmp_path: Path, tree: Path):
     """(manifest, restored folder): the posix corpus copied with cp -a
     (modes, links and hardlinks kept), nested deeper than the manifest."""
+    if not _LINUX:
+        pytest.skip("the posix corpus needs a Linux file system")
     _, manifest = _both_states(tree, "s", "posix")
     corpus.write_manifest(tmp_path / "manifest.json", manifest)
     target = tmp_path / "restored" / "snapshot"

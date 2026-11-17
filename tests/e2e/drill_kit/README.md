@@ -39,7 +39,9 @@ Two **profiles**, chosen with `--profile`:
   are not UTF-8; a path over 300 characters; and symlinks: relative up and
   across (`links/a/up -> ../b/f`), to a folder, absolute, dangling, and one
   whose target is not UTF-8. macOS cannot store the non-UTF-8 name (tiers 1
-  and 3 report it as not restored there), so that check is for Linux only.
+  and 3 report it as not restored there), and a default (case-insensitive)
+  macOS volume cannot hold `case.txt` next to `CASE.txt`: on a Mac expect
+  those two to fail with no restore bug behind them.
 
 No FIFO yet: the tiers make pipes only once #859 lands. `manifest.json`
 already has a `fifo` type for it.
