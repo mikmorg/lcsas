@@ -74,9 +74,12 @@ jobs:
 
       # Sizing (#517): fixture_lib's defaults (12 x 64 KiB) fit ONE TEST_TINY
       # data disc, so the heir's multi-disc sweep was never exercised.  A
-      # TEST_TINY disc is 2 MiB with a ~700 KB holographic reserve (~1.3 MiB
-      # of packs), so 8 x 512 KiB (4 MiB of incompressible data,
-      # fixture_lib.WINDOWS_E2E_FILE_COUNT/_BYTES) lands on four data discs.
+      # TEST_TINY disc is 2 MiB, less the room each disc keeps for the
+      # catalog and the sets' metadata (measured when staging, #811), so
+      # 8 x 512 KiB (4 MiB of incompressible data,
+      # fixture_lib.WINDOWS_E2E_FILE_COUNT/_BYTES) spreads over several
+      # data discs: five, with both backup sets below (the fixture job
+      # prints DATA_DISCS and asserts two or more).
       # Few, bigger files rather than many small ones: Defender real-time
       # scanning on the windows runner is per-file.
       #
