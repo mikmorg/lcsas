@@ -292,6 +292,10 @@ of an otherwise-intact family archive.
   * With LCSAS_PACK_CACHE_DIR set (restore.sh sets it), each data disc
     is copied into the pack cache when first found, so each disc is
     asked for about once (rc10, #602; see ENV_VARS.txt).
+  * Like tier 1, tier 3 finds a data disc mounted one folder below a
+    mount folder (/media/<user>/<LABEL>, /run/media/<user>/<LABEL>,
+    /Volumes/<LABEL>), and while the meta disc is mounted it reads
+    nothing from it (rc10).
   * After traversal, ``RESTORE_FAILURES.txt`` is written under the
     target listing each item not restored (path, reason, blob id), and
     plain-English summary lines are printed (see "ITEMS NOT RESTORED"

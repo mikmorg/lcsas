@@ -251,8 +251,10 @@ _CLI_BLOCK = textwrap.dedent("""\
             "--mount-point", action="append", default=None,
             help=(
                 "Additional root to scan for pack files (each may contain "
-                "data/<XX>/<hex> or data/<hex>).  Pass once per data disc; "
-                "the disc-swap prompt also re-scans these on retry.  "
+                "data/<XX>/<hex> or data/<hex>).  Pass once per data disc "
+                "or mount folder: a disc mounted one level below it "
+                "(/media/<user>/<LABEL>) is found too.  The disc-swap "
+                "prompt re-scans these on retry.  "
                 "Defaults to <repo>/data only."
             ),
         )
@@ -273,6 +275,14 @@ _CLI_BLOCK = textwrap.dedent("""\
                 "prompt printed by tier 1's lcsas-restore.  A missing or "
                 "corrupt catalog falls back silently to the legacy "
                 "prompt that shows only the pack ID."
+            ),
+        )
+        parser.add_argument(
+            "--meta-disc", default=os.environ.get("LCSAS_META_DISC") or None,
+            help=(
+                "Mount point of the meta disc (default: LCSAS_META_DISC).  "
+                "While it is mounted nothing on it is searched, so it can "
+                "come out and the drive be used for data discs."
             ),
         )
         parser.add_argument(
@@ -345,6 +355,7 @@ _CLI_BLOCK = textwrap.dedent("""\
             catalog_path=catalog_path,
             pack_cache_dir=pack_cache,
             resume=not args.no_resume,
+            meta_disc=Path(args.meta_disc) if args.meta_disc else None,
         )
 
         if args.info:

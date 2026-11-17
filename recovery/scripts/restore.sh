@@ -3614,7 +3614,10 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # The pack cache reaches it as the exported LCSAS_PACK_CACHE_DIR
         # (set above; empty: off), as for tier 1 (#602).  A file a
         # stopped run finished is kept, so running again carries on
-        # (#729).
+        # (#729).  --meta-disc: while the meta disc is mounted, tier 3
+        # searches nothing on it, as tier 1; each --mount-point is also
+        # searched one level down (/media/<user>/<LABEL>), as tier 1
+        # walks its mount parents.
         # The non-"latest" sentinel is passed straight through.
         TIER3_SNAP_ARGS=""
         if [ -n "$SNAP" ] && [ "$SNAP" != "latest" ]; then
@@ -3754,7 +3757,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # "$@" can be used inside it.
         _oifs=$IFS; IFS=$NL
         # shellcheck disable=SC2086
-        set -- $CATALOG_ARG $TIER3_MOUNT_ARGS $TIER3_SNAP_ARGS
+        set -- $CATALOG_ARG $TIER3_MOUNT_ARGS $TIER3_SNAP_ARGS $META_DISC_ARG
         IFS=$_oifs
         # `set -e` would abort the LHS subshell of the pipe the moment
         # Python exits non-zero, losing the rc capture.  The

@@ -975,6 +975,7 @@ class PurePythonRestorer:
         strict: bool = False,
         pack_cache_dir: Path | None = None,
         resume: bool = True,
+        meta_disc: Path | None = None,
     ) -> None:
         """Initialize the restorer.
 
@@ -1042,6 +1043,13 @@ class PurePythonRestorer:
                 the node's size and mtime (within 2 seconds, for FAT)
                 is kept and its data is not read (#729), as tier 1 and
                 rustic do.  False restores every file again.
+            meta_disc: Optional mount point of the meta disc (tier 1's
+                ``--meta-disc``).  While it is mounted, nothing on it is
+                searched, so it can be ejected and the drive reused.
+                Each root is also searched one level down (a disc
+                mounted at ``/media/<user>/<LABEL>`` under the root
+                ``/media/<user>``), as tier 1 searches its mount
+                parents.
         """
         self.repo_path = repo_path
         self.interactive = interactive
@@ -1091,6 +1099,11 @@ class PurePythonRestorer:
         self._tree_cache: dict[str, bytes] = {}
         self._tree_cache_bytes = 0
         self._snapshots: list[SnapshotMeta] | None = None
+
+        # Discs found one level below a root (refreshed on a miss), and
+        # the meta disc, which is skipped while it is mounted.
+        self._discovered: list[Path] = []
+        self._meta_disc = meta_disc if meta_disc and str(meta_disc) else None
 
         # #729: keep files an earlier run finished; count them.
         self._resume = resume
@@ -1464,12 +1477,32 @@ class PurePythonRestorer:
         With a pack cache (#602) the cache is searched first, and a hit
         on a disc copies that disc's packs into the cache
         (``_drain_disc``); the cached copy is returned then.
+
+        A disc mounted one level below a root (``/media/<user>/<LABEL>``,
+        ``/Volumes/<LABEL>``) is searched too, as tier 1 walks its
+        mount parents: the folders found last time first, then the
+        roots are listed again for a disc mounted since.  Nothing on
+        the meta disc is used while it is mounted.
         """
         cached = self._cached_pack(pack_id)
         if cached is not None:
             return cached
+        hit = self._probe_roots(self._live_roots(), pack_id)
+        if hit is None and self._discovered:
+            hit = self._probe_roots(self._discovered, pack_id)
+        if hit is None:
+            known = set(self._discovered)
+            self._refresh_discovered()
+            fresh = [d for d in self._discovered if d not in known]
+            if fresh:
+                hit = self._probe_roots(fresh, pack_id)
+        return hit
+
+    def _probe_roots(self, roots: list[Path], pack_id: str) -> Path | None:
+        """The first copy of *pack_id* under *roots* (see
+        ``_scan_pack_search_paths``), copying its disc into the cache."""
         prefix = pack_id[:2]
-        for root in self._pack_search_paths:
+        for root in roots:
             # Legacy default (root = repo_path/"data"): no nested "data/".
             for candidate, data_dir in (
                 (root / prefix / pack_id, root),
@@ -1478,6 +1511,8 @@ class PurePythonRestorer:
                 (root / "data" / pack_id, root / "data"),
             ):
                 if candidate.is_file():
+                    if self._on_live_meta(candidate):
+                        continue
                     if self._pack_cache is not None:
                         self._drain_disc(data_dir)
                         cached = self._cached_pack(pack_id)
@@ -1485,6 +1520,76 @@ class PurePythonRestorer:
                             return cached
                     return candidate
         return None
+
+    # ── Mount folders and the meta disc ──────────────────────────
+
+    def _meta_is_live(self) -> bool:
+        """Is the meta disc still mounted where we were told?  It is
+        while ``recovery/scripts/restore.sh`` is there, which no data
+        disc carries (tier 1: meta_disc_is_live).  Once it is ejected a
+        data disc may be mounted at the same place."""
+        meta = self._meta_disc
+        if meta is None:
+            return False
+        return (meta / "recovery" / "scripts" / "restore.sh").exists()
+
+    def _on_live_meta(self, path: Path) -> bool:
+        """Is *path* on the meta disc, while it is mounted?  (tier 1:
+        path_under, by the path's text.)"""
+        if self._meta_disc is None or not self._meta_is_live():
+            return False
+        meta = os.path.abspath(self._meta_disc).rstrip(os.sep) or os.sep
+        here = os.path.abspath(path)
+        return here == meta or here.startswith(meta.rstrip(os.sep) + os.sep)
+
+    def _live_roots(self) -> list[Path]:
+        """The configured roots, less any on the mounted meta disc."""
+        return [r for r in self._pack_search_paths if not self._on_live_meta(r)]
+
+    def _all_roots(self) -> list[Path]:
+        """The configured roots and the discs found one level below
+        them, less anything on the mounted meta disc."""
+        return self._live_roots() + [
+            d for d in self._discovered if not self._on_live_meta(d)
+        ]
+
+    def _refresh_discovered(self) -> None:
+        """List each root's folders again: a folder there may be a disc
+        mounted under a mount folder (tier 1: refresh_discovered, which
+        lists each mount parent one level deep).
+
+        A root that is itself a disc (it has ``data/``), the
+        repository's own data folder, the pack cache, folders named
+        like a pack folder (two hex digits) and the meta disc are not
+        listed.  Folders already among the roots are not added twice.
+        """
+        roots = self._live_roots()
+        have = {os.path.abspath(r) for r in roots}
+        skip = {os.path.abspath(self.repo_path / "data")}
+        if self._pack_cache is not None:
+            skip.add(os.path.abspath(self._pack_cache))
+        found: list[Path] = []
+        for root in roots:
+            if os.path.abspath(root) in skip or (root / "data").is_dir():
+                continue
+            try:
+                names = sorted(os.listdir(root))
+            except OSError:
+                continue
+            for name in names:
+                if name in (".", ".."):
+                    continue
+                if len(name) == 2 and all(c in "0123456789abcdef" for c in name):
+                    continue
+                child = root / name
+                key = os.path.abspath(child)
+                if key in have or key in skip:
+                    continue
+                if not child.is_dir() or self._on_live_meta(child):
+                    continue
+                have.add(key)
+                found.append(child)
+        self._discovered = found
 
     # ── Pack cache (#602) ────────────────────────────────────────
 
@@ -1504,7 +1609,8 @@ class PurePythonRestorer:
         """
         if self._pack_cache is None:
             return
-        for root in self._pack_search_paths:
+        self._refresh_discovered()
+        for root in self._all_roots():
             data_dir = root / "data"
             if data_dir.is_dir():
                 self._drain_disc(data_dir)
@@ -1704,7 +1810,7 @@ class PurePythonRestorer:
         """
         found: list[Path] = []
         seen: set[Path] = set()
-        for root in self._pack_search_paths:
+        for root in self._all_roots():
             for candidate in (
                 root / "catalog.db",
                 root.parent / "catalog.db",
@@ -1985,7 +2091,7 @@ class PurePythonRestorer:
             "|                                                          |",
             "| Currently searching:                                     |",
         ])
-        lines.extend(self._frame_indented(str(p)) for p in self._pack_search_paths)
+        lines.extend(self._frame_indented(str(p)) for p in self._all_roots())
         lines.extend([
             "|                                                          |",
             "| Insert the right disc and press ENTER to retry.          |",
