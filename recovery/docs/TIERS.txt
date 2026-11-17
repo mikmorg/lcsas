@@ -477,8 +477,8 @@ checks the password could still leave a partial tree (issue #399).
 EXIT 4 -- FINISHED, NOT EVERY ITEM RESTORED (rc10, #799): when tier 1
 exits 4 (#872), or tier 3 exits 2 with RESTORE_FAILURES.txt written by
 this run (restore.sh and restore.bat remove one an earlier run left
-before a tier starts), the restore FINISHED: every other item is restored.  restore.sh and
-restore.bat say "The restore finished, but N item(s) could not be
+before a tier starts), the restore FINISHED: every other item is
+restored.  restore.sh and restore.bat say "The restore finished, but N item(s) could not be
 restored", name the file, and exit 4.  That is the end of that backup
 set, as for a restore that succeeded: no resume.sh advice (a resume
 would skip the same items again), the tools folder goes, "Restore

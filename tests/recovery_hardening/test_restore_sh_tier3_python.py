@@ -192,6 +192,9 @@ def test_no_python_runs_after_tier1_fails(tmp_path: Path) -> None:
         res.stderr), res.stderr
     assert "ERROR: no recovery method available." in res.stderr, res.stderr
     assert "falling back to Python" not in res.stderr, res.stderr
+    # resume.sh is written by now, but it could not carry on either:
+    # no advice to run it.
+    assert "resume.sh" not in res.stderr, res.stderr
 
 
 def test_tier3_exit_75_is_a_stop_not_a_failure(tmp_path: Path) -> None:

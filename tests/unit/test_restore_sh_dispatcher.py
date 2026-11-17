@@ -18,58 +18,42 @@ import pytest
 RESTORE_SH = Path(__file__).resolve().parents[2] / "recovery" / "scripts" / "restore.sh"
 
 
+def _host_triple_source() -> str:
+    """The host_triple function, cut from the live restore.sh: the one
+    table of targets, used by the main dispatch, --check-disc and the
+    relocation (#808)."""
+    lines = RESTORE_SH.read_text().splitlines()
+    start = lines.index("host_triple() {")
+    end = lines.index("}", start)
+    return "\n".join(lines[start:end + 1])
+
+
 def _run_dispatcher(
     uname_s: str, uname_m: str, *, target_override: str = ""
 ) -> tuple[int, str, str]:
-    """Invoke a minimized version of the dispatcher in a fresh /bin/sh.
+    """Run the live host_triple, then the main dispatch's choice
+    (``${LCSAS_TARGET:-$(host_triple ...)}``) and its messages for an
+    unsupported computer, in a fresh /bin/sh.
 
-    The dispatcher is mirrored exactly from ``recovery/scripts/restore.sh``
-    (see ``test_live_restore_sh_contains_full_target_matrix`` below for
-    the drift guard).  We inject ``MACHINE`` and ``OS`` as environment
-    variables rather than stubbing ``uname`` — overriding a builtin in
-    POSIX sh (no ``export -f``) is not portable.
+    ``MACHINE`` and ``OS`` come in as environment variables rather than
+    a stubbed ``uname``.  The messages are pinned against the live
+    script by ``test_live_restore_sh_contains_full_target_matrix``.
 
     Returns (returncode, stdout, stderr).  On success, stdout contains
     just the resolved ``TARGET`` value followed by a newline.
     """
-    # NB: the case block here MUST stay in lockstep with the one in
-    # recovery/scripts/restore.sh.  The drift guard below pins the
-    # target strings; if you change one branch here, change the other.
-    script = r"""
+    script = _host_triple_source() + r"""
         set -eu
-        # MACHINE, OS, LCSAS_TARGET come from the environment.
-        if [ -n "${LCSAS_TARGET:-}" ]; then
-            TARGET="$LCSAS_TARGET"
-        else
+        TARGET="${LCSAS_TARGET:-$(host_triple "$OS" "$MACHINE")}"
+        if [ -z "$TARGET" ]; then
             case "$OS" in
-                Linux)
-                    case "$MACHINE" in
-                        x86_64|amd64)        TARGET="x86_64-unknown-linux-musl" ;;
-                        aarch64|arm64)       TARGET="aarch64-unknown-linux-musl" ;;
-                        armv7*|armv6*|arm)   TARGET="armv7-unknown-linux-gnueabihf" ;;
-                        *)
-                            printf 'unsupported Linux machine: %s\n' "$MACHINE" >&2
-                            exit 1 ;;
-                    esac ;;
-                Darwin)
-                    case "$MACHINE" in
-                        arm64|aarch64)       TARGET="aarch64-apple-darwin" ;;
-                        x86_64)              TARGET="x86_64-apple-darwin" ;;
-                        *)
-                            printf 'unsupported macOS machine: %s\n' "$MACHINE" >&2
-                            exit 1 ;;
-                    esac ;;
+                Linux)  printf 'unsupported Linux machine: %s\n' "$MACHINE" >&2 ;;
+                Darwin) printf 'unsupported macOS machine: %s\n' "$MACHINE" >&2 ;;
                 MINGW*|MSYS*|CYGWIN*|Windows*)
-                    case "$MACHINE" in
-                        x86_64|amd64)        TARGET="x86_64-pc-windows-gnu" ;;
-                        *)
-                            printf 'unsupported Windows machine: %s\n' "$MACHINE" >&2
-                            exit 1 ;;
-                    esac ;;
-                *)
-                    printf 'unsupported OS: %s\n' "$OS" >&2
-                    exit 1 ;;
+                        printf 'unsupported Windows machine: %s\n' "$MACHINE" >&2 ;;
+                *)      printf 'unsupported OS: %s\n' "$OS" >&2 ;;
             esac
+            exit 1
         fi
         printf '%s\n' "$TARGET"
     """
@@ -173,3 +157,21 @@ def test_live_restore_sh_contains_full_target_matrix():
     assert '"$RECOVERY/bin/$TARGET/rustic-static"' in content
     # The override env var must still be honored.
     assert "LCSAS_TARGET" in content
+    # The messages _run_dispatcher prints are the live script's.
+    for msg in ("unsupported Linux machine: %s", "unsupported macOS machine: %s",
+                "unsupported Windows machine: %s", "unsupported OS: %s"):
+        assert msg in content, msg
+
+
+def test_one_target_table() -> None:
+    """#808: one mapping function, used everywhere a triple is chosen
+    (the main dispatch, --check-disc, the relocation): no second table."""
+    content = RESTORE_SH.read_text()
+    assert content.count("host_triple() {") == 1
+    assert content.count('host_triple "') == 3
+    # No triple is assigned anywhere else (the old tables did).
+    for target in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
+                   "armv7-unknown-linux-gnueabihf", "aarch64-apple-darwin",
+                   "x86_64-apple-darwin", "x86_64-pc-windows-gnu"):
+        assert content.count(f"echo {target}") == 1, target
+        assert f'="{target}"' not in content, target

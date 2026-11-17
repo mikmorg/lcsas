@@ -55,6 +55,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_coverage_fault_inject_cleanup.py` | Hardening test: the coverage fault sweep leaves no test fixtures behind. |
 | `test_cross_build_deps.py` | Guard the recovery cross-build source dependencies. |
 | `test_disc_swap_docs.py` | test_disc_swap_docs.py -- static regression guard for the MULTI-DISC RESTORE |
+| `test_doc_quoted_messages.py` | The recovery docs quote only messages the recovery programs print (#809). |
 | `test_dockerfile_rustic_pin_parity.py` | The host-A image's rustic pin must equal the tier-2 recovery pin (#428). |
 | `test_ecc_capacity_claims.py` | Hardening test: ECC repair-capacity claims must match configured redundancy. |
 | `test_ecc_tooling_on_meta.py` | FMT-01: the RS03 repair tool ships on every meta volume. |
@@ -128,6 +129,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_version_flag.py` | Hardening test: --version flag on restore.sh (Issue #96). |
 | `test_restore_shell_facade.py` | The blind agent's terminal must keep the restore's last lines. |
 | `test_restore_skips_tier2_on_multi_disc.py` | Hardening test (issue #227): restore.sh skips tier 2 when the |
+| `test_restore_space_per_set.py` | restore.sh sizes the chosen backup set, even without a sqlite3 command (#798). |
 | `test_restore_space_preflight.py` | Hardening tests: restore-side free-space preflight [FMA-09]. |
 | `test_schedule_only_workflows.py` | Hardening: a scheduled workflow file holds a schedule and nothing else (#462). |
 | `test_scheduled_canary_watchdogs.py` | Hardening: every scheduled canary self-tickets when it goes red (#420). |

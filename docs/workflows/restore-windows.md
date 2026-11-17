@@ -132,12 +132,13 @@ layout) or several.
   the tools folder: a few MB for the programs and the backup sets'
   metadata, plus the pack cache, which grows to about the size of the
   data discs read. `restore.bat` checks the space before the password
-  (#660): the folder and the pack cache each need about the archive
-  size (from the catalog, through `--list-pending-packs`), so one
-  drive that holds both needs twice that. It stops with the numbers
-  when a drive is short. That size counts every backup set on the
-  discs, so when there is more than one it asks `Carry on anyway?
-  [y/N]` instead, and `y` goes on. `LCSAS_SKIP_SPACE_CHECK=1` skips
+  (#660): the folder and the pack cache each need about the chosen
+  set's size (from the catalog, through `--list-pending-packs
+  --repo-id`, #798; the whole archive's when the catalog does not know
+  the set's folder name), so one drive that holds both needs twice
+  that. When a drive is short it gives the numbers and, as the size is
+  an estimate, asks `Carry on anyway? [y/N]`: `y` goes on, anything
+  else stops. `LCSAS_SKIP_SPACE_CHECK=1` skips
   the check; `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER NOTES")
   explains it.
 
