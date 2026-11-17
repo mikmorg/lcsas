@@ -10,6 +10,7 @@
 #include "disc_locator.h"
 #include "catalog.h"
 #include "hex.h"
+#include "sha256.h"
 #include "../vendored/sqlite/sqlite3.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -286,6 +287,63 @@ capture_stderr_end(int saved)
         close(saved);
     }
 }
+
+/* Write a sparse file of `bytes` bytes whose last byte is `last`, and
+ * put the SHA-256 of its contents (a pack's name) in `hex_out`. */
+static int
+write_sparse_named(const char *path, long bytes, int last, char hex_out[65])
+{
+    static char zeros[65536];
+    lcsas_sha256_ctx c;
+    unsigned char d[32];
+    unsigned char b = (unsigned char)last;
+    long left = bytes - 1;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int ok;
+    if (fd < 0) return -1;
+    ok = lseek(fd, (off_t)(bytes - 1), SEEK_SET) != (off_t)-1
+         && write(fd, &b, 1) == 1;
+    close(fd);
+    lcsas_sha256_init(&c);
+    while (left > 0) {
+        long n = left < (long)sizeof zeros ? left : (long)sizeof zeros;
+        lcsas_sha256_update(&c, zeros, (size_t)n);
+        left -= n;
+    }
+    lcsas_sha256_update(&c, &b, 1);
+    lcsas_sha256_final(&c, d);
+    lcsas_hex_encode(d, 32, hex_out);
+    hex_out[64] = '\0';
+    return ok ? 0 : -1;
+}
+
+/* Write `contents` as a real pack under <root>/data/<xx>/<id>: its
+ * name is the SHA-256 of its contents, as restic names packs.  The id
+ * goes to `hex_out`. */
+static int
+write_real_pack(const char *root, const char *contents, char hex_out[65])
+{
+    unsigned char d[32];
+    char p[1200];
+    lcsas_sha256(contents, strlen(contents), d);
+    lcsas_hex_encode(d, 32, hex_out);
+    hex_out[64] = '\0';
+    snprintf(p, sizeof p, "%s/data/%c%c", root, hex_out[0], hex_out[1]);
+    if (mkdir_recursive(p) != 0) return -1;
+    snprintf(p, sizeof p, "%s/data/%c%c/%s", root, hex_out[0], hex_out[1],
+             hex_out);
+    return write_pack(p, contents);
+}
+
+/* A small catalog that passes lcsas_catalog_check. */
+static const char *const GOOD_CATALOG_SQL =
+    "CREATE TABLE schema_version (version INTEGER);"
+    "INSERT INTO schema_version VALUES (10);"
+    "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+    "  size_bytes INTEGER, repo_id TEXT);"
+    "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT,"
+    "  status TEXT);"
+    "CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);";
 
 /* Write a sparse file of `bytes` bytes (reads back as zeros). */
 static int
@@ -653,13 +711,14 @@ main(void)
         }
         mkdir_recursive(chunk_cache);
         search[0] = chunk_root;
-        setenv("LCSAS_DRAIN_CHUNK_PACKS", "1", 1);
+        /* #791: the chunk limit is set on the locator, not through
+         * LCSAS_DRAIN_CHUNK_PACKS (no longer read by the binary). */
         lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        l.drain_chunk_packs = 1;
         lcsas_disc_locator_set_cache_dir(&l, chunk_cache);
         rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
         (void)rc;
         lcsas_disc_locator_free(&l);
-        unsetenv("LCSAS_DRAIN_CHUNK_PACKS");
         {
             char rm[1024];
             snprintf(rm, sizeof rm, "rm -rf %s %s", chunk_root, chunk_cache);
@@ -1795,7 +1854,6 @@ main(void)
         char cache_dir[1024];
         char blocker[1100];
         const char *parents[1];
-        FILE *f;
         int pass;
         for (pass = 0; pass < 2; pass++) {
             snprintf(parent, sizeof parent, "%s_catfailparent", tmpdir);
@@ -1808,8 +1866,9 @@ main(void)
             if (mkdir_recursive(disc) != 0 || mkdir_recursive(blocker) != 0) {
                 fprintf(stderr, "FAIL mkdir catfail fixture\n"); fails++;
             }
-            f = fopen(cat, "wb");
-            if (f) { fputs("not a real catalog", f); fclose(f); }
+            /* #788: only a catalog that can be read through is taken,
+             * so this is a real one (it was a stub file). */
+            make_catalog(cat, GOOD_CATALOG_SQL);
             parents[0] = parent;
             lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
             lcsas_disc_locator_set_mount_parents(&l, parents, 1);
@@ -1850,7 +1909,9 @@ main(void)
         snprintf(disc, sizeof disc, "%s/discA", parent);
         snprintf(cat_a, sizeof cat_a, "%s/catalog.db", disc);
         mkdir_recursive(disc);
-        write_pack(cat_a, "catalog A");
+        /* #788: a real catalog (it was a stub file, which is no longer
+         * taken). */
+        make_catalog(cat_a, GOOD_CATALOG_SQL);
         ut.actime = ut.modtime = (time_t)1000000000L;
         (void)utime(cat_a, &ut);
         snprintf(cache_dir, sizeof cache_dir, "%s/lcsas_dl_keepcat_%ld",
@@ -1886,13 +1947,17 @@ main(void)
                                              : "none"); fails++;
             }
             snprintf(p, sizeof p, "%s/.locator-catalog.db", cache_dir);
-            f = fopen(p, "rb");
-            if (f) { n = fread(buf, 1, sizeof buf - 1, f); fclose(f); }
-            buf[n] = '\0';
-            if (strcmp(buf, "catalog A") != 0) {
-                fprintf(stderr, "FAIL rc6 keep catalog: the cache copy "
-                                "of the catalog in use is gone\n"); fails++;
+            {
+                lcsas_catalog *kept = lcsas_catalog_open(p);
+                if (!kept || lcsas_catalog_check(kept) != 0) {
+                    fprintf(stderr, "FAIL rc6 keep catalog: the cache copy "
+                                    "of the catalog in use is gone\n");
+                    fails++;
+                }
+                if (kept) lcsas_catalog_close(kept);
             }
+            (void)buf;
+            (void)n;
             snprintf(p, sizeof p, "%s/.locator-catalog.db.new", cache_dir);
             f = fopen(p, "rb");
             if (f) {
@@ -2229,11 +2294,10 @@ main(void)
         FILE *err;
         int saved;
         int k;
-        static const char *const packs[3] = {
-            "aa00000000000000000000000000000000000000000000000000000000000001",
-            "aa00000000000000000000000000000000000000000000000000000000000002",
-            "aa00000000000000000000000000000000000000000000000000000000000003"
-        };
+        /* Pack names are the SHA-256 of their contents, as restic names
+         * them: a copy is checked against its name (a fixed fake name
+         * would now be refused). */
+        char packs[3][65];
         memset(miss, 0xC8, 32);
         snprintf(parent, sizeof parent, "%s_firstsight", tmpdir);
         snprintf(disc, sizeof disc, "%s/DISC_A", parent);
@@ -2242,13 +2306,24 @@ main(void)
                  roomy_base(), (long)getpid());
         make_labelled_disc(parent, "DISC_A",
             "{\"label\": \"LCSAS_TEST_2026_0001\", \"type\": \"data\"}");
-        snprintf(p, sizeof p, "%s/data/aa", disc);
-        mkdir_recursive(p);
         for (k = 0; k < 3; k++) {
             /* 3 x 8 MiB: the copy passes a 16 MiB progress step midway. */
-            snprintf(p, sizeof p, "%s/data/aa/%s", disc, packs[k]);
-            if (write_sparse(p, 8L * 1024L * 1024L) != 0) {
+            char tmpp[1200];
+            snprintf(tmpp, sizeof tmpp, "%s/data/pack%d", disc, k);
+            snprintf(p, sizeof p, "%s/data", disc);
+            mkdir_recursive(p);
+            if (write_sparse_named(tmpp, 8L * 1024L * 1024L, k + 1,
+                                   packs[k]) != 0) {
                 fprintf(stderr, "FAIL rc6 first sight: sparse pack\n");
+                fails++;
+            }
+            snprintf(p, sizeof p, "%s/data/%c%c", disc, packs[k][0],
+                     packs[k][1]);
+            mkdir_recursive(p);
+            snprintf(p, sizeof p, "%s/data/%c%c/%s", disc, packs[k][0],
+                     packs[k][1], packs[k]);
+            if (rename(tmpp, p) != 0) {
+                fprintf(stderr, "FAIL rc6 first sight: rename pack\n");
                 fails++;
             }
         }
@@ -2273,7 +2348,8 @@ main(void)
             fails++;
         }
         for (k = 0; k < 3; k++) {
-            snprintf(p, sizeof p, "%s/data/aa/%s", cache_dir, packs[k]);
+            snprintf(p, sizeof p, "%s/data/%c%c/%s", cache_dir, packs[k][0],
+                     packs[k][1], packs[k]);
             if (stat(p, &st) != 0 || st.st_size != 8L * 1024L * 1024L) {
                 fprintf(stderr, "FAIL rc6 first sight: %s not copied\n", p);
                 fails++;
@@ -2308,6 +2384,279 @@ main(void)
             char rm[2200];
             snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
             (void)system(rm);
+        }
+    }
+
+    /* #791: the chunk limit stops a drain after that many packs, and
+     * a stop at the limit does not give the disc up (#786): the next
+     * drain copies the next pack. */
+    {
+        char root[1024], cache[1024], h1[65], h2[65], h3[65], p[1200];
+        unsigned char id1[32];
+        const char *search[1];
+        int k, cached = 0;
+        snprintf(root, sizeof root, "%s_chunk791", tmpdir);
+        snprintf(cache, sizeof cache, "%s/lcsas_dl_chunk791_%ld",
+                 roomy_base(), (long)getpid());
+        mkdir_recursive(cache);
+        write_real_pack(root, "chunk pack one", h1);
+        write_real_pack(root, "chunk pack two", h2);
+        write_real_pack(root, "chunk pack three", h3);
+        search[0] = root;
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        l.drain_chunk_packs = 1;
+        lcsas_disc_locator_set_cache_dir(&l, cache);
+        lcsas_hex_decode(h1, 32, id1);
+        (void)lcsas_disc_locate_pack(&l, id1, found, sizeof found);
+        {
+            const char *hs[3];
+            hs[0] = h1; hs[1] = h2; hs[2] = h3;
+            for (k = 0; k < 3; k++) {
+                struct stat st;
+                snprintf(p, sizeof p, "%s/data/%c%c/%s", cache,
+                         hs[k][0], hs[k][1], hs[k]);
+                if (stat(p, &st) == 0) cached++;
+            }
+        }
+        if (cached != 1 || l.n_drain_skips != 0) {
+            fprintf(stderr, "FAIL 791 chunk: %d pack(s) cached, %lu disc(s) "
+                    "given up (want 1, 0)\n", cached,
+                    (unsigned long)l.n_drain_skips); fails++;
+        }
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[2200];
+            snprintf(rm, sizeof rm, "rm -rf %s %s", root, cache);
+            (void)system(rm);
+        }
+    }
+
+    /* #786: a disc whose copy into the cache stops partway (here: the
+     * cache's data/<xx> for pack A is a file, so A cannot be copied) is
+     * walked once, not once per lookup.  Ten lookups of pack A, which
+     * is read from the disc, cost two walks (count + copy).  Another
+     * disc at the same path (a new data/ time) is walked again. */
+    {
+        char root[1024], cache[1024], ha[65], hb[65], p[1200];
+        unsigned char ida[32];
+        const char *search[1];
+        struct utimbuf ut;
+        unsigned long walks;
+        int k, lrc = 0, saved;
+        FILE *err;
+        snprintf(root, sizeof root, "%s_786disc", tmpdir);
+        snprintf(cache, sizeof cache, "%s/lcsas_dl_786_%ld",
+                 roomy_base(), (long)getpid());
+        write_real_pack(root, "pack A of the 786 disc", ha);
+        write_real_pack(root, "pack B of the 786 disc", hb);
+        snprintf(p, sizeof p, "%s/data", cache);
+        mkdir_recursive(p);
+        snprintf(p, sizeof p, "%s/data/%c%c", cache, ha[0], ha[1]);
+        write_pack(p, "a file where a folder should be");
+        search[0] = root;
+        lcsas_hex_decode(ha, 32, ida);
+        err = capture_stderr_begin(&saved);
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, cache);
+        for (k = 0; k < 10; k++) {
+            lrc |= lcsas_disc_locate_pack(&l, ida, found, sizeof found);
+        }
+        walks = l.drain_walks;
+        /* Another disc in the same place: its data/ has another time. */
+        snprintf(p, sizeof p, "%s/data", root);
+        ut.actime = ut.modtime = (time_t)1100000000L;
+        (void)utime(p, &ut);
+        lrc |= lcsas_disc_locate_pack(&l, ida, found, sizeof found);
+        capture_stderr_end(saved);
+        if (err) fclose(err);
+        if (lrc != 0 || strncmp(found, root, strlen(root)) != 0) {
+            fprintf(stderr, "FAIL 786: pack A not read from the disc "
+                    "(rc=%d, %s)\n", lrc, found); fails++;
+        }
+        if (walks != 2) {
+            fprintf(stderr, "FAIL 786: %lu disc walks for 10 lookups "
+                    "(want 2)\n", walks); fails++;
+        }
+        if (l.drain_walks <= walks) {
+            fprintf(stderr, "FAIL 786: another disc at the same path was "
+                    "not walked\n"); fails++;
+        }
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[2200];
+            snprintf(rm, sizeof rm, "rm -rf %s %s", root, cache);
+            (void)system(rm);
+        }
+    }
+
+    /* Pack check on copy: a pack whose bytes do not hash to its name
+     * (read wrong off a scratched disc) is not kept in the cache, and
+     * is read from the disc; a good pack beside it is cached. */
+    {
+        char root[1024], cache[1024], hg[65], hbad[65], p[1200];
+        unsigned char idbad[32];
+        const char *search[1];
+        struct stat st;
+        int saved;
+        FILE *err;
+        snprintf(root, sizeof root, "%s_badcopy", tmpdir);
+        snprintf(cache, sizeof cache, "%s/lcsas_dl_badcopy_%ld",
+                 roomy_base(), (long)getpid());
+        mkdir_recursive(cache);
+        write_real_pack(root, "a good pack", hg);
+        write_real_pack(root, "the right bytes", hbad);
+        snprintf(p, sizeof p, "%s/data/%c%c/%s", root, hbad[0], hbad[1], hbad);
+        write_pack(p, "the WRONG bytes");
+        search[0] = root;
+        lcsas_hex_decode(hbad, 32, idbad);
+        err = capture_stderr_begin(&saved);
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, cache);
+        rc = lcsas_disc_locate_pack(&l, idbad, found, sizeof found);
+        (void)lcsas_disc_locate_pack(&l, idbad, found, sizeof found);
+        capture_stderr_end(saved);
+        if (rc != 0 || strncmp(found, root, strlen(root)) != 0) {
+            fprintf(stderr, "FAIL pack check: damaged pack not read from "
+                    "the disc (rc=%d, %s)\n", rc, found); fails++;
+        }
+        snprintf(p, sizeof p, "%s/data/%c%c/%s", cache, hbad[0], hbad[1], hbad);
+        if (stat(p, &st) == 0) {
+            fprintf(stderr, "FAIL pack check: damaged copy kept at %s\n", p);
+            fails++;
+        }
+        strcat(p, ".part");
+        if (stat(p, &st) == 0) {
+            fprintf(stderr, "FAIL pack check: %s left\n", p); fails++;
+        }
+        snprintf(p, sizeof p, "%s/data/%c%c/%s", cache, hg[0], hg[1], hg);
+        if (stat(p, &st) != 0) {
+            fprintf(stderr, "FAIL pack check: good pack not cached\n");
+            fails++;
+        }
+        if (err) {
+            if (count_lines_with(err, "was not read correctly") != 1) {
+                fprintf(stderr, "FAIL pack check: want one warning\n");
+                fails++;
+            }
+            fclose(err);
+        }
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[2200];
+            snprintf(rm, sizeof rm, "rm -rf %s %s", root, cache);
+            (void)system(rm);
+        }
+    }
+
+    /* #788: a disc with a NEWER catalog that cannot be read through does
+     * not replace the good catalog in use, with or without the cache;
+     * one warning, however many rescans.  Two kinds of damage: the
+     * file's tail is cut off (this SQLite then cannot read even the
+     * version, but the old open still succeeded), and a page in the
+     * middle is overwritten (the version reads fine; only the check of
+     * every page finds it). */
+    {
+        int pass;
+        for (pass = 0; pass < 4; pass++) {
+            int with_cache = pass & 1;
+            int mid_damage = pass >> 1;
+            char parent[1024], disc[1024], cat_a[1100], cat_b[1100];
+            char cache[1024], p[1200];
+            const char *parents[1];
+            unsigned char miss[32];
+            struct utimbuf ut;
+            struct stat st;
+            lcsas_catalog *probe;
+            FILE *err;
+            int saved;
+            memset(miss, 0xC8, 32);
+            snprintf(parent, sizeof parent, "%s_788cat%d", tmpdir, pass);
+            snprintf(disc, sizeof disc, "%s/discA", parent);
+            snprintf(cat_a, sizeof cat_a, "%s/catalog.db", disc);
+            mkdir_recursive(disc);
+            make_catalog(cat_a, GOOD_CATALOG_SQL);
+            ut.actime = ut.modtime = (time_t)1000000000L;
+            (void)utime(cat_a, &ut);
+            snprintf(cache, sizeof cache, "%s/lcsas_dl_788_%ld_%d",
+                     roomy_base(), (long)getpid(), pass);
+            mkdir_recursive(cache);
+            parents[0] = parent;
+
+            err = capture_stderr_begin(&saved);
+            lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+            lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+            if (with_cache) lcsas_disc_locator_set_cache_dir(&l, cache);
+            (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+
+            /* discB: a newer catalog of many pages, then damaged. */
+            snprintf(disc, sizeof disc, "%s/discB", parent);
+            snprintf(cat_b, sizeof cat_b, "%s/catalog.db", disc);
+            mkdir_recursive(disc);
+            make_catalog(cat_b,
+                "CREATE TABLE schema_version (version INTEGER);"
+                "INSERT INTO schema_version VALUES (10);"
+                "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY,"
+                "  sha256 TEXT, size_bytes INTEGER, repo_id TEXT);"
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1"
+                "  FROM n WHERE i < 4000)"
+                "  INSERT INTO packs SELECT i, hex(randomblob(32)), i, 'r'"
+                "  FROM n;");
+            if (stat(cat_b, &st) != 0) {
+                fprintf(stderr, "FAIL 788: no %s\n", cat_b); fails++;
+            } else if (mid_damage) {
+                FILE *f = fopen(cat_b, "r+b");
+                static unsigned char junk[4096];
+                memset(junk, 0xFF, sizeof junk);
+                if (!f || fseek(f, (long)(st.st_size / 2), SEEK_SET) != 0
+                        || fwrite(junk, 1, sizeof junk, f) != sizeof junk) {
+                    fprintf(stderr, "FAIL 788: cannot damage %s\n", cat_b);
+                    fails++;
+                }
+                if (f) fclose(f);
+            } else if (truncate(cat_b, st.st_size / 2) != 0) {
+                fprintf(stderr, "FAIL 788: cannot cut %s\n", cat_b);
+                fails++;
+            }
+            ut.actime = ut.modtime = (time_t)1000000100L;
+            (void)utime(cat_b, &ut);
+            (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            capture_stderr_end(saved);
+
+            /* The case under test: the old code's open succeeds. */
+            probe = lcsas_catalog_open(cat_b);
+            if (!probe || lcsas_catalog_check(probe) == 0
+                    || (mid_damage
+                        && lcsas_catalog_schema_version(probe) != 10)) {
+                fprintf(stderr, "FAIL 788 (%d): the damaged catalog is not "
+                        "the case under test\n", pass); fails++;
+            }
+            if (probe) lcsas_catalog_close(probe);
+            if (!l.owned_catalog || !l.owned_catalog_path
+                    || strcmp(l.owned_catalog_path, cat_a) != 0
+                    || lcsas_catalog_check(l.owned_catalog) != 0) {
+                fprintf(stderr, "FAIL 788 (%d): the good catalog was "
+                        "replaced (now %s)\n", pass,
+                        l.owned_catalog_path ? l.owned_catalog_path
+                                             : "none"); fails++;
+            }
+            if (err) {
+                if (count_lines_with(err, "is damaged or cut short") != 1) {
+                    fprintf(stderr, "FAIL 788 (%d): want one warning\n",
+                            pass); fails++;
+                }
+                fclose(err);
+            }
+            snprintf(p, sizeof p, "%s/.locator-catalog.db.new", cache);
+            if (stat(p, &st) == 0) {
+                fprintf(stderr, "FAIL 788: %s left\n", p); fails++;
+            }
+            lcsas_disc_locator_free(&l);
+            {
+                char rm[2200];
+                snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache);
+                (void)system(rm);
+            }
         }
     }
 

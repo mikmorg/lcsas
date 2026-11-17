@@ -132,8 +132,13 @@ int main(void)
     lcsas_catalog_describe(c);
 
     /* lcsas_catalog_print_pending_packs(): full SELECT/JOIN/GROUP path. */
-    if (lcsas_catalog_print_pending_packs(c) != 0) {
+    if (lcsas_catalog_print_pending_packs(c, NULL) != 0) {
         fprintf(stderr, "FAIL: print_pending_packs returned non-zero\n");
+        fails++;
+    }
+    /* #798: the same, for one repository. */
+    if (lcsas_catalog_print_pending_packs(c, "repo-abc") != 0) {
+        fprintf(stderr, "FAIL: print_pending_packs(repo) returned non-zero\n");
         fails++;
     }
 

@@ -157,9 +157,11 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_mtime.py` | Issue #188 — tier-1 must preserve file/directory mtime. |
 | `test_tier1_no_ftruncate_on_failure.py` | Issue #245 — tier-1 must NOT ftruncate to expected_size on failure. |
 | `test_tier1_ownership.py` | Issues #189 — tier-1 must restore uid/gid (when running as root). |
+| `test_tier1_password_file_rule.py` | Tier 1 reads a password file as rustic does (#641). |
 | `test_tier1_petabyte_fixture.py` | Issue #160: petabyte-scale stress fixture for tier-1 C binary. |
 | `test_tier1_progress.py` | Hardening test for tier-1 restore progress output (recommendation #9). |
 | `test_tier1_rescan.py` | Hardening test: tier-1 binary rescans mount parents on each retry. |
+| `test_tier1_resume_fat_mtime.py` | Tier 1 resume skips a file whose mtime is off by less than 2 s (#787). |
 | `test_tier1_sanitize.py` | Opt-in gate: make sanitize must complete without any ASan/UBSan/LSan findings. |
 | `test_tier1_snapshot_selection.py` | Regression test for issue #194. |
 | `test_tier1_sparse.py` | Issue #193 — tier-1 must preserve sparseness of restored files. |

@@ -1844,6 +1844,109 @@ main(void)
         }
     }
 
+    /* ── #789: a repository with no index/ folder fails the load and
+     * frees what load_index allocated first (the sanitizer build's leak
+     * check fails this if it does not). */
+    {
+        char tmp[] = "/tmp/lcsas_789_noidx_XXXXXX";
+        lcsas_blob_index ix;
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 789 noidx mkdtemp\n"); fails++;
+        } else {
+            lcsas_blob_index_init(&ix);
+            rc = lcsas_repo_load_index(tmp, &mk, &ix);
+            if (rc >= 0 || ix.count != 0) {
+                fprintf(stderr, "FAIL: 789 no index/ folder must fail the "
+                        "load (rc=%d count=%lu)\n", rc,
+                        (unsigned long)ix.count);
+                fails++;
+            }
+            lcsas_blob_index_free(&ix);
+            rmdir(tmp);
+        }
+    }
+
+    /* ── #789: one pass over the index files.  File "old" lists blobs
+     * X (11..) and Y (22..), plus an entry with an invalid length; file
+     * "new" supersedes "old" and lists Y only.  Whatever order readdir
+     * gives, X and the bad entry are dropped with "old", Y stays once. */
+    {
+        char tmp[] = "/tmp/lcsas_789_supersede_XXXXXX";
+        char idir[1100], ipath[1300];
+        lcsas_blob_index ix;
+        unsigned char iv[16];
+        unsigned char want[32];
+        char old_name[65], new_name[65], two_name[65];
+        char old_doc[1024], new_doc[512], two_doc[1024];
+        char hx[65], hy[65], hp[65], hbad[65];
+        memset(old_name, 'c', 64); old_name[64] = '\0';
+        memset(new_name, 'd', 64); new_name[64] = '\0';
+        memset(two_name, 'e', 64); two_name[64] = '\0';
+        memset(hx, '1', 64); hx[64] = '\0';
+        memset(hy, '2', 64); hy[64] = '\0';
+        memset(hp, '3', 64); hp[64] = '\0';
+        memset(hbad, '4', 64); hbad[64] = '\0';
+        sprintf(old_doc,
+                "{\"supersedes\":[],\"packs\":[{\"id\":\"%s\",\"blobs\":["
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":0,\"length\":10},"
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":10,\"length\":10},"
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":20,\"length\":0}"
+                "]}]}", hp, hx, hy, hbad);
+        sprintf(new_doc,
+                "{\"supersedes\":[\"%s\"],\"packs\":[{\"id\":\"%s\",\"blobs\":["
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":10,\"length\":10}"
+                "]}]}", old_name, hp, hy);
+        /* A kept file with two entries of invalid length: both are
+         * skipped, the first named and the second counted. */
+        sprintf(two_doc,
+                "{\"packs\":[{\"id\":\"%s\",\"blobs\":["
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":0,\"length\":0},"
+                "{\"id\":\"%s\",\"type\":\"data\",\"offset\":0,\"length\":-5}"
+                "]}]}", hp, hbad, hx);
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 789 supersede mkdtemp\n"); fails++;
+        } else {
+            int ok = 1;
+            snprintf(idir, sizeof idir, "%s/index", tmp);
+            mkdir(idir, 0700);
+            memset(iv, 0, 16); iv[0] = 0x78; iv[1] = 1;
+            snprintf(ipath, sizeof ipath, "%s/%s", idir, old_name);
+            if (enc_write(&mk, iv, (const unsigned char *)old_doc,
+                          strlen(old_doc), ipath) != 0) ok = 0;
+            iv[1] = 2;
+            snprintf(ipath, sizeof ipath, "%s/%s", idir, new_name);
+            if (enc_write(&mk, iv, (const unsigned char *)new_doc,
+                          strlen(new_doc), ipath) != 0) ok = 0;
+            iv[1] = 3;
+            snprintf(ipath, sizeof ipath, "%s/%s", idir, two_name);
+            if (enc_write(&mk, iv, (const unsigned char *)two_doc,
+                          strlen(two_doc), ipath) != 0) ok = 0;
+            if (!ok) {
+                fprintf(stderr, "FAIL: 789 supersede enc_write\n"); fails++;
+            } else {
+                lcsas_blob_index_init(&ix);
+                rc = lcsas_repo_load_index(tmp, &mk, &ix);
+                memset(want, 0x22, 32);
+                if (rc != 0 || ix.count != 1
+                        || lcsas_blob_index_find(&ix, want) == NULL) {
+                    fprintf(stderr, "FAIL: 789 superseded file's entries "
+                            "must go (rc=%d count=%lu)\n", rc,
+                            (unsigned long)ix.count);
+                    fails++;
+                }
+                memset(want, 0x11, 32);
+                if (lcsas_blob_index_find(&ix, want) != NULL) {
+                    fprintf(stderr, "FAIL: 789 blob only in the superseded "
+                            "file was kept\n");
+                    fails++;
+                }
+                lcsas_blob_index_free(&ix);
+            }
+            snprintf(ipath, sizeof ipath, "rm -rf %s", tmp);
+            (void)system(ipath);
+        }
+    }
+
     if (fails == 0) printf("test_repo: OK\n");
     return fails ? 1 : 0;
 }

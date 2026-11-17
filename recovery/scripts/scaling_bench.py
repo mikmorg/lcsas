@@ -2,9 +2,10 @@
 """Scaling-benchmark driver for lcsas_blob_index_find (Phase 10).
 
 For each N in a configurable sweep, generates a stress fixture with N
-orphan blob index entries, invokes lcsas-restore with
-LCSAS_STRESS_LOOKUPS=1000, and parses the bench line to extract
-load_index_ms, rss_after_index_kib, and find_ns_mean.
+orphan blob index entries, runs recovery/build/bench_index on it (1000
+random lookups), and parses the bench line to extract load_index_ms,
+rss_after_index_kib, and find_ns_mean.  bench_index replaced the
+LCSAS_STRESS_LOOKUPS hook that shipped inside lcsas-restore (#791).
 
 Writes a markdown table to recovery/build/scaling.md and stdout.
 
@@ -13,7 +14,7 @@ Usage:
     python3 recovery/scripts/scaling_bench.py --sizes 100,1000,10000
 
 This script is opt-in (not invoked by `make gate`).  It needs:
-  - the `lcsas-restore` binary built (any flavour)
+  - `make -C recovery build/bench_index` (Linux)
   - the gen_fixture.py fixture generator
   - /scratch (or LCSAS_BENCH_TMP) writable for intermediate fixtures
 """
@@ -40,30 +41,23 @@ BENCH_LINE = re.compile(
 
 
 def find_binary() -> Path:
-    override = os.environ.get("LCSAS_RESTORE_BIN")
+    override = os.environ.get("LCSAS_BENCH_BIN")
     if override:
         p = Path(override)
         if p.is_file() and os.access(p, os.X_OK):
             return p
-    candidates = [
-        REPO_ROOT / "recovery" / "build" / "lcsas-restore",
-        REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
-    ]
-    for c in candidates:
-        if c.is_file() and os.access(c, os.X_OK):
-            return c
-    raise RuntimeError("no lcsas-restore binary found; run `make -C recovery`")
+    c = REPO_ROOT / "recovery" / "build" / "bench_index"
+    if c.is_file() and os.access(c, os.X_OK):
+        return c
+    raise RuntimeError(
+        "no bench_index binary found; run `make -C recovery build/bench_index`"
+    )
 
 
 def bench_one(binary: Path, fixture: Path, pwfile: Path) -> dict:
-    env = os.environ.copy()
-    env["LCSAS_STRESS_LOOKUPS"] = "1000"
     res = subprocess.run(
-        [str(binary),
-         "--repo", str(fixture),
-         "--password-file", str(pwfile),
-         "--list-snapshots"],
-        env=env, capture_output=True, text=True, timeout=300,
+        [str(binary), str(fixture), str(pwfile), "1000"],
+        capture_output=True, text=True, timeout=300,
     )
     m = BENCH_LINE.search(res.stderr)
     if not m:

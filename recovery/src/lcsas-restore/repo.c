@@ -555,15 +555,12 @@ parse_blob_entry(const char *src,
     if (lcsas_json_decode_int(src, &toks[len_i], &len) != 0) return -1;
     /* Range-validate before these values reach need_end/malloc/pread in
      * read_blob.  off+len must not overflow long long, and len must be a
-     * plausible blob size.  A failure here is a per-entry skip in pass-2
-     * (silent continue); print so the heir can see the bad entry. */
+     * plausible blob size.  A failure here skips the entry; -2 tells
+     * the caller to name it once the file is known not to be
+     * superseded (#789). */
     if (off < 0 || len <= 0 || len > LCSAS_BLOB_LEN_MAX
             || off > LLONG_MAX - len) {
-        fprintf(stderr,
-                "ERROR: index entry for blob %.64s has invalid "
-                "offset/length\n",
-                src + toks[id_i].start);
-        return -1;
+        return -2;
     }
     out->offset = off;
     out->length = len;
@@ -578,6 +575,108 @@ parse_blob_entry(const char *src,
         long long ul = -1;
         if (lcsas_json_decode_int(src, &toks[ulen_i], &ul) == 0) {
             out->uncompressed_length = ul;
+        }
+    }
+    return 0;
+}
+
+/* One index file's place in the load (#789): its entries are
+ * ix->entries[first, last), kept until every file's `supersedes` list
+ * is known.  `bad` counts entries skipped for an invalid offset or
+ * length, `bad_id` names the first of them. */
+struct index_file_span {
+    size_t first;
+    size_t last;
+    unsigned long bad;
+    char bad_id[65];
+};
+
+/* Load the blob entries of one decrypted, parsed index file into `ix`,
+ * and note the names it supersedes in super_set.  Returns 0, or -1 on
+ * an allocation failure or a supersedes list too long to hold. */
+static int
+index_file_load(const char *plain, const lcsas_json_tok *toks, long ntoks,
+                lcsas_blob_index *ix, struct index_file_span *span,
+                char (*super_set)[72], size_t *super_count)
+{
+    long sup_arr = lcsas_json_obj_get(plain, toks, 0, "supersedes");
+    long packs_arr = lcsas_json_obj_get(plain, toks, 0, "packs");
+
+    if (sup_arr >= 0 && toks[sup_arr].type == LCSAS_JSON_ARRAY) {
+        long t;
+        long children = toks[sup_arr].size;
+        long found = 0;
+        for (t = sup_arr + 1; t < ntoks && found < children; t++) {
+            if (toks[t].parent == sup_arr) {
+                if (toks[t].type == LCSAS_JSON_STRING
+                        && toks[t].size <= 64) {
+                    if (*super_count >= 8192) {
+                        fprintf(stderr,
+                            "[lcsas-restore] supersedes overflow at %d"
+                            " — repository state may be pathological\n",
+                            (int)*super_count);
+                        return -1;
+                    }
+                    memcpy(super_set[*super_count], plain + toks[t].start,
+                           (size_t)toks[t].size);
+                    super_set[*super_count][toks[t].size] = '\0';
+                    (*super_count)++;
+                }
+                found++;
+            }
+            if (toks[t].start >= toks[sup_arr].end) break;
+        }
+    }
+
+    if (packs_arr >= 0 && toks[packs_arr].type == LCSAS_JSON_ARRAY) {
+        long pack_idx;
+        long pack_count = toks[packs_arr].size;
+        long p_found = 0;
+        for (pack_idx = packs_arr + 1;
+             pack_idx < ntoks && p_found < pack_count; pack_idx++) {
+            if (toks[pack_idx].parent == packs_arr
+                    && toks[pack_idx].type == LCSAS_JSON_OBJECT) {
+                long id_i = lcsas_json_obj_get(plain, toks, pack_idx, "id");
+                long blobs_i = lcsas_json_obj_get(plain, toks, pack_idx,
+                                                  "blobs");
+                unsigned char pack_id[32];
+                long b_idx;
+                long blob_count;
+                long b_found = 0;
+
+                p_found++;
+
+                if (id_i < 0 || blobs_i < 0) continue;
+                if (toks[id_i].size != 64) continue;
+                if (lcsas_hex_decode(plain + toks[id_i].start,
+                                     32, pack_id) != 0) continue;
+                if (toks[blobs_i].type != LCSAS_JSON_ARRAY) continue;
+                blob_count = toks[blobs_i].size;
+                for (b_idx = blobs_i + 1;
+                     b_idx < ntoks && b_found < blob_count; b_idx++) {
+                    if (toks[b_idx].parent == blobs_i
+                            && toks[b_idx].type == LCSAS_JSON_OBJECT) {
+                        lcsas_blob_loc loc;
+                        int prc;
+                        b_found++;
+                        prc = parse_blob_entry(plain, toks, b_idx,
+                                               pack_id, &loc);
+                        if (prc == 0) {
+                            if (blob_index_push(ix, &loc) != 0) return -1;
+                        } else if (prc == -2) {
+                            if (span->bad++ == 0) {
+                                long id_i2 = lcsas_json_obj_get(
+                                    plain, toks, b_idx, "id");
+                                memcpy(span->bad_id,
+                                       plain + toks[id_i2].start, 64);
+                                span->bad_id[64] = '\0';
+                            }
+                        }
+                    }
+                    if (toks[b_idx].start >= toks[blobs_i].end) break;
+                }
+            }
+            if (toks[pack_idx].start >= toks[packs_arr].end) break;
         }
     }
     return 0;
@@ -599,7 +698,9 @@ lcsas_repo_load_index(const char *repo_path,
     size_t names_cap = 0;
     char (*super_set)[72] = NULL;
     size_t super_count = 0;
+    struct index_file_span *spans = NULL;
     size_t auth_failures = 0;   /* index files that failed MAC/decrypt */
+    size_t w;
 
     size_t i;
     int rc = -1;
@@ -617,7 +718,7 @@ lcsas_repo_load_index(const char *repo_path,
 
     snprintf(index_dir, sizeof index_dir, "%s/index", repo_path);
     d = opendir(index_dir);
-    if (!d) return -1;
+    if (!d) goto out;   /* #789: the two buffers above are freed */
     while ((e = readdir(d)) != NULL) {
         char (*p)[72];
         if (e->d_name[0] == '.') continue;
@@ -637,17 +738,23 @@ lcsas_repo_load_index(const char *repo_path,
         strcpy(names[ncount++], e->d_name);
     }
     closedir(d);
+    spans = (struct index_file_span *)calloc(ncount ? ncount : 1,
+                                             sizeof *spans);
+    if (!spans) goto out;
 
-    /* Pass 1: collect supersedes. */
+    /* Issue #789: each index file is read, decrypted and parsed ONCE.
+     * Its entries go into the index straight away, and the entries of
+     * files another file supersedes are dropped at the end, when every
+     * `supersedes` list is known. */
     for (i = 0; i < ncount; i++) {
         char path[4096];
         unsigned char *plain;
         size_t plen;
         lcsas_json_tok *toks = NULL;
         long ntoks;
-        long sup_arr;
         int why = LCSAS_DEC_OK;
 
+        spans[i].first = spans[i].last = ix->count;
         snprintf(path, sizeof path, "%s/%s", index_dir, names[i]);
         plain = decrypt_repo_file(path, mk, &plen, &why);
         if (!plain) {
@@ -696,144 +803,47 @@ lcsas_repo_load_index(const char *repo_path,
         if (ntoks <= 0) {
             fprintf(stderr,
                     "ERROR: index file %s: invalid JSON after decrypt\n", path);
-            free(plain); goto out;
+            free(plain); free(toks); goto out;
         }
-        sup_arr = lcsas_json_obj_get((char *)plain, toks, 0, "supersedes");
-        if (sup_arr >= 0 && toks[sup_arr].type == LCSAS_JSON_ARRAY) {
-            long t;
-            long children = toks[sup_arr].size;
-            long found = 0;
-            for (t = sup_arr + 1; t < ntoks && found < children; t++) {
-                if (toks[t].parent == sup_arr) {
-                    if (toks[t].type == LCSAS_JSON_STRING
-                            && toks[t].size <= 64) {
-                        size_t k;
-                        if (super_count >= 8192) {
-                            fprintf(stderr,
-                                "[lcsas-restore] supersedes overflow at %d"
-                                " — repository state may be pathological\n",
-                                (int)super_count);
-                            free(plain);
-                            free(toks);
-                            goto out;
-                        }
-                        for (k = 0; k < (size_t)toks[t].size; k++) {
-                            super_set[super_count][k] =
-                                ((char *)plain)[toks[t].start + k];
-                        }
-                        super_set[super_count][toks[t].size] = '\0';
-                        super_count++;
-                    }
-                    found++;
-                }
-                if (toks[t].start >= toks[sup_arr].end) break;
-            }
+        if (index_file_load((const char *)plain, toks, ntoks, ix, &spans[i],
+                            super_set, &super_count) != 0) {
+            free(plain); free(toks); goto out;
         }
+        spans[i].last = ix->count;
         free(plain);
         free(toks);
     }
 
-    /* Pass 2: load entries, skipping superseded files. */
+    /* Drop the entries of superseded files, keeping the order of the
+     * rest.  Spans are in load order, so the copy only moves entries
+     * down. */
+    w = 0;
     for (i = 0; i < ncount; i++) {
-        char path[4096];
-        unsigned char *plain;
-        size_t plen;
-        lcsas_json_tok *toks = NULL;
-        long ntoks;
-        long packs_arr;
-        int superseded = 0;
-        int why = LCSAS_DEC_OK;
         size_t s;
-
+        int superseded = 0;
         for (s = 0; s < super_count; s++) {
             if (strcmp(super_set[s], names[i]) == 0) { superseded = 1; break; }
         }
         if (superseded) continue;
-
-        snprintf(path, sizeof path, "%s/%s", index_dir, names[i]);
-        plain = decrypt_repo_file(path, mk, &plen, &why);
-        if (!plain) {
-            if (why == LCSAS_DEC_TOOBIG || why == LCSAS_DEC_ZSTD) {
-                /* Pass 1 already fails loud on these, so pass 2 should
-                 * never reach here for a cap/zstd file; keep the fatal
-                 * branch anyway in case the index files changed between
-                 * passes (TOCTOU) rather than half-loading the index. */
-                if (why == LCSAS_DEC_TOOBIG) {
-                    fprintf(stderr,
-                            "ERROR: index file %s exceeds the 256 MiB "
-                            "tier-1 decompress cap; use tier-2 (rustic)\n",
-                            names[i]);
-                } else {
-                    fprintf(stderr,
-                            "ERROR: index file %s is corrupt (zstd); "
-                            "use tier-2 (rustic)\n", names[i]);
-                }
-                goto out;
-            }
-            /* Already warned + tallied in pass 1 (same file set); stay
-             * non-fatal so MAC failures don't sink the load. */
-            auth_failures++;
-            continue;
-        }
-        ntoks = lcsas_json_parse_alloc((const char *)plain, plen, &toks, 16384);
-        if (ntoks == -2) {
+        if (spans[i].bad > 0) {
             fprintf(stderr,
-                    "ERROR: index file %s is too large for tier-1 to parse;\n"
-                    "       use tier-2 (rustic) for this repository\n", path);
-            free(plain); goto out;
-        }
-        if (ntoks <= 0) {
-            fprintf(stderr,
-                    "ERROR: index file %s: invalid JSON after decrypt\n", path);
-            free(plain); goto out;
-        }
-
-        packs_arr = lcsas_json_obj_get((char *)plain, toks, 0, "packs");
-        if (packs_arr >= 0 && toks[packs_arr].type == LCSAS_JSON_ARRAY) {
-            long pack_idx;
-            long pack_count = toks[packs_arr].size;
-            long p_found = 0;
-            for (pack_idx = packs_arr + 1; pack_idx < ntoks && p_found < pack_count; pack_idx++) {
-                if (toks[pack_idx].parent == packs_arr
-                        && toks[pack_idx].type == LCSAS_JSON_OBJECT) {
-                    long id_i = lcsas_json_obj_get((char *)plain, toks, pack_idx, "id");
-                    long blobs_i = lcsas_json_obj_get((char *)plain, toks, pack_idx, "blobs");
-                    unsigned char pack_id[32];
-                    long b_idx;
-                    long blob_count;
-                    long b_found = 0;
-
-                    p_found++;
-
-                    if (id_i < 0 || blobs_i < 0) continue;
-                    if (toks[id_i].size != 64) continue;
-                    if (lcsas_hex_decode((char *)plain + toks[id_i].start,
-                                         32, pack_id) != 0) continue;
-                    if (toks[blobs_i].type != LCSAS_JSON_ARRAY) continue;
-                    blob_count = toks[blobs_i].size;
-                    for (b_idx = blobs_i + 1; b_idx < ntoks && b_found < blob_count; b_idx++) {
-                        if (toks[b_idx].parent == blobs_i
-                                && toks[b_idx].type == LCSAS_JSON_OBJECT) {
-                            lcsas_blob_loc loc;
-                            b_found++;
-                            if (parse_blob_entry((char *)plain, toks, b_idx,
-                                                 pack_id, &loc) == 0) {
-                                if (blob_index_push(ix, &loc) != 0) {
-                                    free(plain);
-                                    free(toks);
-                                    goto out;
-                                }
-                            }
-                        }
-                        if (toks[b_idx].start >= toks[blobs_i].end) break;
-                    }
-                }
-                if (toks[pack_idx].start >= toks[packs_arr].end) break;
+                    "ERROR: index entry for blob %.64s has invalid "
+                    "offset/length\n", spans[i].bad_id);
+            if (spans[i].bad > 1) {
+                fprintf(stderr,
+                        "ERROR: %lu more entries of index file %s have an "
+                        "invalid offset/length\n", spans[i].bad - 1,
+                        names[i]);
             }
         }
-        free(plain);
-        free(toks);
+        if (w != spans[i].first) {
+            memmove(&ix->entries[w], &ix->entries[spans[i].first],
+                    (spans[i].last - spans[i].first) * sizeof *ix->entries);
+        }
+        w += spans[i].last - spans[i].first;
     }
+    ix->count = w;
+
     if (auth_failures > 0) {
         fprintf(stderr,
                 "[lcsas-restore] %lu index file(s) failed authentication "
@@ -849,6 +859,7 @@ lcsas_repo_load_index(const char *repo_path,
 out:
     free(names);
     free(super_set);
+    free(spans);
     return rc;
 }
 

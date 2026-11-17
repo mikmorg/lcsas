@@ -4,7 +4,7 @@
  * Usage:
  *   lcsas-restore --repo <dir> --password-file <file> --target <dir>
  *                 [--snapshot <id|latest>] [--list-snapshots]
- *                 [--catalog <file>]
+ *                 [--catalog <file>] [--list-pending-packs [--repo-id <id>]]
  *                 [--pack-search <dir>]   (repeatable)
  *                 [--mount-parent <dir>]  (repeatable; see below)
  *                 [--interactive {auto|on|off}]
@@ -40,8 +40,9 @@
  *
  * Exit status: 0 restored (or listed); 1 failed, or finished with
  * some items not restored (each named on stderr); 2 usage error;
- * 75 the reader typed q at the disc prompt (run the same command again
- * to carry on); 77 wrong password.
+ * 74 the target disk is full (free space, then run the same command
+ * again); 75 the reader typed q at the disc prompt (run the same
+ * command again to carry on); 77 wrong password.
  */
 #ifdef _WIN32
 /* A system header: it goes before posix_compat.h's shim macros. */
@@ -68,10 +69,6 @@
 #  define isatty _isatty
 #  define STDIN_FILENO 0
 #endif
-#if defined(__linux__)
-#  include <time.h>        /* clock_gettime — only used by stress bench */
-#  include <sys/resource.h>/* getrusage     — only used by stress bench */
-#endif
 
 /* Distinct exit status for "a key file POSITIVELY rejected the given
  * password" (Poly1305 MAC mismatch -- issue #384).  A wrong password is
@@ -92,6 +89,15 @@
  * say how to carry on, rather than treating it as a failure or trying
  * another tier.  75 is sysexits.h EX_TEMPFAIL ("try again later"). */
 #define EXIT_READER_QUIT 75
+
+/* Distinct exit status for "the target file system is full" (ENOSPC or
+ * EDQUOT while writing the restore).  Nothing is wrong with the discs
+ * or the password: free some space, or pick a bigger disk, and run the
+ * same command again (finished files are skipped).  Driver scripts can
+ * say so instead of trying another tier, which would fill the same
+ * disk.  74 is sysexits.h EX_IOERR; defined here, as sysexits.h is not
+ * on every system this is built for.  Tier 3 uses the same code. */
+#define EXIT_DISK_FULL 74
 
 #define MAX_PACK_SEARCH 64
 #define MAX_MOUNT_PARENTS 32
@@ -127,7 +133,7 @@ usage(const char *argv0)
         "usage: %s --repo DIR --password-file FILE --target DIR\n"
         "           [--snapshot ID|latest] [--list-snapshots] [--verbose]\n"
         "           [--catalog FILE]\n"
-        "           [--list-pending-packs]\n"
+        "           [--list-pending-packs [--repo-id ID]]\n"
         "           [--pack-search DIR ...]\n"
         "           [--mount-parent DIR ...]\n"
         "           [--interactive {auto|on|off}]\n"
@@ -145,6 +151,8 @@ usage(const char *argv0)
         "      LCSAS_X: 4 packs (12.3 MB)\n"
         "      LCSAS_Y: 2 packs (8.1 MB)\n"
         "    Total: 6 packs, 20.4 MB across 2 discs.\n"
+        "With --repo-id ID it counts only that repository's packs (its\n"
+        "id is the folder name under metadata/ on a data disc).\n"
         "\n"
         "--pack-search adds additional mount points to scan when a pack\n"
         "file is missing from --repo/data/.  Repeatable.\n"
@@ -190,6 +198,8 @@ usage(const char *argv0)
         "    1   failed, or some items were not restored (each one\n"
         "        is named in a NOT RESTORED line)\n"
         "    2   usage error\n"
+        "    74  the disk you restore to is full; free some space, then\n"
+        "        run the same command again\n"
         "    75  you typed q at the disc prompt; run the same command\n"
         "        again to carry on (files already restored are kept)\n"
         "    77  wrong password\n",
@@ -222,6 +232,7 @@ main(int argc, char **argv)
     const char *interactive_arg = "auto";
     const char *auto_mount_arg = "on";
     const char *meta_disc = NULL;
+    const char *pending_repo_id = NULL;
     const char *pack_search[MAX_PACK_SEARCH];
     size_t n_pack_search = 0;
     const char *mount_parents[MAX_MOUNT_PARENTS];
@@ -261,6 +272,7 @@ main(int argc, char **argv)
         else if (parse_arg("--interactive", argc, argv, &i, &interactive_arg) > 0) matched = 1;
         else if (parse_arg("--auto-mount", argc, argv, &i, &auto_mount_arg) > 0) matched = 1;
         else if (parse_arg("--meta-disc", argc, argv, &i, &meta_disc) > 0) matched = 1;
+        else if (parse_arg("--repo-id", argc, argv, &i, &pending_repo_id) > 0) matched = 1;
         else if (parse_arg("--pack-search", argc, argv, &i, &tmp) > 0) {
             if (n_pack_search >= MAX_PACK_SEARCH) {
                 fprintf(stderr, "too many --pack-search entries (max %d)\n",
@@ -310,6 +322,10 @@ main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+    if (pending_repo_id && !list_pending_packs) {
+        fprintf(stderr, "--repo-id goes with --list-pending-packs\n");
+        return 2;
+    }
 
     /* --list-pending-packs: print disc plan from catalog and exit.
      * Catalog is required; no key load, no restore. */
@@ -327,7 +343,7 @@ main(int argc, char **argv)
                     "ERROR: cannot open catalog %s\n", catalog_path);
             return 1;
         }
-        lpp_rc = lcsas_catalog_print_pending_packs(cat);
+        lpp_rc = lcsas_catalog_print_pending_packs(cat, pending_repo_id);
         lcsas_catalog_close(cat);
         return lpp_rc == 0 ? 0 : 1;
     }
@@ -438,9 +454,16 @@ main(int argc, char **argv)
         fprintf(stderr, "cannot read password file: %s\n", pwfile);
         goto out;
     }
-    /* Strip trailing newlines / CR. */
-    while (pw_len > 0 && (pw[pw_len - 1] == '\n' || pw[pw_len - 1] == '\r')) {
-        pw[--pw_len] = '\0';
+    /* Issue #641 -- the password is the file's first line, read as
+     * rustic reads it: every byte before the first LF, less one CR at
+     * its end.  Spaces are kept.  Tier 3 and `lcsas key` use the same
+     * rule, so a file of two lines gives every reader one password. */
+    {
+        size_t k = 0;
+        while (k < pw_len && pw[k] != '\n') k++;
+        if (k > 0 && pw[k - 1] == '\r') k--;
+        pw_len = k;
+        pw[pw_len] = '\0';
     }
 
     snprintf(keys_dir, sizeof keys_dir, "%s/keys", repo_path);
@@ -521,71 +544,11 @@ main(int argc, char **argv)
         }
     }
 
-    {
-        /* The LCSAS_STRESS_LOOKUPS bench diagnostic is Linux-only —
-         * macOS cross-builds (via zig cc) don't expose ru_maxrss in the
-         * same way and we don't run the bench from those targets. */
-#if defined(__linux__)
-        struct timespec _t_idx_a, _t_idx_b;
-        clock_gettime(CLOCK_MONOTONIC, &_t_idx_a);
-#endif
-        if (lcsas_repo_load_index(repo_path, &mk, &ix) != 0) {
-            fprintf(stderr, "ERROR: index load failed\n");
-            goto out;
-        }
-#if defined(__linux__)
-        clock_gettime(CLOCK_MONOTONIC, &_t_idx_b);
-        /* Scaling benchmark: LCSAS_STRESS_LOOKUPS=N timed-find diagnostic.
-         * After load_index succeeds, perform N random lcsas_blob_index_find
-         * calls against the loaded index, print a single benchmark line,
-         * and exit 0.  No production-path side effects. */
-        {
-            const char *env = getenv("LCSAS_STRESS_LOOKUPS");
-            if (env && *env) {
-                long n_lookups = atol(env);
-                long lk;
-                long long load_ns =
-                    (long long)(_t_idx_b.tv_sec - _t_idx_a.tv_sec) * 1000000000LL
-                    + (long long)(_t_idx_b.tv_nsec - _t_idx_a.tv_nsec);
-                struct rusage ru;
-                long rss_kib = 0;
-                struct timespec _t_find_a, _t_find_b;
-                unsigned long long total_find_ns = 0;
-                if (n_lookups <= 0) n_lookups = 1000;
-
-                if (getrusage(RUSAGE_SELF, &ru) == 0) {
-                    /* ru_maxrss is KiB on Linux. */
-                    rss_kib = ru.ru_maxrss;
-                }
-
-                clock_gettime(CLOCK_MONOTONIC, &_t_find_a);
-                for (lk = 0; lk < n_lookups; lk++) {
-                    /* Random lookup against the loaded index.  Most ids
-                     * won't match (orphan entries dominate), but the scan
-                     * cost is what we're measuring. */
-                    unsigned char probe[32];
-                    int j;
-                    for (j = 0; j < 32; j++) probe[j] = (unsigned char)(rand() & 0xff);
-                    (void)lcsas_blob_index_find(&ix, probe);
-                }
-                clock_gettime(CLOCK_MONOTONIC, &_t_find_b);
-                total_find_ns =
-                    (unsigned long long)(_t_find_b.tv_sec - _t_find_a.tv_sec) * 1000000000ULL
-                    + (unsigned long long)(_t_find_b.tv_nsec - _t_find_a.tv_nsec);
-
-                fprintf(stderr,
-                    "[bench] entries=%lu load_index_ms=%lld "
-                    "rss_after_index_kib=%ld find_ns_mean=%llu lookups=%ld\n",
-                    (unsigned long)ix.count,
-                    load_ns / 1000000LL,
-                    rss_kib,
-                    n_lookups > 0 ? total_find_ns / (unsigned long long)n_lookups : 0ULL,
-                    n_lookups);
-                rc = 0;
-                goto out;
-            }
-        }
-#endif /* __linux__ */
+    /* #791: the LCSAS_STRESS_LOOKUPS bench that ran here is now
+     * recovery/tests/bench_index.c, built only for scaling_bench.py. */
+    if (lcsas_repo_load_index(repo_path, &mk, &ix) != 0) {
+        fprintf(stderr, "ERROR: index load failed\n");
+        goto out;
     }
     if (verbose)
         fprintf(stderr, "[lcsas-restore] indexed %lu blobs\n",
@@ -671,6 +634,7 @@ main(int argc, char **argv)
                     "ERROR: target directory out of space "
                     "(path=%s, errno=%d)\n",
                     target, saved_errno);
+            rc = EXIT_DISK_FULL;
         } else {
             fprintf(stderr,
                     "ERROR: cannot create target dir %s (errno=%d)\n",
@@ -703,6 +667,16 @@ main(int argc, char **argv)
                     "[lcsas-restore] To carry on, run the same command "
                     "again; finished files are skipped.\n");
             rc = EXIT_READER_QUIT;
+            goto out;
+        }
+        if (tree_rc == LCSAS_TREE_DISK_FULL) {
+            fprintf(stderr,
+                    "[lcsas-restore] stopped: the disk that holds %s is "
+                    "full.  Files restored so far are kept.\n"
+                    "[lcsas-restore] Free some space there, or restore to "
+                    "a bigger disk, then run the same command again.\n",
+                    target);
+            rc = EXIT_DISK_FULL;
             goto out;
         }
         if (tree_rc == LCSAS_TREE_INCOMPLETE) {

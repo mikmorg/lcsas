@@ -121,10 +121,9 @@ def _candidate_line(text: str) -> str | None:
     nearly all share words (:func:`is_mistyped_share_line`), the first one
     with the most tokens is most likely the share with typing mistakes, so
     it is kept for the per-share check to name the bad word.  The C
-    combiner's ``copy_candidate_line`` takes any line of 13 or more tokens,
-    so for a card whose share words are missing it names a word of a prose
-    line; this one requires the line to be nearly all share words, so such
-    a card is reported as having too few share words.  Both reject it.
+    combiner's ``copy_candidate_line`` uses the same rule (#844), so for a
+    card whose share words are missing neither names a word of a prose
+    line: both say no share words were found.
     """
     best: str | None = None
     best_tokens = 0
@@ -175,6 +174,12 @@ def extract_mnemonic(
         reason = check_share(candidate)
         if reason is not None:
             raise KeyShareError(f"'{source}': {reason}")
+    if not words:
+        # #844: say so plainly, as the C combiner does.
+        raise KeyShareError(
+            f"'{source}': no share words were found in this file - is it "
+            "a share card?"
+        )
     raise KeyShareError(
         f"'{source}': found {len(words)} share words, expected at least "
         f"{_MIN_WORDS} - is this a complete share card?"

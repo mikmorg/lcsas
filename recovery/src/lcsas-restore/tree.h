@@ -63,7 +63,9 @@ void lcsas_progress_finish(const lcsas_progress *p);
 
 /*
  * Returns 0 when every node was restored, -1 when the walk stopped on
- * an error, or LCSAS_TREE_INCOMPLETE when the walk finished but one or
+ * an error, LCSAS_TREE_DISK_FULL when it stopped because the target
+ * file system is full (the "out of space" line names the path), or
+ * LCSAS_TREE_INCOMPLETE when the walk finished but one or
  * more nodes were not restored because of an error (issues #781,
  * #783): a name that cannot be decoded or that this system cannot
  * hold, a link target that cannot be used, an unknown node type, or a
@@ -75,10 +77,12 @@ void lcsas_progress_finish(const lcsas_progress *p);
  *
  * Every node not restored has a "NOT RESTORED: <path> (<reason>)" line
  * on stderr and a row in `target_root`/RESTORE_FAILURES.txt (the same
- * file tier 3 writes).  With nothing to list, a RESTORE_FAILURES.txt
- * an earlier run left there is removed.
+ * file tier 3 writes).  With nothing to list after a finished walk, a
+ * RESTORE_FAILURES.txt an earlier run left there is removed; a walk
+ * that stopped early leaves it.
  */
 #define LCSAS_TREE_INCOMPLETE 1
+#define LCSAS_TREE_DISK_FULL  2
 
 int lcsas_tree_restore(const char *repo_path,
                        const lcsas_master_key *mk,

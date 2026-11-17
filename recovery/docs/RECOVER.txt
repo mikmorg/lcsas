@@ -706,6 +706,9 @@ EXIT CODES
           it can see), or finished with errors: some items were not
           restored (listed in RESTORE_FAILURES.txt)
     2  -- usage error
+    74 -- the disk you restore to is full; free some space, or pick a
+          bigger disk, then run the same command again (files already
+          restored are kept)
     75 -- you typed q at its disc prompt (or its input ended); run the
           same command again to carry on
     77 -- wrong password: a key file rejected it

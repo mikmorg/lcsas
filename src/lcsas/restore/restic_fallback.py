@@ -294,6 +294,11 @@ EXIT_WRONG_PASSWORD = 77
 #: EX_TEMPFAIL, "try again later".
 EXIT_READER_QUIT = 75
 
+#: Exit status of a restore stopped because the target filesystem is full.
+#: The same as tier 1's EXIT_DISK_FULL: sysexits.h EX_IOERR.  Free some
+#: space, or pick a bigger disk, then run the same command again.
+EXIT_DISK_FULL = 74
+
 
 class RestoreAbortedError(Exception):
     """The whole restore must stop now, not just the current file (#658).
@@ -306,8 +311,8 @@ class RestoreAbortedError(Exception):
     turn on a full disk.
 
     ``exit_code`` is what the tier-3 command exits with:
-    ``EXIT_READER_QUIT`` (75) for a stop at the disc prompt, 1 for a
-    full disk.
+    ``EXIT_READER_QUIT`` (75) for a stop at the disc prompt,
+    ``EXIT_DISK_FULL`` (74) for a full disk.
     """
 
     def __init__(self, message: str, exit_code: int) -> None:
@@ -324,6 +329,23 @@ _DISK_FULL_ERRNOS = frozenset(
 _CACHE_SIDE_ERRNOS = _DISK_FULL_ERRNOS | {errno.EROFS}
 
 
+def password_from_file_bytes(data: bytes) -> bytes:
+    """The password a password file holds (#641): its first line.
+
+    Read as rustic reads it: every byte before the first LF, less one CR
+    at its end.  Spaces are kept, and so is a second CR.  Tier 1
+    (lcsas-restore) and the ``lcsas key`` commands use the same rule, so
+    every reader agrees on a file of more than one line.
+    """
+    line = data.split(b"\n", 1)[0]
+    return line[:-1] if line.endswith(b"\r") else line
+
+
+def read_password_file(path: Path) -> bytes:
+    """Read *path* and return its password (see password_from_file_bytes)."""
+    return password_from_file_bytes(path.read_bytes())
+
+
 def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
     """Build the abort for a full target filesystem while writing *path*."""
     return RestoreAbortedError(
@@ -331,7 +353,7 @@ def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
         f"({exc.strerror or exc}) while writing {path.name}.  Free some "
         "space there, or restore to a bigger disk, then run the same "
         "command again.  Files restored so far are kept.",
-        exit_code=1,
+        exit_code=EXIT_DISK_FULL,
     )
 
 
@@ -1082,7 +1104,7 @@ class PurePythonRestorer:
         if password is not None:
             self._password = password
         elif password_file is not None:
-            self._password = password_file.read_bytes().rstrip(b"\n\r")
+            self._password = read_password_file(password_file)
         else:
             raise ValueError("Provide either password_file or password")
 
@@ -2295,7 +2317,12 @@ class PurePythonRestorer:
 
         for node in tree_doc.get("nodes", []):
             name = node.get("name")
-            node_type = node.get("type", "file")
+            # A node with no type is not restored, as in tier 1: it is
+            # listed as "unknown item type: ?" (it used to be read as a
+            # file).
+            node_type = node.get("type")
+            if not isinstance(node_type, str):
+                node_type = "?"
             # Issue #781: decode rustic's escaped name to raw bytes, then
             # run the path-safety checks (empty, ".", "..", "/", NUL; on
             # Windows also what NTFS cannot store) on the DECODED bytes.
@@ -2603,7 +2630,7 @@ class PurePythonRestorer:
                 self._tree_cache[tid] = tree_data
                 self._tree_cache_bytes += len(tree_data)
             for node in tree_doc.get("nodes", []):
-                ntype = node.get("type", "file")
+                ntype = node.get("type")
                 if ntype == "file":
                     total += 1
                 elif ntype == "dir" and "subtree" in node:
@@ -2664,7 +2691,7 @@ class PurePythonRestorer:
                         memo[tid] = frozenset(own | {f"?tree:{tid}"})
                         continue
                     for node in doc.get("nodes") or []:
-                        ntype = node.get("type", "file")
+                        ntype = node.get("type")
                         if ntype == "dir" and node.get("subtree"):
                             subtrees.append(node["subtree"])
                         elif ntype == "file":

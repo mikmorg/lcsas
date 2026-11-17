@@ -102,7 +102,22 @@ EXIT_USAGE = 2
 EXIT_BAD_SHARE = 3
 
 
-def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
+def _skipped_hint(skipped: int) -> str:
+    """The hint for skipped stdin lines when the shares read did not do (#844).
+
+    Printed when the password could not be rebuilt from the shares that
+    were read.  The C combiner prints the same text.
+    """
+    return (
+        f"{skipped} line(s) of input were not read as shares (blank lines "
+        "are not counted).\nType each card's share words on ONE line: a "
+        "share split over two lines\nis skipped.\n"
+    )
+
+
+def _read_mnemonics(
+    paths: list[str], skipped: list[int] | None = None,
+) -> list[tuple[str, str]]:
     """Collect share mnemonics from *paths* and/or stdin.
 
     For each file path, the whole file is treated as ONE share — a bare
@@ -116,6 +131,8 @@ def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
     typing mistakes, so the per-share check names the bad word.
     Returns ``(label, mnemonic)`` pairs in the order encountered; the label
     (a file path or ``"stdin line N"``) is used for per-share diagnostics.
+    When *skipped* is given, the number of non-blank stdin lines that were
+    not read as shares is appended to it.
     """
     mnemonics: list[tuple[str, str]] = []
     if paths:
@@ -125,11 +142,16 @@ def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
                 (p, extract_mnemonic(text, source=p, keep_mistyped=True))
             )
     else:
+        n_skipped = 0
         for lineno, line in enumerate(sys.stdin.read().splitlines(), start=1):
             if is_share_line(line):
                 mnemonics.append(
                     (f"stdin line {lineno}", normalize_share_line(line))
                 )
+            elif line.strip():
+                n_skipped += 1
+        if skipped is not None:
+            skipped.append(n_skipped)
     return mnemonics
 
 
@@ -162,8 +184,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    skipped: list[int] = []
     try:
-        pairs = _read_mnemonics(args)
+        pairs = _read_mnemonics(args, skipped)
     except OSError as exc:
         sys.stderr.write(f"error: could not read share file: {exc}\n")
         return EXIT_USAGE
@@ -176,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
             "error: no share mnemonics supplied.  Pass share file paths as\n"
             "arguments, or pipe mnemonics (one per line) on stdin.\n"
         )
+        if skipped and skipped[0]:
+            sys.stderr.write(_skipped_hint(skipped[0]))
         return EXIT_USAGE
 
     # Per-share pre-pass: validate each share independently and print a
@@ -206,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
             "Check that you supplied at least K shares from the SAME archive\n"
             "and that every word was transcribed correctly.\n"
         )
+        if skipped and skipped[0]:
+            sys.stderr.write(_skipped_hint(skipped[0]))
         return EXIT_CANNOT_COMBINE
 
     sys.stdout.buffer.write(password)

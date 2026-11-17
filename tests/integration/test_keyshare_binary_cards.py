@@ -183,3 +183,44 @@ def test_committed_binary_help_documents_exit_status() -> None:
                  b"  2  usage error", b"  3  a share is not valid"):
         assert line in proc.stdout
     assert proc.stdout.isascii()
+
+
+# ── #844: plain messages for a missing share line and a split share ──
+
+
+def _share_words(card: Path) -> list[str]:
+    return [ln for ln in card.read_text().splitlines()
+            if ln.startswith("  ") and len(ln.split()) >= 20][0].split()
+
+
+def test_committed_binary_card_without_share_line_says_so(tmp_path: Path) -> None:
+    """A card file whose share line is missing says no share words were
+    found in it (it said word 1 'tip:' is not a share word)."""
+    cards = _split_cards(tmp_path)
+    words = " ".join(_share_words(cards[0]))
+    kept = [ln for ln in cards[0].read_text().splitlines()
+            if " ".join(ln.split()) != words]
+    nosh = tmp_path / "no-share-line.txt"
+    nosh.write_text("\n".join(kept) + "\n")
+    proc = _run([str(nosh), str(cards[1])])
+    assert proc.returncode == 3, proc.stderr
+    assert b"no share words were found in this file" in proc.stderr
+    assert b"is not a share word" not in proc.stderr
+    assert proc.stdout == b""
+
+
+def test_committed_binary_stdin_split_share_hints_one_line(tmp_path: Path) -> None:
+    """A share typed over several short lines is skipped; when too few
+    shares remain, the binary says how many lines were skipped and that
+    each card's words go on one line."""
+    cards = _split_cards(tmp_path)
+    words = _share_words(cards[0])
+    chunks = [words[i:i + 11] for i in range(0, len(words), 11)]
+    assert len(chunks) == 3
+    piped = "".join(" ".join(c) + "\n" for c in chunks) + "\n"
+    piped += " ".join(_share_words(cards[1])) + "\n"
+    proc = _run([], stdin=piped.encode())
+    assert proc.returncode == 1, proc.stderr
+    assert b"3 line(s) of input were not read as shares" in proc.stderr
+    assert b"on ONE line" in proc.stderr
+    assert proc.stdout == b""

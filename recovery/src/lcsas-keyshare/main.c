@@ -91,11 +91,16 @@ static size_t count_tokens(const char *line, size_t len)
     return tokens;
 }
 
-/* Fallback when strict extraction fails: copy the single line with the
- * most tokens (the likely-but-typo'd share line) verbatim into `buf`,
- * lowercased and whitespace-normalised, so a per-share check can pinpoint
- * the offending word.  Returns the token count of that line (0 if none
- * has enough tokens to plausibly be a share). */
+static int is_mistyped_share_line(const char *line, size_t len);
+
+/* Fallback when strict extraction fails: of the lines that are nearly
+ * all share words (is_mistyped_share_line), copy the one with the most
+ * tokens (the likely-but-typo'd share line) into `buf`, lowercased and
+ * whitespace-normalised, so a per-share check can pinpoint the offending
+ * word.  Returns the token count of that line, or 0 when no line is
+ * one.  #844: a prose line of a card with no share line is never taken
+ * (it was, and the check then named a prose word, e.g. word 1 'tip:'),
+ * the same rule as the Python combiner's _candidate_line. */
 static size_t copy_candidate_line(const char *text, char *buf, size_t cap)
 {
     const char *p = text;
@@ -119,7 +124,7 @@ static size_t copy_candidate_line(const char *text, char *buf, size_t cap)
             tlen--;
         }
         tokens = count_tokens(line, tlen);
-        if (tokens > best_tokens) {
+        if (tokens > best_tokens && is_mistyped_share_line(line, tlen)) {
             best_tokens = tokens;
             best = line;
             best_len = tlen;
@@ -238,13 +243,31 @@ static int read_file_mnemonic(const char *path, char *buf, size_t cap)
     if (copy_candidate_line(filebuf, buf, cap) > 0) {
         return 0;
     }
-    if (err[0] != '\0') {
+    if (strncmp(err, "found 0 ", 8) == 0) {
+        /* #844: say it plainly. */
+        fprintf(stderr, "lcsas-keyshare: '%s': no share words were found "
+                        "in this file - is it a share card?\n", path);
+    } else if (err[0] != '\0') {
         fprintf(stderr, "lcsas-keyshare: '%s': %s "
                         "- is this a complete share card?\n", path, err);
     } else {
         fprintf(stderr, "lcsas-keyshare: '%s': share too large\n", path);
     }
     return EXIT_BAD_SHARE;
+}
+
+/* #844: stdin lines were skipped and the shares read did not rebuild
+ * the password.  A share wrapped over two lines is the likely cause.
+ * The Python combiner prints the same. */
+static void print_skipped_hint(size_t skipped)
+{
+    if (skipped == 0) {
+        return;
+    }
+    fprintf(stderr, "%lu line(s) of input were not read as shares (blank "
+                    "lines are not counted).\n", (unsigned long)skipped);
+    fputs("Type each card's share words on ONE line: a share split over "
+          "two lines\nis skipped.\n", stderr);
 }
 
 int main(int argc, char **argv)
@@ -261,6 +284,7 @@ int main(int argc, char **argv)
     unsigned char pw[LCSAS_KEYSHARE_MAX_PW];
     size_t pwlen = 0;
     size_t i;
+    size_t skipped = 0;   /* non-blank stdin lines not read as shares */
     int any_bad = 0;
 
     /* Parse options (--passphrase X and --help). */
@@ -349,6 +373,9 @@ int main(int argc, char **argv)
                                        NULL, 0) != 0) {
                 if (!is_mistyped_share_line(linebuf, strlen(linebuf)) ||
                     copy_candidate_line(linebuf, storage[n], MAX_LINE) == 0) {
+                    if (count_tokens(linebuf, strcspn(linebuf, "\r\n")) > 0) {
+                        skipped++;
+                    }
                     continue;
                 }
             }
@@ -367,6 +394,7 @@ int main(int argc, char **argv)
 
     if (n == 0) {
         fprintf(stderr, "lcsas-keyshare: no shares provided\n");
+        print_skipped_hint(skipped);
         usage(stderr);
         return EXIT_USAGE;
     }
@@ -400,6 +428,7 @@ int main(int argc, char **argv)
                         "(too few, corrupt, or mismatched shares)\n");
         fprintf(stderr, "lcsas-keyshare: supply at least K shares from the "
                         "SAME archive (same Split ID on every card)\n");
+        print_skipped_hint(skipped);
         return EXIT_CANNOT_COMBINE;
     }
 

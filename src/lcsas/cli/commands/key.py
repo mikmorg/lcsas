@@ -42,6 +42,19 @@ def _write_private_file(path: Path, data: bytes) -> None:
         os.close(fd)
 
 
+def _read_password_file(path: Path) -> bytes:
+    """The password in *path*: its first line, as rustic reads it (#641).
+
+    The same rule as tiers 1 and 3 (``read_password_file`` in the tier-3
+    reader), so a card or split never carries a password the readers
+    disagree on.  Lines after the first are not part of the password;
+    ``validate_config`` warns about them.
+    """
+    from lcsas.restore.restic_fallback import read_password_file
+
+    return read_password_file(path)
+
+
 def cmd_key_card(args: argparse.Namespace) -> int:
     """Print (or check) a paper password card for an archive whose password is not split."""
     # The card text is frozen in main.py; imported here, not at the top,
@@ -57,8 +70,8 @@ def cmd_key_card(args: argparse.Namespace) -> int:
         if not check_file.exists():
             logger.error("Password file does not exist: %s", check_file)
             return 1
-        # Match the split path's read convention (drop one trailing newline).
-        password = check_file.read_bytes().rstrip(b"\n")
+        # The one password-file rule (#641): the first line, as rustic reads it.
+        password = _read_password_file(check_file)
         computed = _check_code(password)
         expected = args.code.strip().lower()
         if computed == expected:
@@ -111,7 +124,7 @@ def cmd_key_card(args: argparse.Namespace) -> int:
                 "render a card without a transcription check).", pw_file,
             )
             return 1
-        password = pw_file.read_bytes().rstrip(b"\n")
+        password = _read_password_file(pw_file)
         check_code = _check_code(password)
 
     card = _recovery_card_text(
@@ -469,9 +482,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
             logger.error("%s", e)
             return 1
 
-    # Read the password and drop a single trailing newline (password files
-    # often have one; rustic's --password-file ignores it).
-    password = repo_pw_file.read_bytes().rstrip(b"\n")
+    # Read the password as rustic does: the file's first line (#641).
+    password = _read_password_file(repo_pw_file)
 
     # Weak-password advisory (FUP-03).  Every burned disc carries the
     # password-locked key files, so the password faces unlimited offline
@@ -852,7 +864,7 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
         if not args.password_file.exists():
             logger.error("Password file does not exist: %s", args.password_file)
             return 1
-        password = args.password_file.read_bytes().rstrip(b"\n")
+        password = _read_password_file(args.password_file)
         n_shares = 0
     else:
         mnemonics: list[str] = []

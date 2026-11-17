@@ -86,10 +86,8 @@ def test_target_dir_out_of_space_reports_enospc(tmp_path: Path) -> None:
             check=True, capture_output=True, timeout=10,
         )
 
-        # Should fail.  We don't pin a specific non-zero exit code —
-        # the binary uses `1` for any error today, but the contract
-        # is "non-zero".  The diagnostic line is the load-bearing
-        # part.
+        # Should fail with the full-disk exit code, 74 (EX_IOERR),
+        # which tier 3 uses too, and the diagnostic line.
         res = subprocess.run(
             [str(bin_path),
              "--repo", str(repo),
@@ -99,8 +97,8 @@ def test_target_dir_out_of_space_reports_enospc(tmp_path: Path) -> None:
             capture_output=True, text=True, timeout=120,
         )
 
-        assert res.returncode != 0, (
-            f"expected non-zero exit on ENOSPC; got 0\n"
+        assert res.returncode == 74, (
+            f"expected exit 74 on ENOSPC; got {res.returncode}\n"
             f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
         )
         assert "out of space" in res.stderr, (

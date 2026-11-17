@@ -509,6 +509,67 @@ def test_list_pending_packs_with_valid_catalog(tmp_path: Path) -> None:
     assert "vol-a" in out, out
 
 
+def test_list_pending_packs_repo_id_filter(tmp_path: Path) -> None:
+    """#798: --repo-id ID counts only that repository's packs, so
+    restore.sh can size one backup set of several without a sqlite3
+    command.  The "Total:" line keeps its format (restore.sh parses it).
+    The filter uses packs.repo_id only: a frozen column."""
+    bin_path = _find_bin()
+    db_path = tmp_path / "two-sets.db"
+    import sqlite3
+    db = sqlite3.connect(db_path)
+    db.executescript("""
+        CREATE TABLE schema_version (version INTEGER, applied_at DATETIME);
+        INSERT INTO schema_version VALUES (10, datetime('now'));
+        CREATE TABLE packs (pack_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sha256 TEXT UNIQUE NOT NULL, size_bytes INTEGER, repo_id TEXT);
+        INSERT INTO packs (sha256, size_bytes, repo_id) VALUES
+          ('aa', 1048576, 'small'), ('bb', 10485760, 'big'),
+          ('cc', 10485760, 'big');
+        CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          label TEXT UNIQUE, status TEXT);
+        INSERT INTO volumes (label, status) VALUES
+          ('vol-a', 'VERIFIED'), ('vol-b', 'VERIFIED');
+        CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);
+        INSERT INTO volume_packs VALUES (1, 1), (1, 2), (2, 3);
+    """)
+    db.commit()
+    db.close()
+    repo = _make_minimal_repo(tmp_path)
+
+    def pending(*extra: str) -> subprocess.CompletedProcess:
+        return _run(bin_path, "--repo", str(repo), "--password-file",
+                    os.devnull, "--catalog", str(db_path),
+                    "--list-pending-packs", *extra, timeout=5)
+
+    res = pending()
+    assert res.returncode == 0, res.stderr
+    assert "Total: 3 packs, 21.0 MB across 2 discs." in res.stdout
+
+    res = pending("--repo-id", "small")
+    assert res.returncode == 0, res.stderr
+    assert "repository small only" in res.stdout
+    assert "Total: 1 pack, 1.0 MB across 1 disc." in res.stdout
+    assert "vol-b" not in res.stdout
+
+    res = pending("--repo-id", "big")
+    assert "Total: 2 packs, 20.0 MB across 2 discs." in res.stdout
+
+    res = pending("--repo-id", "absent")
+    assert res.returncode == 0, res.stderr
+    assert "Total: 0 packs, 0.0 MB across 0 discs." in res.stdout
+
+    res = _run(bin_path, "--repo", str(repo), "--password-file", os.devnull,
+               "--list-snapshots", "--repo-id", "small", timeout=5)
+    assert res.returncode == 2
+    assert "--repo-id goes with --list-pending-packs" in res.stderr
+
+
+def test_list_pending_packs_repo_id_in_help() -> None:
+    res = _run(_find_bin(), "--help", timeout=5)
+    assert "--repo-id ID" in res.stderr
+
+
 def test_list_pending_packs_invalid_catalog_path_fails(tmp_path: Path) -> None:
     """--list-pending-packs with a non-existent --catalog must fail (covers
     the lcsas_catalog_open failure branch in main.c)."""

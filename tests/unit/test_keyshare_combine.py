@@ -634,6 +634,61 @@ class TestCombinerPerShareValidation:
         assert keyshare_combine.main([]) == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
+    def test_card_with_no_share_line_says_so(self, tmp_path, capsys):
+        """#844: a card file whose share line is missing says no share
+        words were found in it, not that a prose word is not a share word."""
+        from lcsas.cli.main import _share_card_text
+
+        mns = _make_2of5()
+        card = _share_card_text("alpha", 1, 2, 5, mns[0], "2026-01-01", 1)
+        lines = [ln for ln in card.splitlines() if mns[0] not in ln]
+        bad = tmp_path / "card1.txt"
+        bad.write_text("\n".join(lines) + "\n")
+        rc = keyshare_combine.main([str(bad)])
+        err = capsys.readouterr().err
+        assert rc == keyshare_combine.EXIT_BAD_SHARE, err
+        assert "no share words were found in this file" in err
+        assert "is not a share word" not in err
+
+    def test_stdin_split_share_hints_one_line(self, monkeypatch, capsys):
+        """#844: a share wrapped over two stdin lines is skipped; when too
+        few shares remain, the error says how many lines were skipped and
+        that each card's words go on one line."""
+        import io
+
+        mns = _make_2of5()
+        words = mns[0].split()
+        # Lines too short to be taken for a share with typing mistakes.
+        chunks = [words[i:i + 11] for i in range(0, len(words), 11)]
+        assert len(chunks) == 3 and all(len(c) < 13 for c in chunks)
+        piped = (" ".join(chunks[0]) + "\n\n" + " ".join(chunks[1]) + "\n"
+                 + " ".join(chunks[2]) + "\n" + mns[1] + "\n")
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        rc = keyshare_combine.main([])
+        err = capsys.readouterr().err
+        assert rc == keyshare_combine.EXIT_CANNOT_COMBINE, err
+        assert "3 line(s) of input were not read as shares" in err
+        assert "on ONE line" in err
+
+    def test_stdin_no_share_at_all_hints_one_line(self, monkeypatch, capsys):
+        import io
+
+        mns = _make_2of5()
+        words = mns[0].split()
+        piped = "".join(
+            " ".join(words[i:i + 11]) + "\n" for i in range(0, len(words), 11)
+        )
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        assert keyshare_combine.main([]) == keyshare_combine.EXIT_USAGE
+        assert "3 line(s) of input were not read" in capsys.readouterr().err
+
+    def test_stdin_blank_lines_only_no_hint(self, monkeypatch, capsys):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO("\n  \n"))
+        assert keyshare_combine.main([]) == keyshare_combine.EXIT_USAGE
+        assert "were not read as shares" not in capsys.readouterr().err
+
     def test_help_documents_exit_status(self, capsys):
         assert keyshare_combine.main(["--help"]) == 0
         err = capsys.readouterr().err

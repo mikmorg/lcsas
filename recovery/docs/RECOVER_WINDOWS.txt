@@ -813,10 +813,14 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
     --catalog FILE         optional path to LCSAS catalog.db; pass a
                            copy, not the file on a disc
     --list-pending-packs   with --catalog: which discs hold how much
+    --repo-id ID           with --list-pending-packs: count only the
+                           backup set whose id is ID (its folder name
+                           under metadata\)
     --verbose              print more messages
 
-It exits 0 (done), 1 (failed), 2 (wrong arguments), 75 (you typed q
-at a disc box) or 77 (wrong password).
+It exits 0 (done), 1 (failed), 2 (wrong arguments), 74 (the disk you
+restore to is full), 75 (you typed q at a disc box) or 77 (wrong
+password).
 
 Each backup set's keys, index and snapshots live under
 metadata\<id>\ on every disc, where <id> is the set's id, a long

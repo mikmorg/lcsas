@@ -274,6 +274,11 @@ mirror_path = "/mnt/mirror/documents"
 password_file = "/root/keys/documents.key"
 ```
 
+Keep each password file to one line.  rustic and every LCSAS reader use only
+the first line as the password, and `lcsas config check` warns about a file
+with more than one.  `head -c 48 /dev/urandom | base64 | tr -d '\n'` makes a
+one-line password; plain `base64` of 64 bytes wraps onto two lines.
+
 This information is automatically written to `START_HERE.txt` on every
 disc you burn — so your heirs can read it even without this document.
 When a password is split, each disc's `START_HERE.txt` and

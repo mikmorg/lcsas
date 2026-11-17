@@ -85,13 +85,31 @@ typedef struct lcsas_disc_locator {
     char *cache_dir;
 
     /* Maximum number of pack files to copy per drain_disc() call.
-     * 0 = unlimited (drain the full disc in one call; default).
-     * Set via LCSAS_DRAIN_CHUNK_PACKS env var.  When > 0, drain_disc
-     * returns after copying this many packs and the next call resumes
-     * where it left off (already-cached packs are skipped via stat).
-     * Use 100-500 on slow optical drives to keep the restore
-     * interactive between drain calls. */
+     * 0 = unlimited (drain the full disc in one call; the default).
+     * When > 0, drain_disc returns after copying this many packs and
+     * the next call resumes where it left off (already-cached packs
+     * are skipped via stat).  #791: no longer read from the
+     * LCSAS_DRAIN_CHUNK_PACKS environment variable, a test hook that
+     * shipped in every binary; only a test sets it. */
     int drain_chunk_packs;
+
+    /* Walks of a disc's data/ tree by the drain, for diagnostics and
+     * tests (#786: it must not grow with the number of blobs). */
+    unsigned long drain_walks;
+
+    /* 1 once a pack copied into the cache was found not to match its
+     * name (SHA-256) and the one warning for that was printed. */
+    int pack_mismatch_warned;
+
+    /* Discs the drain gave up on for this run (#786): one that did not
+     * fit in the cache or whose copy stopped partway.  Their packs are
+     * read from the disc.  Catalogs found damaged (#788), so they are
+     * not copied and warned about again on each rescan.  Locator-owned;
+     * freed in lcsas_disc_locator_free(). */
+    struct lcsas_disc_memo *drain_skips;
+    size_t n_drain_skips;
+    struct lcsas_disc_memo *bad_catalogs;
+    size_t n_bad_catalogs;
 
     /* Auto-detect (#455).  While the interactive prompt waits, re-scan
      * the search paths and mount parents every `poll_ms` milliseconds,

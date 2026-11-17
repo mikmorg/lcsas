@@ -649,6 +649,33 @@ def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
     return errors
 
 
+def password_file_lines_warning(path: Path) -> str | None:
+    """A warning when password file *path* has more than one line (#641).
+
+    rustic, both restore tiers and ``lcsas key`` all take the first line
+    as the password, so a key file of two lines (``openssl rand -base64
+    64`` wraps its output) works, but its second line is ignored by every
+    reader: the owner should know.  None when the file has one non-empty
+    line, with or without trailing blank lines, or cannot be read (an
+    unreadable file is reported elsewhere).
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    lines = data.split(b"\n")
+    if not any(line.strip() for line in lines[1:]):
+        return None
+    first_empty = not lines[0].rstrip(b"\r")
+    return (
+        f"password_file {path} has more than one line.  rustic and every "
+        "LCSAS reader use only the first line as the password"
+        + ("; its first line is EMPTY, so the password is empty" if first_empty
+           else "")
+        + ".  Put the password on one line."
+    )
+
+
 def validate_config(config: LCSASConfig) -> list[str]:
     """Validate an ``LCSASConfig`` and return a list of error strings.
 
@@ -770,6 +797,10 @@ def validate_config(config: LCSASConfig) -> list[str]:
                 f"repo '{name}': password_file does not exist: "
                 f"{repo.password_file}"
             )
+        elif repo.password_file is not None:
+            note = password_file_lines_warning(repo.password_file)
+            if note is not None:
+                _logger.warning("repo '%s': %s", name, note)
 
     # Check for critical path overlaps that could cause data loss during cleanup.
     # The staging area must not hold, or sit inside, a repository mirror:

@@ -59,23 +59,28 @@ permitted (ignored by the parser).
 <!-- EXEMPTIONS-FENCE-BEGIN -->
 ```
 # catalog.c
-catalog.c:317   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (fault-inject cannot reach) or a catalog lacking the tables, which no --list-pending-packs test supplies
-catalog.c:318   INTRACTABLE   "
+catalog.c:193   INTRACTABLE   lcsas_catalog_check (#788): sqlite3_prepare_v2 of PRAGMA quick_check fails only on malloc inside SQLite (fault-inject cannot reach)
+catalog.c:343   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (fault-inject cannot reach) or a catalog lacking the tables, which no --list-pending-packs test supplies
+catalog.c:344   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:984   DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
-disc_locator.c:986   DEFENSIVE   "
-disc_locator.c:993   DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
-disc_locator.c:995   DEFENSIVE   "
-disc_locator.c:1006  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
-disc_locator.c:1008  DEFENSIVE   "
-disc_locator.c:1013  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
-disc_locator.c:1015  DEFENSIVE   "
-disc_locator.c:1101   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
-disc_locator.c:1102   VOLATILE   "
-disc_locator.c:1110   VOLATILE   "
-disc_locator.c:1111   VOLATILE   "
-disc_locator.c:1113   VOLATILE   "
+disc_locator.c:480   VOLATILE   consider_catalog path_dup malloc fail after a good catalog opened: only the fault-inject sweep can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries (#788 added allocations before it)
+disc_locator.c:481   VOLATILE   "
+disc_locator.c:482   VOLATILE   "
+disc_locator.c:1117  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:1119  DEFENSIVE   "
+disc_locator.c:1126  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:1128  DEFENSIVE   "
+disc_locator.c:1139  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
+disc_locator.c:1141  DEFENSIVE   "
+disc_locator.c:1146  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
+disc_locator.c:1148  DEFENSIVE   "
+disc_locator.c:1254   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
+disc_locator.c:1255   VOLATILE   "
+disc_locator.c:1263   VOLATILE   "
+disc_locator.c:1264   VOLATILE   "
+disc_locator.c:1266   VOLATILE   "  (#786: the disc that did not fit is remembered)
+disc_locator.c:1267   VOLATILE   "
 
 # lcsas_io.c
 lcsas_io.c:27   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
@@ -86,7 +91,11 @@ lcsas_io.c:52   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs
 lcsas_io.c:53   INTRACTABLE   "
 
 # main.c
-main.c:670   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
+main.c:633   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
+main.c:637   INTRACTABLE   "  (exit 74)
+main.c:673   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+main.c:679   INTRACTABLE   "
+main.c:680   INTRACTABLE   "
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator
@@ -105,31 +114,18 @@ repo.c:284   VOLATILE   "
 repo.c:489   DEFENSIVE   strip_v2_prefix 0-byte-plaintext return; decrypt rejects <33B input so pt_len>=1 always -> provably unreachable
 repo.c:490   DEFENSIVE   "
 repo.c:491   DEFENSIVE   "
-repo.c:626   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
-repo.c:627   DEFERRED   "
-repo.c:628   DEFERRED   "
-repo.c:761   DEFENSIVE   load_index pass-2 TOCTOU guard for TOOBIG/ZSTD; pass-1 already fatals on the same static file set, unreachable single-threaded (kept as a guard)
-repo.c:762   DEFENSIVE   "
-repo.c:765   DEFENSIVE   "
-repo.c:767   DEFENSIVE   "
-repo.c:769   DEFENSIVE   "
-repo.c:771   DEFENSIVE   "
-repo.c:780   DEFENSIVE   load_index pass-2 index-too-large (-2); pass-1 parses the same file first with the same cap and fatals -> unreachable
-repo.c:783   DEFENSIVE   "
-repo.c:786   DEFENSIVE   load_index pass-2 invalid-JSON (<=0); pass-1 parses the same file first and fatals -> unreachable
-repo.c:788   DEFENSIVE   "
-repo.c:822   INTRACTABLE   blob_index_push realloc fail; malloc fault-inject blocked by the gcov runtime
-repo.c:823   INTRACTABLE   "
-repo.c:824   INTRACTABLE   "
-repo.c:1181   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
-repo.c:1182   INTRACTABLE   "
-repo.c:1183   INTRACTABLE   "
-repo.c:1184   INTRACTABLE   "
-repo.c:1188   INTRACTABLE   "
-repo.c:1189   INTRACTABLE   "
-repo.c:1192   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
+repo.c:727   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
+repo.c:728   DEFERRED   "
+repo.c:729   DEFERRED   "
+repo.c:1192   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
+repo.c:1193   INTRACTABLE   "
+repo.c:1194   INTRACTABLE   "
 repo.c:1195   INTRACTABLE   "
-repo.c:1197   INTRACTABLE   "
+repo.c:1199   INTRACTABLE   "
+repo.c:1200   INTRACTABLE   "
+repo.c:1203   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
+repo.c:1206   INTRACTABLE   "
+repo.c:1208   INTRACTABLE   "
 
 # tree.c
 tree.c:229   VOLATILE   nr_report_item row malloc fail (#783): only the fault-inject sweep (coverage-c step 3c) can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries
@@ -138,41 +134,47 @@ tree.c:231   VOLATILE   "
 tree.c:240   VOLATILE   nr_report_item rows realloc fail (#783); same fault-inject dependence as 229
 tree.c:241   VOLATILE   "
 tree.c:242   VOLATILE   "
-tree.c:488   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
-tree.c:517   INTRACTABLE   write_blob_sparse write_exact fail on the non-zero prefix; needs a RO mount or write-syscall injection
-tree.c:527   INTRACTABLE   write_blob_sparse lseek fail on the sparse-hole seek; SEEK_CUR on a writable regular fd cannot fail without syscall injection
-tree.c:531   INTRACTABLE   write_blob_sparse write_exact fail on a short (<4 KiB) zero run; same syscall-injection need as 281 (the branch itself is now covered)
-tree.c:559   INTRACTABLE   apply_node_ownership body; guarded by geteuid()!=0 early-return - only reachable when the test process runs as root, which coverage-c never does
-tree.c:560   INTRACTABLE   "
-tree.c:561   INTRACTABLE   "
-tree.c:562   INTRACTABLE   "
-tree.c:564   INTRACTABLE   "
-tree.c:565   INTRACTABLE   "
-tree.c:567   INTRACTABLE   "
-tree.c:572   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
-tree.c:900   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
-tree.c:901   INTRACTABLE   "
-tree.c:902   INTRACTABLE   "
-tree.c:907   INTRACTABLE   "
-tree.c:963   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 626
-tree.c:964   INTRACTABLE   "
-tree.c:965   INTRACTABLE   "
-tree.c:966   INTRACTABLE   "
-tree.c:974   INTRACTABLE   "
-tree.c:1152   DEFENSIVE   decode_link_target: the second lcsas_b64_decode over the same input returns a length other than the sizing pass's; the decoder is deterministic
+tree.c:502   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
+tree.c:531   INTRACTABLE   write_blob_sparse write_exact fail on the non-zero prefix; needs a RO mount or write-syscall injection
+tree.c:541   INTRACTABLE   write_blob_sparse lseek fail on the sparse-hole seek; SEEK_CUR on a writable regular fd cannot fail without syscall injection
+tree.c:545   INTRACTABLE   write_blob_sparse write_exact fail on a short (<4 KiB) zero run; same syscall-injection need as 281 (the branch itself is now covered)
+tree.c:573   INTRACTABLE   apply_node_ownership body; guarded by geteuid()!=0 early-return - only reachable when the test process runs as root, which coverage-c never does
+tree.c:574   INTRACTABLE   "
+tree.c:575   INTRACTABLE   "
+tree.c:576   INTRACTABLE   "
+tree.c:578   INTRACTABLE   "
+tree.c:579   INTRACTABLE   "
+tree.c:581   INTRACTABLE   "
+tree.c:586   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
+tree.c:904   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+tree.c:905   INTRACTABLE   "
+tree.c:906   INTRACTABLE   "
+tree.c:910   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:911   INTRACTABLE   "
+tree.c:913   INTRACTABLE   "
+tree.c:969   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 626
+tree.c:970   INTRACTABLE   "
+tree.c:971   INTRACTABLE   "
+tree.c:972   INTRACTABLE   "
+tree.c:979   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:980   INTRACTABLE   "
+tree.c:982   INTRACTABLE   "
+tree.c:1148   DEFENSIVE   decode_link_target: the second lcsas_b64_decode over the same input returns a length other than the sizing pass's; the decoder is deterministic
 tree.c:1391   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
-tree.c:1395   INTRACTABLE   "
-tree.c:1462   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on symlink() fail (#221); needs a filesystem-full target - integration-only
-tree.c:1466   INTRACTABLE   "
-tree.c:1477   INTRACTABLE   symlink() EPERM/EOPNOTSUPP/ENOSYS: link listed as not restored (#224/#783); needs a non-POSIX (FAT32/exFAT/SMB) target - integration-only (test_tier1_fat32_target.py)
-tree.c:1597   INTRACTABLE   write_failures_file write fail after a successful open (#783); needs a filesystem-full target - integration-only
-tree.c:1603   INTRACTABLE   "
+tree.c:1395   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:1396   INTRACTABLE   "
+tree.c:1466   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on symlink() fail (#221); needs a filesystem-full target - integration-only
+tree.c:1470   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:1471   INTRACTABLE   "
+tree.c:1482   INTRACTABLE   symlink() EPERM/EOPNOTSUPP/ENOSYS: link listed as not restored (#224/#783); needs a non-POSIX (FAT32/exFAT/SMB) target - integration-only (test_tier1_fat32_target.py)
+tree.c:1602   INTRACTABLE   write_failures_file write fail after a successful open (#783); needs a filesystem-full target - integration-only
 tree.c:1608   INTRACTABLE   "
-tree.c:1609   INTRACTABLE   "
-tree.c:1610   INTRACTABLE   "
-tree.c:1611   INTRACTABLE   "
-tree.c:1650   INTRACTABLE   lcsas_tree_restore summary for links the target cannot hold (#783); same constraint as 1477
-tree.c:1667   VOLATILE   lcsas_tree_restore rows-lost summary (#783); reached only when 229/240 are, by the fault-inject sweep
+tree.c:1613   INTRACTABLE   "
+tree.c:1614   INTRACTABLE   "
+tree.c:1615   INTRACTABLE   "
+tree.c:1616   INTRACTABLE   "
+tree.c:1657   INTRACTABLE   lcsas_tree_restore summary for links the target cannot hold (#783); same constraint as 1477
+tree.c:1680   VOLATILE   lcsas_tree_restore rows-lost summary (#783); reached only when 229/240 are, by the fault-inject sweep
 ```<!-- EXEMPTIONS-FENCE-END -->
 
 ## Path forward

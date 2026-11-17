@@ -5,8 +5,9 @@
  * each volume that holds it (and where its discs are kept).  This
  * drives the disc-swap prompts during a multi-disc restore.
  *
- * Schema version 5 (see src/lcsas/db/schema.py).  Catalog files are
- * named "catalog.db" and live at the root of every data disc.
+ * Queries only the frozen tier-1 surface every schema since version 5
+ * keeps (TIER1_FROZEN_SURFACE in src/lcsas/db/schema.py).  Catalog
+ * files are named "catalog.db" and live at the root of every data disc.
  */
 #ifndef LCSAS_CATALOG_H
 #define LCSAS_CATALOG_H
@@ -36,6 +37,15 @@ typedef struct {
  * read-only media), it is reopened as immutable (#543).
  */
 lcsas_catalog *lcsas_catalog_open(const char *path);
+
+/*
+ * Check that an opened catalog can be read through (#788): it has a
+ * schema version and SQLite's PRAGMA quick_check finds every page in
+ * order.  Returns 0 when it can, -1 when it is damaged or cut short
+ * (lcsas_catalog_open succeeds on such a file: SQLite reads pages only
+ * when a query needs them).
+ */
+int lcsas_catalog_check(lcsas_catalog *c);
 
 /*
  * Close.
@@ -95,14 +105,15 @@ int lcsas_catalog_error_is_skew(lcsas_catalog *c);
 void lcsas_catalog_describe(lcsas_catalog *c);
 
 /*
- * Print a "pending packs by disc" summary to stdout, then exit.
- * Groups all packs (catalog-wide) by volume label, sorted by pack
- * count descending.  This is the --list-pending-packs path: it gives
- * the heir a preview of which discs they will need to insert
- * before any actual restore begins.
+ * Print a "pending packs by disc" summary to stdout.  Groups the packs
+ * by volume label, sorted by pack count descending: every pack in the
+ * catalog, or with `repo_id` non-NULL only that repository's (#798).
+ * This is the --list-pending-packs path: it gives the heir a preview of
+ * which discs they will need to insert before any actual restore
+ * begins, and restore.sh its size estimate (from the "Total:" line).
  *
  * Returns 0 on success, -1 on SQL error.
  */
-int lcsas_catalog_print_pending_packs(lcsas_catalog *c);
+int lcsas_catalog_print_pending_packs(lcsas_catalog *c, const char *repo_id);
 
 #endif
