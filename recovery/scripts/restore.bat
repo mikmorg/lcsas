@@ -1712,6 +1712,7 @@ REM backup set.  Back to the menu, which shows every set again; the next
 REM one asks for its folder and its password.
 :another_set
 set "ANOTHER_PASS=1"
+set "PARTIAL="
 set "LCSAS_REPO="
 set "SNAP=latest"
 set "RESUME="

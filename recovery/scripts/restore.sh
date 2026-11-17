@@ -934,10 +934,8 @@ if [ -n "$CHECK_DISC_IMG" ]; then
                     armv6*)
                         # #803: lcsas-ecc is built for ARMv7 and stops
                         # with an illegal instruction on ARMv6.
-                        printf 'restore.sh: --check-disc: this computer has an ARMv6 processor (%s);
-' "$cd_machine" >&2
-                        printf 'lcsas-ecc needs ARMv7 or newer.  Check the disc on a newer computer.
-' >&2
+                        printf 'restore.sh: --check-disc: this computer has an ARMv6 processor (%s);\n' "$cd_machine" >&2
+                        printf 'lcsas-ecc needs ARMv7 or newer.  Check the disc on a newer computer.\n' >&2
                         exit 3 ;;
                     *)                 cd_triple="x86_64-unknown-linux-musl" ;;
                 esac ;;
@@ -1308,20 +1306,13 @@ ARCH="$TARGET"
 
 if [ -n "$OLD_ARM" ]; then
     {
-        printf '[restore.sh] This computer has an ARMv6 processor (%s, for example a
-' "$MACHINE"
-        printf '             Raspberry Pi 1 or Zero).  The recovery programs on the disc
-'
-        printf '             need ARMv7 or newer, so they cannot run here.  What still
-'
-        printf '             works: Python 3.10 or newer installed on this computer
-'
-        printf '             (python3; tier 3), or the stock restic when the backup set
-'
-        printf '             is in one folder on a disk (tier 2b).  Or restore on a
-'
-        printf '             newer computer.
-'
+        printf '[restore.sh] This computer has an ARMv6 processor (%s, for example a\n' "$MACHINE"
+        printf '             Raspberry Pi 1 or Zero).  The recovery programs on the disc\n'
+        printf '             need ARMv7 or newer, so they cannot run here.  What still\n'
+        printf '             works: Python 3.10 or newer installed on this computer\n'
+        printf '             (python3; tier 3), or the stock restic when the backup set\n'
+        printf '             is in one folder on a disk (tier 2b).  Or restore on a\n'
+        printf '             newer computer.\n'
     } >&2
 fi
 
