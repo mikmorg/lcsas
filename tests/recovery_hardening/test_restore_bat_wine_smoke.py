@@ -514,3 +514,73 @@ def test_target_left_in_the_environment_is_ignored(tmp_path: Path) -> None:
     assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
     assert not (meta / "from-env").exists(), out
     assert "\\Documents\\restored" in out, out
+
+
+def test_finished_with_errors_is_reported_as_finished(tmp_path: Path) -> None:
+    """#799: tier 1 "finished with errors" (exit 1, a name Windows cannot
+    store listed in RESTORE_FAILURES.txt) is a restore that FINISHED:
+    restore.bat says how many items were not restored and where the
+    list is, gives no carry-on advice, does not run tier 2, and exits 4."""
+    import shutil as _sh
+    if not RESTORE_EXE.is_file():
+        pytest.skip(f"{RESTORE_EXE} not present")
+    if not _sh.which("rustic"):
+        pytest.skip("rustic not on PATH")
+    from tests.recovery_hardening._diff_helpers import build_rustic_repo
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "ok.txt").write_text("kept\n")
+    (src / "a:b.txt").write_text("Windows cannot store this name\n")
+    pw = tmp_path / "pw"
+    pw.write_text("test-password\n")
+    repo = tmp_path / "rusticrepo"
+    build_rustic_repo(src, repo, pw)
+
+    prefix = tmp_path / "wineprefix"
+    env = _init_prefix(prefix)
+    meta = tmp_path / "meta"
+    _make_meta_tree(meta, repo_src=repo)
+    bin_arch = meta / "recovery" / "bin" / "x86_64-pc-windows-gnu"
+    (bin_arch / "rustic-static.exe").write_bytes(b"MZ decoy")
+    _map_drive(prefix, "e", meta)
+
+    res = _run_bat(env, "e", stdin_data="E:\\restored\n",
+                   extra_env={"LCSAS_PW": "test-password"})
+    out = res.stdout + res.stderr
+    assert res.returncode == 4, f"rc={res.returncode}\n--- output ---\n{out}"
+    assert "The restore finished, but 1 item(s) could not be restored." in out, out
+    assert "E:\\restored\\RESTORE_FAILURES.txt" in out, out
+    assert "stopped before it finished" not in out, out
+    assert "[tier 2]" not in out and "trying tier 2" not in out, out
+    restored = [p.name for p in (meta / "restored").rglob("*") if p.is_file()]
+    assert "ok.txt" in restored, restored
+
+
+
+def test_old_failures_list_is_removed_before_tier1(tmp_path: Path) -> None:
+    """#799: a RESTORE_FAILURES.txt an earlier restore left (it starts
+    with the tiers' "LCSAS " header) is removed before tier 1 runs, so a
+    list there afterwards is this run's.  Here tier 1 fails before its
+    walk (no such snapshot) and writes nothing: with the old list left
+    in place, its exit 1 would read as "finished" (exit 4)."""
+    env, meta = _fixture_meta(tmp_path)
+    target = meta / "restored"
+    target.mkdir()
+    (target / "RESTORE_FAILURES.txt").write_text(
+        "LCSAS restore: items that were NOT restored.\n\npath\treason\tblob_id\n"
+        "old\tname refused: an earlier run\t\n")
+    run_env = {**env, "LCSAS_NO_RELOCATE": "1",
+               "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+               "LCSAS_NEWEST_DISC_PROMPT": "0", "LCSAS_PW": "test",
+               "LCSAS_FORCE_NONEMPTY_TARGET": "1"}
+    res = subprocess.run(
+        ["wine", "cmd", "/c", "E:\\recovery\\scripts\\restore.bat",
+         "--snapshot", "deadbeef"],
+        input="E:\\restored\n", env=run_env, capture_output=True,
+        text=True, timeout=TIMEOUT)
+    out = res.stdout + res.stderr
+    assert "[tier 1] running" in out, out
+    assert res.returncode not in (0, 4), f"rc={res.returncode}\n{out}"
+    assert not (target / "RESTORE_FAILURES.txt").exists(), out
+    assert "could not be restored" not in out, out

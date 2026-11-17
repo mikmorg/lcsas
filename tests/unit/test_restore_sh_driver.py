@@ -118,7 +118,8 @@ def test_quit_exit_code_is_documented():
     text = drv.RESTORE_SH_SOURCE.read_text(encoding="utf-8")
     assert re.search(rf"#\s+{drv.EXIT_DISC_PROMPT_QUIT}\s+the reader typed q "
                      r"at the disc prompt of tier 1", text)
-    assert f"$tier1_rc -eq {drv.EXIT_DISC_PROMPT_QUIT}" in text
+    # The tiers' exit codes are read in one place since #799 (tier_ended).
+    assert f'"$_te_rc" -eq {drv.EXIT_DISC_PROMPT_QUIT}' in text
 
 
 # ---------------------------------------------------------------------------
