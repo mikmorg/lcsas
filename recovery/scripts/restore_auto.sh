@@ -17,21 +17,43 @@
 #   needs index/).  A data disc burned after the meta disc can hold a
 #   set the meta disc does not have (#801).
 #
+# A set that is only on a data disc (not on the meta disc) is found
+# only while a disc holding it is mounted, and restore.sh reads its keys
+# and snapshots from that disc when the set's turn comes: keep a disc
+# that holds it mounted until then.
+#
 # Each set gets its own tools folder, <tools folder>-<id> (the tools
 # folder is $LCSAS_TOOLS_DIR, default $HOME/lcsas-restore-tools).  So a
 # set that stopped keeps its resume.sh and pack cache when a later set
 # succeeds: only its own success removes them (#801).  Run again, the
 # loop carries that set on with its resume.sh, on the same snapshot.
+# Every other set is restored again, also one that finished in the
+# earlier run: files already restored are skipped, but if a newer data
+# disc is mounted by then, its newer snapshot is the one restored, and
+# the folder can end up with files of both snapshots.  Restore into a
+# new TARGET_ROOT to keep the two apart.
 #
 # Exit codes:
 #   0   -- all repositories restored
-#   1   -- at least one repository failed, or no repository was found,
-#          or the disk filled up (then no later set is tried)
+#   1   -- at least one repository failed, or no repository was found
 #   2   -- usage error
+#   4   -- every repository finished, but some items could not be
+#          restored: each set's list is <TARGET_ROOT>/<id>/
+#          RESTORE_FAILURES.txt (1 wins when a set also failed)
+#   74  -- the disk filled up; no later set is tried.  Free some space,
+#          then run this same command again.  (An older restore.sh exits
+#          1 there, and this exits 1 too, after "the disk is full".)
 #   75  -- the person typed q at a disc prompt; no later set is tried
 #   129, 130, 143 -- a closed terminal, Ctrl-C or TERM stopped it; no
 #          later set is tried
 set -eu
+
+case "${1:-}" in
+    -h|--help)
+        # This header, without the comment marks.
+        sed -n '2,/^set -eu$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
+        exit 0 ;;
+esac
 
 if [ $# -lt 2 ]; then
     printf 'usage: %s RECOVERY_ROOT TARGET_ROOT\n' "$0" >&2
@@ -46,6 +68,7 @@ fi
 RECOVERY="$1"
 TARGET="$2"
 fail=0
+partial=0
 NL='
 '
 
@@ -132,14 +155,17 @@ fi
 
 # ── Restoring one set ─────────────────────────────────────────────
 #
-# When the disk fills up, restore.sh exits 1, as for any other failure,
-# and says "out of space" (tier 1), "No space left on device" (tier 3,
-# tiers 2 and 2b) or "Disk quota exceeded".  So its messages go to the
+# When the disk fills up, restore.sh exits 74 (tiers 1 and 3 say so with
+# that exit code).  An older tier 1 or tier 3, and tiers 2 and 2b, exit
+# 1, as for any other failure, and say "out of space" (tier 1), "No
+# space left on device" (tier 3, tiers 2 and 2b) or "Disk quota
+# exceeded".  So, for those, restore.sh's messages go to the
 # screen through tee, and a copy goes to grep, which keeps only those
 # lines: nothing is written to the disk, which may be the full one.
 # The copy needs /dev/fd; without it restore.sh runs plainly, and a full
-# disk counts as one more failed set.  tee and grep ignore Ctrl-C, so
-# what restore.sh prints as it stops (how to carry on) still shows.
+# disk that only the messages tell counts as one more failed set.  tee
+# and grep ignore Ctrl-C, so what restore.sh prints as it stops (how to
+# carry on) still shows.
 #
 # A set that stopped in an earlier run left resume.sh in its tools
 # folder.  When that resume.sh carries on this same set into this same
@@ -238,6 +264,15 @@ for name in $sets; do
     case "$set_rc" in
         0)
             ;;
+        4)
+            # #799: the set finished, but some items could not be
+            # restored.  Nothing to carry on: the next set goes on.
+            printf '!!! %s finished, but some items could not be restored:\n' "$name" >&2
+            printf '    they are listed in %s/RESTORE_FAILURES.txt\n' "$out" >&2
+            partial=1 ;;
+        74)
+            stop_loop "$name" 74 \
+                "the disk is full; free some space or use a bigger disk" ;;
         77)
             # Wrong password for THIS repository (issue #384).  Each
             # repository has its own password, so one shared LCSAS_PWFILE
@@ -265,4 +300,6 @@ done
 IFS="$_ifs"
 
 [ -z "$stop_rc" ] || exit "$stop_rc"
-exit "$fail"
+[ "$fail" = 0 ] || exit 1
+[ "$partial" = 0 ] || exit 4
+exit 0

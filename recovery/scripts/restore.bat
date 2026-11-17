@@ -1541,6 +1541,7 @@ set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if exist "%BIN%" (
     echo.
     echo [tier 1] running !BIN!
+    call :drop_old_failures
     "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot %SNAP% %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
     set "RC=!ERRORLEVEL!"
     REM %PWFILE% is deleted only on the TERMINAL branches below -- the
@@ -1573,7 +1574,17 @@ if exist "%BIN%" (
     )
     REM 75: the reader typed q at the disc prompt, and tier 1 paused the
     REM restore.  That ends this run whatever the set's layout (#615).
+    REM 74: the disk is full; tier 2 would only fill it again.
     if !RC! equ 75 goto :tier1_stopped
+    if !RC! equ 74 goto :tier1_stopped
+    REM 1 with RESTORE_FAILURES.txt from this run (:drop_old_failures
+    REM removed an older one) listing errors: tier 1 "finished with
+    REM errors": every other item is restored (#799).  Nothing to carry
+    REM on, and tier 2 would only restore the same set again.
+    if !RC! equ 1 if exist "%TARGET%\RESTORE_FAILURES.txt" (
+        call :count_failures
+        if !NR_N! gtr 0 goto :restore_partial
+    )
     REM Any other exit.  Tier 2, rustic-static, reads packs only from
     REM the data\ folder of the backup set.  A set found under a
     REM metadata\ folder has none: its packs are on the data discs.
@@ -1591,8 +1602,23 @@ if exist "%BIN%" (
     echo [tier 2] running !BIN!
     "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore %SNAP% "%TARGET%"
     set "RC=!ERRORLEVEL!"
-    del /f /q "%PWFILE%" >nul 2>nul
     if !RC! equ 0 goto :restore_done
+    REM #805: rustic says a wrong password in its own words (exit 1):
+    REM ask it again, as restore.sh does, and stop with 77.
+    set "T2_WRONG="
+    "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" snapshots 2>&1 <nul | findstr /c:"No suitable key found" >nul 2>nul
+    if not errorlevel 1 set "T2_WRONG=1"
+    del /f /q "%PWFILE%" >nul 2>nul
+    if defined T2_WRONG (
+        echo.
+        echo ============================================================
+        echo  ERROR: could not decrypt the repository with that password.
+        echo  Check the password ^(and any share cards^) and re-run.
+        if defined RESUME_CMD echo  To try again, run "!RESUME_CMD!"
+        echo ============================================================
+        pause
+        goto :wrong_password
+    )
     echo [tier 2] failed with exit code !RC!.
 )
 
@@ -1614,13 +1640,31 @@ pause
 exit /b 1
 
 REM ----- The restore has finished -------------------------------------
-REM Reached only via `goto` from tier 1 or tier 2 when they exit 0.
+REM Reached only via `goto` from tier 1 or tier 2 when they exit 0, and
+REM from tier 1 when it finished with errors (:restore_partial, #799):
+REM some items could not be restored and RESTORE_FAILURES.txt lists
+REM them.  That set is done too (nothing to carry on), so the same
+REM questions follow, and the run ends with exit code 4.
 :restore_done
+set "PARTIAL="
 del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
 echo  Restore complete.  Files restored to: !TARGET!
 echo ============================================================
+goto :restore_asked
+:restore_partial
+set "PARTIAL=1"
+del /f /q "%PWFILE%" >nul 2>nul
+echo.
+echo ============================================================
+echo  The restore finished, but !NR_N! item^(s^) could not be restored.
+echo  Everything else was restored to: !TARGET!
+echo  The items, and why, are listed in
+echo    !TARGET!\RESTORE_FAILURES.txt
+echo  See "ITEMS NOT RESTORED" in RECOVER.txt for what to do.
+echo ============================================================
+:restore_asked
 REM Another backup set from the same discs?  The drill restores one set,
 REM then another.  Asked only when the archive has more than one, and
 REM before anything is cleaned up: yes goes back to the menu with the
@@ -1660,6 +1704,7 @@ rmdir "!TOOLS_TOP!" >nul 2>nul
 if exist "!TOOLS_TOP!\" call :claim_tools "%TOOLS_TOP%"
 :all_done_end
 pause
+if defined PARTIAL exit /b 4
 exit /b 0
 
 REM Reached only via `goto` from :restore_done: the reader wants another
@@ -2313,16 +2358,20 @@ pause
 exit /b 64
 
 REM Reached only via `goto` from tier 1 when it stopped with exit code 75
-REM (the reader typed q at the disc prompt), or with any exit code but 0
-REM or 77 when the backup set has no data\ folder, so tier 2 cannot run
-REM (#615).  At top level for the same reason as :wrong_password.  Tier 1
-REM never removes a file it has restored, and a new run skips every file
-REM that is already complete (#92).  The tools folder stays (#609).
+REM (the reader typed q at the disc prompt) or 74 (the disk is full), or
+REM with any exit code but 0 or 77 when the backup set has no data\
+REM folder, so tier 2 cannot run (#615).  At top level for the same
+REM reason as :wrong_password.  Tier 1 never removes a file it has
+REM restored, and a new run skips every file that is already complete
+REM (#92).  The tools folder stays (#609).
 :tier1_stopped
 del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
 echo  The restore stopped before it finished ^(code %RC%^).
+if "%RC%"=="75" echo  You stopped it at the disc box.
+if "%RC%"=="74" echo  The disk is full.  Free some space ^(or restore to a bigger
+if "%RC%"=="74" echo  disk^), then carry on as below.
 echo.
 echo  The files restored so far are kept in:
 echo    !TARGET!
@@ -2342,3 +2391,37 @@ if defined RESUME_CMD (
 echo ============================================================
 pause
 exit /b %RC%
+
+REM ----- RESTORE_FAILURES.txt (#799) -----------------------------------
+REM :drop_old_failures removes a RESTORE_FAILURES.txt an earlier restore
+REM left in the target (only one that starts with the tiers' header), so
+REM that one there after tier 1 has run was written by this run.
+:drop_old_failures
+if not exist "%TARGET%\RESTORE_FAILURES.txt" goto :eof
+set "DOF_LINE="
+set /p "DOF_LINE=" <"%TARGET%\RESTORE_FAILURES.txt"
+if "!DOF_LINE:~0,6!"=="LCSAS " del /f /q "%TARGET%\RESTORE_FAILURES.txt" >nul 2>nul
+goto :eof
+
+REM :count_failures sets NR_N to the rows of RESTORE_FAILURES.txt that are
+REM errors: not a special file Windows cannot create, nor a link (the
+REM rows are path TAB reason TAB blob id; the column line's reason is
+REM "reason", and the header lines have no TAB).  eol is the tab too:
+REM the default ; would skip a row whose path starts with ;.  Each
+REM reason is handed to :count_row in NR_R, never as an argument: it can
+REM hold " < > |, which CALL would parse again.  One test per line:
+REM wine's cmd cannot parse "if ... if /i not ..." chains.
+:count_failures
+set "NR_N=0"
+for /f "usebackq eol=	 tokens=2 delims=	" %%B in ("%TARGET%\RESTORE_FAILURES.txt") do (
+    set "NR_R=%%B"
+    call :count_row
+)
+goto :eof
+:count_row
+if "!NR_R!"=="" goto :eof
+if "!NR_R!"=="reason" goto :eof
+if /i "!NR_R:~0,12!"=="special file" goto :eof
+if /i "!NR_R:~0,40!"=="link not created: the target file system" goto :eof
+set /a NR_N+=1
+goto :eof

@@ -573,7 +573,7 @@ landed across Phase 21.1–21.12 — see the original design RFC (historical) [`
 |---|---|---|
 | `x86_64-unknown-linux-musl` | Linux x86_64 | static (musl), no host glibc dependency |
 | `aarch64-unknown-linux-musl` | Linux ARM64 | static; covers Apple Silicon-via-Asahi, Raspberry Pi 4/5, AWS Graviton |
-| `armv7-unknown-linux-gnueabihf` | Linux 32-bit ARM | Raspberry Pi 1/2/3/Zero |
+| `armv7-unknown-linux-gnueabihf` | Linux 32-bit ARM | ARMv7 and newer: Raspberry Pi 2/3 (not the ARMv6 Pi 1 or Zero: see TIERS.txt "ARMV6") |
 | `aarch64-apple-darwin` | macOS Apple Silicon | native |
 | `x86_64-apple-darwin` | macOS Intel | native |
 | `x86_64-pc-windows-gnu` | Windows x86_64 | restore via `restore.bat` |
