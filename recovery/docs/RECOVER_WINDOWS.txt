@@ -589,12 +589,12 @@ DESTINATION FOLDER NOTES
      FileSystem\LongPathsEnabled = 1).
 
   * Names Windows cannot store: a file made on Linux or macOS may
-    have a name Windows does not allow: one holding \ : * ? " < > or
-    |, one that ends in a dot or a space, or a name Windows keeps
-    for a device (CON, PRN, AUX, NUL, COM1 to COM9, LPT1 to LPT9,
-    with or without an extension, like "con.txt").  Such an item is
-    not restored under another name: it is named in a
-    "NOT RESTORED:" line and listed in RESTORE_FAILURES.txt, the
+    have a name Windows does not allow: one holding a double quote
+    or any of \ : * ? < > |, one that ends in a dot or a space, or a
+    name Windows keeps for a device (CON, PRN, AUX, NUL, COM1 to
+    COM9, LPT1 to LPT9, with or without an extension, like con.txt).
+    Such an item is not restored under another name: it is named in
+    a "NOT RESTORED:" line and listed in RESTORE_FAILURES.txt, the
     restore finishes everything else, and restore.bat says how many
     items could not be restored (exit code 4).  To get them back,
     restore the backup set on Linux or macOS.  Names in any language
