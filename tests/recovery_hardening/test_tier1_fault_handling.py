@@ -449,3 +449,26 @@ def test_wrong_snapshot_id_fails_with_clear_error(tmp_path: Path) -> None:
         f"error did not include the rejected snapshot id; stderr:\n"
         f"{res.stderr}"
     )
+
+
+# ── Issue #789: one bad index file counts once ──────────────────────
+
+
+def test_bad_index_file_is_counted_once(tmp_path: Path) -> None:
+    """Closes #789 (count).  Index files are read, decrypted and parsed
+    once per run, so an index file that fails authentication is warned
+    about once and adds one to the summary count (it used to add two:
+    one per pass)."""
+    bin_path = _find_bin()
+    repo = tmp_path / "repo"
+    shutil.copytree(_require_fixture(), repo)
+    bad = repo / "index" / ("e" * 64)
+    bad.write_bytes(b"\0" * 64)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("test")
+
+    res = _run(bin_path, "--repo", str(repo), "--password-file", str(pwfile),
+               "--list-snapshots", timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert res.stderr.count(f"index file {bad.name} failed authentication") == 1
+    assert "1 index file(s) failed authentication" in res.stderr, res.stderr
