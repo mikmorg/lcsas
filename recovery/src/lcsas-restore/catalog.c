@@ -4,7 +4,10 @@
  * Wraps the vendored SQLite amalgamation (vendored/sqlite/sqlite3.h).
  * Read-only access: never opens a catalog for writing.
  *
- * Schema version 5.  See docs/FORMAT.txt for the full schema.
+ * Queries only the frozen tier-1 surface (TIER1_FROZEN_SURFACE in
+ * src/lcsas/db/schema.py), which every schema version since 5 keeps;
+ * catalogs written today are newer than that.  See
+ * LCSAS_TIER1_SCHEMA_MAX below and docs/FORMAT.txt.
  */
 #include "catalog.h"
 #include "../../vendored/sqlite/sqlite3.h"
@@ -179,6 +182,24 @@ lcsas_catalog_close(lcsas_catalog *c)
 }
 
 int
+lcsas_catalog_check(lcsas_catalog *c)
+{
+    sqlite3_stmt *st = NULL;
+    int ok = 0;
+
+    if (c->schema_version < 0) return -1;
+    if (sqlite3_prepare_v2(c->db, "PRAGMA quick_check", -1, &st,
+                           NULL) != SQLITE_OK)
+        return -1;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *t = sqlite3_column_text(st, 0);
+        ok = t != NULL && strcmp((const char *)t, "ok") == 0;
+    }
+    sqlite3_finalize(st);
+    return ok ? 0 : -1;
+}
+
+int
 lcsas_catalog_schema_version(lcsas_catalog *c)
 {
     sqlite3_stmt *st = NULL;
@@ -276,8 +297,12 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
     return (int)count;
 }
 
-/* Prints the WHOLE-ARCHIVE disc plan, not a per-snapshot one -- by
- * design (#350, resolved won't-fix).  A snapshot-filtered pick-list needs
+/* Prints the disc plan of the whole archive, or of one repository with
+ * `repo_id` (#798: packs.repo_id, a frozen column, so a size for one
+ * backup set needs no sqlite3 command).  Pruned packs are counted too
+ * (is_pruned is not on the frozen surface), so it can overstate a
+ * little.  Not a per-snapshot plan -- by design (#350, resolved
+ * won't-fix).  A snapshot-filtered pick-list needs
  * the snapshot->pack mapping, which the catalog does NOT hold: the catalog
  * maps pack->volume (packs/volume_packs/volumes), while which packs a given
  * snapshot's blobs live in is derivable only from the repo index/trees.
@@ -292,7 +317,7 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
  * still restores the right data) and the per-snapshot optimisation stays a
  * tier-2 (rustic) capability.  See issue #350 for the full analysis. */
 int
-lcsas_catalog_print_pending_packs(lcsas_catalog *c)
+lcsas_catalog_print_pending_packs(lcsas_catalog *c, const char *repo_id)
 {
     sqlite3_stmt *st = NULL;
     int rc;
@@ -310,6 +335,7 @@ lcsas_catalog_print_pending_packs(lcsas_catalog *c)
             "JOIN volume_packs vp ON p.pack_id = vp.pack_id "
             "JOIN volumes v ON vp.volume_id = v.volume_id "
             "WHERE v.status != 'DESTROYED' "
+            "AND (?1 IS NULL OR p.repo_id = ?1) "
             "GROUP BY v.label "
             "ORDER BY COUNT(p.pack_id) DESC",
             -1, &st, NULL);
@@ -317,8 +343,12 @@ lcsas_catalog_print_pending_packs(lcsas_catalog *c)
         fprintf(stderr, "catalog query failed: %s\n", sqlite3_errmsg(c->db));
         return -1;
     }
-
-    printf("Pending packs by disc:\n");
+    if (repo_id) {
+        sqlite3_bind_text(st, 1, repo_id, -1, SQLITE_STATIC);
+        printf("Pending packs by disc, repository %s only:\n", repo_id);
+    } else {
+        printf("Pending packs by disc:\n");
+    }
     while (sqlite3_step(st) == SQLITE_ROW) {
         const unsigned char *label = sqlite3_column_text(st, 0);
         long long n_packs = sqlite3_column_int64(st, 1);

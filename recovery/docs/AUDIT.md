@@ -120,7 +120,7 @@ production-code behaviour at petabyte-class blob index sizes:
 ```bash
 # Scaling sweep across N=100, 1k, 10k, 100k, 1M blob index entries.
 # Writes recovery/build/scaling.md with load/RSS/find_ns table.  ~6 min.
-python3 recovery/scripts/scaling_bench.py
+make -C recovery build/bench_index && python3 recovery/scripts/scaling_bench.py
 
 # End-to-end stress: 1M orphan blob entries + 1k restored files.
 # Asserts RSS < 1.5 GiB and wall-clock < 10 min.  Opt-in.  ~5 min.
@@ -149,10 +149,12 @@ petabyte-scale restore is no longer find-bound.  The table above is
 kept as the historical motivation — see `STATUS_LEDGER.md`
 (Scalability) for the current numbers.
 
-The `LCSAS_STRESS_LOOKUPS=N` env var on the binary is what
-`scaling_bench.py` uses: it times N random `lcsas_blob_index_find` calls
-after `lcsas_repo_load_index` returns, prints a single `[bench]` line
-on stderr, and exits.  Production paths are unaffected.
+`scaling_bench.py` runs `recovery/build/bench_index` (`make -C recovery
+build/bench_index`, Linux): it loads the index with
+`lcsas_repo_load_index`, times N random `lcsas_blob_index_find` calls,
+and prints a single `[bench]` line on stderr.  It replaced the
+`LCSAS_STRESS_LOOKUPS` hook that was compiled into every shipped
+`lcsas-restore` (#791).
 
 ## Differential oracle (`LCSAS_DIFF=1`)
 

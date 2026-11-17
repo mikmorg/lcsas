@@ -310,11 +310,15 @@ def test_cache_reduces_swap_count(tmp_path: Path) -> None:
         shutil.rmtree(str(cache), ignore_errors=True)
 
 
-def test_drain_chunk_packs_env_var_documented() -> None:
-    """Pin LCSAS_DRAIN_CHUNK_PACKS against silent removal from ENV_VARS.txt."""
+def test_drain_chunk_packs_is_not_an_env_var() -> None:
+    """#791: LCSAS_DRAIN_CHUNK_PACKS was a test hook that shipped in every
+    tier-1 binary.  The binary no longer reads it (test_disc_locator.c sets
+    the locator's drain_chunk_packs field), so ENV_VARS.txt must not offer
+    it.  (Before #791 this test pinned the opposite: that it was listed.)"""
     env_vars_txt = REPO_ROOT / "recovery" / "docs" / "ENV_VARS.txt"
-    src = env_vars_txt.read_text()
-    assert "LCSAS_DRAIN_CHUNK_PACKS" in src, (
-        "recovery/docs/ENV_VARS.txt is missing the LCSAS_DRAIN_CHUNK_PACKS "
-        "entry.  Add it under BEHAVIOR KNOBS following the existing format."
-    )
+    assert "LCSAS_DRAIN_CHUNK_PACKS" not in env_vars_txt.read_text()
+    src_dir = REPO_ROOT / "recovery" / "src" / "lcsas-restore"
+    for c_file in src_dir.glob("*.c"):
+        text = c_file.read_text()
+        assert '"LCSAS_DRAIN_CHUNK_PACKS"' not in text, c_file
+        assert '"LCSAS_STRESS_LOOKUPS"' not in text, c_file

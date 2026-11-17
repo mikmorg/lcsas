@@ -454,6 +454,8 @@ Tier 1 exit status, in full:
       or finished with errors: some items were not restored (listed in
       RESTORE_FAILURES.txt)
   2   usage error
+  74  stopped because the disk restored to is full; free some space
+      (or pick a bigger disk) and run the same command again
   75  stopped at the disc prompt (q, or the input ended)
   77  wrong password (see above)
 
@@ -461,10 +463,11 @@ Tier 3 (standalone_restorer.py) exit status:
   0   restored (or, with --list-snapshots, listed); as for tier 1,
       special files or links may be listed in RESTORE_FAILURES.txt
   1   failed (setup: wrong password, no repository, Python older
-      than 3.10; or a full disk)
+      than 3.10)
   2   usage error, or finished with some items not restored (listed
       in RESTORE_FAILURES.txt; see "TIER 3: SKIP-AND-CONTINUE" and
       "ITEMS NOT RESTORED")
+  74  stopped because the disk restored to is full (as tier 1)
   75  stopped at the disc prompt (q, or the input ended)
   130 stopped with Ctrl-C
 

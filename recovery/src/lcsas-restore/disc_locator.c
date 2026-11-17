@@ -13,6 +13,7 @@
 #include "json_q.h"
 #include "lcsas_io.h"
 #include "posix_compat.h"
+#include "sha256.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,7 +41,7 @@
 #endif
 
 /* Forward declarations for helpers defined further below. */
-static int copy_file(const char *src, const char *dst);
+static int copy_file(const char *src, const char *dst, const char *want_hex);
 static void drain_disc(lcsas_disc_locator *l, const char *root);
 
 /*
@@ -61,6 +62,22 @@ struct lcsas_seen_volume {
 };
 
 /*
+ * A disc, or a disc's catalog, the locator has given up on for this run
+ * (#786, #788).  `path` is the disc root or the catalog file; the
+ * numbers identify the disc that was there, so another disc mounted at
+ * the same path is not given up on with it.
+ */
+struct lcsas_disc_memo {
+    char              *path;
+    unsigned long long dev;
+    unsigned long long ino;
+    long long          mtime;
+    long long          size;
+    long long          info_mtime;   /* volume_info.json, or -1 */
+    long long          info_size;
+};
+
+/*
  * volume_info.json is a few hundred bytes plus ~70 per pack in its
  * sha256_manifest: ~7 MB for a BDXL100 of 1 MiB packs.  A bigger file
  * is not one LCSAS wrote, so it is skipped rather than read.
@@ -74,7 +91,6 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
                         lcsas_catalog *catalog,
                         int interactive)
 {
-    const char *chunk_env;
     l->search_paths        = search_paths;
     l->n_paths             = n_paths;
     l->catalog             = catalog;
@@ -92,8 +108,15 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->owned_catalog_path  = NULL;
     l->owned_catalog_mtime = 0;
     l->cache_dir           = NULL;
-    chunk_env = getenv("LCSAS_DRAIN_CHUNK_PACKS");
-    l->drain_chunk_packs   = chunk_env ? atoi(chunk_env) : 0;
+    /* #791: no longer read from LCSAS_DRAIN_CHUNK_PACKS, a test hook
+     * that shipped in every binary; a test sets the field directly. */
+    l->drain_chunk_packs   = 0;
+    l->drain_walks         = 0;
+    l->pack_mismatch_warned = 0;
+    l->drain_skips         = NULL;
+    l->n_drain_skips       = 0;
+    l->bad_catalogs        = NULL;
+    l->n_bad_catalogs      = 0;
     l->seen_volumes        = NULL;
     l->n_seen_volumes      = 0;
     l->cap_seen_volumes    = 0;
@@ -175,41 +198,81 @@ lcsas_disc_locator_free(lcsas_disc_locator *l)
     l->owned_catalog_mtime = 0;
     free(l->cache_dir);
     l->cache_dir = NULL;
+    for (i = 0; i < l->n_drain_skips; i++) free(l->drain_skips[i].path);
+    free(l->drain_skips);
+    l->drain_skips   = NULL;
+    l->n_drain_skips = 0;
+    for (i = 0; i < l->n_bad_catalogs; i++) free(l->bad_catalogs[i].path);
+    free(l->bad_catalogs);
+    l->bad_catalogs   = NULL;
+    l->n_bad_catalogs = 0;
 }
 
 /*
- * Best-effort mkdir -p.  Returns 0 on success or if the directory
- * already exists.  Used both for the cache root and per-prefix
- * subdirs (data/<XX>/).  On Windows '\' separates too, and a leading
- * drive ("C:") is never made (see posix_compat.h).
+ * Fill `m` with the identity of what is at `path` now: its stat (for a
+ * disc root, of its data/ folder, whose time is the burn's) and, when
+ * `info_root` is given, that of its volume_info.json.  Windows reports
+ * st_ino 0, so the times and sizes carry most of the weight there.
+ * Returns -1 when `path` cannot be stat()ed.  `m->path` is untouched.
  */
 static int
-mkdir_p(const char *path)
+memo_identity(const char *path, const char *info_root,
+              struct lcsas_disc_memo *m)
 {
-    char buf[4096];
-    size_t i, n;
     struct stat st;
+    char info[4096];
+    int rc;
 
-    if (!path || !*path) return -1;
-    n = strlen(path);
-    if (n >= sizeof buf) return -1;
-    memcpy(buf, path, n + 1);
-
-    for (i = LCSAS_PATH_START(buf); i < n; i++) {
-        if (!LCSAS_IS_SEP(buf[i])) continue;
-        buf[i] = '\0';
-        if (stat(buf, &st) != 0) {
-            if (mkdir(buf, 0755) != 0) {
-                buf[i] = '/';
-                /* If a race created it, that's fine; bail only on
-                 * real errors. */
-                if (stat(buf, &st) != 0) return -1;
-            }
+    if (stat(path, &st) != 0) return -1;
+    m->dev   = (unsigned long long)st.st_dev;
+    m->ino   = (unsigned long long)st.st_ino;
+    m->mtime = (long long)st.st_mtime;
+    m->size  = (long long)st.st_size;
+    m->info_mtime = -1;
+    m->info_size  = -1;
+    if (info_root) {
+        rc = snprintf(info, sizeof info, "%s/volume_info.json", info_root);
+        if (rc > 0 && (size_t)rc < sizeof info && stat(info, &st) == 0) {
+            m->info_mtime = (long long)st.st_mtime;
+            m->info_size  = (long long)st.st_size;
         }
-        buf[i] = '/';
     }
-    if (stat(buf, &st) == 0) return 0;
-    return mkdir(buf, 0755);
+    return 0;
+}
+
+/* Is `m` (path and identity) in the list? */
+static int
+memo_has(const struct lcsas_disc_memo *list, size_t n,
+         const char *path, const struct lcsas_disc_memo *m)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        if (strcmp(list[i].path, path) == 0
+                && list[i].dev == m->dev && list[i].ino == m->ino
+                && list[i].mtime == m->mtime && list[i].size == m->size
+                && list[i].info_mtime == m->info_mtime
+                && list[i].info_size == m->info_size)
+            return 1;
+    }
+    return 0;
+}
+
+/* Add `m` for `path` to the list (grown by one).  Out of memory: not
+ * remembered, which costs only the work it would have saved. */
+static void
+memo_add(struct lcsas_disc_memo **list, size_t *n, const char *path,
+         const struct lcsas_disc_memo *m)
+{
+    struct lcsas_disc_memo *grown;
+    char *dup = (char *)malloc(strlen(path) + 1);
+    if (!dup) return;
+    grown = (struct lcsas_disc_memo *)realloc(*list, (*n + 1) * sizeof **list);
+    if (!grown) { free(dup); return; }
+    memcpy(dup, path, strlen(path) + 1);
+    *list = grown;
+    grown[*n] = *m;
+    grown[*n].path = dup;
+    (*n)++;
 }
 
 void
@@ -219,7 +282,7 @@ lcsas_disc_locator_set_cache_dir(lcsas_disc_locator *l,
     free(l->cache_dir);
     l->cache_dir = NULL;
     if (!cache_dir || !*cache_dir) return;
-    if (mkdir_p(cache_dir) != 0) {
+    if (lcsas_mkdir_p(cache_dir) != 0) {
         fprintf(stderr,
                 "[lcsas-restore] cannot create cache dir %s; "
                 "auto-cache disabled\n", cache_dir);
@@ -317,8 +380,26 @@ push_discovered(lcsas_disc_locator *l, const char *path)
 }
 
 /*
+ * Open the catalog at `open_path` and check it can be read through
+ * (#788).  Returns the handle, or NULL after one warning naming
+ * `shown` (the catalog on the disc) when it cannot.
+ */
+static lcsas_catalog *
+open_checked_catalog(const char *open_path, const char *shown)
+{
+    lcsas_catalog *cat = lcsas_catalog_open(open_path);
+    if (cat && lcsas_catalog_check(cat) == 0) return cat;
+    if (cat) lcsas_catalog_close(cat);
+    fprintf(stderr,
+            "[lcsas-restore] WARNING: the catalog %s is damaged or cut "
+            "short; keeping the catalog already in use.\n", shown);
+    return NULL;
+}
+
+/*
  * Consider `path` as a potentially-fresher catalog.db.  If its mtime
- * beats whatever the locator has previously opened, swap it in.
+ * beats whatever the locator has previously opened, and it can be read
+ * through, swap it in.
  *
  * To avoid pinning the underlying mount via SQLite's persistent file
  * handle (which would block `umount /mnt` between disc swaps), we
@@ -327,16 +408,21 @@ push_discovered(lcsas_disc_locator *l, const char *path)
  * dir is configured: open the original in-place (legacy behaviour;
  * the heir gets the mount-busy friction).
  *
- * The new copy is made beside the one in use (".new") and takes its
- * place only once it is complete, so a catalog that cannot be read
- * off the disc leaves the one in use open.  Windows can neither
- * delete nor rename over an open file, so the one in use is closed
- * just before that.
+ * Issue #788: the candidate is checked (lcsas_catalog_check) BEFORE
+ * the catalog in use is touched.  The new copy is made beside the one
+ * in use (".new"), checked, and takes its place only then; a damaged
+ * or cut-short catalog leaves the one in use open, and is remembered
+ * (path and identity), so it is neither copied nor warned about again
+ * on every rescan.  It does not raise the mtime floor: a good catalog
+ * of in-between age can still be taken.  Windows can neither delete
+ * nor rename over an open file, so the checked copy is closed, and the
+ * one in use closed, just before the rename.
  */
 static void
 consider_catalog(lcsas_disc_locator *l, const char *path)
 {
     struct stat st;
+    struct lcsas_disc_memo id;
     lcsas_catalog *cat;
     char *path_dup;
     char open_path[4096];
@@ -345,13 +431,15 @@ consider_catalog(lcsas_disc_locator *l, const char *path)
     if (!path || !*path) return;
     if (stat(path, &st) != 0) return;
     if ((long long)st.st_mtime <= l->owned_catalog_mtime) return;
+    if (memo_identity(path, NULL, &id) != 0) return;
+    if (memo_has(l->bad_catalogs, l->n_bad_catalogs, path, &id)) return;
 
     if (l->cache_dir) {
         int rc = snprintf(new_path, sizeof new_path,
                           "%s/.locator-catalog.db.new", l->cache_dir);
         if (rc <= 0 || (size_t)rc >= sizeof new_path) return;
         sprintf(open_path, "%s/.locator-catalog.db", l->cache_dir);
-        if (copy_file(path, new_path) != 0) {
+        if (copy_file(path, new_path, NULL) != 0) {
 #ifdef _WIN32
             /* Opened in place, the disc's catalog would hold the
              * drive, and Windows would not eject the disc.  Keep
@@ -360,27 +448,37 @@ consider_catalog(lcsas_disc_locator *l, const char *path)
 #else
             /* Best-effort fallback: open the original.  Will pin the
              * mount, but better than no catalog. */
-            cat = lcsas_catalog_open(path);
+            cat = open_checked_catalog(path, path);
 #endif
         } else {
-            if (l->owned_catalog) lcsas_catalog_close(l->owned_catalog);
-            l->owned_catalog = NULL;
+            cat = open_checked_catalog(new_path, path);
+            if (cat) {
+                lcsas_catalog_close(cat);
+                if (l->owned_catalog) lcsas_catalog_close(l->owned_catalog);
+                l->owned_catalog = NULL;
 #ifdef _WIN32
-            (void)remove(open_path);
+                (void)remove(open_path);
 #endif
-            cat = lcsas_catalog_open(rename(new_path, open_path) == 0
-                                     ? open_path : new_path);
+                cat = lcsas_catalog_open(rename(new_path, open_path) == 0
+                                         ? open_path : new_path);
+            } else {
+                (void)remove(new_path);
+            }
         }
     } else {
-        cat = lcsas_catalog_open(path);
+        cat = open_checked_catalog(path, path);
     }
-    if (!cat) return;
+    if (!cat) {
+        memo_add(&l->bad_catalogs, &l->n_bad_catalogs, path, &id);
+        return;
+    }
 
     /* Successfully opened a newer catalog -- swap. */
     if (l->owned_catalog) lcsas_catalog_close(l->owned_catalog);
     path_dup = (char *)malloc(strlen(path) + 1);
     if (!path_dup) {
         lcsas_catalog_close(cat);
+        l->owned_catalog = NULL;
         return;
     }
     memcpy(path_dup, path, strlen(path) + 1);
@@ -803,11 +901,17 @@ try_with_meta(lcsas_disc_locator *l, const char *p, const char *hex,
  * searched first, and drains skip a dst that exists).  Nothing looks
  * for a ".part" name, and the next copy overwrites a stale one.
  *
+ * With `want_hex` (a pack's 64-hex id, its file name), the bytes
+ * copied must hash (SHA-256) to it: a pack read wrong off a scratched
+ * disc is not kept, so it is read from the disc (or another copy of
+ * it) instead of being served damaged from the cache for the rest of
+ * the run.  Returns -2 then (the caller warns), -1 on other errors.
+ *
  * FD LIFETIME: all file handles opened in this function are closed
  * before it returns.  Do not hold fds across a disc unmount.
  */
 static int
-copy_file(const char *src, const char *dst)
+copy_file(const char *src, const char *dst, const char *want_hex)
 {
     FILE *in;
     FILE *out;
@@ -815,6 +919,8 @@ copy_file(const char *src, const char *dst)
     char part[4096 + sizeof ".part"];
     size_t n;
     int failed = 0;
+    lcsas_sha256_ctx hash;
+    int mismatch = 0;
 
     if (strlen(dst) >= 4096) return -1;
     sprintf(part, "%s.part", dst);
@@ -822,15 +928,28 @@ copy_file(const char *src, const char *dst)
     if (!in) return -1;
     out = fopen(part, "wb");
     if (!out) { fclose(in); return -1; }
+    lcsas_sha256_init(&hash);
     while ((n = fread(buf, 1, sizeof buf, in)) > 0) {
+        if (want_hex) lcsas_sha256_update(&hash, buf, n);
         if (fwrite(buf, 1, n, out) != n) { failed = 1; break; }
     }
     if (ferror(in)) failed = 1;
     fclose(in);
     if (fclose(out) != 0) failed = 1;
+    if (!failed && want_hex) {
+        unsigned char got[32];
+        char got_hex[65];
+        lcsas_sha256_final(&hash, got);
+        lcsas_hex_encode(got, 32, got_hex);
+        got_hex[64] = '\0';
+        if (strcmp(got_hex, want_hex) != 0) {
+            failed = 1;
+            mismatch = 1;
+        }
+    }
     if (failed) {
         unlink(part);
-        return -1;
+        return mismatch ? -2 : -1;
     }
 #ifdef _WIN32
     /* Windows rename() does not replace an existing file. */
@@ -951,6 +1070,19 @@ drain_tick(struct drain_progress *pg, unsigned long long bytes)
     while (pg->next <= pg->done) pg->next += pg->step;
 }
 
+/* A restic pack file's name: 64 lowercase hex digits, the SHA-256 of
+ * its contents. */
+static int
+is_pack_name(const char *name)
+{
+    size_t i;
+    for (i = 0; i < 64; i++) {
+        char c = name[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
+    }
+    return name[64] == '\0';
+}
+
 /*
  * Walk every pack file under `data_dir` (<root>/data/<XX>/<hex>) that
  * the cache does not have yet.  With `copy` 0, only add up their sizes
@@ -974,6 +1106,7 @@ drain_walk(lcsas_disc_locator *l, const char *data_dir,
     int chunk_limit = l->drain_chunk_packs;
     int limit_reached = 0;
 
+    l->drain_walks++;
     d_root = opendir(data_dir);
     if (!d_root) return 0;
     while (!limit_reached && (e_root = readdir(d_root)) != NULL) {
@@ -994,7 +1127,7 @@ drain_walk(lcsas_disc_locator *l, const char *data_dir,
                     (unsigned long)sizeof cache_prefix);
             continue;
         }
-        if (copy && mkdir_p(cache_prefix) != 0) continue;
+        if (copy && lcsas_mkdir_p(cache_prefix) != 0) continue;
 
         d_pref = opendir(prefix_dir);
         if (!d_pref) continue;
@@ -1021,7 +1154,19 @@ drain_walk(lcsas_disc_locator *l, const char *data_dir,
                 pg->total += (unsigned long long)st.st_size;
                 continue;
             }
-            if (copy_file(src, dst) == 0) {
+            rc = copy_file(src, dst,
+                           is_pack_name(e_pref->d_name)
+                               ? e_pref->d_name : NULL);
+            if (rc == -2 && !l->pack_mismatch_warned) {
+                fprintf(stderr,
+                        "[lcsas-restore] WARNING: pack %.16s... was not "
+                        "read correctly from %s (its contents do not match "
+                        "its name); it is not kept in the cache and is "
+                        "read from a disc when it is needed.\n",
+                        e_pref->d_name, src);
+                l->pack_mismatch_warned = 1;
+            }
+            if (rc == 0) {
                 packs_copied++;
                 drain_tick(pg, (unsigned long long)st.st_size);
                 if (chunk_limit > 0 && packs_copied >= chunk_limit) {
@@ -1045,19 +1190,31 @@ drain_walk(lcsas_disc_locator *l, const char *data_dir,
  *
  * This is opportunistic: errors mid-drain stop the drain for that
  * disc but don't fail the locate.  Returns at once without a cache.
+ *
+ * Issue #786: a disc that does not fit in the cache, or whose copy
+ * stopped partway (a pack that would not read), is remembered for the
+ * run and not walked again: its packs are read from the disc itself.
+ * Without that, every blob looked up on such a disc walked the whole
+ * disc again, one directory walk per blob on an optical drive.
  */
 static void
 drain_disc(lcsas_disc_locator *l, const char *root)
 {
     char data_dir[4096];
     char name[128];
-    struct stat st;
     struct drain_progress pg;
+    struct lcsas_disc_memo id;
+    int copied;
     int rc;
 
     if (!l->cache_dir || !root) return;
     /* If `root` IS the cache (or under it), nothing to drain. */
     if (path_under(root, l->cache_dir)) return;
+
+    rc = snprintf(data_dir, sizeof data_dir, "%s/data", root);
+    if (rc <= 0 || (size_t)rc >= sizeof data_dir) return;
+    if (memo_identity(data_dir, root, &id) != 0) return;
+    if (memo_has(l->drain_skips, l->n_drain_skips, root, &id)) return;
 
     /* Soft warning at 1 GB total cache size.  Single-shot. */
     {
@@ -1075,10 +1232,6 @@ drain_disc(lcsas_disc_locator *l, const char *root)
             }
         }
     }
-
-    rc = snprintf(data_dir, sizeof data_dir, "%s/data", root);
-    if (rc <= 0 || (size_t)rc >= sizeof data_dir) return;
-    if (stat(data_dir, &st) != 0) return;
 
     /* First add up what is left to copy, so the progress lines can
      * say how much there is. */
@@ -1110,6 +1263,7 @@ drain_disc(lcsas_disc_locator *l, const char *root)
                         DRAIN_MB_CEIL(pg.total));
                 warned = 1;
             }
+            memo_add(&l->drain_skips, &l->n_drain_skips, root, &id);
             return;
         }
     }
@@ -1123,11 +1277,17 @@ drain_disc(lcsas_disc_locator *l, const char *root)
             "[lcsas-restore] copying disc %s to the cache: %llu MB.  "
             "From a disc this can take several minutes.\n",
             name, DRAIN_MB_CEIL(pg.total));
-    (void)drain_walk(l, data_dir, &pg, 1);
+    copied = drain_walk(l, data_dir, &pg, 1);
     fprintf(stderr,
             "[lcsas-restore] copied %llu of %llu MB from disc %s to "
             "the cache.\n",
             DRAIN_MB_CEIL(pg.done), DRAIN_MB_CEIL(pg.total), name);
+    /* Stopped partway, and not because of the chunk limit: give the
+     * disc up for this run (#786). */
+    if (pg.done < pg.total
+            && !(l->drain_chunk_packs > 0 && copied >= l->drain_chunk_packs)) {
+        memo_add(&l->drain_skips, &l->n_drain_skips, root, &id);
+    }
 }
 
 static int

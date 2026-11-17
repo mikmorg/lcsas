@@ -446,26 +446,6 @@ LCSAS_TOOLS_DIR
             when $HOME is small or in RAM, e.g. at a USB disk, or on
             Windows when C: is short of space.
 
-LCSAS_DRAIN_CHUNK_PACKS
-  Default:  0  (opt-in / default OFF)
-  Since:    Phase 25
-  Read by:  tier 1, so it works with restore.sh and restore.bat
-  What:     Limits how many pack files are copied per drain_disc() call.
-            0 (default) → drain the entire disc data/ subtree in one
-            call (safe, but can stall for 8-40 minutes on a slow
-            optical drive ~10 MB/s before the next pack lookup proceeds).
-            N > 0 → copy at most N packs per call, then return.  The
-            next drain_disc() call resumes automatically (already-cached
-            packs are skipped via stat, so re-entry is cheap).  Set to
-            100-500 when working with slow optical drives to keep the
-            restore interactive between drain calls.
-  Why:      Opt-IN.  Changing the default would change observable timing
-            behavior: existing scripts and people that rely on the
-            disc being fully drained after the first pack hit would see
-            a different pattern.  Draining in steps is an explicit
-            trade-off between restore interactivity and disc-read
-            continuity; anyone who wants it must opt in.
-
 LCSAS_MAX_JSON_MIB
   Default:  256  (opt-in override; default ceiling always active)
   Since:    Phase 26 (T1C-01)
@@ -819,7 +799,6 @@ LCSAS_NEWEST_DISC_PROMPT    1         opt-out     set 0 to skip that step
 LCSAS_ANOTHER_SET           1         opt-out     set 0 to never ask
 LCSAS_TOOLS_DIR             (home/local) opt-out  tools folder elsewhere
 LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
-LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
 LCSAS_MAX_TREE_DEPTH        1000      opt-in      raise + 'ulimit -s unlimited'
 LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade

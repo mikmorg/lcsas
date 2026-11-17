@@ -473,6 +473,20 @@ mode_from_go_filemode(long long m)
     return posix;
 }
 
+/* The node's "mode" as a POSIX mode word, or `dflt` when absent or not
+ * a number.  The one mode decoder for files, hard links, folders
+ * and special files (#791: it was written out three times). */
+static unsigned int
+node_posix_mode(const char *src, const lcsas_json_tok *toks, long idx,
+                unsigned int dflt)
+{
+    long mode_i = lcsas_json_obj_get(src, toks, idx, "mode");
+    long long v = 0;
+    if (mode_i < 0 || toks[mode_i].type != LCSAS_JSON_NUMBER) return dflt;
+    if (lcsas_json_decode_int(src, &toks[mode_i], &v) != 0) return dflt;
+    return mode_from_go_filemode(v);
+}
+
 #ifndef _WIN32
 static int
 decode_node_mtime(const char *src, const lcsas_json_tok *toks,
@@ -839,16 +853,9 @@ restore_file_node(const char *repo_path,
                      * Hardlinks share inode metadata so this also
                      * touches `prior` — that's the snapshot's
                      * intent (all names point at the same content). */
-                    long mode_idx = lcsas_json_obj_get(src, toks, node_idx,
-                                                      "mode");
-                    long long mode_value = 0644;
-                    if (mode_idx >= 0
-                            && toks[mode_idx].type == LCSAS_JSON_NUMBER) {
-                        (void)lcsas_json_decode_int(src, &toks[mode_idx],
-                                                    &mode_value);
-                    }
                     (void)chmod(target_path,
-                                (mode_t)mode_from_go_filemode(mode_value));
+                                (mode_t)node_posix_mode(src, toks, node_idx,
+                                                        0644));
                     {
                         struct timespec ts[2];
                         if (decode_node_mtime(src, toks, node_idx, ts) == 0) {
@@ -884,12 +891,7 @@ restore_file_node(const char *repo_path,
      * inside lcsas_create_file gets clobbered by the content loop.
      * Setting them ONE LAST TIME after the loop sticks. */
     {
-        long mode_idx = lcsas_json_obj_get(src, toks, node_idx, "mode");
-        long long mode_value = 0644;
-        if (mode_idx >= 0 && toks[mode_idx].type == LCSAS_JSON_NUMBER) {
-            (void)lcsas_json_decode_int(src, &toks[mode_idx], &mode_value);
-        }
-        final_posix_mode = mode_from_go_filemode(mode_value);
+        final_posix_mode = node_posix_mode(src, toks, node_idx, 0644);
         fd = lcsas_create_file(target_path, final_posix_mode);
         /* #654: errno now describes only what fails from here on (the
          * resume stat and the hardlink unlink above leave ENOENT). */
@@ -905,6 +907,8 @@ restore_file_node(const char *repo_path,
                     "ERROR: target directory out of space "
                     "(path=%s, errno=%d)\n",
                     target_path, saved_errno);
+            errno = saved_errno;
+            return LCSAS_TREE_DISK_FULL;
         }
         return -1;
     }
@@ -972,6 +976,8 @@ restore_file_node(const char *repo_path,
                                 target_path,
                                 (long long)(cur >= 0 ? (long long)cur : -1),
                                 saved_errno);
+                        errno = saved_errno;
+                        free(blob); rc = LCSAS_TREE_DISK_FULL; break;
                     }
                     free(blob); rc = -1; break;
                 }
@@ -1080,18 +1086,6 @@ make_way(const char *path, int want)
         return "the item already there with this name cannot be removed";
     }
     return NULL;
-}
-
-/* The node's "mode" as a POSIX mode word, or `dflt` when absent. */
-static unsigned int
-node_posix_mode(const char *src, const lcsas_json_tok *toks, long idx,
-                unsigned int dflt)
-{
-    long mode_i = lcsas_json_obj_get(src, toks, idx, "mode");
-    long long v = 0;
-    if (mode_i < 0 || toks[mode_i].type != LCSAS_JSON_NUMBER) return dflt;
-    if (lcsas_json_decode_int(src, &toks[mode_i], &v) != 0) return dflt;
-    return mode_from_go_filemode(v);
 }
 
 #ifndef _WIN32
@@ -1368,14 +1362,18 @@ tree_restore_recurse(const char *repo_path,
             }
 
             if (strcmp(type_buf, "file") == 0) {
+                int frc;
                 errno = 0;
-                if (restore_file_node(repo_path, mk, ix,
-                                      (char *)blob, toks, ntoks, t, node_path,
-                                      locator, progress, hlmap) != 0) {
+                frc = restore_file_node(repo_path, mk, ix,
+                                        (char *)blob, toks, ntoks, t,
+                                        node_path, locator, progress,
+                                        hlmap);
+                if (frc != 0) {
                     /* Issue #654 — name the system error when there is
                      * one, so "permission denied" or "read-only file
                      * system" is not hidden behind a bare failure. */
                     int saved_errno = errno;
+                    if (frc == LCSAS_TREE_DISK_FULL) rc = frc;
                     if (saved_errno != 0) {
                         fprintf(stderr, "file restore failed: %s (%s)\n",
                                 node_path, strerror(saved_errno));
@@ -1394,6 +1392,7 @@ tree_restore_recurse(const char *repo_path,
                                 "ERROR: target directory out of space "
                                 "(mkdir path=%s, errno=%d)\n",
                                 node_path, saved_errno);
+                        rc = LCSAS_TREE_DISK_FULL;
                         goto out;
                     }
                     /* Non-ENOSPC mkdir failures stay best-effort:
@@ -1423,13 +1422,16 @@ tree_restore_recurse(const char *repo_path,
                         && toks[subtree_i].type == LCSAS_JSON_STRING
                         && toks[subtree_i].size == 64) {
                     char sub_hex[65];
+                    int sub_rc;
                     memcpy(sub_hex, (char *)blob + toks[subtree_i].start, 64);
                     sub_hex[64] = '\0';
-                    if (tree_restore_recurse(repo_path, mk, ix, sub_hex,
-                                             node_path, target_root,
-                                             locator, progress,
-                                             hlmap, rep,
-                                             depth + 1) != 0) {
+                    sub_rc = tree_restore_recurse(repo_path, mk, ix,
+                                                  sub_hex, node_path,
+                                                  target_root, locator,
+                                                  progress, hlmap, rep,
+                                                  depth + 1);
+                    if (sub_rc != 0) {
+                        rc = sub_rc;   /* -1, or LCSAS_TREE_DISK_FULL */
                         goto out;
                     }
                 }
@@ -1465,6 +1467,7 @@ tree_restore_recurse(const char *repo_path,
                                 "ERROR: target directory out of space "
                                 "(symlink path=%s, errno=%d)\n",
                                 node_path, saved_errno);
+                        rc = LCSAS_TREE_DISK_FULL;
                         goto out;
                     } else if (saved_errno == EPERM
                             || saved_errno == EOPNOTSUPP
@@ -1632,12 +1635,14 @@ lcsas_tree_restore(const char *repo_path,
     hardlink_map hlmap;
     nr_report rep;
     int rc;
+    int walk_done;
     memset(&rep, 0, sizeof rep);
     hardlink_map_init(&hlmap);
     rc = tree_restore_recurse(repo_path, mk, ix, tree_id_hex,
                               target_dir, target_root,
                               locator, progress, &hlmap,
                               &rep, 0);
+    walk_done = (rc == 0);
     hardlink_map_free(&hlmap);
     /* Issues #781, #783: say how many items were not restored, of each
      * kind, and where the list is.  Tier 3 prints the same sentences.
@@ -1660,7 +1665,13 @@ lcsas_tree_restore(const char *repo_path,
                 rep.count[NR_FAILED]);
         if (rc == 0) rc = LCSAS_TREE_INCOMPLETE;
     }
-    write_failures_file(target_root, &rep);
+    /* A stale RESTORE_FAILURES.txt is removed only after a finished
+     * walk, as tier 3 does: a walk that stopped early has not looked at
+     * every item, so the old list may still be right.  Rows found
+     * before the stop are written either way. */
+    if (walk_done || rep.nrows > 0) {
+        write_failures_file(target_root, &rep);
+    }
     if (rep.nrows > 0) {
         fprintf(stderr, "[lcsas-restore] See %s/%s for the list.\n",
                 target_root, RESTORE_FAILURES_NAME);

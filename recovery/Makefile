@@ -290,6 +290,13 @@ $(BUILD)/test_tree: $(TESTDIR)/test_tree.c \
 	    $(BUILD)/tree.o $(BUILD)/path.o $(BUILD)/json_q.o \
 	    $(BUILD)/hex.o $(BUILD)/lcsas_io.o $(BUILD)/b64.o -o $@
 
+# bench_index: the blob-index scaling benchmark scaling_bench.py runs
+# (#791: it was the LCSAS_STRESS_LOOKUPS hook inside lcsas-restore).
+# Linux only; not part of `make test`.
+$(BUILD)/bench_index: $(TESTDIR)/bench_index.c $(BUILD) $(OBJ)
+	$(CC) $(CFLAGS) -I$(SRCDIR) $(LDFLAGS) $(TESTDIR)/bench_index.c \
+	    $(OBJ) -o $@
+
 $(BUILD)/test_zstd: $(TESTDIR)/test_zstd.c $(BUILD)/zstd_dec.o $(BUILD)/zstddeclib.o
 	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_zstd.c \
 	    $(BUILD)/zstd_dec.o $(BUILD)/zstddeclib.o -o $@
@@ -672,19 +679,11 @@ coverage-c-run:
 	        ../tests/recovery_hardening/test_tier1_auto_mount.py \
 	        ../tests/recovery_hardening/test_tier1_volume_label.py \
 	        ../tests/recovery_hardening/test_tier1_fault_handling.py \
-	        ../tests/recovery_hardening/test_tier1_unreadable_snapshot.py
-	# Step 3b: exercise the LCSAS_STRESS_LOOKUPS diagnostic block in
-	# main.c (Linux-only) so coverage-c reports it.  ~1 s.  Uses the
-	# already-committed test fixture; no fixture regeneration needed.
-	@if [ -d $(TESTDIR)/fixtures/repo/keys ]; then \
-	    echo "test" > $(BUILD)/_cov_pw && \
-	    LCSAS_STRESS_LOOKUPS=10 $(BUILD)/lcsas-restore \
-	        --repo $(TESTDIR)/fixtures/repo \
-	        --password-file $(BUILD)/_cov_pw \
-	        --list-snapshots 2>&1 | grep -q "\[bench\]" \
-	        && echo "[coverage-c] LCSAS_STRESS_LOOKUPS diagnostic exercised" \
-	        || echo "[coverage-c] LCSAS_STRESS_LOOKUPS exercise failed (non-fatal)"; \
-	fi
+	        ../tests/recovery_hardening/test_tier1_unreadable_snapshot.py \
+	        ../tests/recovery_hardening/test_tier1_password_file_rule.py \
+	        ../tests/recovery_hardening/test_tier1_resume_fat_mtime.py
+	# (Step 3b, the LCSAS_STRESS_LOOKUPS run, is gone: that bench hook
+	# left main.c for tests/bench_index.c, #791.)
 	# Step 3d: exercise the lcsas-keyshare CLI (main.c) so coverage-c
 	# reports it [KEY-06].  test_keyshare links only the combiner library
 	# (slip39.c/wordlist.c), never main.c, so without this main.c shows 0%.
