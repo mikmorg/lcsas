@@ -282,3 +282,41 @@ def test_a_folder_that_cannot_be_entered_is_passed_over(tmp_path: Path) -> None:
         _check(tmp_path / "out")
     finally:
         blocked.chmod(0o700)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root enters any folder")
+def test_the_disc_prompt_passes_over_a_folder_that_cannot_be_entered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """rc10 sweep, fourth run of tier1-missing: at the disc prompt tier 3
+    looks for disc catalogs below the mount folder, and an unenterable
+    folder there (holding a catalog.db) raised PermissionError, so every
+    file failed.  The real prompt runs here (it is not patched out), and
+    the disc mounted at it is used."""
+    mounts = tmp_path / "media" / "user"
+    repo = _repo_and_disc(tmp_path, tmp_path / "shelf", "LCSAS-0002")
+    mounts.mkdir(parents=True)
+    blocked = mounts / "A-shut"
+    (blocked / "data").mkdir(parents=True)
+    (blocked / "catalog.db").write_bytes(b"not a catalog")
+    blocked.chmod(0)
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD, pack_search_paths=[repo / "data", mounts],
+        interactive=True,
+    )
+
+    class Reader:
+        def readline(self) -> str:
+            shelf = tmp_path / "shelf" / "LCSAS-0002"
+            if shelf.exists():
+                os.rename(shelf, mounts / "LCSAS-0002")
+            return "\n"
+
+    monkeypatch.setattr(sys, "stdin", Reader())
+    try:
+        restorer.restore(tmp_path / "out")
+    finally:
+        blocked.chmod(0o700)
+    assert restorer.failures == 0, capsys.readouterr().err
+    _check(tmp_path / "out")
