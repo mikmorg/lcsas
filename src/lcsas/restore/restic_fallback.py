@@ -453,8 +453,10 @@ def node_name_refusal(
 
     Refuses an empty name, ``.``, ``..``, and a name holding ``/`` or a
     NUL byte.  With *windows* also a name NTFS cannot store: one holding
-    ``\\ : * ? " < > |`` or a control character, or one that is not
-    valid UTF-8.  With *macos* also a name that is not valid UTF-8.  The
+    ``\\ : * ? " < > |`` or a control character, one that is not valid
+    UTF-8, one that ends in a dot or a space, a device name (``CON``,
+    ``nul.txt``, ``COM1``...), or one over 255 UTF-16 units (#619).
+    With *macos* also a name that is not valid UTF-8.  The
     reasons match tier 1's (path.c and tree.c).
     """
     if not raw:
@@ -470,10 +472,37 @@ def node_name_refusal(
                 '\\ : * ? " < > | or a control character')
     if windows or macos:
         try:
-            raw.decode("utf-8")
+            text = raw.decode("utf-8")
         except UnicodeDecodeError:
             host = "Windows" if windows else "macOS"
             return f"{host} cannot store a name that is not valid UTF-8"
+        if windows:
+            return _windows_name_refusal(text)
+    return None
+
+
+# #619: names Windows keeps for devices, alone or with any extension.
+_WINDOWS_DEVICE_STEMS = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"{p}{d}" for p in ("COM", "LPT") for d in "123456789\u00b9\u00b2\u00b3"]
+)
+
+
+def _windows_name_refusal(text: str) -> str | None:
+    """The rest of the Windows rule (#619), on a name in valid UTF-8
+    with no reserved character: a trailing dot or space (Windows drops
+    it), a device name, or more than 255 UTF-16 units.  As tier 1's
+    lcsas_name_windows_refusal (path.c)."""
+    if text[-1] in ". ":
+        return "Windows cannot store a name that ends in a dot or a space"
+    stem = text.split(".", 1)[0].rstrip(" ")
+    # Any case, but only ASCII letters change case (as in tier 1).
+    if "".join(c.upper() if c.isascii() else c for c in stem) \
+            in _WINDOWS_DEVICE_STEMS:
+        return ("Windows keeps this name for a device "
+                "(CON, PRN, AUX, NUL, COM1-9, LPT1-9)")
+    if len(text.encode("utf-16-le")) // 2 > 255:
+        return "Windows cannot store a name longer than 255 characters"
     return None
 
 

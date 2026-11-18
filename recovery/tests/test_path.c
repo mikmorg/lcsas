@@ -21,6 +21,18 @@ expect_safe(const char *label, const char *name, int want_ok)
 }
 
 static void
+expect_win(const char *label, const char *name, int want_ok)
+{
+    int rc = lcsas_path_safe_name_windows(name);
+    int got_ok = (rc == 0);
+    if (got_ok != want_ok) {
+        fprintf(stderr, "FAIL %s name='%s' rc=%d (want %s)\n",
+                label, name, rc, want_ok ? "OK" : "REJECT");
+        fails++;
+    }
+}
+
+static void
 expect_sym(const char *label, const char *root, const char *from,
            const char *target, int want_ok)
 {
@@ -169,6 +181,55 @@ test_unescape(void)
     expect_reason("win f5",       lcsas_name_windows_refusal("\xf5\x80\x80\x80", 4), 1);
     expect_reason("win short",    lcsas_name_windows_refusal("\xe2\x80", 2), 1);
     expect_reason("win bad 3rd",  lcsas_name_windows_refusal("\xe2\x80\x41", 3), 1);
+    /* Issue #619: a trailing dot or space, a device name (alone or with
+     * an extension, any case, COM/LPT with a superscript digit), and a
+     * name longer than 255 UTF-16 units. */
+    expect_reason("win dot end",  lcsas_name_windows_refusal("trail.", 6), 1);
+    expect_reason("win sp end",   lcsas_name_windows_refusal("trail ", 6), 1);
+    expect_reason("win dot mid",  lcsas_name_windows_refusal(".hidden", 7), 0);
+    expect_reason("win CON",      lcsas_name_windows_refusal("CON", 3), 1);
+    expect_reason("win con.txt",  lcsas_name_windows_refusal("con.txt", 7), 1);
+    expect_reason("win Nul.a.b",  lcsas_name_windows_refusal("Nul.a.b", 7), 1);
+    expect_reason("win prn sp",   lcsas_name_windows_refusal("prn .x", 6), 1);
+    expect_reason("win aux",      lcsas_name_windows_refusal("aux", 3), 1);
+    expect_reason("win COM1",     lcsas_name_windows_refusal("COM1", 4), 1);
+    expect_reason("win lpt9.x",   lcsas_name_windows_refusal("lpt9.x", 6), 1);
+    expect_reason("win COM sup1", lcsas_name_windows_refusal("COM\xc2\xb9", 5), 1);
+    expect_reason("win LPT sup2", lcsas_name_windows_refusal("lpt\xc2\xb2.t", 7), 1);
+    expect_reason("win COM sup3", lcsas_name_windows_refusal("Com\xc2\xb3", 5), 1);
+    expect_reason("win COM sup4", lcsas_name_windows_refusal("COM\xc2\xb4", 5), 0);
+    expect_reason("win COM a0",   lcsas_name_windows_refusal("COM\xc2\xa0", 5), 0);
+    expect_reason("win COM0",     lcsas_name_windows_refusal("COM0", 4), 0);
+    expect_reason("win COMX",     lcsas_name_windows_refusal("COMX", 4), 0);
+    expect_reason("win LPT",      lcsas_name_windows_refusal("LPT", 3), 0);
+    expect_reason("win CONS",     lcsas_name_windows_refusal("CONSOLE", 7), 0);
+    expect_reason("win CO",       lcsas_name_windows_refusal("CO", 2), 0);
+    expect_reason("win xCON",     lcsas_name_windows_refusal("xCON", 4), 0);
+    expect_reason("win CON1x",    lcsas_name_windows_refusal("COM12", 5), 0);
+    expect_reason("win AUXx",     lcsas_name_windows_refusal("AUXx.txt", 8), 0);
+    expect_reason("win my con",   lcsas_name_windows_refusal("my con.txt", 10), 0);
+    {
+        /* 255 units: fits; 256: refused.  A 4-byte UTF-8 sequence (an
+         * emoji) counts as two units, a 3-byte one as one. */
+        char longname[600];
+        memset(longname, 'a', 256);
+        expect_reason("win 255",  lcsas_name_windows_refusal(longname, 255), 0);
+        expect_reason("win 256",  lcsas_name_windows_refusal(longname, 256), 1);
+        memset(longname, 0, sizeof longname);
+        {
+            size_t k;
+            for (k = 0; k < 127; k++) memcpy(longname + 4 * k, "\xf0\x9f\x98\x80", 4);
+            longname[508] = 'a';
+            expect_reason("win 4b 255",
+                          lcsas_name_windows_refusal(longname, 509), 0);
+            longname[509] = 'b';
+            expect_reason("win 4b 256",
+                          lcsas_name_windows_refusal(longname, 510), 1);
+            for (k = 0; k < 85; k++) memcpy(longname + 3 * k, "\xe2\x82\xac", 3);
+            expect_reason("win 3b 85",
+                          lcsas_name_windows_refusal(longname, 255), 0);
+        }
+    }
 
     /* The UTF-8 test the macOS build applies. */
     if (!lcsas_name_is_utf8("caf\xc3\xa9", 5) || !lcsas_name_is_utf8("", 0)
@@ -209,6 +270,27 @@ int main(void)
     expect_sym("absolute",        "/restore", "/restore/a", "/etc/passwd",      1);
     expect_sym("dotdot to root",  "/restore", "/restore/a", "..",       1);  /* lands at /restore */
     expect_sym("dotdot past root","/restore", "/restore",   "..",       0);
+
+    /* Issue #619: the Windows rule for a relative path. */
+    expect_win("win plain",      "foo\\bar/baz",  1);
+    expect_win("win dotdot bs",  "..\\evil",      0);
+    expect_win("win dotdot mid", "a\\..\\b",     0);
+    expect_win("win dotdot end", "a\\..",         0);
+    expect_win("win lead bs",    "\\abs",         0);
+    expect_win("win empty seg",  "a\\\\b",       0);
+    expect_win("win mixed empty","a/\\b",         0);
+    expect_win("win drive",      "C:evil",        0);
+    expect_win("win drive abs",  "C:\\x",        0);
+    expect_win("win stream",     "a\\b:stream",  0);
+    expect_win("win dotdot fs",  "a/../b",        0);
+    expect_win("win abs",        "/abs",          0);
+    expect_win("win empty",      "",              0);
+    expect_win("win dots ok",    "...\\a..b",    1);
+    /* The POSIX rule keeps '\' as a name byte. */
+#ifndef _WIN32
+    expect_safe("posix bs",      "..\\x",        1);
+    expect_safe("posix colon",   "C:x",           1);
+#endif
 
     if (fails == 0) printf("test_path: OK\n");
     return fails ? 1 : 0;

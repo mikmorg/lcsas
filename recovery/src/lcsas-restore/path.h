@@ -18,10 +18,23 @@
 #include <stddef.h>
 
 /*
- * Validate that `name` is a safe restic tree-blob name.  Returns 0 if
- * safe; non-zero on rejection.
+ * Validate that `name` is a safe relative path: not empty, not
+ * absolute, no empty segment and no ".." segment.  Returns 0 if safe;
+ * non-zero on rejection.  The Windows build applies the Windows rule
+ * (lcsas_path_safe_name_windows).  The tree walk checks each decoded
+ * name with lcsas_name_refusal and lcsas_name_windows_refusal, which
+ * are stricter; this one is kept, with its unit and fuzz tests.
  */
 int lcsas_path_safe_name(const char *name);
+
+/*
+ * Issue #619 -- the Windows rule, compiled on every platform so it can
+ * be tested anywhere: '\' separates segments as '/' does, so "..\x"
+ * and "a\..\b" are refused, as are a leading '\' and any ':' (a
+ * drive prefix such as "C:", or "name:stream", an NTFS alternate data
+ * stream).
+ */
+int lcsas_path_safe_name_windows(const char *name);
 
 /*
  * Validate that `target`, when resolved relative to `from_dir` under
@@ -65,8 +78,11 @@ const char *lcsas_name_refusal(const char *name, size_t len);
 
 /*
  * The extra rule on Windows: NULL when NTFS can store the decoded name,
- * else a short reason (the name holds \ : * ? " < > | or a control
- * character, or is not valid UTF-8).  Compiled on every platform so it
+ * else a short reason: the name holds \ : * ? " < > | or a control
+ * character, is not valid UTF-8, ends in a dot or a space (#619:
+ * Windows would drop it), is a device name (CON, PRN, AUX, NUL,
+ * COM1-9, LPT1-9, alone or with an extension, in any case), or is
+ * longer than 255 UTF-16 units.  Compiled on every platform so it
  * can be tested anywhere; tree.c calls it only in the Windows build.
  */
 const char *lcsas_name_windows_refusal(const char *name, size_t len);

@@ -517,8 +517,9 @@ def test_target_left_in_the_environment_is_ignored(tmp_path: Path) -> None:
 
 
 def test_finished_with_errors_is_reported_as_finished(tmp_path: Path) -> None:
-    """#799: tier 1 "finished with errors" (exit 1, a name Windows cannot
-    store listed in RESTORE_FAILURES.txt) is a restore that FINISHED:
+    """#799: tier 1 "finished with errors" (exit 4 since #872, a name
+    Windows cannot store listed in RESTORE_FAILURES.txt) is a restore
+    that FINISHED:
     restore.bat says how many items were not restored and where the
     list is, gives no carry-on advice, does not run tier 2, and exits 4."""
     import shutil as _sh

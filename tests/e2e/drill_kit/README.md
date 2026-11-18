@@ -31,8 +31,9 @@ Two **profiles**, chosen with `--profile`:
   and #474, so both hold only names NTFS can store. Their longest path is at
   most 180 characters inside the set, so it stays under 240 in the default
   restore folder (`%USERPROFILE%\Documents\restored-<set>\<set>\`) for a
-  user name of up to 20 characters: Windows tier 1 has no long-path support
-  yet (#619).
+  user name of up to 20 characters. Windows tier 1 restores longer paths
+  since #619, but tier 2 (rustic-static) and Explorer may not, so the
+  drill set stays under MAX_PATH.
 - `posix` (Linux and macOS): everything above, plus names with a double
   quote, a backslash, a tab, a colon and `* ? < > |`, a trailing dot or
   space, `case.txt` next to `CASE.txt`, `CON.txt`, and a name whose bytes

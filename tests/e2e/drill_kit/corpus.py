@@ -15,7 +15,8 @@ Two profiles:
 
 - ``windows`` (the default; the #476 and #474 drills restore both sets on
   Windows): only names NTFS can store, no symlinks, and the long path stays
-  short enough for a Windows restore folder (#619).
+  short enough for a Windows restore folder under MAX_PATH (tier 1 copes
+  with longer ones since #619; tier 2 and Explorer may not).
 - ``posix`` (Linux and macOS): everything in ``windows``, plus names with a
   quote, a backslash, a tab, a colon, a byte that is not UTF-8, a trailing
   dot or space, a case-only twin and a reserved DOS name; a path over 260
@@ -56,8 +57,10 @@ BIG_FILE = ("photos", "videos/home movie (test data).bin", 101 * MiB)
 
 # A Windows restore lands in %USERPROFILE%\Documents\restored[-<set>]\<set>\:
 # about 50 characters before the set's own path for a short user name.
-# Without long-path support in Windows tier 1 (#619) the whole path must
-# stay under 240, so the Windows set's longest path is at most this long.
+# Windows tier 1 restores longer paths since #619, but tier 2
+# (rustic-static) and programs like Explorer may not, so the Windows
+# set's longest path stays at most this long: the whole path stays
+# under 240.
 WINDOWS_MAX_SET_PATH = 180
 # The posix set's long path is longer than this (Windows MAX_PATH).
 POSIX_MIN_LONG_PATH = 260

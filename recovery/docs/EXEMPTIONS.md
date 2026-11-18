@@ -64,9 +64,9 @@ catalog.c:343   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:344   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:480   VOLATILE   consider_catalog path_dup malloc fail after a good catalog opened: only the fault-inject sweep can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries (#788 added allocations before it)
-disc_locator.c:481   VOLATILE   "
-disc_locator.c:482   VOLATILE   "
+disc_locator.c:477   VOLATILE   consider_catalog path_dup malloc fail after a good catalog opened: only the fault-inject sweep can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries (#788 added allocations before it)
+disc_locator.c:478   VOLATILE   "
+disc_locator.c:479   VOLATILE   "
 disc_locator.c:1117  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
 disc_locator.c:1119  DEFENSIVE   "
 disc_locator.c:1126  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
@@ -83,19 +83,19 @@ disc_locator.c:1266   VOLATILE   "  (#786: the disc that did not fit is remember
 disc_locator.c:1267   VOLATILE   "
 
 # lcsas_io.c
-lcsas_io.c:27   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
-lcsas_io.c:28   INTRACTABLE   "
-lcsas_io.c:35   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (#222 disc-disconnect classifier); needs a source that returns 0 mid-read - integration-only
-lcsas_io.c:36   INTRACTABLE   "
-lcsas_io.c:52   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs racy signal injection
-lcsas_io.c:53   INTRACTABLE   "
+lcsas_io.c:30   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
+lcsas_io.c:31   INTRACTABLE   "
+lcsas_io.c:38   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (#222 disc-disconnect classifier); needs a source that returns 0 mid-read - integration-only
+lcsas_io.c:39   INTRACTABLE   "
+lcsas_io.c:55   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs racy signal injection
+lcsas_io.c:56   INTRACTABLE   "
 
 # main.c
-main.c:633   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
-main.c:637   INTRACTABLE   "  (exit 74)
-main.c:673   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
-main.c:679   INTRACTABLE   "
-main.c:680   INTRACTABLE   "
+main.c:650   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
+main.c:654   INTRACTABLE   "  (exit 74)
+main.c:690   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+main.c:696   INTRACTABLE   "
+main.c:697   INTRACTABLE   "
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator

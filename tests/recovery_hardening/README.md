@@ -174,6 +174,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_vs_tier2_differential.py` | Phase 14: tier-1 ↔ tier-2 differential oracle. |
 | `test_tier1_wide_directory.py` | T1C-01: one very wide directory (5,000 entries in a single tree blob). |
 | `test_tier1_windows_drive_swap_wine.py` | rc6 (#476 drill, F8/F9/F10/F12): Windows tier 1 with ONE optical drive. |
+| `test_tier1_windows_names_wine.py` | #619: Windows tier 1 restores every name Windows can hold, and only those. |
 | `test_tier1_windows_wine.py` | Issue #118: tier-1 Windows cross-built binary coverage via wine. |
 | `test_tier1_xattrs.py` | Issue #190 — tier-1 must restore extended attributes (xattrs). |
 | `test_tier3_catalog_auto_discovery.py` | Hardening test: tier-3 catalog auto-discovery (#253). |

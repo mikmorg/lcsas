@@ -751,7 +751,8 @@ def test_fixture_refused_names_exit_nonzero(tmp_path: Path) -> None:
         timeout=30,
     )
     err = res.stderr
-    assert res.returncode == 1, err
+    # #872: 4, "finished, but some items were not restored" (was 1).
+    assert res.returncode == 4, err
     assert err.count("NOT RESTORED: ") == 3, err
     assert "3 item(s) were NOT restored" in err, err
     assert "finished with errors" in err, err

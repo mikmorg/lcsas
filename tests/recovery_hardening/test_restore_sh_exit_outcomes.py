@@ -4,11 +4,11 @@ Each test runs restore.sh against stub tiers, so it needs no real
 repository and no binaries:
 
 * #799 / #783: a restore that FINISHED but could not restore some items
-  (tier 1 exit 1 saying "finished with errors", tier 3 exit 2), with the
-  list in RESTORE_FAILURES.txt written by this run, is reported as
-  "finished, N item(s) could not be restored", exits 4 (not 1 or 2), and
-  gives no resume advice.  Tier 1's exit 1 for a damaged disc (no
-  "finished with errors") stays a failure that can be carried on.  A
+  (tier 1 exit 4 since #872; tier 3 exit 2 with the list in
+  RESTORE_FAILURES.txt written by this run) is reported as "finished, N
+  item(s) could not be restored", exits 4 (not 1 or 2), and gives no
+  resume advice.  Tier 1's exit 1 (a damaged disc) stays a failure that
+  can be carried on, whatever it printed and whatever list is there.  A
   RESTORE_FAILURES.txt an earlier run left does not count.  Exit 75 (q at
   tier 1's disc prompt) says "stopped at your request"; exit 74 (the
   disk is full) says so and keeps the resume advice.
@@ -141,7 +141,7 @@ FINISHED_WITH_ERRORS = f"""\
 printf '%s%s' '{HEADER}' '{ROWS}' > "$target/RESTORE_FAILURES.txt"
 echo '[lcsas-restore] ERROR: 2 item(s) were NOT restored.' >&2
 echo '[lcsas-restore] finished with errors: every other item was restored' >&2
-exit 1
+exit 4
 """
 
 
@@ -166,14 +166,16 @@ def test_tier1_finished_with_errors_is_reported_as_finished(
     assert _log(tmp_path)[-1].endswith("tier=1  discs=0  result=not-all-restored")
 
 
-def test_tier1_exit_1_without_finished_with_errors_is_a_failure(
-        tmp_path: Path) -> None:
+def test_tier1_exit_1_with_the_list_is_a_failure(tmp_path: Path) -> None:
     """Tier 1 also writes the list when it stops on a damaged disc; that
-    restore did not finish, so the resume advice stays."""
+    restore did not finish, so the resume advice stays.  Since #872 only
+    tier 1's exit 4 means "finished": its exit 1 is a failure even with
+    the list there and the old words printed."""
     recovery = _fixture(tmp_path)
     _tier1(recovery, f"""\
         printf '%s%s' '{HEADER}' '{ROWS}' > "$target/RESTORE_FAILURES.txt"
         echo 'ERROR: tree restore failed' >&2
+        echo '[lcsas-restore] finished with errors: every other item' >&2
         exit 1
     """)
 
@@ -600,7 +602,6 @@ def test_tier_words_restore_sh_reads_are_still_printed() -> None:
     fallback = FALLBACK.read_text()
     sh = RESTORE_SH.read_text()
     assert '"[lcsas-restore] finished with errors: every other "' in main_c
-    assert 'tier_said "finished with errors"' in sh
     for src in (tree_c, fallback):
         assert "item(s) were NOT restored." in src
         assert '"LCSAS restore: items that were NOT restored."' in src
@@ -706,3 +707,21 @@ def test_armv6_relocated_run(tmp_path: Path) -> None:
     assert "TIER1_RAN_ON_ARMV6" not in res.stdout, res.stdout
     assert "HOST_PYTHON_RAN" in res.stdout, res.stdout
     assert "This computer has an ARMv6 processor" in res.stderr, res.stderr
+
+
+def test_tier1_exit_4_is_the_scripts_exit_4() -> None:
+    """#872: tier 1 exits 4 when it finished with items not restored, and
+    restore.sh and restore.bat take its 4 as that, with no guess from
+    its words or the list."""
+    main_c = (TIER1_C / "main.c").read_text()
+    sh = RESTORE_SH.read_text()
+    bat = (REPO_ROOT / "recovery" / "scripts" / "restore.bat").read_text()
+    assert "#define EXIT_NOT_ALL_RESTORED 4" in main_c
+    tail = main_c[main_c.index("if (tree_rc == LCSAS_TREE_INCOMPLETE)"):]
+    assert "rc = EXIT_NOT_ALL_RESTORED;" in tail[:tail.index("goto out;")]
+    assert "EXIT_NOT_ALL_RESTORED=4" in sh
+    assert ('[ "$2" = lcsas ] && [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]'
+            in sh)
+    assert 'tier_said "finished with errors"' not in sh
+    assert "if !RC! equ 4 (" in bat
+    assert "if !RC! equ 1 if exist" not in bat

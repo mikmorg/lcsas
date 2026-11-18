@@ -1,7 +1,8 @@
 /*
  * fuzz_path_safe.c -- LibFuzzer harness for path traversal safety checks.
  *
- * Feeds arbitrary bytes to lcsas_path_safe_name and
+ * Feeds arbitrary bytes to lcsas_path_safe_name (and, #619, its
+ * Windows rule lcsas_path_safe_name_windows) and
  * lcsas_path_safe_symlink, and (issue #781) the whole input to the
  * node-name decoder lcsas_unescape_name and the decoded-name checks
  * lcsas_name_refusal / lcsas_name_windows_refusal.  The goal is to find inputs where the
@@ -61,6 +62,24 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     rc2 = lcsas_path_safe_name(from_dir);
     (void)rc1; (void)rc2;
 
+    /* Issue #619: a path the Windows rule accepts holds no ':', does
+     * not start with a separator, and has no ".." segment when split
+     * on both '/' and '\'. */
+    if (lcsas_path_safe_name_windows(root) == 0) {
+        size_t k, seg = 0;
+        if (strchr(root, ':') || root[0] == '/' || root[0] == '\\') abort();
+        for (k = 0; ; k++) {
+            char c = root[k];
+            if (c == '\0' || c == '/' || c == '\\') {
+                if (k - seg == 2 && root[seg] == '.' && root[seg + 1] == '.') {
+                    abort();
+                }
+                if (c == '\0') break;
+                seg = k + 1;
+            }
+        }
+    }
+
     /* Exercise lcsas_path_safe_symlink. */
     lcsas_path_safe_symlink(root, from_dir, target);
 
@@ -83,7 +102,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 }
                 if (lcsas_name_windows_refusal(dec, (size_t)n) == NULL
                         && (memchr(dec, '\\', (size_t)n)
-                            || memchr(dec, ':', (size_t)n))) {
+                            || memchr(dec, ':', (size_t)n)
+                            || dec[n - 1] == '.' || dec[n - 1] == ' ')) {
                     abort();
                 }
             }

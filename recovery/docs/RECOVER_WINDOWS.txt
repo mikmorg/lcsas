@@ -578,12 +578,27 @@ DESTINATION FOLDER NOTES
     File Explorer under "This PC".  Delete C:\lcsas-check afterwards.
 
   * Long paths: Windows historically limited paths to 260 characters.
-    Modern Windows 10/11 supports longer paths if enabled in Group
-    Policy.  Restored files with paths > 260 chars will fail to
-    write.  Workaround: enable long-path support
+    lcsas-restore.exe (tier 1) restores longer paths itself (rc10,
+    #619): nothing needs to be turned on.  Some programs, Explorer
+    among them, may not open a file whose path is that long; move
+    the folder closer to the drive's root if one does not.  If tier 1
+    cannot run and tier 2 (rustic-static.exe) restores instead, paths
+    over 260 characters may fail to write: then restore to a folder
+    with a short path, like C:\r, or enable long-path support
     (Computer\HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\
-     FileSystem\LongPathsEnabled = 1) or restore to a folder with a
-    short root path like C:\r.
+     FileSystem\LongPathsEnabled = 1).
+
+  * Names Windows cannot store: a file made on Linux or macOS may
+    have a name Windows does not allow: one holding a double quote
+    or any of \ : * ? < > |, one that ends in a dot or a space, or a
+    name Windows keeps for a device (CON, PRN, AUX, NUL, COM1 to
+    COM9, LPT1 to LPT9, with or without an extension, like con.txt).
+    Such an item is not restored under another name: it is named in
+    a "NOT RESTORED:" line and listed in RESTORE_FAILURES.txt, the
+    restore finishes everything else, and restore.bat says how many
+    items could not be restored (exit code 4).  To get them back,
+    restore the backup set on Linux or macOS.  Names in any language
+    or script (accents, Chinese, emoji) restore as they are.
 
   * Symlinks in the original archive are NOT restored on Windows.
     Creating Windows symlinks requires the SeCreateSymbolicLink
@@ -817,9 +832,10 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
                            under metadata\)
     --verbose              print more messages
 
-It exits 0 (done), 1 (failed), 2 (wrong arguments), 74 (the disk you
-restore to is full), 75 (you typed q at a disc box) or 77 (wrong
-password).
+It exits 0 (done), 1 (failed), 2 (wrong arguments), 4 (finished, but
+some items could not be restored: they are listed in
+RESTORE_FAILURES.txt), 74 (the disk you restore to is full), 75 (you
+typed q at a disc box) or 77 (wrong password).
 
 Each backup set's keys, index and snapshots live under
 metadata\<id>\ on every disc, where <id> is the set's id, a long

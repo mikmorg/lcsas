@@ -370,7 +370,8 @@ be decoded or that this system cannot hold, a link target that cannot
 be used (empty, holding a NUL byte, longer than 4095 bytes, or badly
 stored), an item type the reader does not know, a folder in the way,
 or (tier 3) a file whose data could not be read.  Tier 1 then ends with
-"finished with errors" and exit code 1; tier 3 with exit code 2.
+"finished with errors" and exit code 4 (rc10, #872); tier 3 with exit
+code 2.
 
 Both tiers name each item in a line "NOT RESTORED: <path> (<reason>)",
 write the list to RESTORE_FAILURES.txt in the restore folder (one row
@@ -474,21 +475,18 @@ restore, and asks again when tier 3 exits 77.  restore.bat stops with
 checks the password could still leave a partial tree (issue #399).
 
 EXIT 4 -- FINISHED, NOT EVERY ITEM RESTORED (rc10, #799): when tier 1
-ends "finished with errors" (exit 1, and it says so) or tier 3 exits 2
-with RESTORE_FAILURES.txt written by this run (restore.sh and
-restore.bat remove one an earlier run left before a tier starts),
-the restore FINISHED: every other item is restored.  restore.sh and
-restore.bat say "The restore finished, but N item(s) could not be
+exits 4 (#872), or tier 3 exits 2 with RESTORE_FAILURES.txt written by
+this run (restore.sh and restore.bat remove one an earlier run left
+before a tier starts), the restore FINISHED: every other item is
+restored.  restore.sh and restore.bat say "The restore finished, but N item(s) could not be
 restored", name the file, and exit 4.  That is the end of that backup
 set, as for a restore that succeeded: no resume.sh advice (a resume
 would skip the same items again), the tools folder goes, "Restore
 another backup set?" is asked, and the next tier is not tried, even
 with LCSAS_TIER_FALLBACK=1 (it would restore the whole set again).
-Tier 1's exit 1 for a damaged disc is not "finished with errors": that
-stays a failure, with the resume advice.  restore.bat cannot read tier
-1's words, so it takes exit 1 with a list of errors written by this
-run as "finished"; a run that stopped on a damaged disc after it had
-already listed an error is then reported as finished too.
+Tier 1's exit 1 (a damaged disc, say) stays a failure, with the resume
+advice, even when RESTORE_FAILURES.txt is there: tier 1 has its own
+code for "finished", so neither script has to guess from the file.
 
 EXIT 74 -- THE DISK IS FULL: tiers 1 and 3 exit 74 when the disk they
 restore to fills up.  restore.sh and restore.bat say so, keep the
@@ -512,10 +510,11 @@ Tier 1 exit status, in full:
   0   restored (or, with --list-snapshots, listed); special files or
       links this system cannot hold may be listed in
       RESTORE_FAILURES.txt (see "ITEMS NOT RESTORED")
-  1   failed (setup, a disc read error, a pack on no disc it can see),
-      or finished with errors: some items were not restored (listed in
-      RESTORE_FAILURES.txt)
+  1   failed (setup, a disc read error, a pack on no disc it can see)
   2   usage error
+  4   finished with errors: every other item was restored, and the
+      items not restored are listed in RESTORE_FAILURES.txt (rc10,
+      #872; before rc10 this was exit 1)
   74  stopped because the disk restored to is full; free some space
       (or pick a bigger disk) and run the same command again
   75  stopped at the disc prompt (q, or the input ended)

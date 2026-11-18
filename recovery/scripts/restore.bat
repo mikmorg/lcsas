@@ -1586,13 +1586,14 @@ if exist "%BIN%" (
     REM 74: the disk is full; tier 2 would only fill it again.
     if !RC! equ 75 goto :tier1_stopped
     if !RC! equ 74 goto :tier1_stopped
-    REM 1 with RESTORE_FAILURES.txt from this run (:drop_old_failures
-    REM removed an older one) listing errors: tier 1 "finished with
-    REM errors": every other item is restored (#799).  Nothing to carry
-    REM on, and tier 2 would only restore the same set again.
-    if !RC! equ 1 if exist "%TARGET%\RESTORE_FAILURES.txt" (
+    REM 4: tier 1 finished, but some items could not be restored
+    REM (#872): every other item is restored, and RESTORE_FAILURES.txt
+    REM lists them (#799).  Nothing to carry on, and tier 2 would only
+    REM restore the same set again.  :count_failures counts them for the
+    REM message.
+    if !RC! equ 4 (
         call :count_failures
-        if !NR_N! gtr 0 goto :restore_partial
+        goto :restore_partial
     )
     REM Any other exit.  Tier 2, rustic-static, reads packs only from
     REM the data\ folder of the backup set.  A set found under a
@@ -1650,7 +1651,7 @@ exit /b 1
 
 REM ----- The restore has finished -------------------------------------
 REM Reached only via `goto` from tier 1 or tier 2 when they exit 0, and
-REM from tier 1 when it finished with errors (:restore_partial, #799):
+REM from tier 1 when it exits 4 (:restore_partial, #799, #872):
 REM some items could not be restored and RESTORE_FAILURES.txt lists
 REM them.  That set is done too (nothing to carry on), so the same
 REM questions follow, and the run ends with exit code 4.
@@ -2404,6 +2405,7 @@ REM hold " < > |, which CALL would parse again.  One test per line:
 REM wine's cmd cannot parse "if ... if /i not ..." chains.
 :count_failures
 set "NR_N=0"
+if not exist "%TARGET%\RESTORE_FAILURES.txt" goto :eof
 for /f "usebackq eol=	 tokens=2 delims=	" %%B in ("%TARGET%\RESTORE_FAILURES.txt") do (
     set "NR_R=%%B"
     call :count_row
@@ -2419,7 +2421,7 @@ goto :eof
 
 REM Reached only via `goto` from tier 1 when it stopped with exit code 75
 REM (the reader typed q at the disc prompt) or 74 (the disk is full), or
-REM with any exit code but 0 or 77 when the backup set has no data\
+REM with any exit code but 0, 4 or 77 when the backup set has no data\
 REM folder, so tier 2 cannot run (#615).  At top level for the same
 REM reason as :wrong_password.  Tier 1 never removes a file it has
 REM restored, and a new run skips every file that is already complete
