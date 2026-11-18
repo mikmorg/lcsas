@@ -1165,6 +1165,10 @@ class PurePythonRestorer:
         # Discs found one level below a root (refreshed on a miss), and
         # the meta disc, which is skipped while it is mounted.
         self._discovered: list[Path] = []
+        # Pack copies that could not be opened or read (a folder only root
+        # may read, a damaged disc): never chosen again this run, so the
+        # search goes on to another copy or to the disc prompt.
+        self._unreadable: set[str] = set()
         self._meta_disc = meta_disc if meta_disc and str(meta_disc) else None
 
         # #729: keep files an earlier run finished; count them.
@@ -1578,6 +1582,8 @@ class PurePythonRestorer:
                     # A copy this user cannot read (a folder only root may
                     # read, say) is not a copy: look on, and ask for the
                     # disc if none is found, as tier 1 does.
+                    if str(candidate) in self._unreadable:
+                        continue
                     if not os.access(candidate, os.R_OK):
                         continue
                     if self._pack_cache is not None:
@@ -1666,6 +1672,8 @@ class PurePythonRestorer:
         if self._pack_cache is None:
             return None
         path = self._pack_cache / "data" / pack_id[:2] / pack_id
+        if str(path) in self._unreadable:
+            return None
         return path if path.is_file() else None
 
     def _drain_visible_discs(self) -> None:
@@ -2226,6 +2234,25 @@ class PurePythonRestorer:
             f"Looked in: {searched}"
         )
 
+    def _read_pack_range(self, pack_id: str, offset: int, length: int) -> bytes:
+        """Read *length* bytes at *offset* of the first copy of *pack_id*
+        that opens.  A copy that fails to open or read (``PermissionError``
+        where a mode check said yes, an I/O error on a damaged disc) is
+        set aside for the run and the search goes on, ending at the disc
+        prompt as for a pack not found (rc10 sweep, tier1-missing)."""
+        while True:
+            pack_path = self._find_pack_path(pack_id)
+            try:
+                with open(pack_path, "rb") as f:
+                    f.seek(offset)
+                    return f.read(length)
+            except OSError as exc:
+                if str(pack_path) in self._unreadable:
+                    raise
+                self._unreadable.add(str(pack_path))
+                _log(f"cannot read {pack_path} ({exc.strerror or exc}); "
+                     "looking for another copy.")
+
     def _read_blob(self, blob_id: str) -> bytes:
         """Read, decrypt, and (optionally) decompress a blob.
 
@@ -2243,11 +2270,7 @@ class PurePythonRestorer:
             raise KeyError(f"Blob not found in index: {blob_id}")
 
         loc = self._blob_index[blob_id]
-        pack_path = self._find_pack_path(loc.pack_id)
-
-        with open(pack_path, "rb") as f:
-            f.seek(loc.offset)
-            encrypted = f.read(loc.length)
+        encrypted = self._read_pack_range(loc.pack_id, loc.offset, loc.length)
 
         plaintext = self._decrypt(encrypted)
         try:
