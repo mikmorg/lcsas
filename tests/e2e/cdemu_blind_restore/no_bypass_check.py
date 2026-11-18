@@ -149,7 +149,8 @@ def scan_transcript(path: str) -> list[str]:
                 d = json.loads(line)
             except Exception:
                 continue
-            content = d.get('message', {}).get('content', [])
+            msg = d.get('message')
+            content = (msg if isinstance(msg, dict) else {}).get('content', [])
             if not isinstance(content, list):
                 continue
             for c in content:
