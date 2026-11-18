@@ -739,7 +739,8 @@ def test_armv6_relocated_run(tmp_path: Path) -> None:
 def test_tier1_exit_4_is_the_scripts_exit_4() -> None:
     """#872: tier 1 exits 4 when it finished with items not restored, and
     restore.sh and restore.bat take its 4 as that, with no guess from
-    its words or the list."""
+    its words or the list.  Since #875 restore.sh takes tier 3's 4 the
+    same way: one check in the tiers 1 and 3 arm of tier_ended."""
     main_c = (TIER1_C / "main.c").read_text()
     sh = RESTORE_SH.read_text()
     bat = (REPO_ROOT / "recovery" / "scripts" / "restore.bat").read_text()
@@ -747,8 +748,11 @@ def test_tier1_exit_4_is_the_scripts_exit_4() -> None:
     tail = main_c[main_c.index("if (tree_rc == LCSAS_TREE_INCOMPLETE)"):]
     assert "rc = EXIT_NOT_ALL_RESTORED;" in tail[:tail.index("goto out;")]
     assert "EXIT_NOT_ALL_RESTORED=4" in sh
-    assert ('[ "$2" = lcsas ] && [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]'
-            in sh)
+    arm = sh[sh.index("tier_ended() {"):]
+    arm = arm[arm.index("        lcsas|python)"):arm.index("        rustic|restic)")]
+    assert ('            if [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]; then\n'
+            '                not_all_restored "$1"\n'
+            '            fi\n') in arm
     assert 'tier_said "finished with errors"' not in sh
     assert "if !RC! equ 4 (" in bat
     assert "if !RC! equ 1 if exist" not in bat
