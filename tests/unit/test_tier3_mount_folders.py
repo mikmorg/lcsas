@@ -188,3 +188,45 @@ def test_the_script_finds_a_disc_under_a_mount_folder(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     _check(tmp_path / "out")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+def test_an_unreadable_copy_is_passed_over(tmp_path: Path) -> None:
+    """rc10 sweep, tier1-missing: a folder below the mount folder that
+    only root may read held the packs too.  Tier 3 took that copy, could
+    not open it, and failed every file.  A copy this user cannot read is
+    now not a copy: the readable disc is used, as tier 1 does."""
+    mounts = tmp_path / "media" / "user"
+    repo = _repo_and_disc(tmp_path, mounts, "LCSAS-0001")
+    # An unreadable copy of every pack, listed first ("A" < "L").
+    blocked = mounts / "A-root-only"
+    shutil.copytree(mounts / "LCSAS-0001" / "data", blocked / "data")
+    for p in (blocked / "data").rglob("*"):
+        if p.is_file():
+            p.chmod(0)
+    try:
+        restorer = fb.PurePythonRestorer(
+            repo, password=PASSWORD,
+            pack_search_paths=[repo / "data", mounts], interactive=False,
+        )
+        restorer.restore(tmp_path / "out")
+        assert restorer.failures == 0
+        _check(tmp_path / "out")
+    finally:
+        for p in (blocked / "data").rglob("*"):
+            if p.is_file():
+                p.chmod(0o600)
+
+
+def test_a_hidden_folder_below_a_mount_folder_is_not_searched(
+    tmp_path: Path,
+) -> None:
+    """A mounted disc is never a hidden folder; skip them all."""
+    mounts = tmp_path / "media" / "user"
+    repo = _repo_and_disc(tmp_path, mounts, ".hidden-disc")
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD,
+        pack_search_paths=[repo / "data", mounts], interactive=False,
+    )
+    restorer.restore(tmp_path / "out")
+    assert restorer.failures > 0

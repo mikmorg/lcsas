@@ -1575,6 +1575,11 @@ class PurePythonRestorer:
                 if candidate.is_file():
                     if self._on_live_meta(candidate):
                         continue
+                    # A copy this user cannot read (a folder only root may
+                    # read, say) is not a copy: look on, and ask for the
+                    # disc if none is found, as tier 1 does.
+                    if not os.access(candidate, os.R_OK):
+                        continue
                     if self._pack_cache is not None:
                         self._drain_disc(data_dir)
                         cached = self._cached_pack(pack_id)
@@ -1639,7 +1644,8 @@ class PurePythonRestorer:
             except OSError:
                 continue
             for name in names:
-                if name in (".", ".."):
+                # Hidden folders are never a mounted disc.
+                if name.startswith("."):
                     continue
                 if len(name) == 2 and all(c in "0123456789abcdef" for c in name):
                     continue
