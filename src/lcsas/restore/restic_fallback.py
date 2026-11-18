@@ -1576,7 +1576,7 @@ class PurePythonRestorer:
                 (root / "data" / prefix / pack_id, root / "data"),
                 (root / "data" / pack_id, root / "data"),
             ):
-                if candidate.is_file():
+                if _is_file(candidate):
                     if self._on_live_meta(candidate):
                         continue
                     # A copy this user cannot read (a folder only root may
@@ -1643,7 +1643,7 @@ class PurePythonRestorer:
             skip.add(os.path.abspath(self._pack_cache))
         found: list[Path] = []
         for root in roots:
-            if os.path.abspath(root) in skip or (root / "data").is_dir():
+            if os.path.abspath(root) in skip or _is_dir(root / "data"):
                 continue
             try:
                 names = sorted(os.listdir(root))
@@ -1659,7 +1659,7 @@ class PurePythonRestorer:
                 key = os.path.abspath(child)
                 if key in have or key in skip:
                     continue
-                if not child.is_dir() or self._on_live_meta(child):
+                if not _is_dir(child) or self._on_live_meta(child):
                     continue
                 have.add(key)
                 found.append(child)
@@ -1674,7 +1674,7 @@ class PurePythonRestorer:
         path = self._pack_cache / "data" / pack_id[:2] / pack_id
         if str(path) in self._unreadable:
             return None
-        return path if path.is_file() else None
+        return path if _is_file(path) else None
 
     def _drain_visible_discs(self) -> None:
         """Copy every data disc now in a search root into the cache.
@@ -1688,7 +1688,7 @@ class PurePythonRestorer:
         self._refresh_discovered()
         for root in self._all_roots():
             data_dir = root / "data"
-            if data_dir.is_dir():
+            if _is_dir(data_dir):
                 self._drain_disc(data_dir)
 
     def _is_not_a_disc(self, data_dir: Path) -> bool:
@@ -1737,7 +1737,7 @@ class PurePythonRestorer:
 
         for entry in sorted(os.listdir(data_dir)):
             path = data_dir / entry
-            if len(entry) == 2 and path.is_dir():
+            if len(entry) == 2 and _is_dir(path):
                 for name in sorted(os.listdir(path)):
                     consider(path / name, name)
             else:
@@ -2952,6 +2952,26 @@ def _disc_name(root: Path) -> str:
         pass
     return str(root)
 
+
+
+def _is_file(path: Path) -> bool:
+    """``path.is_file()`` that says False for a path it may not look at.
+
+    pathlib raises PermissionError (not False) when a folder on the way
+    cannot be entered; a disc search must pass over such a folder.
+    """
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _is_dir(path: Path) -> bool:
+    """``path.is_dir()`` that says False for a path it may not look at."""
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
 
 def _copy_pack(
     src: Path, dst: Path, pack_id: str, tick: Callable[[int], None],
