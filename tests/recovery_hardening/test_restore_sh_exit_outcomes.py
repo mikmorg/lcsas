@@ -4,11 +4,12 @@ Each test runs restore.sh against stub tiers, so it needs no real
 repository and no binaries:
 
 * #799 / #783: a restore that FINISHED but could not restore some items
-  (tier 1 exit 4 since #872; tier 3 exit 2 with the list in
-  RESTORE_FAILURES.txt written by this run) is reported as "finished, N
-  item(s) could not be restored", exits 4 (not 1 or 2), and gives no
-  resume advice.  Tier 1's exit 1 (a damaged disc) stays a failure that
-  can be carried on, whatever it printed and whatever list is there.  A
+  (tier 1 exit 4 since #872, tier 3 exit 4 since #875; an older tier 3
+  exit 2 with its words and the list in RESTORE_FAILURES.txt written by
+  this run) is reported as "finished, N item(s) could not be restored",
+  exits 4 (not 1 or 2), and gives no resume advice.  Tier 1's exit 1 (a
+  damaged disc) stays a failure that can be carried on, whatever it
+  printed and whatever list is there.  A
   RESTORE_FAILURES.txt an earlier run left does not count.  Exit 75 (q at
   tier 1's disc prompt) says "stopped at your request"; exit 74 (the
   disk is full) says so and keeps the resume advice.
@@ -223,7 +224,30 @@ def test_users_own_failures_file_is_kept(tmp_path: Path) -> None:
     assert own.read_text() == "my own notes\n"
 
 
-def test_tier3_exit_2_with_list_is_finished(tmp_path: Path) -> None:
+def test_tier3_exit_4_is_finished(tmp_path: Path) -> None:
+    """Tier 3 exits 4 for "finished, not all restored" (#875), as tier
+    1 does: restore.sh needs neither its words nor anything else."""
+    recovery = _fixture(tmp_path)
+    _python(tmp_path / "stubbin", f"""\
+        printf '%s%s' '{HEADER}' '{ROWS}' > "$target/RESTORE_FAILURES.txt"
+        echo '[lcsas-restore] ERROR: 2 item(s) were NOT restored.' >&2
+        exit 4
+    """)
+
+    res = _run(recovery, tmp_path)
+
+    assert res.returncode == 4, res.stderr
+    assert ("The restore finished, but 2 item(s) could not be restored."
+            in res.stderr), res.stderr
+    assert "[tier 3] FAILED" not in res.stderr, res.stderr
+    assert "resume.sh" not in res.stderr, res.stderr
+    assert not _tools(tmp_path).exists()
+    assert _log(tmp_path)[-1].endswith("tier=3  discs=0  result=not-all-restored")
+
+
+def test_older_tier3_exit_2_with_list_is_finished(tmp_path: Path) -> None:
+    """A tier 3 from a disc made before #875 says "finished, not all
+    restored" with exit 2 and its words: still reported as finished."""
     recovery = _fixture(tmp_path)
     _python(tmp_path / "stubbin", f"""\
         printf '%s%s' '{HEADER}' '{ROWS}' > "$target/RESTORE_FAILURES.txt"
@@ -242,15 +266,18 @@ def test_tier3_exit_2_with_list_is_finished(tmp_path: Path) -> None:
     assert _log(tmp_path)[-1].endswith("tier=3  discs=0  result=not-all-restored")
 
 
-def test_tier3_count_from_the_list_when_not_said(tmp_path: Path) -> None:
+@pytest.mark.parametrize("rc", [4, 2])
+def test_tier3_count_from_the_list_when_not_said(
+        tmp_path: Path, rc: int) -> None:
     """N comes from the tier's own line, else from the error rows of the
     list (special files and links the file system cannot hold are not
-    errors)."""
+    errors).  Exit 4 is tier 3's code since #875; exit 2 with its words
+    is an older disc's tier 3."""
     recovery = _fixture(tmp_path)
     _python(tmp_path / "stubbin", f"""\
         printf '%s%s' '{HEADER}' '{ROWS}' > "$target/RESTORE_FAILURES.txt"
         echo '[lcsas-restore] some item(s) could NOT be restored.' >&2
-        exit 2
+        exit {rc}
     """)
 
     res = _run(recovery, tmp_path)
@@ -712,7 +739,8 @@ def test_armv6_relocated_run(tmp_path: Path) -> None:
 def test_tier1_exit_4_is_the_scripts_exit_4() -> None:
     """#872: tier 1 exits 4 when it finished with items not restored, and
     restore.sh and restore.bat take its 4 as that, with no guess from
-    its words or the list."""
+    its words or the list.  Since #875 restore.sh takes tier 3's 4 the
+    same way: one check in the tiers 1 and 3 arm of tier_ended."""
     main_c = (TIER1_C / "main.c").read_text()
     sh = RESTORE_SH.read_text()
     bat = (REPO_ROOT / "recovery" / "scripts" / "restore.bat").read_text()
@@ -720,8 +748,11 @@ def test_tier1_exit_4_is_the_scripts_exit_4() -> None:
     tail = main_c[main_c.index("if (tree_rc == LCSAS_TREE_INCOMPLETE)"):]
     assert "rc = EXIT_NOT_ALL_RESTORED;" in tail[:tail.index("goto out;")]
     assert "EXIT_NOT_ALL_RESTORED=4" in sh
-    assert ('[ "$2" = lcsas ] && [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]'
-            in sh)
+    arm = sh[sh.index("tier_ended() {"):]
+    arm = arm[arm.index("        lcsas|python)"):arm.index("        rustic|restic)")]
+    assert ('            if [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]; then\n'
+            '                not_all_restored "$1"\n'
+            '            fi\n') in arm
     assert 'tier_said "finished with errors"' not in sh
     assert "if !RC! equ 4 (" in bat
     assert "if !RC! equ 1 if exist" not in bat

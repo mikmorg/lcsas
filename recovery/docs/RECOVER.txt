@@ -348,7 +348,7 @@ Not a problem (the restore still counts as complete, exit code 0):
     symlinks": see TARGET FILESYSTEM LIMITATIONS below.
 
 Every other reason is an error.  The restore ends with "finished with
-errors" (exit code 4 from lcsas-restore, exit code 2 from tier 3).
+errors" (exit code 4 from lcsas-restore and from tier 3).
 Everything not listed was restored.  restore.sh and restore.bat then
 say "The restore finished, but N item(s) could not be restored", give
 the path of RESTORE_FAILURES.txt, and exit with code 4.  The restore

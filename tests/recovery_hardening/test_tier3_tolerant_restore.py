@@ -8,8 +8,8 @@ blob → 0% restored, when 99.9% of the family archive is intact.
 
 These are static guards (no optical hardware, no slow decode):
   * the generated _CLI_BLOCK wraps restore() in try/except and surfaces
-    RESTORE_FAILURES.txt + exit code 2 (a raw traceback for the heir is
-    the regression we are pinning against);
+    RESTORE_FAILURES.txt + exit code 4, as tier 1 (#875; a raw
+    traceback for the heir is the regression we are pinning against);
   * TIERS.txt documents the tolerant behaviour AND the remedy for
     already-burned data discs (re-run tier 3 from a NEWER meta disc).
 
@@ -52,9 +52,10 @@ def test_cli_block_wraps_restore_in_try_except() -> None:
     )
 
 
-def test_cli_block_reports_manifest_and_exit_2() -> None:
+def test_cli_block_reports_manifest_and_exit_4() -> None:
     """The generated CLI must check restorer.failures, point the operator
-    at RESTORE_FAILURES.txt, and exit 2 (distinct from a hard failure)."""
+    at RESTORE_FAILURES.txt, and exit 4 (distinct from a hard failure,
+    and from argparse's usage error 2; the same as tier 1, #875)."""
     text = _build_standalone_text()
     assert "restorer.failures" in text, (
         "generated CLI no longer inspects restorer.failures — skipped "
@@ -64,9 +65,18 @@ def test_cli_block_reports_manifest_and_exit_2() -> None:
         "generated CLI no longer mentions RESTORE_FAILURES.txt — the heir "
         "has no list of what could not be restored."
     )
-    assert "sys.exit(2)" in text, (
-        "generated CLI no longer exits 2 on partial restore — callers "
-        "can't distinguish 'some files skipped' from a hard failure."
+    assert "sys.exit(EXIT_NOT_ALL_RESTORED)" in text, (
+        "generated CLI no longer exits EXIT_NOT_ALL_RESTORED on partial "
+        "restore — callers can't distinguish 'some files skipped' from a "
+        "hard failure."
+    )
+    assert "\nEXIT_NOT_ALL_RESTORED = 4\n" in text, (
+        "EXIT_NOT_ALL_RESTORED is no longer 4, tier 1's and restore.sh's "
+        "code for 'finished, some items not restored' (#875)."
+    )
+    assert "sys.exit(2)" not in text, (
+        "generated CLI exits 2 again: that is argparse's usage error, "
+        "which restore.sh must not take for 'finished' (#875)."
     )
 
 

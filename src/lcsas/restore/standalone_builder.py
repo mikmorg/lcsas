@@ -415,9 +415,11 @@ _CLI_BLOCK = textwrap.dedent("""\
             )
             sys.exit(1)
 
-        # Exit 2 only for errors: special files this system cannot
-        # create and links the target cannot hold are listed in
-        # RESTORE_FAILURES.txt but do not fail the restore (#783).
+        # Exit 4 (EXIT_NOT_ALL_RESTORED, as tier 1, #875) only for
+        # errors: special files this system cannot create and links the
+        # target cannot hold are listed in RESTORE_FAILURES.txt but do
+        # not fail the restore (#783).  Exit 2 stays argparse's usage
+        # error.
         if restorer.failures:
             print(
                 f"[lcsas-restore] {restorer.failures} item(s) could NOT be "
@@ -427,7 +429,7 @@ _CLI_BLOCK = textwrap.dedent("""\
                 "disc or from another undamaged disc with the same label.",
                 file=sys.stderr,
             )
-            sys.exit(2)
+            sys.exit(EXIT_NOT_ALL_RESTORED)
 
 
     if __name__ == "__main__":

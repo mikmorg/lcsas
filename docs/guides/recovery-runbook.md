@@ -357,8 +357,9 @@ ships fallback paths:
   `--repo /path/to/assembled/repo --password-file <file>
   --target <dir>`.  As in tier 1, `q` (or the end of input) at its
   disc box stops the whole restore with exit code 75.  A full disk
-  stops it with exit code 1 and names the full folder.  A damaged file
-  is skipped and listed in `RESTORE_FAILURES.txt` (exit code 2).
+  stops it with exit code 74 and names the full folder.  A damaged file
+  is skipped and listed in `RESTORE_FAILURES.txt` (exit code 4, as
+  tier 1; exit code 2 before rc10).
   Special files this computer cannot create, and links on a file
   system without links, are listed there too but do not change the
   exit code (see `recovery/docs/RECOVER.txt`, "ITEMS NOT RESTORED").

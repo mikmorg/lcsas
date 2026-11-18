@@ -318,9 +318,10 @@ of an otherwise-intact family archive.
     target listing each item not restored (path, reason, blob id), and
     plain-English summary lines are printed (see "ITEMS NOT RESTORED"
     below).
-  * Exit code 2 means "finished, but K item(s) could not be restored"
-    (distinct from exit 1, a setup-level failure like a bad password or
-    missing repository).  The generated script prints a plain-English
+  * Exit code 4 means "finished, but K item(s) could not be restored"
+    (distinct from exit 1, a setup-level failure like a missing
+    repository).  Before rc10 tier 3 used exit 2 for this, which is
+    also its usage error (#875).  The generated script prints a plain-English
     message, never a raw Python traceback, for any outcome.
 
 NOTE for ALREADY-BURNED data discs: standalone_restorer.py is
@@ -370,8 +371,8 @@ be decoded or that this system cannot hold, a link target that cannot
 be used (empty, holding a NUL byte, longer than 4095 bytes, or badly
 stored), an item type the reader does not know, a folder in the way,
 or (tier 3) a file whose data could not be read.  Tier 1 then ends with
-"finished with errors" and exit code 4 (rc10, #872); tier 3 with exit
-code 2.
+"finished with errors" and exit code 4 (rc10, #872); tier 3 also with
+exit code 4 (rc10, #875; before rc10 it was 2).
 
 Both tiers name each item in a line "NOT RESTORED: <path> (<reason>)",
 write the list to RESTORE_FAILURES.txt in the restore folder (one row
@@ -475,10 +476,13 @@ restore, and asks again when tier 3 exits 77.  restore.bat stops with
 checks the password could still leave a partial tree (issue #399).
 
 EXIT 4 -- FINISHED, NOT EVERY ITEM RESTORED (rc10, #799): when tier 1
-exits 4 (#872), or tier 3 exits 2 with RESTORE_FAILURES.txt written by
-this run (restore.sh and restore.bat remove one an earlier run left
-before a tier starts), the restore FINISHED: every other item is
-restored.  restore.sh and restore.bat say "The restore finished, but N item(s) could not be
+(#872) or tier 3 (#875) exits 4, the restore FINISHED: every other item
+is restored.  The items not restored are in RESTORE_FAILURES.txt
+(restore.sh and restore.bat remove one an earlier run left before a
+tier starts).  Tier 3 on a disc made before rc10 says the same with
+exit 2, which is also its usage error; restore.sh takes that exit 2
+as "finished" only when tier 3 also said so in its own words and this
+run wrote RESTORE_FAILURES.txt.  restore.sh and restore.bat say "The restore finished, but N item(s) could not be
 restored", name the file, and exit 4.  That is the end of that backup
 set, as for a restore that succeeded: no resume.sh advice (a resume
 would skip the same items again), the tools folder goes, "Restore
@@ -525,9 +529,11 @@ Tier 3 (standalone_restorer.py) exit status:
       special files or links may be listed in RESTORE_FAILURES.txt
   1   failed (setup: no repository, key files that cannot be read,
       Python older than 3.10)
-  2   usage error, or finished with some items not restored (listed
-      in RESTORE_FAILURES.txt; see "TIER 3: SKIP-AND-CONTINUE" and
-      "ITEMS NOT RESTORED")
+  2   usage error (wrong arguments)
+  4   finished with errors: every other item was restored, and the
+      items not restored are listed in RESTORE_FAILURES.txt (see
+      "TIER 3: SKIP-AND-CONTINUE" and "ITEMS NOT RESTORED"; rc10,
+      #875; before rc10 this was exit 2)
   74  stopped because the disk restored to is full (as tier 1)
   75  stopped at the disc prompt (q, or the input ended)
   77  wrong password: a key file rejected it (rc10, #805)

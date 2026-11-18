@@ -363,9 +363,11 @@ class TestStandaloneSubprocess:
         )
         assert result.returncode != 0
 
-    def test_corrupt_blob_exits_2_no_traceback(self, tmp_path):
+    def test_corrupt_blob_exits_4_no_traceback(self, tmp_path):
         """RST-03: a corrupt blob skips that file, writes a manifest,
-        exits 2, and prints a plain-English message (no traceback)."""
+        exits 4 (as tier 1; 2 before #875, which is also argparse's
+        usage error), and prints a plain-English message (no
+        traceback)."""
         repo, pw_file, script = _build_repo_and_script(
             tmp_path, corrupt_first_blob=True
         )
@@ -384,8 +386,8 @@ class TestStandaloneSubprocess:
             text=True,
             timeout=120,
         )
-        assert result.returncode == 2, (
-            f"Expected exit 2 for skipped file, got {result.returncode}.\n"
+        assert result.returncode == 4, (
+            f"Expected exit 4 for skipped file, got {result.returncode}.\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
         # No raw Python traceback leaked to the heir.
@@ -521,3 +523,55 @@ class TestStandaloneSubprocess:
         combined = result.stdout + result.stderr
         assert "Python 3.10 or newer" in combined, combined
         assert "Traceback (most recent call last)" not in combined, combined
+
+
+# ── lcsas restore standalone's in-process Python reader ──────────────
+#
+# _restore_with_python_reader runs the same reader in process when rustic
+# is not installed.  It must give the exit codes the bundled
+# standalone_restorer.py gives (#875).
+
+
+def _in_process(tmp_path: Path, pw_file: Path, repo: Path) -> int:
+    from lcsas.restore.orchestrator import _restore_with_python_reader
+
+    # The repository folder stands in for the disc: its data/ is the
+    # disc's data/, so nothing is linked.
+    return _restore_with_python_reader(
+        repo, repo, tmp_path / "output", pw_file, "latest",
+    )
+
+
+def test_in_process_reader_restores(tmp_path: Path) -> None:
+    repo, pw_file, _ = _build_repo_and_script(tmp_path)
+    assert _in_process(tmp_path, pw_file, repo) == 0
+
+
+def test_in_process_reader_wrong_password_exits_77(tmp_path: Path) -> None:
+    """A key file that rejects the password gives 77, as the bundled
+    reader and tier 1 do (#805), not 1."""
+    repo, _, _ = _build_repo_and_script(tmp_path)
+    wrong = tmp_path / "wrong-pw"
+    wrong.write_bytes(b"not-the-password")
+    rc = _in_process(tmp_path, wrong, repo)
+    assert rc == restic_fallback.EXIT_WRONG_PASSWORD == 77
+    assert not any((tmp_path / "output").rglob("*.txt"))
+
+
+def test_in_process_reader_unreadable_keys_exit_1(tmp_path: Path) -> None:
+    """Key files that are all unreadable say nothing about the
+    password: exit 1, as the bundled reader does."""
+    repo, pw_file, _ = _build_repo_and_script(tmp_path)
+    for kf in (repo / "keys").iterdir():
+        kf.write_text("not a key file")
+    assert _in_process(tmp_path, pw_file, repo) == 1
+
+
+def test_in_process_reader_not_all_restored_exits_4(tmp_path: Path) -> None:
+    """Finished, but an item could not be restored: 4, as the bundled
+    reader and tier 1 do (#875)."""
+    repo, pw_file, _ = _build_repo_and_script(
+        tmp_path, corrupt_first_blob=True)
+    rc = _in_process(tmp_path, pw_file, repo)
+    assert rc == restic_fallback.EXIT_NOT_ALL_RESTORED == 4
+    assert (tmp_path / "output" / "RESTORE_FAILURES.txt").is_file()
