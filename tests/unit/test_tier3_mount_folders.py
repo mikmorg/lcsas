@@ -258,3 +258,27 @@ def test_a_copy_that_fails_to_open_is_set_aside(
     assert restorer.failures == 0
     monkeypatch.undo()
     _check(tmp_path / "out")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root enters any folder")
+def test_a_folder_that_cannot_be_entered_is_passed_over(tmp_path: Path) -> None:
+    """rc10 sweep, third run of tier1-missing: a folder below the mount
+    folder could not be entered (mode 000 for this user).  pathlib's
+    is_file() raised PermissionError instead of saying False, so the
+    search itself stopped and every file failed.  Such a folder is now
+    passed over and the readable disc is used."""
+    mounts = tmp_path / "media" / "user"
+    repo = _repo_and_disc(tmp_path, mounts, "LCSAS-0001")
+    blocked = mounts / "A-shut"
+    shutil.copytree(mounts / "LCSAS-0001" / "data", blocked / "data")
+    blocked.chmod(0)
+    try:
+        restorer = fb.PurePythonRestorer(
+            repo, password=PASSWORD,
+            pack_search_paths=[repo / "data", mounts], interactive=False,
+        )
+        restorer.restore(tmp_path / "out")
+        assert restorer.failures == 0
+        _check(tmp_path / "out")
+    finally:
+        blocked.chmod(0o700)
