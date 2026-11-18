@@ -132,7 +132,9 @@ def run_lcsas_burn() -> list[Path]:
     conn.commit()
 
     scanned = scan_mirror_packs(MIRROR_DIR)
-    delta = DeltaAnalyzer(conn, scanned, repo_id=REPO_NAME)
+    if scanned.errors:
+        raise SystemExit(f"mirror scan incomplete: {scanned.errors}")
+    delta = DeltaAnalyzer(conn, scanned.packs, repo_id=REPO_NAME)
     delta.register_new_packs()
     conn.commit()
 
