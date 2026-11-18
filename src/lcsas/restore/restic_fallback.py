@@ -1604,7 +1604,7 @@ class PurePythonRestorer:
         meta = self._meta_disc
         if meta is None:
             return False
-        return (meta / "recovery" / "scripts" / "restore.sh").exists()
+        return _is_file(meta / "recovery" / "scripts" / "restore.sh")
 
     def _on_live_meta(self, path: Path) -> bool:
         """Is *path* on the meta disc, while it is mounted?  (tier 1:
@@ -1735,10 +1735,10 @@ class PurePythonRestorer:
             if stat.S_ISREG(st.st_mode):
                 found.append((path, name, st.st_size))
 
-        for entry in sorted(os.listdir(data_dir)):
+        for entry in _listdir(data_dir):
             path = data_dir / entry
             if len(entry) == 2 and _is_dir(path):
-                for name in sorted(os.listdir(path)):
+                for name in _listdir(path):
                     consider(path / name, name)
             else:
                 consider(path, entry)
@@ -1900,7 +1900,7 @@ class PurePythonRestorer:
                 if key in seen:
                     continue
                 seen.add(key)
-                if candidate.is_file():
+                if _is_file(candidate):
                     found.append(candidate)
         return found
 
@@ -1986,7 +1986,7 @@ class PurePythonRestorer:
         """
         primary = self._lookup_catalog_path(pack_id)
         reachable = self._discover_catalogs()
-        if self.catalog_path is not None and self.catalog_path.is_file():
+        if self.catalog_path is not None and _is_file(self.catalog_path):
             reachable.insert(0, self.catalog_path)
         for cat in reachable:
             self._keep_catalog_copy(cat)
@@ -2109,7 +2109,12 @@ class PurePythonRestorer:
             f"| Pack {pack_id[:16]}... is required for the next file.  |",
         ]
 
-        cat_result = self._lookup_volume_labels(pack_id)
+        # The catalog only adds a hint; a disc or folder that cannot be
+        # read must never stop the prompt (rc10 sweep).
+        try:
+            cat_result = self._lookup_volume_labels(pack_id)
+        except OSError:
+            cat_result = None
         if cat_result is None:
             # No --catalog supplied (or catalog unreadable).  Keep the
             # legacy "no catalog available" wording so backwards-compat
@@ -2972,6 +2977,14 @@ def _is_dir(path: Path) -> bool:
         return path.is_dir()
     except OSError:
         return False
+
+
+def _listdir(path: Path) -> list[str]:
+    """Sorted names in *path*; empty for a folder it may not list."""
+    try:
+        return sorted(os.listdir(path))
+    except OSError:
+        return []
 
 def _copy_pack(
     src: Path, dst: Path, pack_id: str, tick: Callable[[int], None],
