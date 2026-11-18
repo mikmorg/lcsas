@@ -299,6 +299,13 @@ EXIT_READER_QUIT = 75
 #: space, or pick a bigger disk, then run the same command again.
 EXIT_DISK_FULL = 74
 
+#: Exit status of a restore that finished, but could not restore some
+#: items (listed in RESTORE_FAILURES.txt under the target).  The same as
+#: tier 1's EXIT_NOT_ALL_RESTORED (#872) and restore.sh's exit 4 (#799).
+#: Before rc10 tier 3 exited 2 for this, which is also argparse's usage
+#: error (#875).
+EXIT_NOT_ALL_RESTORED = 4
+
 
 class RestoreAbortedError(Exception):
     """The whole restore must stop now, not just the current file (#658).

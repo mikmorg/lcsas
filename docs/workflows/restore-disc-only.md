@@ -369,12 +369,13 @@ unless noted otherwise.
 identifying the snapshot ID and hostname
 (the pure-Python success log in `_restore_with_python_reader()`).
 A partial pure-Python restore — some items not restored under
-tolerant traversal — exits `2` and leaves a `RESTORE_FAILURES.txt`
+tolerant traversal — exits `4` (as tier 1; `2` before rc10, #875)
+and leaves a `RESTORE_FAILURES.txt`
 manifest under the target (special files this system cannot create
 and links the target cannot hold are listed there too, with exit
 `0`).  `q` (or the end of input) at the Python reader's
 disc box stops the whole restore with exit code `75`, as the bundled
-`standalone_restorer.py` does.  A full disk stops it with exit code `1`.
+`standalone_restorer.py` does.  A full disk stops it with exit code `74`.
 
 **Variant axes that apply:**
 
@@ -765,7 +766,7 @@ This path deliberately trades capability for portability. It **cannot**:
 - **Repair a damaged blob.** A MAC/SHA-256/zstd failure on a blob
   cannot be repaired at this tier. Under the default *tolerant*
   traversal (#374) the affected file is skipped and listed in
-  `RESTORE_FAILURES.txt` under the target (the CLI exits `2`; the
+  `RESTORE_FAILURES.txt` under the target (the CLI exits `4`; the
   rest of the data restores); `strict=True` on the Python API
   brings back the legacy abort-on-first-error contract
   (`PurePythonRestorer` `strict` parameter,

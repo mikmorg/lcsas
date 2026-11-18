@@ -363,9 +363,11 @@ class TestStandaloneSubprocess:
         )
         assert result.returncode != 0
 
-    def test_corrupt_blob_exits_2_no_traceback(self, tmp_path):
+    def test_corrupt_blob_exits_4_no_traceback(self, tmp_path):
         """RST-03: a corrupt blob skips that file, writes a manifest,
-        exits 2, and prints a plain-English message (no traceback)."""
+        exits 4 (as tier 1; 2 before #875, which is also argparse's
+        usage error), and prints a plain-English message (no
+        traceback)."""
         repo, pw_file, script = _build_repo_and_script(
             tmp_path, corrupt_first_blob=True
         )
@@ -384,8 +386,8 @@ class TestStandaloneSubprocess:
             text=True,
             timeout=120,
         )
-        assert result.returncode == 2, (
-            f"Expected exit 2 for skipped file, got {result.returncode}.\n"
+        assert result.returncode == 4, (
+            f"Expected exit 4 for skipped file, got {result.returncode}.\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
         # No raw Python traceback leaked to the heir.

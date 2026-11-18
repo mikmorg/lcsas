@@ -186,9 +186,9 @@ def test_restore_marks_the_file_failed_and_goes_on(
     assert "bad.txt" in (target / "RESTORE_FAILURES.txt").read_text()
 
 
-def test_standalone_without_zstandard_exits_2(tmp_path: Path) -> None:
-    """The generated reader, on a Python with no zstandard, exits 2
-    ("some files failed") with no traceback."""
+def test_standalone_without_zstandard_exits_4(tmp_path: Path) -> None:
+    """The generated reader, on a Python with no zstandard, exits 4
+    ("some files failed", #875) with no traceback."""
     repo = _repo_with_bad_frame(tmp_path)
     script = tmp_path / "standalone_restorer.py"
     script.write_text(build_standalone())
@@ -202,7 +202,7 @@ def test_standalone_without_zstandard_exits_2(tmp_path: Path) -> None:
          "--interactive", "off"],
         capture_output=True, text=True, timeout=300,
     )
-    assert res.returncode == 2, res.stderr
+    assert res.returncode == 4, res.stderr
     assert "Traceback" not in res.stderr
     assert "slow built-in zstd decoder" in res.stderr
     assert (target / "good.txt").is_file()

@@ -1286,13 +1286,15 @@ def _restore_with_python_reader(
 ) -> int:
     """Restore with the Python reader (tier 3) when rustic is not installed.
 
-    Returns the exit code: 0 done, 2 some files skipped, 75 stopped at a
-    disc prompt, 1 for any other failure.
+    Returns the exit code, as the bundled standalone_restorer.py exits:
+    0 done, 4 finished but some items not restored (#875), 74 the disk
+    is full, 75 stopped at a disc prompt, 1 for any other failure.
     """
     # Auto-fallback: use the Python reader (tier 3) bundled with LCSAS.
     # Link the disc data dir into the cache so PurePythonRestorer can
     # find the pack files without copying gigabytes.
     from lcsas.restore.restic_fallback import (
+        EXIT_NOT_ALL_RESTORED,
         PurePythonRestorer,
         RestoreAbortedError,
         allow_openssl_command,
@@ -1341,7 +1343,7 @@ def _restore_with_python_reader(
         meta = restorer.restore(target=target, snapshot_id=snap_arg)
     except RestoreAbortedError as exc:
         # q (or the end of input) at the disc prompt exits 75, a
-        # full disk 1, as the bundled standalone_restorer.py does
+        # full disk 74, as the bundled standalone_restorer.py does
         # (#658).
         logger.error("Python reader restore stopped: %s", exc)
         return exc.exit_code
@@ -1361,7 +1363,7 @@ def _restore_with_python_reader(
             "disc of the affected volume to restore them.",
             restorer.failures, target,
         )
-        return 2
+        return EXIT_NOT_ALL_RESTORED
     logger.info(
         "Restore complete (Python reader fallback). Snapshot: %s, "
         "hostname: %s",

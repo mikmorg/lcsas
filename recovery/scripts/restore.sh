@@ -3539,8 +3539,9 @@ restore_succeeded() {
 }
 
 # EXIT_NOT_ALL_RESTORED: the restore finished, but some items could not
-# be restored (#799).  Kept apart from a failed run (1) and from tier 3's
-# own 2, which is restore.sh's usage error.
+# be restored (#799).  Kept apart from a failed run (1) and from 2,
+# restore.sh's usage error.  Tier 1 (#872) and tier 3 (#875) exit 4 for
+# the same.
 EXIT_NOT_ALL_RESTORED=4
 
 # The restore's list of the items it could not restore (#783).
@@ -3667,14 +3668,16 @@ tier_ended() {
                 printf '         bigger disk), then carry on as below.\n' >&2
                 exit 74
             fi
-            # Tier 1 finished, but some items were not restored: it
-            # exits 4 for that (#872), as this script does, and lists
-            # them in RESTORE_FAILURES.txt.  Its exit 1 is a failure
-            # (a damaged disc, say), which needs a resume.
-            if [ "$2" = lcsas ] && [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]; then
+            # The tier finished, but some items were not restored: tier
+            # 1 (#872) and tier 3 (#875) exit 4 for that, as this script
+            # does, and list them in RESTORE_FAILURES.txt.  Tier 1's
+            # exit 1 is a failure (a damaged disc, say), which needs a
+            # resume.
+            if [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]; then
                 not_all_restored "$1"
             fi
-            # Tier 3 says the same with exit 2 (also its usage error),
+            # Only for an older disc's tier 3 (before rc10, #875): it
+            # said the same with exit 2, which is also its usage error,
             # so its words and this run's list (drop_old_failures) must
             # be there too.
             if [ -f "$FAILURES_FILE" ]; then
@@ -3722,8 +3725,10 @@ tier_err_file() {
 # labelled separator (#240), so the cause is not lost among the lines
 # before it.  Not after an outcome tier_ended reports itself.
 tier3_replay() {
-    case "$TIER_RC" in 0|74|75|77) return 0 ;; esac
+    case "$TIER_RC" in 0|4|74|75|77) return 0 ;; esac
     [ -n "$TIER_ERR" ] && [ -s "$TIER_ERR" ] || return 0
+    # An older disc's tier 3 said "finished, not all restored" with
+    # exit 2 (before rc10, #875); see tier_ended.
     if [ "$TIER_RC" -eq 2 ] && [ -f "$FAILURES_FILE" ] \
        && { tier_said "item(s) were NOT restored." \
             || tier_said "could NOT be restored"; }; then
