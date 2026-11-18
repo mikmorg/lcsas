@@ -376,6 +376,9 @@ and links the target cannot hold are listed there too, with exit
 `0`).  `q` (or the end of input) at the Python reader's
 disc box stops the whole restore with exit code `75`, as the bundled
 `standalone_restorer.py` does.  A full disk stops it with exit code `74`.
+A wrong password (a key file rejects it) stops it with exit code `77`,
+as in the bundled reader (it was `1`); key files that cannot be read
+at all give `1`.
 
 **Variant axes that apply:**
 
