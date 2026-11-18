@@ -104,7 +104,7 @@ with open(sys.argv[1]) as f:
     for line in f:
         try: d = json.loads(line)
         except Exception: continue
-        content = d.get('message', {}).get('content', [])
+        content = (d.get('message') if isinstance(d.get('message'), dict) else {}).get('content', [])
         if not isinstance(content, list): continue
         for c in content:
             if c.get('type') == 'tool_use':
@@ -128,7 +128,7 @@ with open('$TRANSCRIPT') as f:
     for line in f:
         try: d = json.loads(line)
         except: continue
-        content = d.get('message', {}).get('content', [])
+        content = (d.get('message') if isinstance(d.get('message'), dict) else {}).get('content', [])
         if not isinstance(content, list): continue
         for c in content:
             if c.get('type') == 'tool_use':
@@ -179,7 +179,7 @@ with open(sys.argv[1]) as fh:
             continue
         t = d.get('type')
         if t == 'assistant':
-            for c in d.get('message', {}).get('content', []):
+            for c in (d.get('message') if isinstance(d.get('message'), dict) else {}).get('content', []):
                 if c.get('type') == 'text' and 'RESTORE COMPLETE' in c.get('text', ''):
                     hits += 1
         elif t == 'result':
@@ -262,7 +262,7 @@ with open(sys.argv[1]) as fh:
             d = json.loads(line)
         except Exception:
             continue
-        content = d.get('message', {}).get('content', [])
+        content = (d.get('message') if isinstance(d.get('message'), dict) else {}).get('content', [])
         if not isinstance(content, list):
             continue
         for c in content:
@@ -319,7 +319,7 @@ with open(sys.argv[1]) as fh:
             d = json.loads(line)
         except Exception:
             continue
-        content = d.get('message', {}).get('content', [])
+        content = (d.get('message') if isinstance(d.get('message'), dict) else {}).get('content', [])
         if not isinstance(content, list):
             continue
         for c in content:
@@ -397,7 +397,7 @@ with open(sys.argv[1]) as fh:
             d = json.loads(line)
         except Exception:
             continue
-        content = d.get('message', {}).get('content', [])
+        content = (d.get('message') if isinstance(d.get('message'), dict) else {}).get('content', [])
         if not isinstance(content, list):
             continue
         for c in content:
@@ -500,7 +500,7 @@ with open(sys.argv[1]) as fh:
             d = json.loads(line)
         except Exception:
             continue
-        content = d.get('message', {}).get('content', [])
+        content = (d.get('message') if isinstance(d.get('message'), dict) else {}).get('content', [])
         if not isinstance(content, list):
             continue
         for c in content:

@@ -525,3 +525,28 @@ def test_a_real_violation_still_fails_conduct(
     if why:
         reason = lines[fail + 1]
         assert reason.startswith("        ") and why in reason, out
+
+
+def test_a_system_event_with_a_text_message_is_not_a_crash(
+    tmp_path: Path, loop_mount_ok,
+) -> None:
+    """rc10 sweep, split-key-2of5: the transcript held a
+    ``{"type": "system", "subtype": "permission_denied", "message":
+    "<text>"}`` event.  Every checker read ``message`` as a dict, crashed
+    with AttributeError, and its check failed (6 checks).  Such an event
+    carries no tool call: the checkers pass over it."""
+    name = sorted(RC9_RUNS)[0]
+    build, discs = RC9_RUNS[name]
+    commands, inserted = build()
+    fix = _fixture(tmp_path, discs=discs, allowed=discs)
+    run = _run_dir(tmp_path, commands, inserted)
+    with (run / "transcript.jsonl").open("a") as f:
+        f.write(json.dumps({
+            "type": "system", "subtype": "permission_denied",
+            "message": "This Bash command contains multiple operations.",
+        }) + "\n")
+    rc, out = _verify(run, fix)
+    assert "Traceback" not in out, out
+    assert "OUTCOME: PASS (9 passed, 0 failed)" in out, out
+    assert "CONDUCT: PASS (7 passed, 0 failed)" in out, out
+    assert rc == 0, out

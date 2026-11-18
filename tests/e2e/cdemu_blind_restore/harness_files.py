@@ -83,7 +83,8 @@ def agent_commands(transcript: Path) -> Iterator[str]:
                 continue
             if not isinstance(event, dict):
                 continue
-            content = (event.get("message") or {}).get("content", [])
+            msg = event.get("message")
+            content = (msg if isinstance(msg, dict) else {}).get("content", [])
             if not isinstance(content, list):
                 continue
             for block in content:

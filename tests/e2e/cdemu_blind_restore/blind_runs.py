@@ -152,7 +152,8 @@ def run_stats(transcript: Path) -> dict[str, object]:
             stats["turns"] = event.get("num_turns")
             stats["agent_result"] = event.get("subtype")
         if event.get("type") == "assistant":
-            content = (event.get("message") or {}).get("content")
+            msg = event.get("message")
+            content = (msg if isinstance(msg, dict) else {}).get("content")
             if isinstance(content, list):
                 tool_calls += sum(
                     1 for b in content
