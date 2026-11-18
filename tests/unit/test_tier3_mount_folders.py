@@ -230,3 +230,31 @@ def test_a_hidden_folder_below_a_mount_folder_is_not_searched(
     )
     restorer.restore(tmp_path / "out")
     assert restorer.failures > 0
+
+
+def test_a_copy_that_fails_to_open_is_set_aside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rc10 sweep re-run, tier1-missing: a mode check said a copy was
+    readable but open() was refused (EACCES).  The copy is set aside for
+    the run and the readable disc is used instead of failing the file."""
+    mounts = tmp_path / "media" / "user"
+    repo = _repo_and_disc(tmp_path, mounts, "LCSAS-0001")
+    blocked = mounts / "A-refused"
+    shutil.copytree(mounts / "LCSAS-0001" / "data", blocked / "data")
+    real_open = open
+
+    def refusing_open(file, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(blocked) in str(file):
+            raise PermissionError(13, "Permission denied", str(file))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", refusing_open)
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD,
+        pack_search_paths=[repo / "data", mounts], interactive=False,
+    )
+    restorer.restore(tmp_path / "out")
+    assert restorer.failures == 0
+    monkeypatch.undo()
+    _check(tmp_path / "out")
