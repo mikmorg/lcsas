@@ -468,6 +468,57 @@ def files_outside_manifest(
     return sorted(extras)
 
 
+def recovery_manifests(recovery_root: Path) -> dict[str, str]:
+    """Compute the two integrity manifests of a recovery/ tree (#894).
+
+    Returns ``{"MANIFEST.sha256": text, "docs/MANIFEST.sha256": text}``
+    (the second only when there is a docs/ folder), each built from the
+    files under *recovery_root* as they stand:
+
+    * ``MANIFEST.sha256`` lists every file except the two manifests:
+      first every file outside ``bin/``, sorted by path as
+      ``LC_ALL=C sort`` sorts it, which is the row set and order
+      ``make -C recovery manifest`` writes for a git checkout; then the
+      files under ``bin/``, sorted folder by folder, which is where and
+      how the builder has always added them.
+    * ``docs/MANIFEST.sha256`` lists every file under docs/ except any
+      file named MANIFEST.sha256, sorted by path, relative to docs/.
+
+    Rows are ``<sha256>  ./<path>``, one per line, as ``sha256sum``
+    writes them.  For UTF-8 names, sorting by characters gives the
+    byte order ``LC_ALL=C sort`` uses.
+    """
+    source: list[str] = []
+    built: list[str] = []
+    docs: list[str] = []
+    for path in recovery_root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(recovery_root).as_posix()
+        if rel in UNLISTED_MANIFESTS:
+            continue
+        if rel.startswith("bin/"):
+            built.append(rel)
+            continue
+        source.append(rel)
+        if rel.startswith("docs/") and path.name != "MANIFEST.sha256":
+            docs.append(rel)
+
+    def rows(paths: list[str], strip: str = "") -> str:
+        return "".join(
+            f"{sha256_file(recovery_root / rel)}  ./{rel.removeprefix(strip)}\n"
+            for rel in paths
+        )
+
+    manifests = {
+        "MANIFEST.sha256": rows(sorted(source))
+        + rows(sorted(built, key=lambda rel: rel.split("/"))),
+    }
+    if (recovery_root / "docs").is_dir():
+        manifests["docs/MANIFEST.sha256"] = rows(sorted(docs), "docs/")
+    return manifests
+
+
 # ── Per-repo metadata bundling (#435) ────────────────────────────────
 
 # Wall-clock bound on the "is this mirror reachable?" probe.  A stat()
@@ -1011,7 +1062,6 @@ class MetaVolumeBuilder:
         if dst.exists():
             shutil.rmtree(str(dst))
         self._copy_recovery_tree(src, dst)
-        self._drop_dev_only_manifest_rows(dst)
 
         # _write_restore_script copies scripts/restore.sh to the disc
         # root as restore.sh, the disc's one restore driver (#689).
@@ -1060,7 +1110,8 @@ class MetaVolumeBuilder:
         Outside a git checkout (a source tarball, say) git cannot say
         what is tracked, so the whole tree is copied minus build debris
         and the fuzzer output ``recovery/fuzz/.gitignore`` names, with a
-        warning: any other stray file would fail ``meta verify --strict``.
+        warning: any other stray file goes on the disc, and the manifests
+        computed from the tree list it (#894).
         """
         tracked, why_not = _git_tracked_files(src)
         if tracked is None:
@@ -1068,10 +1119,9 @@ class MetaVolumeBuilder:
                 "Meta disc: git cannot list the tracked files in %s (%s); "
                 "it may not be a git checkout. Copying the "
                 "whole directory, minus build debris and fuzzer output. Any "
-                "other file there that recovery/MANIFEST.sha256 does not "
-                "list will fail `lcsas meta verify --strict`. Build the "
-                "meta disc from a git checkout to bundle only tracked "
-                "files (#562).",
+                "other file there goes on the disc and into its manifest. "
+                "Build the meta disc from a git checkout to bundle only "
+                "tracked files (#562).",
                 src, why_not,
             )
             shutil.copytree(
@@ -1106,34 +1156,6 @@ class MetaVolumeBuilder:
                 str(bin_src), str(dst / "bin"),
                 ignore=shutil.ignore_patterns(*_RECOVERY_DEBRIS),
             )
-
-    @staticmethod
-    def _drop_dev_only_manifest_rows(dst: Path) -> None:
-        """Remove the rows of the files left off the disc (#724).
-
-        The source manifests list every authored file, the developer
-        records too; on the disc a row for an absent file would make
-        ``meta verify`` and an heir's ``sha256sum -c`` fail.
-        """
-        manifests = {
-            dst / "MANIFEST.sha256": {
-                f"./{rel}" for rel in DEV_ONLY_RECOVERY_FILES
-            },
-            dst / "docs" / "MANIFEST.sha256": {
-                f"./{rel.removeprefix('docs/')}"
-                for rel in DEV_ONLY_RECOVERY_FILES if rel.startswith("docs/")
-            },
-        }
-        for manifest, gone in manifests.items():
-            if not manifest.is_file():
-                continue
-            lines = manifest.read_text(encoding="utf-8").splitlines()
-            kept = [
-                ln for ln in lines
-                if ln.strip().split("  ", 1)[-1] not in gone
-            ]
-            if len(kept) != len(lines):
-                manifest.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
     def unlisted_recovery_files(self) -> list[str]:
         """Files under the built recovery/ that its MANIFEST.sha256 omits.
@@ -1365,56 +1387,20 @@ class MetaVolumeBuilder:
                 os.chmod(str(dst_bin), 0o755)
 
     def _regenerate_recovery_manifest(self, recovery_dst: Path) -> None:
-        """Merge bundled upstream binaries into recovery/MANIFEST.sha256.
+        """Write recovery/MANIFEST.sha256 and recovery/docs/MANIFEST.sha256.
 
-        The source-tree MANIFEST already covers files we author (C
-        source, scripts, docs, vendored sqlite/zstd, …).  This step
-        adds the per-target rustic + python tree rooted at
-        ``bin/<target>/`` so the meta disc ships with a single
-        integrity manifest covering everything under ``recovery/``.
+        Both are computed from the files now in the built recovery/ tree
+        (``recovery_manifests``): the source files copied from the
+        repository and the per-target binaries the bundlers put under
+        ``bin/<target>/``.  So the meta disc's manifests list exactly the
+        files on the disc, and an heir can ``sha256sum -c`` either one.
+        Files left off the disc (``DEV_ONLY_RECOVERY_FILES``) get no row.
+        Must run after every step that adds a file under recovery/.
 
-        Idempotent: re-running rewrites the file in place; the source
-        entries are preserved, the bin/<target>/ entries are recomputed.
-
-        Skipped (silent) when ``MANIFEST.sha256`` is absent from the
-        recovery tree (some older builds didn't ship it) — there's
-        nothing to merge into.
+        Idempotent: re-running rewrites both files from the tree.
         """
-        manifest_path = recovery_dst / "MANIFEST.sha256"
-        if not manifest_path.is_file():
-            return
-
-        # Read existing entries, keep anything NOT under ./bin/ — those
-        # rows are about to be regenerated and stale ones would shadow.
-        existing_lines: list[str] = []
-        for line in manifest_path.read_text().splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                existing_lines.append(line)
-                continue
-            # Parse "<sha>  <path>".  Drop bin/* entries (they get
-            # regenerated below); keep everything else verbatim.
-            parts = stripped.split("  ", 1)
-            if len(parts) == 2 and parts[1].startswith("./bin/"):
-                continue
-            existing_lines.append(line)
-
-        # Walk every file under recovery_dst/bin/ and produce a new
-        # entry.  Sort by relative path for deterministic output —
-        # makes the manifest reviewable and SHA-stable across builds
-        # that bundle the same target set.
-        bin_root = recovery_dst / "bin"
-        bin_entries: list[str] = []
-        if bin_root.is_dir():
-            for path in sorted(bin_root.rglob("*")):
-                if not path.is_file():
-                    continue
-                # Path inside recovery/ — manifest format is "./relative/path".
-                rel = path.relative_to(recovery_dst).as_posix()
-                bin_entries.append(f"{sha256_file(path)}  ./{rel}")
-
-        merged = "\n".join(existing_lines + bin_entries) + "\n"
-        manifest_path.write_text(merged)
+        for rel, text in recovery_manifests(recovery_dst).items():
+            _write_and_sync(recovery_dst / rel, text)
 
     def _bundle_metadata(self) -> None:
         """Copy each repository's metadata (keys, config, index, snapshots) onto the meta disc.
