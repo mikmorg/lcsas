@@ -2781,11 +2781,11 @@ def test_row(table, row):
 def test_status_write_sites_are_the_ones_the_table_was_written_for():
     """20 ``update_status`` calls, 5 raw status writes, 5 deletions (#891),
     moving to ``VolumeLifecycle`` events one file at a time (#892):
-    ``cli/commands/verify.py`` and ``catalog.py`` done.  A new one needs
-    rows that reach it."""
+    ``cli/commands/verify.py``, ``catalog.py`` and
+    ``burn/orchestrator.py`` done.  A new one needs rows that reach it."""
     counts = Counter(site.kind for site in status_write_sites())
-    assert counts == {"update_status": 9, "raw UPDATE": 5,
-                      "delete_volume": 4, "lifecycle event": 9}
+    assert counts == {"update_status": 4, "raw UPDATE": 5,
+                      "lifecycle event": 18}
 
 
 def test_every_status_write_is_reached_by_a_row(table):

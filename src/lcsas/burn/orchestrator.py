@@ -35,10 +35,10 @@ from lcsas.db.key_escrow import (
     recorded_splits,
 )
 from lcsas.db.label_mark import label_seq, next_label_seq, raise_label_high_water
+from lcsas.db.lifecycle import Refusal, VolumeLifecycle
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume
 from lcsas.db.queries import (
-    deprecated_by_loss,
     get_unarchived_or_missing_at_location,
     get_unarchived_packs,
 )
@@ -52,19 +52,11 @@ from lcsas.db.sessions import (
     update_session_status,
     update_session_volume_iso,
 )
-from lcsas.db.volume_copies import add_volume_copy
-from lcsas.db.volume_events import (
-    add_event,
-    burn_evidence,
-    rebuild_burn_unknown,
-)
+from lcsas.db.volume_events import add_event
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import (
     create_volume,
-    delete_volume,
     get_volume_by_id,
-    mark_closed,
-    update_status,
     update_used_bytes,
 )
 from lcsas.ecc.dvdisaster import (
@@ -168,6 +160,29 @@ def _burn_unknown_refusal(
         f"import its burn receipt with 'lcsas catalog import-receipts'. If "
         f"you are sure no disc of {'it' if one else 'them'} was ever "
         f"burned, run '{abort_cmd} --never-burned'."
+    )
+
+
+def _abort_volume_refusal(label: str, refusal: Refusal) -> str:
+    """Why ``session abort --volume`` refuses *label*
+    (:meth:`~lcsas.db.lifecycle.VolumeLifecycle.may_delete`)."""
+    if refusal.kind == "status":
+        return (
+            f"Volume {label} has status {refusal.status} — only never-burned "
+            f"(STAGING/BURNING) volumes can be aborted."
+        )
+    if refusal.kind == "disc":
+        return (
+            f"Volume {label} has a recorded disc — a burned disc "
+            f"exists, refusing to abort it."
+        )
+    if refusal.kind == "burned":
+        return _unrecorded_burn_refusal(
+            f"volume {label}",
+            [(label, f"{refusal.status}, but {refusal.evidence}")],
+        )
+    return _burn_unknown_refusal(
+        f"volume {label}", [label], f"lcsas session abort --volume {label}",
     )
 
 
@@ -583,7 +598,7 @@ class BurnOrchestrator:
             self._conn.rollback()  # drop any uncommitted partial state
             # Removes volume_packs links and the session_volumes row too,
             # so the packs reappear in get_unarchived_packs().
-            delete_volume(self._conn, volume.volume_id)
+            VolumeLifecycle(self._conn).stage_failed(volume.volume_id)
             # The unfinished ISO is never burnable; free its space.
             with contextlib.suppress(OSError):
                 unfinished_iso_path(iso_output).unlink(missing_ok=True)
@@ -1430,7 +1445,7 @@ class BurnOrchestrator:
                 )
             except Exception as exc:
                 self._conn.rollback()
-                delete_volume(self._conn, volume_id)
+                VolumeLifecycle(self._conn).stage_failed(volume_id)
                 with contextlib.suppress(OSError):
                     unfinished_iso_path(iso_output).unlink(missing_ok=True)
                 _logger.error(
@@ -1595,30 +1610,13 @@ class BurnOrchestrator:
                     f"lcsas burn --session latest --location {location}"
                 )
 
-            # For multi-location re-burns, skip status transitions if
-            # the volume is already VERIFIED (just add another disc).
-            # A lost volume (DEPRECATED because its last disc went) is
-            # burned again the same way; recording its disc puts it back
-            # in service (#726).  A failed verify leaves it lost.
-            is_reburn = vol.status == "VERIFIED" or (
-                vol.status == "DEPRECATED"
-                and deprecated_by_loss(self._conn, sv.volume_id)
-            )
-            # #810: a BURNED volume (a disc of it exists, but none is
-            # recorded: a catalog rebuilt from discs) stays BURNED for the
-            # whole burn.  It becomes VERIFIED when this disc passes, and
-            # stays BURNED when the disc fails or the burn is stopped.  It
-            # never goes through BURNING, so neither a failure nor a hard
-            # kill can turn it into a STAGING volume that 'session abort'
-            # or 'catalog reconcile --fix' would delete.
-            was_burned = vol.status == "BURNED"
-            # Only a never-burned (STAGING) volume enters BURNING, and
-            # only it goes back to STAGING when the burn fails.
-            marks_burning = not is_reburn and not was_burned
-
-            if marks_burning:
-                update_status(self._conn, sv.volume_id, "BURNING", commit=False)
-                self._conn.commit()
+            # A never-burned (STAGING) volume enters BURNING, committed,
+            # and only it goes back to STAGING when the burn fails.  A
+            # VERIFIED or lost volume gets another disc (#726); a BURNED
+            # one stays BURNED for the whole burn (#810).  The lifecycle
+            # decides; its Burn record carries that to the outcome.
+            lifecycle = VolumeLifecycle(self._conn)
+            burn = lifecycle.burn_started(sv.volume_id)
 
             try:
                 # Burn
@@ -1650,51 +1648,24 @@ class BurnOrchestrator:
                         verified_at = utc_now()
 
                 if verify_passed:
-                    # A STAGING volume (moved to BURNING above) and a
-                    # BURNED one (#810) become VERIFIED, in the same
-                    # transaction as the disc row.  A re-burn stays
-                    # VERIFIED; a lost volume is put back in service by
-                    # its disc row (#726).
-                    if not is_reburn:
-                        update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
-                        mark_closed(self._conn, sv.volume_id, commit=False)
-                    # Record the disc at its location, with the verification
-                    # evidence (BURN-04: previously iso_sha256 was omitted —
-                    # every disc row got NULL, and a re-burn UPSERT blanked
-                    # any stored hash; last_verified_at was never written).
-                    add_volume_copy(
-                        self._conn,
-                        volume_id=sv.volume_id,
-                        location=location,
-                        burn_date=burn_date,
+                    # VERIFIED (a re-burn already is) in the same
+                    # transaction as the disc row, with the verification
+                    # evidence (BURN-04).
+                    lifecycle.burn_succeeded(
+                        burn, location=location, burn_date=burn_date,
                         iso_sha256=sv.iso_sha256 or None,
                         iso_size_bytes=sv.iso_size_bytes,
-                        last_verified_at=verified_at,
-                        verified=True,
-                        commit=False,
+                        verified_at=verified_at,
                     )
                 else:
-                    if marks_burning:
-                        # Back to STAGING (#483).  BURNED would count its
-                        # packs as archived (FMA-01's DURABLE_VOLUME_STATUSES)
-                        # with no verified disc behind them.  STAGING
-                        # returns them to the unarchived pool; the
-                        # VERIFY_FAIL event keeps the attempt.
-                        update_status(self._conn, sv.volume_id, "STAGING", commit=False)
-                    elif is_reburn:
-                        # The volume stays VERIFIED (it passed before), or
-                        # a lost one stays lost until a disc passes.
-                        add_event(
-                            self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
-                            location=location,
-                            detail="Post-burn read-back failed on re-burn attempt",
-                            event_date=burn_date,
-                            commit=False,
-                        )
-                    # A BURNED volume stays BURNED (#810), with no
-                    # VERIFY_FAIL_REBURN: that event says an earlier disc
-                    # was recorded, and none is.
-                    #
+                    # A never-burned volume goes back to STAGING (#483):
+                    # BURNED would count its packs as archived (FMA-01's
+                    # DURABLE_VOLUME_STATUSES) with no verified disc behind
+                    # them.  A re-burned volume keeps its status, a BURNED
+                    # one stays BURNED (#810).
+                    lifecycle.burn_failed(
+                        burn, location=location, burn_date=burn_date,
+                    )
                     # BURN-05: a failed disc is not recorded. Recording one
                     # would satisfy the ACTIVE-disc location queries and
                     # `stage --for-location` would never re-stage these
@@ -1743,8 +1714,7 @@ class BurnOrchestrator:
                 # BURNED one never left BURNED (#810).
                 try:
                     self._conn.rollback()
-                    if marks_burning:
-                        update_status(self._conn, sv.volume_id, "STAGING")
+                    lifecycle.burn_stopped(burn)
                 except Exception as cleanup_exc:
                     _logger.error(
                         "Error during exception cleanup: %s",
@@ -1841,10 +1811,9 @@ class BurnOrchestrator:
         # volume in BURNING.  With no disc recorded it goes back to the
         # status it had before that burn, so this run burns it: STAGING,
         # or BURNED when an older LCSAS moved a BURNED volume to BURNING
-        # (#810, status_before_burning).  BURNING with a disc recorded is
-        # not a state the burn writes; refuse it rather than guess.
+        # (#810).  BURNING with a disc recorded is not a state the burn
+        # writes; refuse it rather than guess.
         from lcsas.db.volume_copies import get_copies_for_volume
-        from lcsas.db.volumes import status_before_burning
 
         for sv, vol in vols:
             if vol.status != "BURNING":
@@ -1860,13 +1829,14 @@ class BurnOrchestrator:
                         f"'lcsas verify {vol.label} --disc'."
                     ),
                 )
-            before = status_before_burning(self._conn, sv.volume_id)
+            recovered = VolumeLifecycle(self._conn).burn_interrupted_recovered(
+                sv.volume_id,
+            )
             _logger.warning(
                 "Volume %s was left BURNING by an interrupted burn; "
                 "resetting it to %s and burning it again.", vol.label,
-                before,
+                recovered.status,
             )
-            update_status(self._conn, sv.volume_id, before)
 
     def _assert_blank_media(self, device: str, label: str) -> None:
         """Refuse to burn onto a disc that already carries data (FUP-01).
@@ -2032,7 +2002,7 @@ class BurnOrchestrator:
         without ``force``, before anything is removed.
 
         A volume a catalog rebuild brought in with no record of whether it
-        was burned (:func:`lcsas.db.volume_events.rebuild_burn_unknown`,
+        was burned (:meth:`lcsas.db.lifecycle.VolumeLifecycle.burn_unknown`,
         #758) is refused the same way, unless *never_burned*: the owner
         confirms no disc of it was burned, and it is then deleted like a
         never-burned volume.
@@ -2084,6 +2054,7 @@ class BurnOrchestrator:
                 f"Use --force to clean AND abort in one step."
             )
 
+        lifecycle = VolumeLifecycle(self._conn)
         for vid, label in strandable:
             reclaim = self._reclaim_summary([vid])
             _logger.info(
@@ -2091,7 +2062,7 @@ class BurnOrchestrator:
                 "return to the unarchived pool",
                 label, reclaim.packs_reclaimed,
             )
-            delete_volume(self._conn, vid)
+            lifecycle.never_burned_deleted(vid, never_burned=never_burned)
 
         for sv in session_vols:
             iso_path = Path(sv.iso_path)
@@ -2180,35 +2151,16 @@ class BurnOrchestrator:
         vol = get_volume_by_label(self._conn, label)
         if vol is None:
             raise ValueError(f"Volume '{label}' not found in catalog.")
-        if vol.status not in ("STAGING", "BURNING"):
-            raise ValueError(
-                f"Volume {label} has status {vol.status} — only never-burned "
-                f"(STAGING/BURNING) volumes can be aborted."
-            )
-        has_copy = self._conn.execute(
-            "SELECT 1 FROM volume_copies WHERE volume_id = ? LIMIT 1",
-            (vol.volume_id,),
-        ).fetchone()
-        if has_copy is not None:
-            raise ValueError(
-                f"Volume {label} has a recorded disc — a burned disc "
-                f"exists, refusing to abort it."
-            )
-        evidence = burn_evidence(self._conn, vol.volume_id)
-        if evidence is not None:
-            raise ValueError(_unrecorded_burn_refusal(
-                f"volume {label}", [(label, f"{vol.status}, but {evidence}")],
-            ))
-        if not never_burned and rebuild_burn_unknown(self._conn,
-                                                     vol.volume_id):
-            raise ValueError(_burn_unknown_refusal(
-                f"volume {label}", [label],
-                f"lcsas session abort --volume {label}",
-            ))
+        lifecycle = VolumeLifecycle(self._conn)
+        refusal = lifecycle.may_delete(vol.volume_id,
+                                       never_burned=never_burned)
+        if refusal is not None:
+            raise ValueError(_abort_volume_refusal(label, refusal))
 
         summary = self._reclaim_summary([vol.volume_id])
         summary.labels = [label]
-        delete_volume(self._conn, vol.volume_id)
+        lifecycle.never_burned_deleted(vol.volume_id,
+                                       never_burned=never_burned)
 
         logger.info(
             "Aborted volume %s: reclaimed %d pack(s), %s bytes returned "
@@ -2227,7 +2179,7 @@ class BurnOrchestrator:
         That is a STAGING/BURNING volume (never burned, or burned but
         failed its post-burn verification, #483) with no ``volume_copies``
         row and no event that records a good disc
-        (:func:`~lcsas.db.volume_events.burn_evidence`).
+        (:meth:`~lcsas.db.lifecycle.VolumeLifecycle.burn_evidence`).
         A volume with any ``volume_copies`` row corresponds to a disc
         (however stale its status) and is never deleted by clean/abort
         (FMA-01); nor is a BURNED volume with no disc row, or a
@@ -2236,23 +2188,24 @@ class BurnOrchestrator:
         *never_burned*, is one a catalog rebuild left with no record of
         whether it was burned (:meth:`_burn_unknown_session_volumes`).
         """
+        lifecycle = VolumeLifecycle(self._conn)
         return [
             (vid, label)
-            for vid, label, status in self._session_volumes_without_disc(
+            for vid, label, _status in self._session_volumes_without_disc(
                 session_id)
-            if status != "BURNED" and burn_evidence(self._conn, vid) is None
-            and (never_burned or not rebuild_burn_unknown(self._conn, vid))
+            if lifecycle.may_delete(vid, never_burned=never_burned) is None
         ]
 
     def _burn_unknown_session_volumes(self, session_id: str) -> list[str]:
         """Labels of a burn session's volumes that a catalog rebuild left
         with no record of whether they were burned (#758,
-        :func:`lcsas.db.volume_events.rebuild_burn_unknown`)."""
+        :meth:`lcsas.db.lifecycle.VolumeLifecycle.burn_unknown`)."""
+        lifecycle = VolumeLifecycle(self._conn)
         return [
             label
             for vid, label, status in self._session_volumes_without_disc(
                 session_id)
-            if status != "BURNED" and rebuild_burn_unknown(self._conn, vid)
+            if status != "BURNED" and lifecycle.burn_unknown(vid)
         ]
 
     def _unrecorded_burned_session_volumes(
@@ -2266,15 +2219,16 @@ class BurnOrchestrator:
         volume with no disc row from before #483 (a failed post-burn
         verification) looks the same, so it is kept too.  A STAGING/BURNING
         volume counts when an event records a good disc of it
-        (:func:`~lcsas.db.volume_events.burn_evidence`).
+        (:meth:`~lcsas.db.lifecycle.VolumeLifecycle.burn_evidence`).
         """
+        lifecycle = VolumeLifecycle(self._conn)
         found: list[tuple[str, str]] = []
         for vid, label, status in self._session_volumes_without_disc(
                 session_id):
             if status == "BURNED":
                 found.append((label, "BURNED, but no disc of it is recorded"))
                 continue
-            evidence = burn_evidence(self._conn, vid)
+            evidence = lifecycle.burn_evidence(vid)
             if evidence is not None:
                 found.append((label, f"{status}, but {evidence}"))
         return found

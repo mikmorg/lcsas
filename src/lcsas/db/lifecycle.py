@@ -166,12 +166,15 @@ class VolumeLifecycle:
             )
         return get_volume_by_id(self._conn, burn.volume_id)
 
-    def burn_stopped(self, burn: Burn) -> Volume:
+    def burn_stopped(self, burn: Burn) -> Volume | None:
         """The burn was stopped by an error or Ctrl-C (the caller has
         rolled back what it had not committed): a volume the burn moved to
-        BURNING goes back to STAGING, committed (#668)."""
-        if burn.marked_burning:
-            update_status(self._conn, burn.volume_id, STATUS_STAGING)
+        BURNING goes back to STAGING, committed (#668).  Returns the volume
+        when its status changed; else None, and nothing is read (the
+        catalog may be what failed)."""
+        if not burn.marked_burning:
+            return None
+        update_status(self._conn, burn.volume_id, STATUS_STAGING)
         return get_volume_by_id(self._conn, burn.volume_id)
 
     def burn_interrupted_recovered(self, volume_id: int) -> Volume:
