@@ -579,8 +579,8 @@ party":
 
   * VENDORED SOURCE -- we ship the C source for sqlite + zstd inside
     recovery/vendored/, compile it ourselves alongside our own code,
-    and pin it by SHA-256 in MANIFEST.sha256 (the files-we-author
-    manifest).  The build is reproducible from those sources.  An
+    and pin it by SHA-256 in VENDORED.sha256 (MANIFEST.sha256 on the
+    meta disc lists it too, with every other file there).  The build is reproducible from those sources.  An
     auditor can read every line that ends up in the lcsas-restore
     binary.  Vendored source is acceptable on the bare path.
 

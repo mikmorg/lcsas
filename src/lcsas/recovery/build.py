@@ -230,10 +230,14 @@ class RecoveryBuilder:
 
         Excludes the build/ tree (artifacts are deterministic but
         rebuildable; the manifest covers source).  Result is sorted by
-        path for deterministic diffs.
+        path for deterministic diffs.  Written to build/MANIFEST.sha256
+        by default.  This is a developer's listing, not the meta disc's
+        manifest: ``lcsas meta build`` computes that one from the files it
+        bundles (#894); ``make -C recovery manifest`` previews it.
         """
         if manifest_path is None:
-            manifest_path = self._dir / "MANIFEST.sha256"
+            manifest_path = self._dir / "build" / "MANIFEST.sha256"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
         lines: list[str] = []
         for root, dirs, files in os.walk(self._dir):

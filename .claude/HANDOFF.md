@@ -240,8 +240,9 @@ The channel between the sessions is **GitHub issues** (`gh`, repo
     RECOVER_*.txt, `recovery/docs/`, the restore guides and the card text.
   - For those, open the PR and add the label, because the blind drills
     must re-run after they change.
-  - Any file under `recovery/` also needs `make -C recovery manifest`,
-    or the manifest freshness tests fail.
+  - A change under `recovery/vendored/` also needs
+    `make -C recovery vendored-pin`, or the vendored pin test fails.
+    The meta disc's manifests are computed at build time (#894).
 
 ## Your machine
 

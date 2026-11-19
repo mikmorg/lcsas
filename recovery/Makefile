@@ -5,7 +5,8 @@
 #   all       -- build host-arch lcsas-restore (default)
 #   test      -- build and run unit tests
 #   clean     -- remove build artifacts
-#   manifest  -- regenerate MANIFEST.sha256 + docs/MANIFEST.sha256
+#   manifest  -- write the meta disc's manifests for this checkout to build/manifest/
+#   vendored-pin -- regenerate VENDORED.sha256 (the vendored sqlite/zstd pin)
 #
 # Strict C89 + standard POSIX flags.  Reproducible via SOURCE_DATE_EPOCH.
 #
@@ -768,61 +769,48 @@ open('$(abspath $(BUILD))/coverage.txt', 'w').write(line + '\n')"
 	# to a line that's actually covered.  Kills doc drift.
 	@python3 scripts/exemptions_check.py
 
-# ── Integrity manifests ──────────────────────────────────────────
+# ── Integrity manifests and the vendored pin ─────────────────────
 #
-# THE CURATION RULE (the answer to "what belongs in MANIFEST.sha256?")
+# The meta disc's two integrity manifests, recovery/MANIFEST.sha256 and
+# recovery/docs/MANIFEST.sha256, are not kept in git (#894).  `lcsas meta
+# build` computes both from the files it puts on the disc
+# (meta/builder.py recovery_manifests), so an heir can `sha256sum -c`
+# the disc and detect tampering or bit-rot:
 #
-#   MANIFEST.sha256 lists the files WE AUTHOR under recovery/, so an
-#   heir can `sha256sum -c` a disc and detect tampering or bit-rot.
-#   docs/history/CROSS_PLATFORM_META_RFC.md Q4 fixes the split: files
-#   we author go here, files we merely trust from upstream (rustic,
-#   CPython) go in UPSTREAM.sha256.
+#   * MANIFEST.sha256 lists every file under the disc's recovery/ but
+#     the two manifests: the files git tracks under recovery/ (the
+#     developer records in DEV_ONLY_RECOVERY_FILES stay off the disc),
+#     in LC_ALL=C path order, then the bundled binaries under bin/.
+#   * docs/MANIFEST.sha256 lists every file under the disc's docs/.
 #
-#   "Files we author" == "files tracked by git under recovery/", minus:
-#     * bin/           -- built artifacts, not source.  Their integrity
-#                         is covered by bin-parity, and the meta disc
-#                         builder regenerates ./bin/ rows per-target at
-#                         burn time (meta/builder.py
-#                         _regenerate_recovery_manifest).  Keeping them
-#                         out is what lets MANIFEST.sha256 "stay stable"
-#                         when only binaries change (RFC Q4).
-#     * the two MANIFEST.sha256 files -- a manifest cannot list itself.
+# Which source files go on the disc is decided by git: fuzz/corpus/ is a
+# MIXED directory (curated seed_* inputs are committed, fuzzer output is
+# gitignored), and no `find` predicate can separate the two (#425).
 #
-#   git is the oracle on purpose.  fuzz/corpus/ is a MIXED directory:
-#   the curated seed_* inputs are committed, while fuzzer-generated
-#   hex-named entries are gitignored (see fuzz/.gitignore, "Only the
-#   curated seed_* files are committed").  No `find` predicate can
-#   separate those two populations, which is why the previous
-#   find-based sweep grew this file from 208 to 8,710 rows and swept in
-#   untracked corpus + __pycache__ (issue #425).
+# `make manifest` writes the manifests the disc would carry for this
+# checkout (bin/ as it stands) to build/manifest/, for review.
+# tests/recovery_hardening/test_manifest_freshness.py checks a built
+# tree: every file has a row, every row has a file, every hash matches.
 #
-#   Determinism: LC_ALL=C pins collation so the byte output does not
-#   depend on the developer's locale, and --cached ignores worktree
-#   noise.  Re-running this target on a clean checkout MUST produce a
-#   byte-identical file; tests/recovery_hardening/test_manifest_freshness.py
-#   asserts both halves (every row matches, and every authored file has
-#   a row).
-#
-# docs/MANIFEST.sha256 keeps its find-based sweep: recovery/docs/ holds
-# only authored docs, so "every file in the directory" is already the
-# correct, deterministic scope.
+# VENDORED.sha256 pins the third-party C source we compile into tier 1
+# (vendored/sqlite, vendored/zstd).  It IS committed: a change to a
+# vendored file must come with a change to the pin, which makes it
+# visible in review.  `make vendored-pin` rewrites it;
+# tests/recovery_hardening/test_vendored_pin.py fails when they differ.
 manifest:
-	@cd docs && find . -type f ! -name MANIFEST.sha256 -exec sha256sum {} \; \
-		| LC_ALL=C sort -k 2 > MANIFEST.sha256
-	@echo "wrote docs/MANIFEST.sha256"
+	@cd .. && PYTHONPATH=src python3 -m lcsas.meta.manifest_preview \
+	    "$(abspath $(BUILD))/manifest"
+
+vendored-pin:
 	@git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { \
-	    echo "manifest: not a git work tree -- cannot determine the authored" >&2; \
-	    echo "manifest: file set.  Regenerate from a git checkout." >&2; \
+	    echo "vendored-pin: not a git work tree -- run it in a checkout." >&2; \
 	    exit 1; }
-	@git ls-files --cached -z -- . \
-	        ':(exclude)bin' \
-	        ':(exclude)MANIFEST.sha256' \
-	        ':(exclude)docs/MANIFEST.sha256' \
+	@git ls-files --cached -z -- vendored \
 	    | LC_ALL=C sort -z \
 	    | sed -z 's|^|./|' \
 	    | xargs -0 sha256sum \
-	    > MANIFEST.sha256
-	@echo "wrote MANIFEST.sha256 (top-level, $$(wc -l < MANIFEST.sha256) entries)"
+	    > VENDORED.sha256
+	@echo "wrote VENDORED.sha256 ($$(wc -l < VENDORED.sha256) entries)"
 
 # ── Sanitizer target ─────────────────────────────────────────────
 #
@@ -1240,4 +1228,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 keyshare-arches ecc-arches coverage-c coverage-c-run decontaminate sanitize sanitize-run fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest vendored-pin repro-check check-toolchain bin-parity zig-aarch64 keyshare-arches ecc-arches coverage-c coverage-c-run decontaminate sanitize sanitize-run fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject

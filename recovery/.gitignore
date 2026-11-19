@@ -4,3 +4,7 @@ dist/
 build/
 __pycache__/
 *.pyc
+# The meta disc builder computes these (#894); `make manifest` previews
+# them under build/manifest/.
+/MANIFEST.sha256
+/docs/MANIFEST.sha256

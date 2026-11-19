@@ -895,11 +895,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     rm = recovery_sub.add_parser(
         "manifest",
-        help="Compute SHA-256 of every file in recovery/ -> MANIFEST.sha256.",
+        help="Compute SHA-256 of every file in recovery/ -> build/MANIFEST.sha256.",
     )
     rm.add_argument(
         "--output", "-o", type=Path, default=None,
-        help="Output manifest path (default: recovery/MANIFEST.sha256).",
+        help="Output manifest path (default: recovery/build/MANIFEST.sha256).",
     )
 
     recovery_sub.add_parser(

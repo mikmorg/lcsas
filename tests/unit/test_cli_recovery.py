@@ -62,7 +62,7 @@ class _FakeRecoveryBuilder:
         target = (
             Path(manifest_path)
             if manifest_path is not None
-            else self.recovery_dir / "MANIFEST.sha256"
+            else self.recovery_dir / "build" / "MANIFEST.sha256"
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("deadbeef  README\n")

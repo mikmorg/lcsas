@@ -129,11 +129,12 @@ subcommand. `--output` / `-o` is required.
       decides on.
    8. `_bundle_recovery_toolchain_artifacts` — copy `recovery/` onto the
       meta disc, add the per-target binaries (`lcsas-restore`,
-      **`lcsas-ecc`**, `rustic-static`, and the bundled CPython) and merge
-      `recovery/MANIFEST.sha256` (`_bundle_upstream_binaries` +
-      `_bundle_tier1_binaries`). From a git checkout it copies only the
-      git-tracked files under `recovery/` (the set the manifest is built
-      from), plus `recovery/bin/` as it stands, so untracked files such as the
+      **`lcsas-ecc`**, `rustic-static`, and the bundled CPython)
+      (`_bundle_upstream_binaries` + `_bundle_tier1_binaries`), then compute
+      `recovery/MANIFEST.sha256` and `recovery/docs/MANIFEST.sha256` from
+      the files now there (`recovery_manifests`, #894; neither is kept in
+      git). From a git checkout it copies only the
+      git-tracked files under `recovery/`, plus `recovery/bin/` as it stands, so untracked files such as the
       fuzzer output a local `make audit-gate` leaves in
       `recovery/fuzz/corpus/` stay off the disc (#562). Outside a git
       checkout it copies the whole folder minus build debris and fuzzer
@@ -185,7 +186,9 @@ subcommand. `--output` / `-o` is required.
 3. The `.incomplete` marker is removed once every stage succeeds.
    `cmd_meta_build` then warns about any file in the built `recovery/`
    that `recovery/MANIFEST.sha256` does not list: the files
-   `lcsas meta verify --strict` would report as `EXTRA` (#562).
+   `lcsas meta verify --strict` would report as `EXTRA` (#562). Since the
+   manifest is computed from the tree, only a build step that writes into
+   `recovery/` after it can cause this.
 4. **RST-05 completeness gate:** `cmd_meta_build` then calls
    `builder.missing_required_contents()` (the `required_meta_paths()`
    contract). If any per-target tier-1/2/3 binary, `lcsas-ecc`, CPython
@@ -329,7 +332,7 @@ required-contents contract (`required_meta_paths`,
 | `recovery/bin/<target>/lcsas-ecc` | `_bundle_tier1_binaries` | **FMT-01:** in-house RS03 verify/repair, per target. Required, not optional. |
 | `recovery/bin/<target>/python/...` | `_bundle_upstream_binaries` | Tier-3 bundled CPython tree, per target. |
 | `recovery/bin/<target>/python/lib/ld-musl-<arch>.so.1` | `_bundle_upstream_binaries` | musl's loader for the Linux x86_64 / aarch64 CPython, so tier 3 runs on glibc hosts that lack musl (#714). Pinned in `recovery/UPSTREAM.sha256` (`musl/`, from an Alpine release). Required for those two targets. |
-| `recovery/MANIFEST.sha256` | merged by `_bundle_recovery_toolchain_artifacts` | SHA-256 of the bundled recovery source/scripts (audited by `lcsas meta verify`). |
+| `recovery/MANIFEST.sha256` | computed by `_bundle_recovery_toolchain_artifacts` from the bundled files (#894) | SHA-256 of the bundled recovery source/scripts (audited by `lcsas meta verify`). |
 | `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repository Rustic state that *doesn't* go stale (keys decrypt any future pack). A repository whose mirror was unreachable at build time is absent here — and named in the build summary and in `volume_info.json` (#435), and fails the build outright if it is a live repository with packs on discs (#437). |
 | `VOLUME_INFO.txt` | `_write_volume_info` | Plain-text twin of `volume_info.json` for heirs: this is the meta disc, when it was built, the LCSAS version, and that it holds the tools but no catalog. |
 | `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions + `repo_metadata` (repositories whose keys are / are not on this disc, each with its `retired` flag and `packs_on_discs` count, plus `acknowledged` — whether the build was waved through with `--allow-missing-metadata`). |

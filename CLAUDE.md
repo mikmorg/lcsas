@@ -94,7 +94,7 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 | 2 (fallback) | upstream `rustic-static` | Hedge in case tier 1 won't run on a given host. Pinned upstream artifact (`recovery/UPSTREAM.sha256`). |
 | 3 (last resort) | bundled CPython + `standalone_restorer.py` (the Python reader) | Last-resort restore if tiers 1+2 both fail. Pinned upstream CPython (`python-build-standalone`). |
 
-**Vendoring vs runtime dependency:** sqlite + zstd live as C source in `recovery/vendored/` and we compile them ourselves alongside our own code — that's not a "third party runtime dependency", it's source we ship and audit (pinned in `recovery/MANIFEST.sha256`). Rustic and CPython ARE runtime dependencies (we ship opaque prebuilt artifacts pinned in `recovery/UPSTREAM.sha256`).
+**Vendoring vs runtime dependency:** sqlite + zstd live as C source in `recovery/vendored/` and we compile them ourselves alongside our own code — that's not a "third party runtime dependency", it's source we ship and audit (pinned in `recovery/VENDORED.sha256`). Rustic and CPython ARE runtime dependencies (we ship opaque prebuilt artifacts pinned in `recovery/UPSTREAM.sha256`).
 
 **Intent:** the bare path (tier 1) must work with nothing but kernel + libc + the `lcsas-restore` binary off the meta disc. No `pip install`, no package manager, no upstream release matrix that still needs to exist decades from now. Cross-platform tier-1 coverage as of Phase 21.12: all 6 approved targets — Linux x86_64/aarch64/armv7 musl, Windows-gnu, macOS Intel + Apple Silicon (the macOS pair via `zig cc -target <arch>-macos`, no Apple SDK required). See `docs/history/CROSS_PLATFORM_META_RFC.md` §6 Q6.
 
