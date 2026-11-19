@@ -7,9 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from lcsas.config.media import MediaType
+from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.models import Pack
 from lcsas.db.queries import get_packs_on_volumes
-from lcsas.db.volumes import get_volume_by_id, update_status
+from lcsas.db.volumes import get_volume_by_id
 
 #: Plans the volumes a stage makes of some packs on a media type
 #: (``BurnOrchestrator.plan_volumes``): one ``(packs, bytes)`` per volume.
@@ -41,8 +42,9 @@ def release_consolidation_sources(
            ORDER BY v.label""",
         (consolidation_note(session_id),),
     ).fetchall()
+    lifecycle = VolumeLifecycle(conn)
     for row in rows:
-        update_status(conn, row[0], "VERIFIED", commit=False)
+        lifecycle.consolidation_abandoned(row[0])
     conn.commit()
     return [row[1] for row in rows]
 
@@ -147,8 +149,9 @@ class VolumeMerger:
         that a crash leaves volumes in a recognisable interrupted state rather
         than silently ACTIVE.
         """
+        lifecycle = VolumeLifecycle(self._conn)
         for vid in source_volume_ids:
-            update_status(self._conn, vid, "DEPRECATED", commit=False)
+            lifecycle.consolidation_finished(vid)
         self._conn.commit()
 
     def mark_sources_consolidating(
@@ -168,15 +171,10 @@ class VolumeMerger:
         each source also gets a :func:`consolidation_note` event, so
         aborting that session returns the sources to VERIFIED (#677).
         """
-        from lcsas.db.volume_events import add_event
-
+        lifecycle = VolumeLifecycle(self._conn)
+        note = consolidation_note(session_id) if session_id is not None else None
         for vid in source_volume_ids:
-            update_status(self._conn, vid, "CONSOLIDATING", commit=False)
-            if session_id is not None:
-                add_event(
-                    self._conn, vid, "NOTE",
-                    detail=consolidation_note(session_id), commit=False,
-                )
+            lifecycle.consolidation_started(vid, note=note)
         self._conn.commit()
 
     def abort_consolidation(
@@ -184,6 +182,7 @@ class VolumeMerger:
         source_volume_ids: list[int],
     ) -> None:
         """Revert CONSOLIDATING volumes back to VERIFIED on burn failure."""
+        lifecycle = VolumeLifecycle(self._conn)
         for vid in source_volume_ids:
-            update_status(self._conn, vid, "VERIFIED", commit=False)
+            lifecycle.consolidation_abandoned(vid)
         self._conn.commit()
