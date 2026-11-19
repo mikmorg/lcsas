@@ -56,7 +56,8 @@ def _repo_key(case: Case) -> str:
     return repr((case.repo, sorted(case.tree.items()),
                  sorted(case.before.items()) if case.before else None,
                  case.pack_per_blob, case.faults.missing,
-                 case.faults.truncated, case.faults.corrupted))
+                 case.faults.truncated, case.faults.corrupted,
+                 case.faults.unreadable))
 
 
 def _built(case: Case, base: Path) -> Built:
