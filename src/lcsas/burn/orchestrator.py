@@ -2198,14 +2198,16 @@ class BurnOrchestrator:
 
     def _burn_unknown_session_volumes(self, session_id: str) -> list[str]:
         """Labels of a burn session's volumes that a catalog rebuild left
-        with no record of whether they were burned (#758,
-        :meth:`lcsas.db.lifecycle.VolumeLifecycle.burn_unknown`)."""
+        with no record of whether they were burned (#758): the ones
+        :meth:`~lcsas.db.lifecycle.VolumeLifecycle.may_delete` refuses for
+        that reason."""
         lifecycle = VolumeLifecycle(self._conn)
         return [
             label
-            for vid, label, status in self._session_volumes_without_disc(
+            for vid, label, _status in self._session_volumes_without_disc(
                 session_id)
-            if status != "BURNED" and lifecycle.burn_unknown(vid)
+            if (refusal := lifecycle.may_delete(vid)) is not None
+            and refusal.kind == "burn unknown"
         ]
 
     def _unrecorded_burned_session_volumes(
@@ -2218,19 +2220,23 @@ class BurnOrchestrator:
         volumes like this: BURNED, with no disc row (#678).  A BURNED
         volume with no disc row from before #483 (a failed post-burn
         verification) looks the same, so it is kept too.  A STAGING/BURNING
-        volume counts when an event records a good disc of it
-        (:meth:`~lcsas.db.lifecycle.VolumeLifecycle.burn_evidence`).
+        volume counts when an event records a good disc of it.  Both are
+        what :meth:`~lcsas.db.lifecycle.VolumeLifecycle.may_delete` refuses
+        for their status or their burn evidence.
         """
         lifecycle = VolumeLifecycle(self._conn)
         found: list[tuple[str, str]] = []
-        for vid, label, status in self._session_volumes_without_disc(
+        for vid, label, _status in self._session_volumes_without_disc(
                 session_id):
-            if status == "BURNED":
-                found.append((label, "BURNED, but no disc of it is recorded"))
+            refusal = lifecycle.may_delete(vid)
+            if refusal is None:
                 continue
-            evidence = lifecycle.burn_evidence(vid)
-            if evidence is not None:
-                found.append((label, f"{status}, but {evidence}"))
+            if refusal.kind == "status":
+                found.append((label, f"{refusal.status}, but no disc of it "
+                                     f"is recorded"))
+            elif refusal.kind == "burned":
+                found.append((label, f"{refusal.status}, but "
+                                     f"{refusal.evidence}"))
         return found
 
     def _session_volumes_without_disc(
