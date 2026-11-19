@@ -597,7 +597,10 @@ options:
   -h, --help           show this help message and exit
   --iso ISO            Path to the ISO file (auto-detected from session if
                        omitted).
-  --disc               Verify a burned disc instead of an ISO file.
+  --disc               Verify a burned disc instead of an ISO file. Only a
+                       disc check makes a BURNED volume VERIFIED; an ISO check
+                       changes no status. Needs --location when the volume has
+                       no disc recorded.
   --device DEVICE      Optical drive device (overrides config; default
                        /dev/sr0 when neither is set).
   --mark-verified      Manually mark the volume as verified (remote workflow).
@@ -611,9 +614,10 @@ options:
                        single-volume --disc, stamp the disc at this location
                        (defaults to the volume's only ACTIVE disc when
                        unambiguous); with --disc, record the disc there when
-                       none of the volume is recorded at it; with --mark-
-                       verified on a volume with no disc recorded (required
-                       there), record its disc at this location.
+                       none of the volume is recorded at it (required with
+                       --disc and with --mark-verified on a volume with no
+                       disc recorded); with --mark-verified, record its disc
+                       at this location.
 ===== lcsas session --help =====
 usage: lcsas session [-h] {list,abort} ...
 

@@ -34,7 +34,8 @@ stranger's hands.
 
 **Verified volume**:
 A volume at least one of whose discs has been read back in full and matched
-against its ISO image. "Verify", unqualified, means reading a disc back.
+against its ISO image. "Verify", unqualified, means reading a disc back. A
+check of the ISO image alone does not make a volume verified.
 
 **ISO image**:
 The file a volume is mastered into before it is burned onto discs.

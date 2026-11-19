@@ -1345,43 +1345,65 @@ TABLE: dict[str, list[dict[str, str]]] = {
     ],
     "disc check passes": [
         R("STAGING", "STAGING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …"),
+          deleted_by="reconcile-waiting abort-volume abort"),
         R("STAGING, rebuilt", "STAGING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("STAGING, burn evidence", "STAGING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("STAGING + disc", "STAGING", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("BURNING", "BURNING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …"),
+          deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           events="VERIFY_PASS"),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect=("VERIFIED with no disc recorded anywhere; --mark-verified refuses that "
-                   "(#673), verify --disc without --location does not")),
+        R("BURNED, rebuilt", "BURNED",
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("BURNED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS, NOTE BURNED → VERIFIED"),
         R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("VERIFIED", "VERIFIED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("CONSOLIDATING", "CONSOLIDATING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("DEPRECATED", "DEPRECATED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("DESTROYED", "DESTROYED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
     ],
     "disc check passes where no disc is recorded": [
         R("STAGING", "VERIFIED", "Bank ACTIVE",
@@ -1442,13 +1464,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
           events="VERIFY_PASS"),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           events="VERIFY_PASS"),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect=("VERIFIED from a check of the staged ISO file, not of any disc, and with no "
-                   "disc recorded")),
-        R("BURNED + disc", "VERIFIED", "Home ACTIVE",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect="VERIFIED from a check of the staged ISO file, not of any disc"),
+        R("BURNED, rebuilt", "BURNED",
+          events="VERIFY_PASS"),
+        R("BURNED + disc", "BURNED", "Home ACTIVE",
+          events="VERIFY_PASS"),
         R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("VERIFIED", "VERIFIED",
@@ -1478,13 +1497,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect=("VERIFIED from a check of the staged ISO file, not of any disc, and with no "
-                   "disc recorded")),
-        R("BURNED + disc", "VERIFIED", "Home ACTIVE",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect="VERIFIED from a check of the staged ISO file, not of any disc"),
+        R("BURNED, rebuilt", "BURNED",
+          events="VERIFY_PASS"),
+        R("BURNED + disc", "BURNED", "Home ACTIVE",
+          events="VERIFY_PASS"),
         R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("VERIFIED", "VERIFIED",
@@ -2691,12 +2707,13 @@ def test_row(table, row):
 
 def test_status_write_sites_are_the_ones_the_table_was_written_for():
     """The 20 ``update_status`` calls, 5 raw status writes and 5 deletions
-    the table was written for (#891) are now 28 calls of ``VolumeLifecycle``
+    the table was written for (#891) became 28 calls of ``VolumeLifecycle``
     events and, inside it, 18 ``_update_status`` and 2 ``_delete_volume``
     calls (events that shared a sequence share one call) and 9 status
-    writes (#892).  A new one needs rows that reach it."""
+    writes (#892).  #906 removed the ISO check's event (2 calls, 1
+    ``_update_status``).  A new one needs rows that reach it."""
     counts = Counter(site.kind for site in status_write_sites())
-    assert counts == {"lifecycle event": 28, "_update_status": 18,
+    assert counts == {"lifecycle event": 26, "_update_status": 17,
                       "_delete_volume": 2, "status write": 9}
 
 

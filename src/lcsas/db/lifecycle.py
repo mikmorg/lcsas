@@ -476,20 +476,16 @@ class VolumeLifecycle:
         )
         return get_volume_by_id(self._conn, volume_id)
 
-    def iso_check_passed(self, volume_id: int) -> Volume | None:
-        """The volume's staged ISO passed a check (``lcsas verify <label>``,
-        ``verify --all``): a BURNED volume becomes VERIFIED, committed.
-        Returns the volume when its status changed, else None."""
-        if get_volume_by_id(self._conn, volume_id).status != STATUS_BURNED:
-            return None
-        _update_status(self._conn, volume_id, STATUS_VERIFIED)
-        return get_volume_by_id(self._conn, volume_id)
+    # A check of the staged ISO image (``lcsas verify <label>``, ``verify
+    # --all``) is no event: VERIFIED means a disc of the volume was read
+    # back (#906, CONTEXT.md "Verified volume").
 
     def disc_check_passed(
         self, volume_id: int, *, disc_recorded: bool = False,
     ) -> Volume | None:
         """A disc of the volume was identified and read back
-        (``verify --disc``): a BURNED volume becomes VERIFIED.  With
+        (``verify --disc``, which needs the disc recorded or ``--location``,
+        #906): a BURNED volume becomes VERIFIED.  With
         *disc_recorded* (the check recorded that disc, #678), so does a
         STAGING or BURNING one: the same evidence a burn's own check
         gives.  Commits.  Returns the volume when its status changed,

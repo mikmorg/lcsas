@@ -281,8 +281,13 @@ def _register_burned_volume(
     iso_path: Path,
     *,
     iso_size_override: int | None = None,
+    disc_at: str | None = None,
 ) -> int:
-    """Register *iso_path* as a BURNED volume the way stage() records it."""
+    """Register *iso_path* as a BURNED volume the way stage() records it.
+
+    With *disc_at*, its disc is recorded at that location too: since #906
+    ``verify --disc`` without ``--location`` refuses a volume with no disc
+    recorded (as ``--mark-verified`` does, #673)."""
     from lcsas.db.connection import get_connection
     from lcsas.db.schema import create_all
     from lcsas.db.sessions import add_session_volume, create_session
@@ -309,6 +314,14 @@ def _register_burned_volume(
             else iso_path.stat().st_size
         ),
     )
+    if disc_at is not None:
+        conn.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)",
+                     (disc_at,))
+        conn.execute(
+            "INSERT INTO volume_copies (volume_id, location, burn_date) "
+            "VALUES (?, ?, '2026-01-01T00:00:00+00:00')",
+            (vol.volume_id, disc_at),
+        )
     conn.commit()
     conn.close()
     return vol.volume_id
@@ -328,7 +341,8 @@ def test_verify_disc_wrong_disc_records_nothing(cdemu_device, tmp_path):
     iso_b = _master_iso(tmp_path, label_b)
 
     db_path = tmp_path / "archive.db"
-    vol_id = _register_burned_volume(db_path, label_a, iso_a)
+    vol_id = _register_burned_volume(db_path, label_a, iso_a,
+                                     disc_at="E2E_Shelf")
 
     # Baseline: registration itself logs STATUS_CHANGE audit events —
     # the verify run must add nothing on top of them.
@@ -473,7 +487,7 @@ def test_verify_disc_truncated_image_fails(cdemu_device, tmp_path):
     full_size = iso.stat().st_size
 
     db_path = tmp_path / "archive.db"
-    _register_burned_volume(db_path, label, iso)
+    _register_burned_volume(db_path, label, iso, disc_at="E2E_Shelf")
 
     # Truncate the backing image by two sectors (PVD at sector 16 stays
     # intact, so the disc still identifies correctly — only the length

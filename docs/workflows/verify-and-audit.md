@@ -69,15 +69,15 @@ one place that decides it
 6. **Manual-marking branch (`--mark-verified`, `_mark_verified`):** only a `BURNED` or `STAGING` volume (not a lost one). A volume with no ACTIVE disc needs `--location` (#673): the disc is recorded there (ACTIVE, with the staged ISO's hash; `last_verified_at` stays empty, as nothing read the disc) and `closed_at` is set. Then `BURNED → VERIFIED` (or `STAGING → BURNING → VERIFIED`) and a `VERIFY_PASS` event at that location. A `--location` where the volume has no disc, while it has discs elsewhere, is refused. To check the disc itself instead, see `burn-iso --verify-only` in `burn-iso-portable.md`.
 7. **Manual-marking branch (`--mark-failed`):** append a `VERIFY_FAIL` event with `detail` text; do not change status.
 8. **Physical/ISO branch:** if `--iso` was not passed and `--disc` was not requested, look up the most-recent `session_volumes.iso_path` for the volume; bail if neither is available.
-9. If `--disc`: resolve which disc is in the drive (`--location`, or the volume's sole ACTIVE disc), then run `_check_disc_for_volume` (`src/lcsas/cli/commands/verify.py`): an **identity gate** first (read the disc's ISO 9660 Volume ID; a mismatch / unreadable ID is `WRONG_DISC` and records *nothing* — FMA-03), then `verify_disc` (`-check_media` readability), then a **device read-back SHA-256** compared against the hash recorded at stage time (BURN-04). A PASS stamps `last_verified_at` on the disc (FMA-05).
+9. If `--disc`: resolve which disc is in the drive (`--location`, or the volume's sole ACTIVE disc; a volume with no disc recorded needs `--location`, as `--mark-verified` does (#673, #906), and is refused before the drive is read), then run `_check_disc_for_volume` (`src/lcsas/cli/commands/verify.py`): an **identity gate** first (read the disc's ISO 9660 Volume ID; a mismatch / unreadable ID is `WRONG_DISC` and records *nothing* — FMA-03), then `verify_disc` (`-check_media` readability), then a **device read-back SHA-256** compared against the hash recorded at stage time (BURN-04). A PASS stamps `last_verified_at` on the disc (FMA-05).
 10. Else (ISO mode): confirm the ISO image exists, then **FMT-01 ECC chain** via `select_ecc_runner()` — prefer real `dvdisaster` (RS03 verify, can detect *and* repair); else fall back to the bundled in-house `lcsas-ecc` (decode-only); if *neither* ECC tool is present, fall back to a portable **SHA-256** compare against the catalog-recorded hash (detect-only).
 11. Append a `VERIFY_PASS` or `VERIFY_FAIL` event with detail describing the source; the valid event types come from `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`) and the underlying insert is `add_event`.
-12. If the verification passed *and* the volume was `BURNED`, promote it to `VERIFIED`: the `VolumeLifecycle` event `iso_check_passed` or `disc_check_passed` (`src/lcsas/db/lifecycle.py`) decides; a disc check that just recorded the disc of a `STAGING`/`BURNING` volume promotes it too (#678).
+12. If a disc check passed *and* the volume was `BURNED`, promote it to `VERIFIED`: the `VolumeLifecycle` event `disc_check_passed` (`src/lcsas/db/lifecycle.py`) decides; a disc check that just recorded the disc of a `STAGING`/`BURNING` volume promotes it too (#678).  An ISO check changes no status: `VERIFIED` means a disc was read back (#906), so a `BURNED` volume whose ISO passes stays `BURNED` and the command says to read its disc back.
 13. Return `0` on pass, `1` on fail.
 
 **Expected outcome:**
 - Stdout shows `Verifying ISO: <path>` (or `Verifying disc on <device> ...`) and a `PASS`/`FAIL` line.
-- For a previously-`BURNED` volume that passes, log line `Volume <label>: promoted BURNED → VERIFIED`.
+- For a previously-`BURNED` volume whose disc passes, log line `Volume <label>: promoted BURNED → VERIFIED`.  An ISO check leaves it `BURNED` (#906).
 - A new row appears in `volume_events` with `event_type` set to `VERIFY_PASS` or `VERIFY_FAIL`, today's UTC `event_date`, and the path or device in `detail`.
 - Exit code `0` on pass, `1` on fail or argument error.
 
@@ -124,7 +124,7 @@ one place that decides it
 3. Probe the ECC tool ONCE up front with `select_ecc_runner()` (FMT-01); if absent, log that the whole sweep falls back to SHA-256.
 4. For each candidate, look up the most-recent `session_volumes.iso_path`; if missing/gone, report and point at `verify --all --disc`.
 5. Run `ecc_runner.verify_iso(iso_path)` (or the SHA-256 fallback), append a `VERIFY_PASS` / `VERIFY_FAIL` event (`"Batch ISO verify"` / `"Batch SHA-256 verify"`).
-6. On pass, promote `BURNED → VERIFIED`.
+6. A pass changes no status: a `BURNED` volume stays `BURNED` until a disc of it is read back (#906).
 7. Print a summary line: passed / failed / skipped.
 8. Exit `1` if any volume failed *or* if every candidate was skipped; `0` otherwise.
 
@@ -134,7 +134,7 @@ one place that decides it
 - One log line per volume (`<label>: PASS` / `FAIL`, or `<label>: ISO not found ... — skipped`).
 - One summary line: `Verification complete: N passed, M failed, K skipped`.
 - One `VERIFY_PASS` or `VERIFY_FAIL` row in `volume_events` per non-skipped volume.
-- `BURNED` volumes that passed are now `VERIFIED`.
+- No status changes: `BURNED` volumes that passed stay `BURNED` (an ISO check does not verify a disc, #906).
 
 **Variant axes that apply:**
 - **Media type:** ECC verification only, so this works equally well for BD25 / MDISC100 / TEST_TINY ISO images.
@@ -149,7 +149,7 @@ one place that decides it
 - Gaps:
   - No test exercises the `--location` filter.
   - No test asserts the "all skipped → exit 1" branch.
-  - No test for the `BURNED → VERIFIED` promotion in batch mode.
+  - The #891 table (`tests/unit/test_volume_lifecycle_table.py`) pins that a passing batch ISO check leaves a `BURNED` volume `BURNED` (#906).
 
 **Source refs:**
 - `build_parser()` (`--all` / `--disc` / `--location`), `_verify_all`, `_verify_all_disc` (`src/lcsas/cli/commands/verify.py` and `src/lcsas/cli/parser.py`)

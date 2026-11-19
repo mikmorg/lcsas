@@ -813,8 +813,7 @@ each event does from every start state is pinned by
 | `burn_stopped`                | `lcsas burn`, stopped by an error or Ctrl-C        | `BURNING → STAGING` (#668)                      |
 | `burn_interrupted_recovered`  | the next `lcsas burn` after a burn was killed      | `BURNING → STAGING`, or `→ BURNED` when it was `BURNED` before that burn (#810) |
 | `verified_by_hand`            | `lcsas verify --mark-verified`                     | `STAGING`/`BURNED → VERIFIED` (a `STAGING` one through `BURNING`) |
-| `iso_check_passed`            | `lcsas verify <label>`, `lcsas verify --all`       | `BURNED → VERIFIED`                             |
-| `disc_check_passed`           | `lcsas verify --disc`, `lcsas verify --all --disc` | `BURNED → VERIFIED`; `STAGING`/`BURNING → VERIFIED` when the check recorded the disc (#678) |
+| `disc_check_passed`           | `lcsas verify --disc`, `lcsas verify --all --disc` | `BURNED → VERIFIED`; `STAGING`/`BURNING → VERIFIED` when the check recorded the disc (#678); `verify --disc` of a volume with no disc recorded needs `--location` (#906) |
 | `passing_receipt_imported`    | `catalog import-receipts`, `verify_passed=true` (#669, #670) | first disc: `STAGING`/`BURNING`/`BURNED → VERIFIED`; disc recorded |
 | `unverified_receipt_imported` | `catalog import-receipts`, `verify_passed=null` (`burn-iso --no-verify`) | `STAGING`/`BURNING → BURNED`; disc recorded |
 | `failing_receipt_imported`    | `catalog import-receipts`, `verify_passed=false`   | first disc: `BURNING →` the status before its burn (#483, #810); no disc recorded |
@@ -827,7 +826,10 @@ each event does from every start state is pinned by
 | `disc_catalog_status_adopted` | `lcsas catalog rebuild`                            | the freshest disc catalog's status (FMA-06), outside the graph, no note |
 | `own_disc_read_in_rebuild`    | `lcsas catalog rebuild`, reading the volume's own disc | `STAGING`/`BURNING → BURNED` (#678), no note |
 
-No event writes the volume-wide `DESTROYED` status (#907); see *Gaps*.
+A check of the ISO image (`lcsas verify <label>`, `lcsas verify --all`)
+changes no status: `VERIFIED` means a disc of the volume was read back
+(#906).  No event writes the volume-wide `DESTROYED` status (#907); see
+*Gaps*.
 
 The lifecycle's private `_update_status` (`src/lcsas/db/lifecycle.py`) enforces the
 table and, on the `* → DEPRECATED` edge, additionally runs
