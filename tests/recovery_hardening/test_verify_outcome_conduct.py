@@ -22,6 +22,9 @@ fail CONDUCT, and the FAIL line must show why.
 
 No agent, no CDEmu: verify.sh only reads the folder, the fixture and the
 two ISOs (loop-mounted through sudo, as on the lab VM).
+
+Which saved texts count as the prompt's loop (harness_files) is unit-tested
+in tests/unit/test_blind_checks.py, with each check on its own (#890).
 """
 
 from __future__ import annotations
@@ -32,10 +35,21 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
+from tests.fixtures.blind_transcripts import (
+    DISC_SWAP_LOOP,
+    HANDLE_RESTORE,
+    INLINE_LOOP,
+    LABEL,
+    PW_HEX,
+    RESTORE_RUNNER,
+    bash,
+    loop_with,
+    said,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = REPO_ROOT / "tests" / "e2e" / "cdemu_blind_restore"
@@ -47,118 +61,6 @@ _spec = importlib.util.spec_from_file_location(
 assert _spec is not None and _spec.loader is not None
 blind_runs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(blind_runs)
-
-sys.path.insert(0, str(HARNESS))
-import harness_files  # noqa: E402
-
-from tests.fixtures.blind_transcripts import (  # noqa: E402
-    DISC_SWAP_LOOP,
-    HANDLE_RESTORE,
-    INLINE_LOOP,
-    LABEL,
-    PW_HEX,
-    RESTORE_RUNNER,
-    bash,
-    loop_with,
-    said,
-    transcript_file,
-)
-
-# --- harness_files: which saved texts are the prompt's loop ----------------
-
-
-def _body(command: str) -> str:
-    writes = list(harness_files.heredoc_writes(command))
-    assert len(writes) == 1, writes
-    return writes[0][1]
-
-
-@pytest.mark.parametrize("command", [HANDLE_RESTORE, DISC_SWAP_LOOP])
-def test_the_rc9_saved_loops_are_the_prompts_loop(command: str) -> None:
-    assert harness_files.is_swap_loop(_body(command))
-
-
-def test_the_old_prompt_loop_text_is_the_prompts_loop() -> None:
-    assert harness_files.is_swap_loop(INLINE_LOOP)
-    assert harness_files.is_swap_loop(_body(loop_with("")))
-
-
-@pytest.mark.parametrize("extra", [
-    "    restore-shell start sh /media/restore.sh ~/restored latest\n",
-    '    restore-shell send "$(cat ~/alpha.pw)"\n',
-    f"    restore-shell send {PW_HEX}\n",
-    "    restore-shell send-raw x\n",
-    "    echo \"$out\" > /tmp/log.txt\n",
-    "    python3 /media/keyshare_combine.py a b\n",
-    "    sh /media/restore.sh ~/restored latest\n",
-    "    cat /media/restore.sh\n",
-    "    cp ~/lcsas-restore-tools/standalone_restorer.py /tmp/\n",
-])
-def test_a_loop_that_does_more_is_a_wrapper(extra: str) -> None:
-    assert not harness_files.is_swap_loop(_body(loop_with(extra)))
-
-
-# The same, with the command hidden inside a double-quoted substitution.
-@pytest.mark.parametrize("extra", [
-    '    echo "$(sh /media/restore.sh ~/restored latest)"\n',
-    '    echo "`sh /media/restore.sh`"\n',
-    '    restore-shell send "$(cat ~/alpha.key)"\n',
-])
-def test_a_quoted_substitution_is_looked_into(extra: str) -> None:
-    assert not harness_files.is_swap_loop(_body(loop_with(extra)))
-
-
-def test_a_loop_with_quoted_substitutions_is_the_loop() -> None:
-    quoted = loop_with('    echo "swap $(date +%T): ${DATA_DISCS[$disc_idx]}"\n')
-    assert not harness_files.is_swap_loop(_body(quoted))  # date: not the loop
-    quoted = _body(loop_with("")).replace(
-        "out=$(restore-shell expect 'Insert the right disc|restore complete' 120)",
-        "out=\"$(restore-shell expect 'Insert the right disc|restore complete' 120)\"",
-    )
-    assert 'out="$(' in quoted
-    assert harness_files.is_swap_loop(quoted)
-
-
-def test_a_runner_is_a_wrapper() -> None:
-    assert not harness_files.is_swap_loop(_body(RESTORE_RUNNER))
-
-
-def test_a_file_with_no_disc_swap_is_not_the_loop() -> None:
-    assert not harness_files.is_swap_loop("echo hello\n")
-    assert not harness_files.is_swap_loop("restore-shell expect x 10\n")
-
-
-def test_only_resume_sh_of_the_tools_folder_is_restore_sh_s(tmp_path: Path) -> None:
-    exempt = harness_files.harness_file(transcript_file(tmp_path, []))
-    for path in ("~/lcsas-restore-tools/resume.sh",
-                 "/home/lcsas-blind/lcsas-restore-tools/resume.sh",
-                 "$HOME/lcsas-restore-tools/resume.sh"):
-        assert exempt(path), path
-    for path in ("~/lcsas-restore-tools/standalone_restorer.py",
-                 "~/lcsas-restore-tools/recovery/scripts/restore.sh",
-                 "/media/restore.sh", "/tmp/resume.sh", "~/resume.sh"):
-        assert not exempt(path), path
-
-
-def test_a_path_written_as_loop_and_as_wrapper_is_not_exempt(
-    tmp_path: Path,
-) -> None:
-    exempt = harness_files.harness_file(transcript_file(tmp_path, [
-        loop_with("", "/tmp/x.sh"),
-        loop_with("    sh /media/restore.sh ~/restored latest\n", "/tmp/x.sh"),
-        loop_with("", "/tmp/y.sh"),
-    ]))
-    assert not exempt("/tmp/x.sh")
-    assert exempt("/tmp/y.sh")
-
-
-def test_a_resume_sh_the_agent_wrote_itself_is_not_exempt(tmp_path: Path) -> None:
-    exempt = harness_files.harness_file(transcript_file(tmp_path, [
-        "cat > ~/lcsas-restore-tools/resume.sh <<'EOF'\n"
-        "sh /media/restore.sh ~/restored latest\nEOF",
-    ]))
-    assert not exempt("/home/lcsas-blind/lcsas-restore-tools/resume.sh")
-
 
 # --- verify.sh end to end ----------------------------------------------------
 
