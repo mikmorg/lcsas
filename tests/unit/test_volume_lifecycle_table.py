@@ -366,24 +366,25 @@ def build_templates(base: Path) -> Templates:
 def seed(env: Env, start: Start) -> None:
     """Force *start* onto the staged volume with raw SQL.
 
-    The one place this file forces a volume's status (#892 step 4
-    replaces it); :func:`seed_replica` and :func:`seed_consolidation_tie`
-    add the other rows a few events need.  Every NOTE is the text
-    production writes for that history, so the rules that read NOTEs
-    (``status_before_burning``, ``deprecated_by_loss``,
-    ``rebuild_burn_unknown``) see what they would.  Seeded history is
+    The one place this file forces a volume's status (through the test
+    helper ``force_status``, #892); :func:`seed_replica` and
+    :func:`seed_consolidation_tie` add the other rows a few events need.
+    Every NOTE is the text production writes for that history, so the
+    rules that read NOTEs (in ``db/lifecycle.py``: the status before a
+    burn, burn evidence, the #758 rebuild flag; ``deprecated_by_loss``)
+    see what they would.  Seeded history is
     dated an hour ago, so what an event writes is always newer (the #666
     guard compares a receipt's burn date with when its disc was recorded
     lost).
     """
+    from tests.unit.volume_status import force_status
+
     conn, vid = env.conn, env.volume_id
     durable = start.status not in ("STAGING", "BURNING")
     verified = start.status not in ("STAGING", "BURNING", "BURNED")
-    conn.execute(
-        "UPDATE volumes SET status = ?, closed_at = ?, verified_at = ? "
-        "WHERE volume_id = ?",
-        (start.status, _ts(_DAY_AGO) if durable else None,
-         _ts(_DAY_AGO) if verified else None, vid))
+    force_status(conn, vid, start.status,
+                 closed_at=_ts(_DAY_AGO) if durable else None,
+                 verified_at=_ts(_DAY_AGO) if verified else None)
     if start.disc is not None:
         conn.execute(
             "INSERT INTO volume_copies (volume_id, location, status, "

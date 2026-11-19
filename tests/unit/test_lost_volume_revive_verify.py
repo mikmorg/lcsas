@@ -24,7 +24,7 @@ from tests.unit.test_lost_volume_reburn import (
     _assert_in_service,
     burned,  # noqa: F401  (fixture)
 )
-from tests.unit.volume_status import update_status
+from tests.unit.volume_status import force_status, update_status
 
 
 def _pre_726_disc(conn, volume_id: int, location: str) -> None:
@@ -94,8 +94,7 @@ def test_consolidated_volume_is_never_revived(burned):  # noqa: F811
     create_location(conn, "Offsite")
     # Back to VERIFIED with a disc (as #726 would), then consolidated.
     _pre_726_disc(conn, vid, "Offsite")
-    conn.execute("UPDATE volumes SET status = 'VERIFIED' WHERE volume_id = ?",
-                 (vid,))
+    force_status(conn, vid, "VERIFIED")
     conn.commit()
     update_status(conn, vid, "CONSOLIDATING")
     update_status(conn, vid, "DEPRECATED", force=True)

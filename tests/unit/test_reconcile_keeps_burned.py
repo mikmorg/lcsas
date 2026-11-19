@@ -27,6 +27,7 @@ from lcsas.db.sessions import add_session_volume, create_session
 from lcsas.db.volume_events import add_event
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume, get_volume_by_label
+from tests.unit.volume_status import force_status
 
 EVIDENCE = {
     "verify_pass": ("VERIFY_PASS", "Home",
@@ -138,8 +139,7 @@ def test_fix_keeps_volume_an_older_lcsas_moved_from_burned_to_burning(
     conn = get_connection(db)
     try:
         vid = get_volume_by_label(conn, "BURNED_NO_DISC").volume_id
-        conn.execute("UPDATE volumes SET status = 'BURNING' "
-                     "WHERE volume_id = ?", (vid,))
+        force_status(conn, vid, "BURNING")
         for detail in ("Status changed: STAGING → BURNING",
                        "Status changed: BURNING → BURNED",
                        "Status changed: BURNED → BURNING"):

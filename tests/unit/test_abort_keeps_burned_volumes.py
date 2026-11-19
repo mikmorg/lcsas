@@ -37,6 +37,7 @@ from lcsas.db.sessions import get_session
 from lcsas.db.volume_events import add_event
 from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import get_volume_by_label
+from tests.unit.volume_status import force_status
 
 
 def _config(tmp_path: Path) -> LCSASConfig:
@@ -313,8 +314,7 @@ _WAS_BURNED = "it was BURNED when a burn of it started"
 def _rc7_history(conn, volume_id: int, status: str,
                  notes: tuple[str, ...]) -> None:
     """Give the volume *status* and *notes*, as the older LCSAS left it."""
-    conn.execute("UPDATE volumes SET status = ? WHERE volume_id = ?",
-                 (status, volume_id))
+    force_status(conn, volume_id, status)
     for detail in notes:
         add_event(conn, volume_id, "NOTE", detail=detail)
 
@@ -382,8 +382,7 @@ def test_mixed_session_deletes_nothing(tmp_path):
     orch = _orchestrator(config, conn)
     result = orch.stage()
     first, second = result.manifests
-    conn.execute("UPDATE volumes SET status = 'BURNED' WHERE volume_id = ?",
-                 (second.volume_id,))
+    force_status(conn, second.volume_id, "BURNED")
     conn.commit()
 
     with pytest.raises(ValueError, match=f"{second.volume_label} is BURNED"):

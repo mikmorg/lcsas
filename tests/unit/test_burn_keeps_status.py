@@ -39,7 +39,7 @@ from tests.unit.test_session_pipeline import (
     _seed_packs,
     _wire_drive_identity,
 )
-from tests.unit.volume_status import update_status
+from tests.unit.volume_status import force_status, update_status
 
 
 class _RecordingPrompt:
@@ -135,9 +135,10 @@ def _status(env, volume_id: int | None = None) -> str:
 def _make_burned(env) -> None:
     """What 'catalog rebuild' writes for a volume whose own disc it read:
     BURNED, no disc record (db/rebuild.py _promote_read_discs)."""
+    force_status(env["conn"], env["volume_id"], "BURNED")
     env["conn"].execute(
-        "UPDATE volumes SET status = 'BURNED', "
-        "created_at = datetime('now', '-48 hours') WHERE volume_id = ?",
+        "UPDATE volumes SET created_at = datetime('now', '-48 hours') "
+        "WHERE volume_id = ?",
         (env["volume_id"],),
     )
     env["conn"].commit()
@@ -245,8 +246,7 @@ def test_status_before_burning(one):
     update_status(conn, vid, "BURNING")
     assert _status_before_burning(conn, vid) == "STAGING"
     update_status(conn, vid, "STAGING")
-    conn.execute("UPDATE volumes SET status = 'BURNED' WHERE volume_id = ?",
-                 (vid,))
+    force_status(conn, vid, "BURNED")
     update_status(conn, vid, "BURNING", force=True)
     assert _status_before_burning(conn, vid) == "BURNED"
 
