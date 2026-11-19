@@ -431,16 +431,26 @@ _KEPT = {
                           "Status changed: STAGING → BURNING",
                           "Status changed: BURNING → STAGING"))),
         _WAS_BURNED_EARLIER),
-    # Case 2: a bare "BURNED → STAGING" note, with no failing receipt
-    # beside it.  No LCSAS from rc1 to rc9 wrote that note on its own:
-    # its only writer was the receipt import above (c5b3338 to 7935657),
-    # which always wrote the failing receipt with it.  The note alone
-    # still counts, and so with a later killed burn.
+    # Case 2: "BURNED → STAGING".  Its only writer in rc1 to rc9 was
+    # the receipt import above (c5b3338 to 7935657), with the failing
+    # receipt beside it; the bare note counts as well.
     "burned-to-staging": (
         "STAGING", (_note("Status changed: BURNED → STAGING"),),
         _WAS_BURNED_THEN_STAGING),
     "burned-to-staging, killed": (
         "BURNING", (_note("Status changed: BURNED → STAGING"),
+                    _note("Status changed: STAGING → BURNING")),
+        _WAS_BURNED_THEN_STAGING),
+    # Case 3, #483: the volume's only disc may have failed verification.
+    # A catalog rebuild that read a disc of it marked it BURNED with raw
+    # SQL and no note (rc8 db/rebuild.py _promote_read_discs); importing
+    # a failing receipt then set it STAGING.  The receipt does not say
+    # the BURNED status was wrong, so the volume is kept until removed
+    # by hand (owner decision on #912), also after a later killed burn.
+    "failing-receipt": (
+        "STAGING", _rc9_failing_receipt(), _WAS_BURNED_THEN_STAGING),
+    "failing-receipt, killed": (
+        "BURNING", (*_rc9_failing_receipt(),
                     _note("Status changed: STAGING → BURNING")),
         _WAS_BURNED_THEN_STAGING),
 }
@@ -470,72 +480,30 @@ def test_burned_earlier_is_never_deleted(staged, case):
     assert get_session(conn, result.session_id).status == "STAGED"
 
 
-# Case 3, #483: the volume's only disc failed verification.  A catalog
-# rebuild that read that disc marked the volume BURNED with raw SQL and
-# no note (rc8 db/rebuild.py _promote_read_discs); importing the disc's
-# failing receipt then set it STAGING.  The receipt accounts for the
-# note, so the volume stays deletable, also after a later killed burn.
-_FAILED_ONLY = {
-    "failing receipt": ("STAGING", _rc9_failing_receipt()),
-    "failing receipt, killed": (
-        "BURNING", (*_rc9_failing_receipt(),
-                    _note("Status changed: STAGING → BURNING"))),
-}
-
-
-@pytest.mark.parametrize("deleter", [
-    "abort", "abort --never-burned", "clean --force", "abort --volume",
-    "abort --volume --never-burned",
-])
-@pytest.mark.parametrize("case", sorted(_FAILED_ONLY))
-def test_only_disc_failed_is_still_deleted(staged, case, deleter):
-    orch, conn, result, manifest = staged
-    status, events = _FAILED_ONLY[case]
-    _old_history(conn, manifest.volume_id, status, events)
-
-    assert VolumeLifecycle(conn).burn_evidence(manifest.volume_id) is None
-    if deleter.startswith("abort --volume"):
-        orch.abort_volume(manifest.volume_label,
-                          never_burned="never" in deleter)
-    elif deleter.startswith("abort"):
-        orch.abort_session(result.session_id,
-                           never_burned="never" in deleter)
-    else:
-        orch.clean_session(result.session_id, force=True)
-    assert get_volume_by_label(conn, manifest.volume_label) is None
-    assert len(get_unarchived_packs(conn)) == 2
-
-
 @pytest.mark.parametrize("events, why", [
-    # The failing receipt is at another location than the VERIFY_FAIL:
-    # not the import's own three events.
-    ((*_rc9_failing_receipt()[:2],
-      _rc9_failing_receipt(location="Bank")[2]),
+    # A failing receipt excepts no note: the newest note out of BURNED
+    # gives the reason, here the receipt import's own.
+    ((*map(_note, _EARLIER_BURN_UNDONE),
+      _note("Status changed: STAGING → BURNING"),
+      _note("Status changed: BURNING → BURNED"),
+      *_rc9_failing_receipt()),
      _WAS_BURNED_THEN_STAGING),
-    # Another event between the note and the VERIFY_FAIL.
-    ((_rc9_failing_receipt()[0], ("CONDITION_CHECK", "Home", "ok"),
-      *_rc9_failing_receipt()[1:]),
-     _WAS_BURNED_THEN_STAGING),
-    # The receipt passed: evidence by itself.
+    # A passing receipt is evidence by itself, and is read first.
     ((*_rc9_failing_receipt()[:2],
       ("BURN_RECEIPT_IMPORTED", "Home",
        json.dumps({"receipt_file": "TEST-0001.receipt.json",
                    "verify_passed": True}))),
      "a burn receipt of it was imported at Home"),
-    # A failing receipt accounts only for its own note: the earlier
-    # burn from BURNED still counts.
-    ((*map(_note, _EARLIER_BURN_UNDONE),
-      _note("Status changed: STAGING → BURNING"),
-      _note("Status changed: BURNING → BURNED"),
-      *_rc9_failing_receipt()),
-     _WAS_BURNED_EARLIER),
     # Out of VERIFIED counts too.
     ((_note("Status changed: VERIFIED → CONSOLIDATING"),),
      "it was VERIFIED before it was set to CONSOLIDATING"),
+    # Notes that never leave BURNED or VERIFIED are no evidence.
+    ((_note("Status changed: STAGING → BURNING"),
+      _note("Status changed: BURNING → STAGING")),
+     None),
 ])
-def test_which_failing_receipt_accounts_for_the_note(staged, events, why):
+def test_burn_evidence_from_status_notes(staged, events, why):
     _orch, conn, _result, manifest = staged
-    conn.execute("INSERT INTO locations (name) VALUES ('Bank')")
     _old_history(conn, manifest.volume_id, "STAGING", events)
     assert VolumeLifecycle(conn).burn_evidence(manifest.volume_id) == why
 

@@ -230,9 +230,8 @@ def _burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
       rc1 to rc9 also demoted a BURNED volume whose burn failed
       (BURNED → BURNING → STAGING), so a later burn from STAGING hides
       the note above, and rc8 and rc9 set a BURNED volume STAGING when
-      a failing receipt was imported.  The one note that does not count
-      is the one such a failing receipt import wrote: it says only that
-      the receipt's disc failed (#483).
+      a failing receipt was imported.  No such note is excepted, not
+      even one a failing receipt import wrote (owner decision on #912).
 
     ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
     to STAGING and is re-staged or aborted (BURN-05, #483).
@@ -283,45 +282,49 @@ def _left_burned_or_verified(
     conn: sqlite3.Connection, volume_id: int,
 ) -> str | None:
     """Why a status note says the volume was BURNED or VERIFIED, or None
-    (#912).  The newest such note that counts gives the reason.
+    (#912).  Every such note counts, however old; the newest gives the
+    reason.
 
-    Every note out of BURNED or VERIFIED counts except "Status changed:
-    BURNED → STAGING" when the volume's next two events are the
-    ``VERIFY_FAIL`` and the ``BURN_RECEIPT_IMPORTED`` (``verify_passed``
-    false) that the same receipt import wrote.  That is what
-    ``catalog import-receipts`` wrote, from c5b3338 (rc8, rc9) until
-    #810 (7935657, rc10), for a failing receipt of a BURNED volume with
-    no disc recorded, in one transaction under the catalog lock:
+    The notes older LCSAS versions left that only this rule sees:
 
-    1. ``NOTE`` "Status changed: BURNED → STAGING" (``update_status``);
-    2. ``VERIFY_FAIL`` at the receipt's location, detail "Offline burn
-       receipt: <file name>";
-    3. ``BURN_RECEIPT_IMPORTED`` at that location, its JSON detail with
-       ``"receipt_file": "<file name>"`` and ``"verify_passed": false``.
+    - "Status changed: BURNED → BURNING" followed, after the burn failed
+      or was stopped, by "BURNING → STAGING" (rc1 to rc9, until #810):
+      a later burn from STAGING then writes a newer "→ BURNING" note,
+      which hides the first from :func:`_status_before_burning`.
+    - "Status changed: BURNED → STAGING".  Its only writer in rc1 to rc9
+      was ``catalog import-receipts`` from c5b3338 (rc8, rc9) until #810
+      (7935657, rc10), for a receipt with ``verify_passed`` false for a
+      BURNED volume with no disc recorded.  It wrote, in one transaction
+      under the catalog lock: the note (``update_status``), then
+      ``VERIFY_FAIL`` at the receipt's location ("Offline burn receipt:
+      <file name>"), then ``BURN_RECEIPT_IMPORTED`` at that location
+      (``"receipt_file": "<file name>"``, ``"verify_passed": false``),
+      each event with its own ``datetime.now()``.  rc2 to rc7 changed no
+      status for a failing receipt, rc1 recorded its disc, and every
+      burn went BURNED → BURNING first.
 
-    So the three are adjacent in the volume's events, and the match is
-    on that order, the location and the file name.  Not on the dates:
-    each ``add_event`` stamped its own ``datetime.now()``.  Not on
-    consecutive ``event_id`` values either: ``catalog rebuild`` copies
-    events into a catalog with new ids.  No other LCSAS from rc1 to rc9
-    wrote "BURNED → STAGING" (its burns went BURNED → BURNING first),
-    and none paired a failing receipt with any other note out of BURNED
-    or VERIFIED, so the exception covers only this note.  rc2 to rc7
-    changed no status for a failing receipt; rc1 recorded its disc and
-    wrote no ``verify_passed`` in the event.  Since #810 a failing
-    receipt leaves a BURNED volume BURNED.
+    That failing receipt does not except its note (owner decision on
+    #912).  The note was first meant to be excepted, so that a volume
+    whose only disc failed verification stays deletable (#483).  But the
+    receipt says only that its own disc failed, not why the volume was
+    BURNED before it: a catalog rebuild that read a disc of it, with no
+    note, looks the same.  The exception would have let every real
+    "BURNED → STAGING" note be deleted, which is the gap #912 closes.
+    The residual: a volume whose only disc failed and that carries such
+    a note (an rc8/rc9 failing receipt, or an rc1 burn that left it
+    BURNED after a failed verify and was then burned again) is never
+    deleted by ``session abort``, ``stage --clean`` or ``catalog
+    reconcile --fix``; it stays until removed by hand.
     """
-    events = conn.execute(
-        """SELECT event_type, location, detail FROM volume_events
-           WHERE volume_id = ?
+    reason = None
+    for (detail,) in conn.execute(
+        """SELECT detail FROM volume_events
+           WHERE volume_id = ? AND event_type = 'NOTE'
            ORDER BY julianday(event_date), event_id""",
         (volume_id,),
-    ).fetchall()
-    reason = None
-    for i, (event_type, _location, detail) in enumerate(events):
-        match = (_LEFT_DURABLE_NOTE.match(str(detail or ""))
-                 if event_type == "NOTE" else None)
-        if match is None or _failing_receipt_wrote(events, i):
+    ):
+        match = _LEFT_DURABLE_NOTE.match(str(detail or ""))
+        if match is None:
             continue
         status, new_status = match.groups()
         if new_status == STATUS_BURNING:
@@ -331,28 +334,6 @@ def _left_burned_or_verified(
         else:
             reason = f"it was {status} before it was set to {new_status}"
     return reason
-
-
-def _failing_receipt_wrote(
-    events: list[tuple[str, str | None, str | None]], i: int,
-) -> bool:
-    """True when ``events[i]`` is the "BURNED → STAGING" note that a
-    failing receipt import of rc8 or rc9 wrote, followed by its
-    ``VERIFY_FAIL`` and ``BURN_RECEIPT_IMPORTED``
-    (:func:`_left_burned_or_verified`)."""
-    if events[i][2] != f"Status changed: {STATUS_BURNED} → {STATUS_STAGING}":
-        return False
-    if len(events) < i + 3:
-        return False
-    fail_type, fail_location, fail_detail = events[i + 1]
-    import_type, import_location, import_detail = events[i + 2]
-    receipt = _receipt(import_detail)
-    return (fail_type == "VERIFY_FAIL"
-            and import_type == "BURN_RECEIPT_IMPORTED"
-            and fail_location == import_location
-            and receipt.get("verify_passed") is False
-            and fail_detail
-            == f"Offline burn receipt: {receipt.get('receipt_file')}")
 
 
 def _rebuild_burn_unknown(conn: sqlite3.Connection, volume_id: int) -> bool:

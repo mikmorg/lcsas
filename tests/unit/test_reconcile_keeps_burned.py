@@ -27,11 +27,7 @@ from lcsas.db.sessions import add_session_volume, create_session
 from lcsas.db.volume_events import add_event
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume, get_volume_by_label
-from tests.unit.test_abort_keeps_burned_volumes import (
-    _FAILED_ONLY,
-    _KEPT,
-    _old_history,
-)
+from tests.unit.test_abort_keeps_burned_volumes import _KEPT, _old_history
 from tests.unit.volume_status import force_status
 
 EVIDENCE = {
@@ -177,7 +173,8 @@ def test_fix_keeps_volume_that_was_burned_earlier(
     tmp_path, caplog, case, include_waiting,
 ):
     """#912: a status note out of BURNED anywhere in the history keeps
-    the volume (the literal rc1 to rc9 histories of
+    the volume, also the one an rc8/rc9 failing receipt import wrote
+    (the literal rc1 to rc9 histories of
     ``test_abort_keeps_burned_volumes``)."""
     status, events, why = _KEPT[case]
     db = _catalog(tmp_path, None, isos=include_waiting)
@@ -201,30 +198,5 @@ def test_fix_keeps_volume_that_was_burned_earlier(
     try:
         kept = get_volume_by_label(conn, "BURNED_NO_DISC")
         assert kept is not None and kept.status == status
-    finally:
-        conn.close()
-
-
-@pytest.mark.parametrize("case", sorted(_FAILED_ONLY))
-def test_fix_still_deletes_volume_whose_only_disc_failed(
-    tmp_path, caplog, case,
-):
-    """#912, #483: the failing receipt accounts for its "BURNED →
-    STAGING" note, so the volume is a ghost like any never-burned one."""
-    status, events = _FAILED_ONLY[case]
-    db = _catalog(tmp_path, None, isos=True)
-    conn = get_connection(db)
-    try:
-        vid = get_volume_by_label(conn, "BURNED_NO_DISC").volume_id
-        _old_history(conn, vid, status, events)
-    finally:
-        conn.close()
-    caplog.clear()
-    assert main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes",
-                 "--include-waiting"]) == 0, caplog.text
-    assert "Deleting ghost volume BURNED_NO_DISC" in caplog.text
-    conn = get_connection(db)
-    try:
-        assert get_volume_by_label(conn, "BURNED_NO_DISC") is None
     finally:
         conn.close()
