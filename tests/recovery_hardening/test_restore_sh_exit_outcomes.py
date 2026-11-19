@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.contract.restore_contract import ReaderExit
+from tests.contract.exit_codes import ReaderExit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"

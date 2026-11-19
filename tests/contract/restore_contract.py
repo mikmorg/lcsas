@@ -30,10 +30,10 @@ type) is written directly by ``tests/unit/tier3_repo_builder.py``.
 from __future__ import annotations
 
 import contextlib
-import enum
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from tests.contract.exit_codes import ReaderExit
 from tests.recovery_hardening import test_name_escaping_differential as _esc
 from tests.recovery_hardening._diff_helpers import (
     build_rustic_repo,
@@ -56,23 +57,6 @@ from tests.recovery_hardening._diff_helpers import (
 READERS = ("tier1", "tier3")
 FAILURES_NAME = "RESTORE_FAILURES.txt"
 PASSWORD = b"test-password"
-
-
-class ReaderExit(enum.IntEnum):
-    """A reader's own exit codes; tier 1 and the Python reader share them.
-
-    Tier 1: ``recovery/src/lcsas-restore/main.c``.  Python reader:
-    ``src/lcsas/restore/restic_fallback.py`` and the ``sys.exit`` calls
-    in ``standalone_builder.py``.  1 and 2 are bare literals in both.
-    """
-
-    OK = 0
-    FAILED = 1               # a damaged disc, a missing pack: run again
-    USAGE = 2                # a usage error (argparse's 2 in tier 3)
-    NOT_ALL_RESTORED = 4     # finished; items listed in RESTORE_FAILURES.txt
-    DISK_FULL = 74           # the target file system is full
-    READER_QUIT = 75         # 'q' (or end of input) at the disc prompt
-    WRONG_PASSWORD = 77      # a key file rejected the password
 
 
 # ── What is backed up and what is restored ──────────────────────────
@@ -159,6 +143,9 @@ class Faults:
     target_full: bool = False
     #: Leave ``--target`` off the command line.
     usage_error: bool = False
+    #: Repository files (relative paths) emptied before the judged run:
+    #: a folder loses what is in it, a file is removed.
+    damage: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -237,7 +224,7 @@ def _builder_special_tree() -> BuilderTree:
     return {
         "good": b"good\n",
         "null": RawNode({"type": "chardev", "mode": go_chardev | 0o644,
-                         "device": os.makedev(1, 3)}),
+                         "device": 259}),     # Linux makedev(1, 3)
     }
 
 
@@ -365,7 +352,7 @@ CASES: list[Case] = [
         replaces="new (#785, without root)",
     ),
     Case(
-        name="setuid, setgid and a device as root",
+        name="setuid and setgid as root",
         needs="root",
         tree={b"su": File(b"su\n", 0o4755), b"sg": File(b"sg\n", 0o2755)},
         expect=Outcome(exit=ReaderExit.OK, summary=_DONE),
@@ -380,6 +367,13 @@ CASES: list[Case] = [
         expect=Outcome(exit=ReaderExit.WRONG_PASSWORD, restored={},
                        summary=r"wrong password"),
         replaces="new (#384, #805)",
+    ),
+    Case(
+        name="no key files",
+        tree={b"f": File(b"f\n")},
+        faults=Faults(damage=("keys",)),
+        expect=Outcome(exit=ReaderExit.FAILED, restored={}),
+        replaces="new (#384: no key tested the password, so not 77)",
     ),
     Case(
         name="password file with two lines",
@@ -397,7 +391,8 @@ CASES: list[Case] = [
     ),
     Case(
         name="target full",
-        tree={b"big.bin": File(os.urandom(4 * 1024 * 1024))},
+        # Bytes zstd cannot shrink below the 1 MiB tmpfs.
+        tree={b"big.bin": File(random.Random(886).randbytes(4 << 20))},
         faults=Faults(target_full=True),
         expect=Outcome(exit=ReaderExit.DISK_FULL, restored=ANY,
                        summary=r"is full"),
@@ -757,6 +752,13 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
                     + first.stderr.decode("utf-8", "replace"))
         for pack in built.missing_packs:
             (repo / "data" / pack[:2] / pack).unlink()
+        for rel in case.faults.damage:
+            hit = repo / rel
+            if hit.is_dir():
+                for child in hit.iterdir():
+                    child.unlink()
+            else:
+                hit.unlink()
         res = _run(_command(reader, repo, target, pwfile, None, case.faults,
                             empty, work), case.faults.answers or b"")
         output = (res.stdout + res.stderr).decode("utf-8", "replace")

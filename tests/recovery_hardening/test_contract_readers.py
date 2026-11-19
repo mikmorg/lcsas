@@ -112,7 +112,8 @@ def _agree_params() -> list[object]:
         marks = []
         if case.differs:
             marks.append(pytest.mark.xfail(
-                strict=True, reason=f"known difference: {case.why}"))
+                strict=True, raises=AssertionError,
+                reason=f"known difference: {case.why}"))
         params.append(pytest.param(case, id=slug, marks=marks))
     return params
 

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.contract.restore_contract import ReaderExit
+from tests.contract.exit_codes import ReaderExit
 from tests.e2e import restore_sh_driver as drv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
