@@ -164,12 +164,16 @@ STARTS: dict[str, Start] = {
     "DEPRECATED, lost": Start(
         "DEPRECATED", disc="lost", notes=_LOST_NOTES,
         what="a lost volume: its only disc recorded lost (ADR 0003)"),
+    # The volume-wide DESTROYED status left the graph (#907) and no
+    # command writes it, but the schema keeps it: an old catalog may hold
+    # it, so what each event does to such a volume stays pinned.
     "DESTROYED + disc": Start(
         "DESTROYED", disc="ACTIVE",
-        what="no command writes DESTROYED today; seeded directly"),
+        what="not in the status graph (#907); only an old catalog holds it; "
+             "seeded directly"),
     "DESTROYED": Start(
-        "DESTROYED", what="no command writes DESTROYED today; seeded "
-                          "directly"),
+        "DESTROYED", what="not in the status graph (#907); only an old "
+                          "catalog holds it; seeded directly"),
 }
 
 # ---------------------------------------------------------------------
@@ -540,13 +544,6 @@ def _stage_consolidation(env: Env) -> None:
     seed_consolidation_tie(env, result.session_id)
 
 
-def _abort_consolidation(env: Env) -> int:
-    from lcsas.consolidate.merger import VolumeMerger
-
-    VolumeMerger(env.conn).abort_consolidation([env.volume_id])
-    return 0
-
-
 def _later_disc(env: Env) -> Path:
     """Stage one more volume, of a new pack: its staging tree is a disc
     made after the volume reached its state, carrying the catalog as it
@@ -770,8 +767,6 @@ EVENTS: dict[str, Event] = {
         lambda env: _main("--config", env.cfg, "session", "abort",
                           env.other_session),
         prepare=_stage_consolidation),
-    "VolumeMerger.abort_consolidation (no command calls it)": Event(
-        "(none: merger method only)", _abort_consolidation),
     # --- deleting -----------------------------------------------------
     "session abort": Event(
         "lcsas session abort S",
@@ -1050,28 +1045,20 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("VERIFIED", "VERIFIED"),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE"),
         R("CONSOLIDATING", "CONSOLIDATING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: CONSOLIDATING → BURNING (allowed: "
-                "['DEPRECATED', 'VERIFIED'…"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is CONSOLIDATING; its packs are being consolidated "
+                "onto a new volume; bu…")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE"),
         R("DEPRECATED", "DEPRECATED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → BURNING (allowed: "
-                "['DESTROYED'])"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DEPRECATED; its packs are on other volumes, so no "
+                "new disc of it is b…")),
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED"),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE"),
         R("DESTROYED", "DESTROYED",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → BURNING (allowed: [])",
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DESTROYED; it is out of service, so no new disc "
+                "of it is burned. Noth…")),
     ],
     "burn and verify succeed": [
         R("STAGING", "VERIFIED", "Home ACTIVE",
@@ -1099,29 +1086,21 @@ TABLE: dict[str, list[dict[str, str]]] = {
           events="VERIFY_PASS@Home"),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE"),
         R("CONSOLIDATING", "CONSOLIDATING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: CONSOLIDATING → BURNING (allowed: "
-                "['DEPRECATED', 'VERIFIED'…"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is CONSOLIDATING; its packs are being consolidated "
+                "onto a new volume; bu…")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE"),
         R("DEPRECATED", "DEPRECATED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → BURNING (allowed: "
-                "['DESTROYED'])"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DEPRECATED; its packs are on other volumes, so no "
+                "new disc of it is b…")),
         R("DEPRECATED, lost", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS@Home, NOTE DEPRECATED → VERIFIED"),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE"),
         R("DESTROYED", "DESTROYED",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → BURNING (allowed: [])",
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DESTROYED; it is out of service, so no new disc "
+                "of it is burned. Noth…")),
     ],
     "burn fails its read-back": [
         R("STAGING", "STAGING",
@@ -1169,31 +1148,23 @@ TABLE: dict[str, list[dict[str, str]]] = {
                 "still needs this vol…")),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE"),
         R("CONSOLIDATING", "CONSOLIDATING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: CONSOLIDATING → BURNING (allowed: "
-                "['DEPRECATED', 'VERIFIED'…"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is CONSOLIDATING; its packs are being consolidated "
+                "onto a new volume; bu…")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE"),
         R("DEPRECATED", "DEPRECATED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → BURNING (allowed: "
-                "['DESTROYED'])"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DEPRECATED; its packs are on other volumes, so no "
+                "new disc of it is b…")),
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
           events="VERIFY_FAIL@Home, VERIFY_FAIL_REBURN@Home",
           says=("Burn at Home FAILED verification for <L>. NO disc was recorded — this location "
                 "still needs this vol…")),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE"),
         R("DESTROYED", "DESTROYED",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → BURNING (allowed: [])",
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DESTROYED; it is out of service, so no new disc "
+                "of it is burned. Noth…")),
     ],
     "burn stopped by an error or Ctrl-C": [
         R("STAGING", "STAGING",
@@ -1237,30 +1208,22 @@ TABLE: dict[str, list[dict[str, str]]] = {
           says="drive error"),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE"),
         R("CONSOLIDATING", "CONSOLIDATING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: CONSOLIDATING → BURNING (allowed: "
-                "['DEPRECATED', 'VERIFIED'…"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is CONSOLIDATING; its packs are being consolidated "
+                "onto a new volume; bu…")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE"),
         R("DEPRECATED", "DEPRECATED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → BURNING (allowed: "
-                "['DESTROYED'])"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DEPRECATED; its packs are on other volumes, so no "
+                "new disc of it is b…")),
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
           rc="RuntimeError",
           says="drive error"),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE"),
         R("DESTROYED", "DESTROYED",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → BURNING (allowed: [])",
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DESTROYED; it is out of service, so no new disc "
+                "of it is burned. Noth…")),
     ],
     "burn killed, then the next burn succeeds": [
         R("STAGING", "VERIFIED", "Home ACTIVE",
@@ -1293,29 +1256,21 @@ TABLE: dict[str, list[dict[str, str]]] = {
           events="VERIFY_PASS@Home"),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE"),
         R("CONSOLIDATING", "CONSOLIDATING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: CONSOLIDATING → BURNING (allowed: "
-                "['DEPRECATED', 'VERIFIED'…"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is CONSOLIDATING; its packs are being consolidated "
+                "onto a new volume; bu…")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE"),
         R("DEPRECATED", "DEPRECATED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → BURNING (allowed: "
-                "['DESTROYED'])"),
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DEPRECATED; its packs are on other volumes, so no "
+                "new disc of it is b…")),
         R("DEPRECATED, lost", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS@Home, NOTE DEPRECATED → VERIFIED"),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE"),
         R("DESTROYED", "DESTROYED",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → BURNING (allowed: [])",
-          suspect=("refused only by the transition check inside update_status (a bare "
-                   "ValueError, which 'lcsas burn' reports as 'Unexpected error'), not by the "
-                   "burn preflight")),
+          rc="BurnError",
+          says=("Cannot burn volume <L>: it is DESTROYED; it is out of service, so no new disc "
+                "of it is burned. Noth…")),
     ],
     "a lost volume is re-burned": [
         R("DEPRECATED, lost", "VERIFIED", "Home ACTIVE",
@@ -1385,43 +1340,65 @@ TABLE: dict[str, list[dict[str, str]]] = {
     ],
     "disc check passes": [
         R("STAGING", "STAGING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …"),
+          deleted_by="reconcile-waiting abort-volume abort"),
         R("STAGING, rebuilt", "STAGING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("STAGING, burn evidence", "STAGING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("STAGING + disc", "STAGING", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("BURNING", "BURNING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …"),
+          deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           events="VERIFY_PASS"),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect=("VERIFIED with no disc recorded anywhere; --mark-verified refuses that "
-                   "(#673), verify --disc without --location does not")),
+        R("BURNED, rebuilt", "BURNED",
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("BURNED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS, NOTE BURNED → VERIFIED"),
         R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("VERIFIED", "VERIFIED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("CONSOLIDATING", "CONSOLIDATING",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("DEPRECATED", "DEPRECATED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("DESTROYED", "DESTROYED",
-          events="VERIFY_PASS"),
+          rc="1",
+          says=("Volume <L> has no disc recorded. Give --location to say where the disc in the "
+                "drive is kept, and a …")),
     ],
     "disc check passes where no disc is recorded": [
         R("STAGING", "VERIFIED", "Bank ACTIVE",
@@ -1457,13 +1434,9 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DEPRECATED, lost", "VERIFIED", "Bank ACTIVE; Home DESTROYED",
           events="NOTE DEPRECATED → VERIFIED, VERIFY_PASS"),
         R("DESTROYED + disc", "DESTROYED", "Bank ACTIVE; Home ACTIVE",
-          events="VERIFY_PASS",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="VERIFY_PASS"),
         R("DESTROYED", "DESTROYED", "Bank ACTIVE",
-          events="VERIFY_PASS",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="VERIFY_PASS"),
     ],
     "ISO check passes": [
         R("STAGING", "STAGING",
@@ -1482,13 +1455,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
           events="VERIFY_PASS"),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           events="VERIFY_PASS"),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect=("VERIFIED from a check of the staged ISO file, not of any disc, and with no "
-                   "disc recorded")),
-        R("BURNED + disc", "VERIFIED", "Home ACTIVE",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect="VERIFIED from a check of the staged ISO file, not of any disc"),
+        R("BURNED, rebuilt", "BURNED",
+          events="VERIFY_PASS"),
+        R("BURNED + disc", "BURNED", "Home ACTIVE",
+          events="VERIFY_PASS"),
         R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("VERIFIED", "VERIFIED",
@@ -1518,13 +1488,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect=("VERIFIED from a check of the staged ISO file, not of any disc, and with no "
-                   "disc recorded")),
-        R("BURNED + disc", "VERIFIED", "Home ACTIVE",
-          events="VERIFY_PASS, NOTE BURNED → VERIFIED",
-          suspect="VERIFIED from a check of the staged ISO file, not of any disc"),
+        R("BURNED, rebuilt", "BURNED",
+          events="VERIFY_PASS"),
+        R("BURNED + disc", "BURNED", "Home ACTIVE",
+          events="VERIFY_PASS"),
         R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("VERIFIED", "VERIFIED",
@@ -1601,9 +1568,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           events="VERIFY_PASS@Home, BURN_RECEIPT_IMPORTED@Home"),
         R("DESTROYED", "DESTROYED", "Home ACTIVE",
-          events="VERIFY_PASS@Home, BURN_RECEIPT_IMPORTED@Home",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="VERIFY_PASS@Home, BURN_RECEIPT_IMPORTED@Home"),
     ],
     "a failing receipt is imported": [
         R("STAGING", "STAGING",
@@ -1681,9 +1646,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           events="BURN_RECEIPT_IMPORTED@Home"),
         R("DESTROYED", "DESTROYED", "Home ACTIVE",
-          events="BURN_RECEIPT_IMPORTED@Home",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="BURN_RECEIPT_IMPORTED@Home"),
     ],
     "the disc is taken out of service": [
         R("STAGING", "STAGING",
@@ -1912,53 +1875,44 @@ TABLE: dict[str, list[dict[str, str]]] = {
           says="Volume <L> is DESTROYED: only VERIFIED volumes can be consolidated."),
     ],
     "consolidation finishes (packs on another volume too)": [
-        R("STAGING", "DEPRECATED",
-          events="NOTE STAGING → DEPRECATED",
-          suspect=("a STAGING volume, never consolidated or verified, becomes DEPRECATED (the "
-                   "graph allows STAGING → DEPRECATED); no delete command takes it after that")),
-        R("STAGING, rebuilt", "DEPRECATED",
-          events="NOTE STAGING → DEPRECATED",
-          suspect=("a STAGING volume, never consolidated or verified, becomes DEPRECATED (the "
-                   "graph allows STAGING → DEPRECATED); no delete command takes it after that")),
-        R("STAGING, burn evidence", "DEPRECATED",
-          events="NOTE STAGING → DEPRECATED",
-          suspect=("a STAGING volume, never consolidated or verified, becomes DEPRECATED (the "
-                   "graph allows STAGING → DEPRECATED); no delete command takes it after that")),
-        R("STAGING + disc", "DEPRECATED", "Home ACTIVE",
-          events="NOTE STAGING → DEPRECATED",
-          suspect=("a STAGING volume, never consolidated or verified, becomes DEPRECATED (the "
-                   "graph allows STAGING → DEPRECATED); no delete command takes it after that")),
+        R("STAGING", "STAGING",
+          rc="1",
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…"),
+          deleted_by="reconcile-waiting abort-volume abort"),
+        R("STAGING, rebuilt", "STAGING",
+          rc="1",
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…")),
+        R("STAGING, burn evidence", "STAGING",
+          rc="1",
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…")),
+        R("STAGING + disc", "STAGING", "Home ACTIVE",
+          rc="1",
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…")),
         R("BURNING", "BURNING",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
-                "(allowed: ['BURNED',…"),
-          deleted_by="reconcile-waiting abort-volume abort",
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNING; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated. …"),
+          deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
-                "(allowed: ['BURNED',…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNING; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated. …")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
-                "(allowed: ['BURNED',…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNING; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated. …")),
         R("BURNED, rebuilt", "BURNED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNED → DEPRECATED "
-                "(allowed: ['DESTROYED…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNED; verify its disc first ('lcsas verify "
+                "<L> --disc'). Nothi…")),
         R("BURNED + disc", "BURNED", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNED → DEPRECATED "
-                "(allowed: ['DESTROYED…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNED; verify its disc first ('lcsas verify "
+                "<L> --disc'). Nothi…")),
         R("VERIFIED + disc", "DEPRECATED", "Home ACTIVE",
           events="NOTE VERIFIED → DEPRECATED"),
         R("VERIFIED", "DEPRECATED",
@@ -1969,146 +1923,100 @@ TABLE: dict[str, list[dict[str, str]]] = {
           events="NOTE CONSOLIDATING → DEPRECATED"),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DEPRECATED → "
-                "DEPRECATED (allowed: ['DESTR…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DEPRECATED; it is already deprecated. "
+                "Nothing was deprecated.")),
         R("DEPRECATED", "DEPRECATED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DEPRECATED → "
-                "DEPRECATED (allowed: ['DESTR…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DEPRECATED; it is already deprecated. "
+                "Nothing was deprecated.")),
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DEPRECATED → "
-                "DEPRECATED (allowed: ['DESTR…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DEPRECATED; it is already deprecated. "
+                "Nothing was deprecated.")),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DESTROYED → "
-                "DEPRECATED (allowed: [])"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DESTROYED; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated…")),
         R("DESTROYED", "DESTROYED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DESTROYED → "
-                "DEPRECATED (allowed: [])"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DESTROYED; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated…")),
     ],
     "deprecate by hand (packs on no other volume)": [
         R("STAGING", "STAGING",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          deleted_by="reconcile-waiting abort-volume abort",
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…"),
+          deleted_by="reconcile-waiting abort-volume abort"),
         R("STAGING, rebuilt", "STAGING",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…")),
         R("STAGING, burn evidence", "STAGING",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…")),
         R("STAGING + disc", "STAGING", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is STAGING; it was never burned, so it is not "
+                "deprecated; delete it…")),
         R("BURNING", "BURNING",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
-                "(allowed: ['BURNED',…"),
-          deleted_by="reconcile-waiting abort-volume abort",
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNING; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated. …"),
+          deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
-                "(allowed: ['BURNED',…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNING; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated. …")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
-                "(allowed: ['BURNED',…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNING; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated. …")),
         R("BURNED, rebuilt", "BURNED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNED → DEPRECATED "
-                "(allowed: ['DESTROYED…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNED; verify its disc first ('lcsas verify "
+                "<L> --disc'). Nothi…")),
         R("BURNED + disc", "BURNED", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: BURNED → DEPRECATED "
-                "(allowed: ['DESTROYED…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is BURNED; verify its disc first ('lcsas verify "
+                "<L> --disc'). Nothi…")),
         R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: 3 of its pack(s) are on no other in-service "
+                "volume; burn and verify th…")),
         R("VERIFIED", "VERIFIED",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: 3 of its pack(s) are on no other in-service "
+                "volume; burn and verify th…")),
         R("CONSOLIDATING + disc", "CONSOLIDATING", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: 3 of its pack(s) are on no other in-service "
+                "volume; burn and verify th…")),
         R("CONSOLIDATING", "CONSOLIDATING",
           rc="1",
-          says=("Unexpected error: Cannot deprecate volume 1: 3 pack(s) would become "
-                "unreplicated. Use force=True to…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: 3 of its pack(s) are on no other in-service "
+                "volume; burn and verify th…")),
         R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DEPRECATED → "
-                "DEPRECATED (allowed: ['DESTR…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DEPRECATED; it is already deprecated. "
+                "Nothing was deprecated.")),
         R("DEPRECATED", "DEPRECATED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DEPRECATED → "
-                "DEPRECATED (allowed: ['DESTR…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DEPRECATED; it is already deprecated. "
+                "Nothing was deprecated.")),
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DEPRECATED → "
-                "DEPRECATED (allowed: ['DESTR…"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DEPRECATED; it is already deprecated. "
+                "Nothing was deprecated.")),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DESTROYED → "
-                "DEPRECATED (allowed: [])"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DESTROYED; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated…")),
         R("DESTROYED", "DESTROYED",
           rc="1",
-          says=("Unexpected error: Invalid status transition for volume 1: DESTROYED → "
-                "DEPRECATED (allowed: [])"),
-          suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
-                   "does not check the status first or catch the ValueError")),
+          says=("Cannot deprecate volume <L>: it is DESTROYED; only a VERIFIED or CONSOLIDATING "
+                "volume is deprecated…")),
     ],
     "consolidation abandoned (its session aborted)": [
         R("STAGING", "STAGING",
@@ -2133,77 +2041,6 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED"),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE"),
         R("DESTROYED", "DESTROYED"),
-    ],
-    "VolumeMerger.abort_consolidation (no command calls it)": [
-        R("STAGING", "STAGING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DEPRECATED', 'DES…"),
-          deleted_by="reconcile-waiting abort-volume abort"),
-        R("STAGING, rebuilt", "STAGING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DEPRECATED', 'DES…")),
-        R("STAGING, burn evidence", "STAGING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DEPRECATED', 'DES…")),
-        R("STAGING + disc", "STAGING", "Home ACTIVE",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DEPRECATED', 'DES…")),
-        R("BURNING", "VERIFIED",
-          events="NOTE BURNING → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNING volume VERIFIED "
-                   "with no disc check")),
-        R("BURNING, was BURNED", "VERIFIED",
-          events="NOTE BURNING → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNING volume VERIFIED "
-                   "with no disc check")),
-        R("BURNING + disc", "VERIFIED", "Home ACTIVE",
-          events="NOTE BURNING → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNING volume VERIFIED "
-                   "with no disc check")),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="NOTE BURNED → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNED volume VERIFIED "
-                   "with no disc check")),
-        R("BURNED + disc", "VERIFIED", "Home ACTIVE",
-          events="NOTE BURNED → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNED volume VERIFIED "
-                   "with no disc check")),
-        R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: VERIFIED → VERIFIED (allowed: "
-                "['CONSOLIDATING', 'DEPRECATED…")),
-        R("VERIFIED", "VERIFIED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: VERIFIED → VERIFIED (allowed: "
-                "['CONSOLIDATING', 'DEPRECATED…")),
-        R("CONSOLIDATING + disc", "VERIFIED", "Home ACTIVE",
-          events="NOTE CONSOLIDATING → VERIFIED",
-          suspect="dead code: no command calls it"),
-        R("CONSOLIDATING", "VERIFIED",
-          events="NOTE CONSOLIDATING → VERIFIED",
-          suspect="dead code: no command calls it"),
-        R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → VERIFIED (allowed: "
-                "['DESTROYED'])")),
-        R("DEPRECATED", "DEPRECATED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → VERIFIED (allowed: "
-                "['DESTROYED'])")),
-        R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → VERIFIED (allowed: "
-                "['DESTROYED'])")),
-        R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → VERIFIED (allowed: [])"),
-        R("DESTROYED", "DESTROYED",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → VERIFIED (allowed: [])"),
     ],
     "session abort": [
         R("STAGING", "deleted"),
@@ -2604,7 +2441,8 @@ class Site:
 # The methods of ``VolumeLifecycle`` (``db/lifecycle.py``, #892) that only
 # read; every other public method is an event that changes or deletes a
 # volume.
-_LIFECYCLE_READS = frozenset({"burn_evidence", "burn_unknown", "may_delete"})
+_LIFECYCLE_READS = frozenset({"burn_evidence", "burn_unknown", "may_burn",
+                              "may_delete"})
 _LIFECYCLE = "db/lifecycle.py"
 
 
@@ -2785,12 +2623,14 @@ def test_row(table, row):
 
 def test_status_write_sites_are_the_ones_the_table_was_written_for():
     """The 20 ``update_status`` calls, 5 raw status writes and 5 deletions
-    the table was written for (#891) are now 28 calls of ``VolumeLifecycle``
+    the table was written for (#891) became 28 calls of ``VolumeLifecycle``
     events and, inside it, 18 ``_update_status`` and 2 ``_delete_volume``
     calls (events that shared a sequence share one call) and 9 status
-    writes (#892).  A new one needs rows that reach it."""
+    writes (#892).  #906 removed the ISO check's event (2 calls, 1
+    ``_update_status``), #907 the dead ``abort_consolidation`` (1 call).
+    A new one needs rows that reach it."""
     counts = Counter(site.kind for site in status_write_sites())
-    assert counts == {"lifecycle event": 28, "_update_status": 18,
+    assert counts == {"lifecycle event": 25, "_update_status": 17,
                       "_delete_volume": 2, "status write": 9}
 
 

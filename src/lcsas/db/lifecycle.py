@@ -30,7 +30,6 @@ from lcsas.constants import (
     STATUS_BURNING,
     STATUS_CONSOLIDATING,
     STATUS_DEPRECATED,
-    STATUS_DESTROYED,
     STATUS_STAGING,
     STATUS_VERIFIED,
 )
@@ -49,19 +48,29 @@ _logger = logging.getLogger(__name__)
 # The status graph: each key maps to the set of statuses a volume may
 # move to from that one.  Private: callers send events, and the events
 # below are the only writers of volumes.status (#892).
+#
+# DESTROYED is not in it (#907): no command writes the volume-wide
+# DESTROYED status ("destroy" is the disc-level 'copy destroy').  It stays
+# a valid value in the volumes.status CHECK constraint, which needs no
+# migration: the tier-1 reader filters on it (db/schema.py
+# TIER1_REQUIRED_VOLUME_STATUS), and an old catalog, or a catalog rebuilt
+# from an old disc catalog, may still hold it.  A volume that is DESTROYED
+# has no key here, so _update_status refuses every change of it.
 _TRANSITIONS: dict[str, set[str]] = {
-    STATUS_STAGING:         {STATUS_BURNING, STATUS_DEPRECATED, STATUS_DESTROYED},
-    STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
+    # A never-burned volume is deleted or staged again, never deprecated
+    # (#905): no command deletes a DEPRECATED volume, so it would stay in
+    # the catalog for good.
+    STATUS_STAGING:         {STATUS_BURNING},
+    STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING},
     # A BURNED volume never goes back to BURNING or STAGING (#810): a
     # disc of it exists (a catalog rebuilt from discs records the newest
     # ones as BURNED with no disc row), and STAGING would let 'session
     # abort' or 'reconcile --fix' delete it.  'burn --session' burns a
     # BURNED volume without leaving BURNED, then makes it VERIFIED.
-    STATUS_BURNED:          {STATUS_VERIFIED, STATUS_DESTROYED},
-    STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_DESTROYED, STATUS_CONSOLIDATING},
+    STATUS_BURNED:          {STATUS_VERIFIED},
+    STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_CONSOLIDATING},
     STATUS_CONSOLIDATING:   {STATUS_DEPRECATED, STATUS_VERIFIED},
-    STATUS_DEPRECATED:      {STATUS_DESTROYED},
-    STATUS_DESTROYED:       set(),
+    STATUS_DEPRECATED:      set(),
 }
 
 
@@ -91,15 +100,22 @@ def _update_status(
         # Safety check: refuse DEPRECATED if packs would become unreplicated.
         # Use a savepoint for write-lock protection (nests safely in outer transactions).
         if status == "DEPRECATED":
+            # Outside a transaction a SAVEPOINT opens one and its RELEASE
+            # commits it, so the change would be committed at once, before
+            # the caller's commit (or rollback: 'consolidate --deprecate'
+            # of several volumes is all or nothing, #905).
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             conn.execute("SAVEPOINT deprecate_check")
             try:
                 at_risk = check_deprecation_safe(conn, volume_id)
                 if at_risk:
                     conn.execute("ROLLBACK TO deprecate_check")
                     raise ValueError(
-                        f"Cannot deprecate volume {volume_id}: "
-                        f"{len(at_risk)} pack(s) would become unreplicated. "
-                        f"Use force=True to override."
+                        f"Cannot deprecate volume {volume.label}: "
+                        f"{len(at_risk)} of its pack(s) are on no other "
+                        f"in-service volume; burn and verify the volume(s) "
+                        f"they were consolidated onto first."
                     )
                 conn.execute(
                     "UPDATE volumes SET status = ? WHERE volume_id = ?",
@@ -332,9 +348,12 @@ class VolumeLifecycle:
         burn killed outright is seen by the next one (#668).  A VERIFIED
         or lost volume gets another disc and keeps its status; a BURNED
         one stays BURNED for the whole burn (#810).  Any other status is
-        refused (``ValueError``, from the status graph)."""
+        refused (``ValueError``, the reason :meth:`may_burn` gives)."""
         from lcsas.db.queries import deprecated_by_loss
 
+        refusal = self.may_burn(volume_id)
+        if refusal is not None:
+            raise ValueError(refusal)
         vol = get_volume_by_id(self._conn, volume_id)
         reburn = vol.status == STATUS_VERIFIED or (
             vol.status == STATUS_DEPRECATED
@@ -463,20 +482,16 @@ class VolumeLifecycle:
         )
         return get_volume_by_id(self._conn, volume_id)
 
-    def iso_check_passed(self, volume_id: int) -> Volume | None:
-        """The volume's staged ISO passed a check (``lcsas verify <label>``,
-        ``verify --all``): a BURNED volume becomes VERIFIED, committed.
-        Returns the volume when its status changed, else None."""
-        if get_volume_by_id(self._conn, volume_id).status != STATUS_BURNED:
-            return None
-        _update_status(self._conn, volume_id, STATUS_VERIFIED)
-        return get_volume_by_id(self._conn, volume_id)
+    # A check of the staged ISO image (``lcsas verify <label>``, ``verify
+    # --all``) is no event: VERIFIED means a disc of the volume was read
+    # back (#906, CONTEXT.md "Verified volume").
 
     def disc_check_passed(
         self, volume_id: int, *, disc_recorded: bool = False,
     ) -> Volume | None:
         """A disc of the volume was identified and read back
-        (``verify --disc``): a BURNED volume becomes VERIFIED.  With
+        (``verify --disc``, which needs the disc recorded or ``--location``,
+        #906): a BURNED volume becomes VERIFIED.  With
         *disc_recorded* (the check recorded that disc, #678), so does a
         STAGING or BURNING one: the same evidence a burn's own check
         gives.  Commits.  Returns the volume when its status changed,
@@ -722,9 +737,31 @@ class VolumeLifecycle:
         return get_volume_by_id(self._conn, volume_id)
 
     def consolidation_finished(self, volume_id: int) -> Volume:
-        """The volume's packs are on another volume: it becomes
-        DEPRECATED.  Refused (``ValueError``) when a pack would be on no
-        other live volume, or the status graph forbids it."""
+        """The volume's packs are on another volume: a VERIFIED or
+        CONSOLIDATING volume becomes DEPRECATED.  Refused (``ValueError``,
+        a one-line reason for the owner, nothing written) when the status
+        graph forbids it, or when a pack would be on no other live volume.
+        A never-burned volume is deleted or staged again, never deprecated
+        (#905)."""
+        vol = get_volume_by_id(self._conn, volume_id)
+        if STATUS_DEPRECATED not in _TRANSITIONS.get(vol.status, set()):
+            why = {
+                STATUS_STAGING: (
+                    f"it was never burned, so it is not deprecated; delete "
+                    f"it with 'lcsas session abort --volume {vol.label}' "
+                    f"(its packs go back to the unarchived pool) or burn it"
+                ),
+                STATUS_BURNED: (
+                    f"verify its disc first ('lcsas verify {vol.label} "
+                    f"--disc')"
+                ),
+                STATUS_DEPRECATED: "it is already deprecated",
+            }.get(vol.status, "only a VERIFIED or CONSOLIDATING volume is "
+                              "deprecated")
+            raise ValueError(
+                f"Cannot deprecate volume {vol.label}: it is {vol.status}; "
+                f"{why}."
+            )
         _update_status(self._conn, volume_id, STATUS_DEPRECATED, commit=False)
         return get_volume_by_id(self._conn, volume_id)
 
@@ -804,6 +841,41 @@ class VolumeLifecycle:
     # -----------------------------------------------------------------
     # Read-only
     # -----------------------------------------------------------------
+
+    def may_burn(self, volume_id: int) -> str | None:
+        """Whether a new disc of the volume may be burned: why not, as one
+        line for the owner, or None.
+
+        A STAGING, BURNED or VERIFIED volume, or a lost one (#726), may.
+        A CONSOLIDATING, DEPRECATED or DESTROYED one may not (#905): its
+        packs are being moved, or are on other volumes, or it is out of
+        service.  ``lcsas burn`` asks before its first disc prompt, and
+        :meth:`burn_started` refuses with the same reason."""
+        from lcsas.db.queries import deprecated_by_loss
+
+        vol = get_volume_by_id(self._conn, volume_id)
+        if vol.status in (STATUS_STAGING, STATUS_BURNED, STATUS_VERIFIED):
+            return None
+        if (vol.status == STATUS_DEPRECATED
+                and deprecated_by_loss(self._conn, volume_id)):
+            return None
+        why = {
+            STATUS_BURNING: (
+                "a burn of it was interrupted; 'lcsas burn' of its session "
+                "resets it"
+            ),
+            STATUS_CONSOLIDATING: (
+                "its packs are being consolidated onto a new volume; burn "
+                "that session and run 'lcsas consolidate --deprecate', or "
+                "'lcsas session abort' it to make this volume VERIFIED again"
+            ),
+            STATUS_DEPRECATED: (
+                "its packs are on other volumes, so no new disc of it is "
+                "burned"
+            ),
+        }.get(vol.status, "it is out of service, so no new disc of it is "
+                          "burned")
+        return f"Cannot burn volume {vol.label}: it is {vol.status}; {why}."
 
     def burn_evidence(self, volume_id: int) -> str | None:
         """Why the volume's events say a good disc of it was burned, or

@@ -128,7 +128,7 @@ attack (`docs/DISC_CONFIDENTIALITY.md`).
    a disc in service again at <location>`. The redundancy report, the
    stage pool and the deprecation guard then count it again. This is a
    direct update, like the auto-deprecation: the status graph still has
-   no way out of `DEPRECATED` except `DESTROYED`, so a volume deprecated by
+   no way out of `DEPRECATED` (#907), so a volume deprecated by
    consolidation never comes back by accident. Because the newest
    deprecating note decides, a lost volume that came back and was later
    consolidated is a deprecated volume, not a lost one.

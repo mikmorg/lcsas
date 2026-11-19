@@ -8,16 +8,14 @@ import pytest
 
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
-from lcsas.constants import STATUS_CONSOLIDATING, STATUS_VERIFIED
 from lcsas.db.connection import get_memory_connection
 from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import get_pack_ids_for_volume
-from lcsas.db.volumes import create_volume, get_volume_by_id
+from lcsas.db.volumes import create_volume
 from lcsas.utils.labels import generate_uuid
-from tests.unit.volume_status import update_status
 
 
 class TestRound4Fixes:
@@ -149,46 +147,6 @@ class TestRound4Fixes:
         # Get the source code of build_parser to verify --deprecate is configured
         source = inspect.getsource(build_parser)
         assert "--deprecate" in source, "--deprecate flag not found in build_parser"
-
-    # T22: abort_consolidation called on staging failure (R4-C2)
-    def test_consolidation_aborted_on_staging_failure(self, conn):
-        """
-        When staging fails during consolidation, volumes should revert
-        from CONSOLIDATING status back to VERIFIED.
-        """
-        from lcsas.consolidate.merger import VolumeMerger
-
-        # Create volumes in VERIFIED state
-        vol1_id = create_volume(
-            conn, "VOL_MERGE_1", generate_uuid(), "TEST_TINY", 100000
-        ).volume_id
-        vol2_id = create_volume(
-            conn, "VOL_MERGE_2", generate_uuid(), "TEST_TINY", 100000
-        ).volume_id
-
-        update_status(conn, vol1_id, STATUS_VERIFIED, force=True)
-        update_status(conn, vol2_id, STATUS_VERIFIED, force=True)
-
-        # Create merger
-        merger = VolumeMerger(conn)
-
-        # Mark as consolidating
-        merger.mark_sources_consolidating([vol1_id, vol2_id])
-
-        # Verify they're in CONSOLIDATING state
-        vol1_check = get_volume_by_id(conn, vol1_id)
-        vol2_check = get_volume_by_id(conn, vol2_id)
-        assert vol1_check.status == STATUS_CONSOLIDATING
-        assert vol2_check.status == STATUS_CONSOLIDATING
-
-        # Abort consolidation
-        merger.abort_consolidation([vol1_id, vol2_id])
-
-        # Verify they're back in VERIFIED state
-        vol1_final = get_volume_by_id(conn, vol1_id)
-        vol2_final = get_volume_by_id(conn, vol2_id)
-        assert vol1_final.status == STATUS_VERIFIED
-        assert vol2_final.status == STATUS_VERIFIED
 
 
 # ─── Helper Functions ──────────────────────────────────────────────────

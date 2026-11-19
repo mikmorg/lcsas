@@ -21,6 +21,7 @@ from pathlib import Path
 
 from lcsas.cli.main import main
 from lcsas.db.connection import get_connection
+from lcsas.db.volume_events import add_event
 from tests.unit.test_rebuild_burn_unknown import (
     _move_discs,
     _rebuild,
@@ -51,8 +52,9 @@ def test_newest_session_rebuilt_from_its_last_disc(
 ):
     """Rebuilt from session A's disc and session B's last disc: B's last
     volume is BURNED with no disc; B's first was read by nothing.  Then
-    'verify <first> --disc' without --location: it passes, records no
-    disc, and the volume is STAGING with burn evidence."""
+    'verify <first> --disc' without --location is refused (#906, it has
+    no disc recorded); an older LCSAS passed it and recorded no disc,
+    leaving the volume STAGING with burn evidence, which status shows."""
     trees, labels_b, config = discs
     first_b, last_b = labels_b
     moved = _move_discs([trees[0], trees[-1]], tmp_path)
@@ -72,7 +74,17 @@ def test_newest_session_rebuilt_from_its_last_disc(
     (unknown,) = _warnings(text, "no disc it read shows")
     assert first_b in unknown and "--never-burned" in unknown
 
-    assert _verify_disc(db, first_b) == 0, caplog.text
+    assert _verify_disc(db, first_b) == 1
+    assert f"Volume {first_b} has no disc recorded." in caplog.text
+    # What that check wrote before #906: a VERIFY_PASS with no location
+    # and the default detail, burn evidence (_burn_evidence).
+    conn = get_connection(db)
+    try:
+        (vid,) = conn.execute("SELECT volume_id FROM volumes WHERE label = ?",
+                              (first_b,)).fetchone()
+        add_event(conn, vid, "VERIFY_PASS", detail="Disc verify")
+    finally:
+        conn.close()
     text, doc = _status(db, caplog, capsys)
     assert doc["ghosts"] == []
     assert doc["burn_unknown"] == []

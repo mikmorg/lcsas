@@ -27,7 +27,12 @@ class TestCmdVerify:
         db = tmp_path / "test.db"
         conn = get_connection(db)
         create_all(conn)
-        create_volume(conn, "VOL_001", "u1", "BD25", 25e9, "Home", "VERIFIED")
+        vol = create_volume(conn, "VOL_001", "u1", "BD25", 25e9, "Home",
+                            "VERIFIED")
+        from lcsas.db.locations import ensure_location
+        from lcsas.db.volume_copies import add_volume_copy
+        ensure_location(conn, "Home")
+        add_volume_copy(conn, vol.volume_id, "Home")
         conn.close()
 
         with (
@@ -367,6 +372,17 @@ class TestCmdVerifyShaFallback:
         out = capsys.readouterr().out
         # The "falling back" log line must appear.
         assert "falling back" in out.lower() or "SHA-256" in out
+        # #906: an ISO check verifies no disc, so BURNED stays BURNED,
+        # and the owner is told how to verify it.
+        from lcsas.db.volumes import get_volume_by_label
+
+        conn = get_connection(db)
+        try:
+            assert get_volume_by_label(conn, "VOL_SHA").status == "BURNED"
+        finally:
+            conn.close()
+        assert "stays BURNED" in out
+        assert "lcsas verify VOL_SHA --disc" in out
 
     def test_dvdisaster_missing_with_bad_sha_fails(self, tmp_path, capsys):
         """SHA fallback that catches actual corruption → verify fails
@@ -428,9 +444,12 @@ class TestVerifyDiscIdentityAndEvidence:
         iso_sha256: str | None = None,
         iso_size_bytes: int | None = None,
         iso_path: str = "/gone/away.iso",
+        disc_at: str | None = "Home",
     ) -> int:
-        """Create a catalog with one BURNED volume; optionally a
-        session_volumes row carrying hash/size evidence."""
+        """Create a catalog with one BURNED volume, its disc recorded at
+        *disc_at* (no hash: ``verify --disc`` needs a recorded disc or
+        ``--location``, #906); optionally a session_volumes row carrying
+        hash/size evidence."""
         from lcsas.db.connection import get_connection
         from lcsas.db.schema import create_all
         from lcsas.db.sessions import add_session_volume, create_session
@@ -440,6 +459,11 @@ class TestVerifyDiscIdentityAndEvidence:
         create_all(conn)
         vol = create_volume(conn, label, f"uuid-{label}", "TEST_TINY",
                             2_097_152, "Home", "BURNED")
+        if disc_at is not None:
+            from lcsas.db.locations import ensure_location
+            from lcsas.db.volume_copies import add_volume_copy
+            ensure_location(conn, disc_at)
+            add_volume_copy(conn, vol.volume_id, disc_at, commit=False)
         if iso_sha256 is not None:
             session = create_session(conn, media_type="TEST_TINY",
                                      staging_dir="/tmp")
@@ -483,6 +507,42 @@ class TestVerifyDiscIdentityAndEvidence:
 
         conn = get_connection(db)
         # Nothing recorded: no events, no promotion.
+        events = conn.execute(
+            "SELECT COUNT(*) FROM volume_events WHERE volume_id = ?",
+            (vol_id,),
+        ).fetchone()[0]
+        assert events == 0
+        assert get_volume_by_label(conn, "VOL_A").status == "BURNED"
+        conn.close()
+
+    def test_verify_disc_with_no_disc_recorded_needs_location(
+        self, tmp_path, caplog,
+    ):
+        """#906: with no disc recorded and no --location, the check is
+        refused before the drive is read, and nothing is recorded (as
+        --mark-verified refuses, #673)."""
+        from unittest.mock import patch
+
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volumes import get_volume_by_label
+
+        db = tmp_path / "test.db"
+        vol_id = self._make_burned_volume(
+            db, "VOL_A", iso_sha256="a" * 64, iso_size_bytes=100,
+            disc_at=None,
+        )
+
+        with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+                   "read_disc_volume_id",
+                   side_effect=AssertionError("the drive was read")) as m:
+            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+                           "--device", "/dev/null"])
+
+        assert result == 1
+        m.assert_not_called()
+        assert ("Volume VOL_A has no disc recorded.  Give --location"
+                in caplog.text)
+        conn = get_connection(db)
         events = conn.execute(
             "SELECT COUNT(*) FROM volume_events WHERE volume_id = ?",
             (vol_id,),
@@ -599,7 +659,8 @@ class TestVerifyDiscIdentityAndEvidence:
         from lcsas.db.volumes import get_volume_by_label
 
         db = tmp_path / "test.db"
-        vol_id = self._make_burned_volume(db, "VOL_A", iso_sha256=None)
+        vol_id = self._make_burned_volume(db, "VOL_A", iso_sha256=None,
+                                          disc_at=None)
 
         # "Device" whose bytes ARE the recorded image.
         disc_bytes = b"image-bytes" * 64

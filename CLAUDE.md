@@ -102,7 +102,7 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 ### Catalog schema
 
-Schema version 10 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (burn session audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor).
+Schema version 10 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (burn session audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor); every status change goes through `db/lifecycle.py` (ADR 0004). The volume-wide `DESTROYED` status left the graph (#907) but stays a valid schema value for old catalogs; destroying a disc is per disc (`copy destroy`).
 
 ### Test levels
 

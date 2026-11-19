@@ -67,7 +67,7 @@ from lcsas.ecc.dvdisaster import (
     rs03_staged_image_bytes,
     smallest_fitting_medium_bytes,
 )
-from lcsas.exceptions import StagingError
+from lcsas.exceptions import BurnError, StagingError
 from lcsas.iso.xorriso import (
     XORRISO_DEFAULT_PADDING_BYTES,
     MediaStatus,
@@ -1583,6 +1583,15 @@ class BurnOrchestrator:
                 )
                 return []
 
+        # #905: a volume no disc of which may be burned (CONSOLIDATING,
+        # DEPRECATED, DESTROYED) is refused with its reason, before the
+        # first disc prompt.  Volumes skipped above are not asked.
+        lifecycle = VolumeLifecycle(self._conn)
+        for sv in session_vols:
+            refusal = lifecycle.may_burn(sv.volume_id)
+            if refusal is not None:
+                raise BurnError(f"{refusal} Nothing was burned.")
+
         receipts: list[BurnReceipt] = []
         total = len(session_vols)
 
@@ -1783,7 +1792,6 @@ class BurnOrchestrator:
         (:func:`unfinished_stage_refusal`).
         """
         from lcsas.db.sessions import get_session
-        from lcsas.exceptions import BurnError
 
         vols = [(sv, get_volume_by_id(self._conn, sv.volume_id))
                 for sv in session_vols]

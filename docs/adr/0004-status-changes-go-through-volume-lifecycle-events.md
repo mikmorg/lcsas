@@ -78,8 +78,8 @@ happens. Examples are `burn_started`, `burn_succeeded`,
 - **A rule change is made in one place.**
   - Removing STAGING → DEPRECATED (#905) is a `_TRANSITIONS` edit plus a
     check in `consolidation_finished`.
-  - Stopping an ISO check from promoting a volume (#906) is a change to
-    `iso_check_passed`.
+  - Stopping an ISO check from promoting a volume (#906) removed one
+    event, `iso_check_passed`, and touched nothing else.
   - Widening burn evidence (#912) is a change to `_burn_evidence`.
 - **A guard keeps it that way.**
   `tests/unit/test_volume_status_writers.py` fails on any SQL in

@@ -166,7 +166,7 @@ The end-to-end flow inside a single session:
    (`BurnOrchestrator.burn_session`).
 
 The catalog volume lifecycle is `STAGING → BURNING → BURNED → VERIFIED →
-DEPRECATED → DESTROYED`. The session lifecycle is `STAGED → PARTIAL/COMPLETE
+DEPRECATED`. The session lifecycle is `STAGED → PARTIAL/COMPLETE
 → CLEANED`.
 
 ---

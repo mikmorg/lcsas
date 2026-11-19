@@ -695,7 +695,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--iso", type=Path, default=None,
                           help="Path to the ISO file (auto-detected from session if omitted).")
     verify_p.add_argument("--disc", action="store_true", default=False,
-                          help="Verify a burned disc instead of an ISO file.")
+                          help="Verify a burned disc instead of an ISO file. "
+                               "Only a disc check makes a BURNED volume "
+                               "VERIFIED; an ISO check changes no status. "
+                               "Needs --location when the volume has no "
+                               "disc recorded.")
     verify_p.add_argument("--device", default=None,
                           help="Optical drive device (overrides config; "
                                "default /dev/sr0 when neither is set).")
@@ -717,9 +721,10 @@ def build_parser() -> argparse.ArgumentParser:
                                "this location (defaults to the volume's only "
                                "ACTIVE disc when unambiguous); with --disc, "
                                "record the disc there when none of the volume "
-                               "is recorded at it; with --mark-verified on a "
-                               "volume with no disc recorded (required there), "
-                               "record its disc at this location.")
+                               "is recorded at it (required with --disc and "
+                               "with --mark-verified on a volume with no disc "
+                               "recorded); with --mark-verified, record its "
+                               "disc at this location.")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")

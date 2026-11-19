@@ -307,9 +307,20 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 record_location = True
             if stamp_location is None:
                 active = get_copies_for_volume(conn, vol.volume_id)
+                if not active:
+                    # #906: VERIFIED means a disc of the volume was read
+                    # back, so the disc a check reads must be recorded
+                    # somewhere, as --mark-verified requires (#673).
+                    logger.error(
+                        f"Volume {vol.label} has no disc recorded.  Give "
+                        f"--location to say where the disc in the drive "
+                        f"is kept, and a passing check records it there.  "
+                        f"Nothing was read."
+                    )
+                    return 1
                 if len(active) == 1:
                     stamp_location = active[0].location
-                elif len(active) > 1:
+                else:
                     locs = ", ".join(sorted(c.location for c in active))
                     logger.error(
                         f"Volume {vol.label} has ACTIVE discs at {locs} — "
@@ -329,12 +340,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 return 1
             passed = outcome == "PASS"
             if passed:
-                if stamp_location is None:
-                    logger.warning(
-                        f"  No ACTIVE disc of {vol.label} recorded — "
-                        f"last_verified_at not stamped"
-                    )
-                elif record_location:
+                if record_location:
                     # Uncommitted: the add_event() below commits the
                     # disc record atomically with the VERIFY_PASS event.
                     add_volume_copy(
@@ -413,19 +419,23 @@ def cmd_verify(args: argparse.Namespace) -> int:
         detail = args.detail or ("Disc verify" if args.disc else f"ISO verify: {iso_path}")
         add_event(conn, vol.volume_id, event_type, detail=detail)
 
-        # A passing check may promote the volume to VERIFIED: a BURNED
-        # one, or (#678) a STAGING/BURNING one whose disc this check
-        # identified, read and recorded.
-        promoted = None
+        # A passing disc check may promote the volume to VERIFIED: a
+        # BURNED one, or (#678) a STAGING/BURNING one whose disc this
+        # check identified, read and recorded.  An ISO check never does:
+        # VERIFIED means a disc was read back (#906).
         if passed and args.disc:
             promoted = VolumeLifecycle(conn).disc_check_passed(
                 vol.volume_id, disc_recorded=recorded_disc,
             )
-        elif passed:
-            promoted = VolumeLifecycle(conn).iso_check_passed(vol.volume_id)
-        if promoted is not None:
+            if promoted is not None:
+                logger.info(
+                    f"Volume {vol.label}: promoted {vol.status} → VERIFIED"
+                )
+        elif passed and vol.status == "BURNED":
             logger.info(
-                f"Volume {vol.label}: promoted {vol.status} → VERIFIED"
+                f"Volume {vol.label} stays BURNED: checking its ISO image "
+                f"does not verify a disc.  Read its disc back with "
+                f"'lcsas verify {vol.label} --disc'."
             )
 
         return 0 if passed else 1
@@ -433,7 +443,6 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any) -> int:
     """Verify all BURNED/VERIFIED volumes in one run, optionally at a location."""
-    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.volume_copies import get_copies_for_volume
     from lcsas.db.volume_events import add_event
     from lcsas.db.volumes import list_volumes
@@ -524,8 +533,9 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
         add_event(conn, vol.volume_id, event_type, detail=f"{verify_kind}: {iso_path}")
 
         if ok:
+            # A passing ISO check leaves a BURNED volume BURNED: VERIFIED
+            # means a disc was read back (#906).
             passed_count += 1
-            VolumeLifecycle(conn).iso_check_passed(vol.volume_id)
             logger.info(f"  {vol.label}: PASS")
         else:
             failed_count += 1

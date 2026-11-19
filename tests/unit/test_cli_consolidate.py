@@ -361,3 +361,95 @@ class TestConsolidateParser:
         parser = build_parser()
         args = parser.parse_args(["consolidate", "1", "2", "--execute"])
         assert args.execute is True
+
+
+def _replicate(db, vol_ids: list[int]) -> None:
+    """A VERIFIED REPLICA volume holding every pack of *vol_ids*, so the
+    deprecation safety check passes for them."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.queries import get_packs_for_volume
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+    from lcsas.utils.labels import generate_uuid
+
+    conn = get_connection(str(db))
+    try:
+        replica = create_volume(
+            conn, label="REPLICA_VOL", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+            status="VERIFIED",
+        )
+        bulk_link_packs(conn, replica.volume_id, [
+            p.pack_id for vid in vol_ids
+            for p in get_packs_for_volume(conn, vid)])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _statuses(db, vol_ids: list[int]) -> list[str]:
+    from lcsas.db.connection import get_connection
+    from lcsas.db.volumes import get_volume_by_id
+
+    conn = get_connection(str(db))
+    try:
+        return [get_volume_by_id(conn, vid).status for vid in vol_ids]
+    finally:
+        conn.close()
+
+
+class TestDeprecateRefusals:
+    """``consolidate --deprecate`` refuses with a one-line reason, exit 1,
+    and deprecates none of its volumes (#905)."""
+
+    def test_never_burned_volume_is_refused_and_none_changes(
+        self, tmp_path, caplog,
+    ):
+        from tests.unit.volume_status import force_status
+
+        db = tmp_path / "test.db"
+        vol_ids = _seed_db_with_volumes(db, num_volumes=2, packs_per_volume=1)
+        _replicate(db, vol_ids)
+        from lcsas.db.connection import get_connection
+
+        conn = get_connection(str(db))
+        try:
+            force_status(conn, vol_ids[1], "STAGING")
+            conn.commit()
+        finally:
+            conn.close()
+        caplog.clear()
+
+        rc = main(["--db", str(db), "consolidate", *map(str, vol_ids),
+                   "--target-media", "BD25", "--deprecate"])
+
+        assert rc == 1
+        assert "Unexpected error" not in caplog.text
+        [line] = [r.getMessage() for r in caplog.records
+                  if r.levelname == "ERROR"]
+        assert line.startswith(
+            "Cannot deprecate volume SRC_VOL_1: it is STAGING; it was never "
+            "burned")
+        assert "lcsas session abort --volume SRC_VOL_1" in line
+        assert line.endswith("Nothing was deprecated.")
+        # SRC_VOL_0 was valid and came first: it is not deprecated either.
+        assert _statuses(db, vol_ids) == ["VERIFIED", "STAGING"]
+
+    def test_packs_on_no_other_volume_is_one_line(self, tmp_path, caplog):
+        db = tmp_path / "test.db"
+        vol_ids = _seed_db_with_volumes(db, num_volumes=2, packs_per_volume=1)
+        _replicate(db, vol_ids[:1])
+        caplog.clear()
+
+        rc = main(["--db", str(db), "consolidate", *map(str, vol_ids),
+                   "--target-media", "BD25", "--deprecate"])
+
+        assert rc == 1
+        assert "Unexpected error" not in caplog.text
+        [line] = [r.getMessage() for r in caplog.records
+                  if r.levelname == "ERROR"]
+        assert line == (
+            "Cannot deprecate volume SRC_VOL_1: 1 of its pack(s) are on no "
+            "other in-service volume; burn and verify the volume(s) they "
+            "were consolidated onto first. Nothing was deprecated.")
+        assert _statuses(db, vol_ids) == ["VERIFIED", "VERIFIED"]
