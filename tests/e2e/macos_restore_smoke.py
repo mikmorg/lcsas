@@ -23,9 +23,10 @@ sub-command), then on hosted ``macos-15`` (arm64) and ``macos-15-intel``
 ``fixture``         Linux only: build the multi-disc fixture (rustic + xorriso).
 
 Why a pty and not a FIFO for the swap case: tier 1 only prompts when
-``isatty(0)`` -- restore.sh does not pass ``--interactive on`` -- so a piped
-stdin makes a missing pack fail fast with "pack not found" and no prompt.  A
-heir at Terminal.app always has a tty; the harness has to provide one.
+``isatty(0)`` -- restore.sh does not pass ``--interactive on`` -- so with a
+piped stdin a missing pack gives "pack not found" and no prompt (the file is
+listed, the rest restored, exit 4: #909).  A heir at Terminal.app always has
+a tty; the harness has to provide one.
 
 Stdlib only, Python >= 3.9 syntax at runtime.  ``--attach extract`` replaces
 ``hdiutil`` with a xorriso extraction into a throw-away directory so the

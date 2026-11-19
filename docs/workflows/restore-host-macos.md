@@ -225,8 +225,10 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   (ENTER: "still not found"), then the right disc (ENTER: the restore
   resumes), then the right disc with no input (the rescan finds it).
   The prompt only appears when `restore.sh` runs on a terminal (or with
-  `LCSAS_INTERACTIVE=on`); with stdin piped or redirected, a missing
-  pack fails at once with "pack not found".  Discs burned before #534 was fixed carry a
+  `LCSAS_INTERACTIVE=on`); with stdin piped or redirected, there is
+  no prompt: each file whose pack is not found is listed in
+  `RESTORE_FAILURES.txt` ("pack not found: <id>"), the rest is
+  restored, and tier 1 exits 4 (#909).  Discs burned before #534 was fixed carry a
   WAL-mode catalog, which SQLite cannot query in place on a read-only
   disc.  Tier 1 now reopens it as immutable and names the disc
   (#543); older recovery binaries said "catalog could not be queried

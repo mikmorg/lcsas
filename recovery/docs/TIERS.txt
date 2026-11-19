@@ -297,6 +297,17 @@ whole run on the first bad byte.  All-or-nothing is the wrong default
 on the last-resort tier -- one bad blob must not cost the heir 99.9%
 of an otherwise-intact family archive.
 
+Since rc11 (#909) tier 1 does the same: a file whose pack is not
+found (with no disc prompt), damaged (cut short, a MAC that fails, a
+bad zstd frame, a wrong hash) or unreadable, or whose blob the index
+does not hold, and a folder whose listing cannot be read, is listed
+and the walk goes on, with exit 4.  Both tiers write the same reason
+in RESTORE_FAILURES.txt: "pack not found: <pack id>", "pack damaged:
+<pack id>", "pack unreadable: <pack id>" or "blob not in index: <blob
+id>".  Tier 1 also writes each file to ``.lcsas-partial`` first (as
+below).  q at the disc prompt (75) and a full disk (74) still stop
+either tier.
+
   * Files are written to a sibling ``.lcsas-partial`` file and only
     renamed onto the final path after the last blob -- so a truncated
     file is NEVER left at a final restore path, and re-running is
@@ -521,7 +532,7 @@ set, as for a restore that succeeded: no resume.sh advice (a resume
 would skip the same items again), the tools folder goes, "Restore
 another backup set?" is asked, and the next tier is not tried, even
 with LCSAS_TIER_FALLBACK=1 (it would restore the whole set again).
-Tier 1's exit 1 (a damaged disc, say) stays a failure, with the resume
+Tier 1's exit 1 (a walk that stopped early) stays a failure, with the resume
 advice, even when RESTORE_FAILURES.txt is there: tier 1 has its own
 code for "finished", so neither script has to guess from the file.
 
@@ -547,11 +558,13 @@ Tier 1 exit status, in full:
   0   restored (or, with --list-snapshots, listed); special files or
       links this system cannot hold may be listed in
       RESTORE_FAILURES.txt (see "ITEMS NOT RESTORED")
-  1   failed (setup, a disc read error, a pack on no disc it can see)
+  1   failed (setup, a file it cannot write, a tree it cannot parse)
   2   usage error
   4   finished with errors: every other item was restored, and the
       items not restored are listed in RESTORE_FAILURES.txt (rc10,
-      #872; before rc10 this was exit 1)
+      #872; before rc10 this was exit 1).  Since rc11 (#909) this
+      includes data it cannot read: a pack on no disc it can see
+      (with no disc prompt), a damaged or unreadable pack
   74  stopped because the disk restored to is full; free some space
       (or pick a bigger disk) and run the same command again
   75  stopped at the disc prompt (q, or the input ended)

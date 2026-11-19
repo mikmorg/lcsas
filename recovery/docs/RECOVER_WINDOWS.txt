@@ -778,7 +778,9 @@ TROUBLESHOOTING -- error messages
       or run it from a Command Prompt window, and it shows a box
       that names the disc it needs (see QUICK START above).  A
       script that types the answers itself can set
-      LCSAS_INTERACTIVE=on.
+      LCSAS_INTERACTIVE=on.  The files that need that disc are
+      listed in RESTORE_FAILURES.txt, and everything else is
+      restored: insert the disc and run the restore again.
 
 "The restore stopped before it finished (code N)."
    -> Code 75: you typed Q at a disc box.  Any other code:
