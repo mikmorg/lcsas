@@ -272,7 +272,7 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
             "FROM volumes v "
             "JOIN volume_packs vp ON vp.volume_id = v.volume_id "
             "WHERE vp.pack_id = ? AND v.status != 'DESTROYED' "
-            "ORDER BY v.volume_id",
+            "ORDER BY v.volume_id DESC",
             -1, &st, NULL);
     if (rc != SQLITE_OK) {
         warn_schema_skew_once(c);

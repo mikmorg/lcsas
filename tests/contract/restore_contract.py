@@ -249,11 +249,12 @@ _MISSING_PACK_TREE: dict[bytes, Entry] = {
 
 # #896: which discs the prompt names, by tier 1's rule (TIERS.txt,
 # "WHICH DISCS THE PROMPT NAMES"): every volume holding the pack that
-# is not DESTROYED, by volume number.  Label order is not volume order
-# here (a CD700 volume consolidated onto a later BD25 one), so a reader
-# that sorts by label disagrees.
-_CD = "LCSAS_CD700_2026_0001"
-_BD = "LCSAS_BD25_2026_0002"
+# is not DESTROYED, newest volume (highest volume number) first.  Here
+# that is neither label order nor oldest-first (a BD25 volume
+# consolidated onto a later BD50 one), so a reader that sorts by label,
+# or oldest first, disagrees.
+_V1 = "LCSAS_BD25_2026_0001"
+_V2 = "LCSAS_BD50_2026_0002"
 
 
 def _disc_prompt(name: str, vols: tuple[Vol, ...],
@@ -654,19 +655,20 @@ CASES: list[Case] = [
             "name with no cause, lists nothing and stops, exit 1; tier 3 "
             "lists the file as a MAC failure, restores the rest and exits 4.",
     ),
-    _disc_prompt("one volume", (Vol(_CD),), (_CD,)),
-    _disc_prompt("two volumes", (Vol(_CD), Vol(_BD)), (_CD, _BD)),
+    _disc_prompt("one volume", (Vol(_V1),), (_V1,)),
+    _disc_prompt("two volumes, newest first", (Vol(_V1), Vol(_V2)),
+                 (_V2, _V1)),
     _disc_prompt("one of two DESTROYED",
-                 (Vol(_CD, "DESTROYED", "DESTROYED"), Vol(_BD)), (_BD,)),
+                 (Vol(_V1), Vol(_V2, "DESTROYED", "DESTROYED")), (_V1,)),
     _disc_prompt("one of two DEPRECATED",
-                 (Vol(_CD, "DEPRECATED"), Vol(_BD)), (_CD, _BD)),
-    _disc_prompt("one of two lost", (Vol(_CD, lost=True), Vol(_BD)),
-                 (_CD, _BD)),
-    _disc_prompt("a volume with no disc recorded", (Vol(_CD, disc=None),),
-                 (_CD,)),
+                 (Vol(_V1, "DEPRECATED"), Vol(_V2)), (_V2, _V1)),
+    _disc_prompt("one of two lost", (Vol(_V1, lost=True), Vol(_V2)),
+                 (_V2, _V1)),
+    _disc_prompt("a volume with no disc recorded", (Vol(_V1, disc=None),),
+                 (_V1,)),
     _disc_prompt("its only volume DESTROYED",
-                 (Vol(_CD, "DESTROYED", "DESTROYED"),), NONE_LISTED),
-    _disc_prompt("pack unknown to the catalog", (Vol(_CD), Vol(_BD)),
+                 (Vol(_V1, "DESTROYED", "DESTROYED"),), NONE_LISTED),
+    _disc_prompt("pack unknown to the catalog", (Vol(_V1), Vol(_V2)),
                  NO_RECORD, knows=False),
     Case(
         name="usage error",

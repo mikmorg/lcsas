@@ -49,6 +49,9 @@ EXIT_READER_QUIT = 75
 #: A volume of a disc catalog that holds a pack: (volume_id, label,
 #: status).  The status may be NULL in a damaged catalog.
 _CatalogVolume = tuple[int, str, str | None]
+#: What one catalog says of a pack: the volumes holding it, whether the
+#: catalog has the pack at all, and every volume of the catalog.
+_CatalogAnswer = tuple[list[_CatalogVolume], bool, list[_CatalogVolume]]
 
 
 class RestoreAbortedError(Exception):
@@ -878,11 +881,12 @@ class DiscSearch:
 
     def _query_catalog(
         self, path: Path, pack_id: str,
-    ) -> tuple[list[_CatalogVolume], bool, int, str | None] | None:
-        """(volumes holding the pack, pack known, number of discs
-        listed, newest disc listed), or None when the catalog cannot be
-        opened or read.  Each volume is ``(volume_id, label, status)``,
-        DESTROYED ones included: ``_offered_labels`` applies the rule.
+    ) -> _CatalogAnswer | None:
+        """(volumes holding the pack, pack known, every volume of the
+        catalog), or None when the catalog cannot be opened or read.
+        Each volume is ``(volume_id, label, status)``, newest first,
+        DESTROYED ones included: ``_offered_labels`` and
+        ``_newest_disc`` apply the rules.
 
         The one place the catalog is queried.
         """
@@ -892,14 +896,14 @@ class DiscSearch:
         try:
             # Three-table join: volume_packs.pack_id is the INT FK, not
             # the sha256 hex we have in hand -- so we go through
-            # packs.sha256.  In volume_id order, as tier 1's
+            # packs.sha256.  Newest volume first, as tier 1's
             # catalog.c::lcsas_catalog_volumes_for_pack.
             vols: list[_CatalogVolume] = [
                 (int(row[0]), row[1], row[2]) for row in conn.execute(
                     "SELECT v.volume_id, v.label, v.status FROM volumes v "
                     "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
                     "JOIN packs p ON p.pack_id = vp.pack_id "
-                    "WHERE p.sha256 = ? ORDER BY v.volume_id",
+                    "WHERE p.sha256 = ? ORDER BY v.volume_id DESC",
                     (pack_id,),
                 )
                 if isinstance(row[1], str)
@@ -907,11 +911,14 @@ class DiscSearch:
             known = bool(vols) or conn.execute(
                 "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1", (pack_id,),
             ).fetchone() is not None
-            n_vols = conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0]
-            newest = conn.execute(
-                "SELECT label FROM volumes ORDER BY volume_id DESC LIMIT 1"
-            ).fetchone()
-            return vols, known, int(n_vols), newest[0] if newest else None
+            every: list[_CatalogVolume] = [
+                (int(row[0]), row[1], row[2]) for row in conn.execute(
+                    "SELECT volume_id, label, status FROM volumes "
+                    "ORDER BY volume_id DESC"
+                )
+                if isinstance(row[1], str)
+            ]
+            return vols, known, every
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog.
             return None
@@ -944,8 +951,8 @@ class DiscSearch:
         reachable now is copied locally, and all copies are consulted:
         the volumes are the union, and the pack counts as known if any
         catalog knows it.  Sets ``_newest_known_label`` to the newest
-        disc in the catalog that lists the most discs, for the prompt's
-        "newer than" hint.
+        disc that is not DESTROYED in the catalog that lists the most
+        discs, for the prompt's "newer than" hint (``_newest_disc``).
         """
         primary = self._lookup_catalog_path(pack_id)
         reachable = self._discover_catalogs()
@@ -953,23 +960,23 @@ class DiscSearch:
             reachable.insert(0, self.catalog_path)
         for cat in reachable:
             self._keep_catalog_copy(cat)
-        vols: list[_CatalogVolume] = list(primary[0]) if primary else []
-        known = primary is not None and primary[1]
-        any_ok = primary is not None
-        best_n = -1
+        answers = [primary] if primary else []
+        best: list[_CatalogVolume] | None = None
         for copy in self._catalog_copies.values():
             result = self._query_catalog(copy, pack_id)
             if result is None:
                 continue
-            c_vols, c_known, n_vols, newest = result
-            any_ok = True
-            vols.extend(c_vols)
-            known = known or c_known
-            if n_vols > best_n:
-                best_n = n_vols
-                self._newest_known_label = newest
-        if not any_ok:
+            answers.append(result)
+            if best is None or len(result[2]) > len(best):
+                best = result[2]
+        if not answers:
             return None
+        if best is not None:
+            self._newest_known_label = self._newest_disc(
+                best, [ans[2] for ans in answers],
+            )
+        vols = [vol for ans in answers for vol in ans[0]]
+        known = any(ans[1] for ans in answers)
         labels = self._offered_labels(vols)
         if labels:
             return labels, ""
@@ -981,8 +988,9 @@ class DiscSearch:
 
         Tier 1's rule (catalog.c::lcsas_catalog_volumes_for_pack, read
         by disc_locator.c::print_prompt; #896, recovery/docs/TIERS.txt):
-        every volume holding the pack whose status is not DESTROYED, by
-        volume number, at most ``_PROMPT_MAX_DISCS``.  A DEPRECATED
+        every volume holding the pack whose status is not DESTROYED,
+        newest volume (highest volume number) first, at most
+        ``_PROMPT_MAX_DISCS``: the newest ones.  A DEPRECATED
         volume is offered, lost or not, and so is one with no disc
         recorded: the disc records (``volume_copies``) are not read.  A
         NULL status is left out, as SQL's ``status != 'DESTROYED'``
@@ -992,25 +1000,39 @@ class DiscSearch:
         that any copy records as DESTROYED is not offered: DESTROYED is
         final, so the copy that says so is the newer one.
         """
-        first: dict[str, int] = {}
+        number: dict[str, int] = {}
         destroyed: set[str] = set()
         for volume_id, label, status in vols:
             if status == "DESTROYED":
                 destroyed.add(label)
-            elif status is not None and (
-                label not in first or volume_id < first[label]
-            ):
-                first[label] = volume_id
+            elif status is not None:
+                number[label] = max(volume_id, number.get(label, volume_id))
         offered = sorted(
-            (lbl for lbl in first if lbl not in destroyed),
-            key=lambda lbl: (first[lbl], lbl),
+            (lbl for lbl in number if lbl not in destroyed),
+            key=lambda lbl: (-number[lbl], lbl),
         )
         return offered[:cls._PROMPT_MAX_DISCS]
 
+    @staticmethod
+    def _newest_disc(
+        volumes: list[_CatalogVolume], every: list[list[_CatalogVolume]],
+    ) -> str | None:
+        """The label the "It is on a disc newer than:" hint names: the
+        newest volume of *volumes* (one catalog, newest first) that is
+        not DESTROYED, nor recorded as DESTROYED in any catalog of
+        *every* (#896: never a disc that no longer exists).  A NULL
+        status counts as not offered, as in ``_offered_labels``."""
+        destroyed = {label for vols in every for _vid, label, status in vols
+                     if status == "DESTROYED"}
+        for _vid, label, status in volumes:
+            if status not in (None, "DESTROYED") and label not in destroyed:
+                return label
+        return None
+
     def _lookup_catalog_path(
         self, pack_id: str,
-    ) -> tuple[list[_CatalogVolume], bool] | None:
-        """The volumes of ``catalog_path`` that hold the pack.
+    ) -> _CatalogAnswer | None:
+        """What ``catalog_path`` says of the pack.
 
         Returns
         -------
@@ -1019,11 +1041,11 @@ class DiscSearch:
             override was passed AND auto-discovery turned up nothing
             under any pack-search root, or the discovered file could not
             be opened / queried.
-        ``(volumes, known)``
-            ``volumes`` lists ``(volume_id, label, status)`` of each
-            volume holding the pack, as ``_query_catalog`` returns them
-            (possibly empty); ``known`` says whether the catalog has the
-            pack at all.
+        ``(volumes, known, every volume)``
+            As ``_query_catalog`` returns it: ``volumes`` lists
+            ``(volume_id, label, status)`` of each volume holding the
+            pack (possibly empty); ``known`` says whether the catalog
+            has the pack at all.
 
         Auto-discovery (issue #253): when ``self.catalog_path is None``,
         every call walks ``self._pack_search_paths`` looking for a
@@ -1065,8 +1087,7 @@ class DiscSearch:
             if was_auto_discovered:
                 self.catalog_path = None
             return None
-        vols, known, _n, _newest = result
-        return vols, known
+        return result
 
     @staticmethod
     def _frame_indented(text: str) -> str:

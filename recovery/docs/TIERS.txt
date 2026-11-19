@@ -410,12 +410,14 @@ owner decision 2026-11-19):
     consolidation may still be on the shelf.  A lost volume (recorded
     as DEPRECATED, ADR 0003) is named too, and so is a volume with no
     disc recorded: the prompt does not read the disc records.
-  * In volume number order (the order the volumes were made), at most
-    8 discs.
+  * Newest volume first (the highest volume number: volumes are
+    numbered in the order they were made), since the heir starts from
+    the newest disc.  At most 8 discs: the 8 newest.
   * The pack is in the catalog but every volume holding it is
     DESTROYED (or none holds it): "(catalog has the pack, but lists no
     disc for it)".  Tier 3 then also names the newest disc in the
-    catalog and says the pack is on a newer one.
+    catalog that is not DESTROYED and says the pack is on a newer one;
+    it never names a DESTROYED disc there.
   * The pack is not in the catalog at all: "(catalog has no record of
     this pack ID)", and how to pick an older snapshot.
 
@@ -425,8 +427,9 @@ has seen in the run (#635) and names the volumes any of them lists by
 the same rule; a volume that any of them records as DESTROYED is not
 named, since a destroyed volume never comes back.
 
-NOTE for ALREADY-BURNED discs: before rc11, tier 3 also named DESTROYED
-volumes, and listed the discs in label order.  Tier 1 is unchanged.
+NOTE for ALREADY-BURNED discs: before rc11, tier 1 listed the discs
+oldest volume first; tier 3 also named DESTROYED volumes and listed the
+discs in label order.  Use the tools on the newest meta disc.
 
 TIER 3: ZSTD DECOMPRESSION (rustic v2 default)
 
