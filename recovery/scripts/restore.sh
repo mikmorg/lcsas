@@ -39,11 +39,13 @@
 #   0    success
 #   1    generic failure (no repository, unsupported OS/arch, not enough
 #        free space, no recovery method available, etc.)
-#   2    usage error; --check-disc: the image has no ECC data
+#   2    usage error
 #   3    --check-disc: no image, no recovery tree or no lcsas-ecc, or the
 #        image could not be read or repaired
 #   4    the restore finished, but some items could not be restored:
 #        they are listed in <target>/RESTORE_FAILURES.txt (#799)
+#   5    --check-disc: the image has no ECC data, so there is nothing to
+#        repair (lcsas-ecc verify's own code for that is 2; #887)
 #   64   no recovery binary available at any tier (issue #225)
 #   65   the reader stopped at a question this script asked
 #   74   the disk filled up; free some space, then carry on with resume.sh
@@ -900,12 +902,13 @@ done
 # 1) -- offers/performs `lcsas-ecc fix`.  Never touches the
 # repository, password, or restore machinery; exits when done.
 #
-# Exit codes mirror the wrapped tool plus a couple of script-local
-# ones:
+# Exit codes, from the wrapped tool's:
 #   0   disc clean, or damage fully repaired
 #   1   damage remained uncorrectable after fix (or heir declined fix)
-#   2   image has no RS03 ECC header (nothing to check/repair)
 #   3   usage / I-O error (missing image, no lcsas-ecc binary)
+#   5   image has no RS03 ECC header (nothing to check/repair):
+#       lcsas-ecc verify exits 2 for it, which is this script's usage
+#       error, so it is reported as 5 (#887)
 if [ -n "$CHECK_DISC_IMG" ]; then
     if [ ! -f "$CHECK_DISC_IMG" ]; then
         printf 'restore.sh: --check-disc: image not found: %s\n' \
@@ -1001,7 +1004,7 @@ if [ -n "$CHECK_DISC_IMG" ]; then
         2)
             printf '[check-disc] this image has no RS03 ECC parity layer; ' >&2
             printf 'nothing to repair.\n' >&2
-            exit 2 ;;
+            exit 5 ;;
         1)
             : ;;  # damage found -- fall through to the repair offer
         *)

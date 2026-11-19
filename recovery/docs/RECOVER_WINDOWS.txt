@@ -873,21 +873,23 @@ eight characters of it, to restore.bat:
 restore.bat then asks its questions as usual.  A restore that stopped
 carries on with the same snapshot.
 
-EXIT CODES of restore.bat (0, 4, 64, 65, 74, 75 and 77 mean the
+EXIT CODES of restore.bat (0, 4, 5, 64, 65, 74, 75 and 77 mean the
 same as for restore.sh; see RECOVER.txt):
 
     0   the restore finished: every backup set you chose
     1   a failure; the message above it says what (for example not
         enough free space, after any answer but y)
     2   --snapshot was given without an ID, or with something that is
-        not one (an ID is made of the digits 0-9 and the letters a-f);
-        with --check-disc, the image has no ECC data to repair with
+        not one (an ID is made of the digits 0-9 and the letters a-f)
     3   --check-disc only: no image, no lcsas-ecc.exe on this disc, or
         the image could not be read or repaired
     4   the restore finished, but some items could not be restored:
         the message names the file RESTORE_FAILURES.txt in the folder
         you restored into, which lists them and why (see "ITEMS NOT
         RESTORED" in RECOVER.txt).  Nothing is left to carry on
+    5   --check-disc only: the image has no ECC data, so there is
+        nothing to repair: that disc was burned without ECC.  If it
+        cannot be read, use another disc with the same label
     64  lcsas-restore.exe is missing (antivirus may have removed
         it), so the backup set cannot be read from the discs; see
         "WHAT IF restore.bat DOES NOT RUN?", CASE E

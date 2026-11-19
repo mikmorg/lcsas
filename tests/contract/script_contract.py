@@ -446,11 +446,13 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
                           not_says=NEXT_TIER_RAN),
     ),
     ScriptCase(
+        # lcsas-ecc verify exits 2 for that; the scripts say 5, since 2
+        # is their usage error (owner, #887).
         name="check-disc: the image has no ECC data",
         tier=None, check_disc=2,
-        sh=ScriptOutcome(exit=2,
+        sh=ScriptOutcome(exit=ScriptExit.NO_ECC,
                          says=r"no RS03 ECC parity layer; nothing to repair\."),
-        bat=ScriptOutcome(exit=2,
+        bat=ScriptOutcome(exit=ScriptExit.NO_ECC,
                           says=r"no RS03 ECC parity layer; nothing to repair\."),
     ),
 )

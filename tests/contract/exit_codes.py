@@ -38,6 +38,7 @@ class ScriptExit(enum.IntEnum):
     USAGE = 2                # the script was called wrongly
     CHECK_DISC_ERROR = 3     # --check-disc: no image or no tool, a read error
     NOT_ALL_RESTORED = 4     # finished; items listed in RESTORE_FAILURES.txt
+    NO_ECC = 5               # --check-disc: the image has no ECC data (#887)
     NO_RECOVERY_BIN = 64     # no program here can restore the set
     USER_ABORT = 65          # the person stopped at a question the script asked
     DISK_FULL = 74           # the disk restored to is full

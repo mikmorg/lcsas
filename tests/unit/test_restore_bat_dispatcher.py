@@ -1124,3 +1124,17 @@ def test_restore_bat_banner_repeats_the_quickedit_note():
     banner = content[content.index("LCSAS Restore (Windows)"):content.index(":ask_target")]
     assert "a click pauses the restore" in banner
     assert '"Select"' in banner and "Esc" in banner
+
+
+def test_restore_bat_check_disc_no_ecc_exits_from_top_level():
+    """#887: "no ECC data" is the script's exit 5 (lcsas-ecc.exe's own 2
+    is restore.bat's usage error).  That 5 is run under wine in
+    tests/contract/script_contract.py.  Static, because only real
+    cmd.exe drops an exit code given inside a ( ) block (#384): the exit
+    sits at a label after :wrong_password, reached by goto."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert "if !VRC! equ 2 goto :check_disc_no_ecc" in code
+    label = code.index(":check_disc_no_ecc")
+    assert label > code.index(":wrong_password"), "top level"
+    assert _label_body(content, ":check_disc_no_ecc")[-1] == "exit /b 5"

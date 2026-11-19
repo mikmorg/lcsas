@@ -429,11 +429,9 @@ if /i "%~1"=="--check-disc" (
         pause
         exit /b 0
     )
-    if !VRC! equ 2 (
-        echo [check-disc] this image has no RS03 ECC parity layer; nothing to repair.
-        pause
-        exit /b 2
-    )
+    REM lcsas-ecc.exe's 2 ("no RS03 header") is this script's 5: its own
+    REM 2 is a usage error (#887).  At top level, as :wrong_password.
+    if !VRC! equ 2 goto :check_disc_no_ecc
     if not !VRC! equ 1 (
         echo [check-disc] could not read the image ^(exit !VRC!^).
         pause
@@ -2357,6 +2355,14 @@ REM reliably propagates to `cmd /c` (issue #384).  Normal flow stops at
 REM the `exit /b 1` above and never falls into this label.
 :wrong_password
 exit /b 77
+
+REM Reached only via `goto` from --check-disc when lcsas-ecc.exe verify
+REM exits 2: the image has no ECC data, so there is nothing to repair.
+REM Exit 5, as restore.sh: 2 is the usage error of both scripts (#887).
+:check_disc_no_ecc
+echo [check-disc] this image has no RS03 ECC parity layer; nothing to repair.
+pause
+exit /b 5
 
 REM Reached only via `goto` from the banner, when lcsas-restore.exe is
 REM missing and the backup set has no data\ of its own (#631): before

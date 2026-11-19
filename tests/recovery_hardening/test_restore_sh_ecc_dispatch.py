@@ -25,6 +25,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests.contract.exit_codes import ScriptExit
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 
@@ -126,15 +128,17 @@ def test_clean_disc_exits_zero_no_fix(tmp_path: Path) -> None:
     assert "intact" in res.stderr
 
 
-# ── no ECC header: verify exit 2 → script exit 2 ──────────────────────
+# ── no ECC header: verify exit 2 → script exit 5 (#887) ───────────────
 
 
-def test_no_ecc_header_exits_two(tmp_path: Path) -> None:
+def test_no_ecc_header_exits_five(tmp_path: Path) -> None:
+    """lcsas-ecc verify's 2 ("no RS03 header") is the script's 5: its own
+    2 is a usage error (#887)."""
     recovery = _recovery_fixture(tmp_path)
     img = _image(tmp_path)
     res = _run(["--check-disc", str(img), str(recovery)],
                {"LCSAS_TEST_ECC_VERIFY_RC": "2"})
-    assert res.returncode == 2, res.stderr
+    assert res.returncode == ScriptExit.NO_ECC == 5, res.stderr
     assert "ECC-CALL: fix" not in res.stdout
     assert "no RS03 ECC parity" in res.stderr
 

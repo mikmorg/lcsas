@@ -596,7 +596,9 @@ If the disc returns I/O errors:
      (Or call the tool directly:
          /mnt/recovery/bin/<arch>/lcsas-ecc verify /tmp/disc.iso
          /mnt/recovery/bin/<arch>/lcsas-ecc fix    /tmp/disc.iso
-      -- where <arch> is your machine's target dir under recovery/bin/.)
+      -- where <arch> is your machine's target dir under recovery/bin/.
+      lcsas-ecc verify exits 2 for an image with no ECC data;
+      restore.sh --check-disc exits 5 for it, see EXIT CODES.)
 
      With the default 15% redundancy, roughly 13-15% of unreadable
      sectors can be repaired.  Higher configured redundancy raises
@@ -746,8 +748,7 @@ EXIT CODES
           an unsupported computer, not enough free space (see
           PREREQUISITES), "no recovery method available", or the tier
           that ran failed
-    2  -- usage error; with --check-disc, the image has no ECC data,
-          so there is nothing to repair
+    2  -- usage error
     3  -- --check-disc only: no image, no recovery folder or no
           lcsas-ecc for this computer, or the image could not be read
           or repaired (see "REPAIRING A DAMAGED DISC")
@@ -755,6 +756,9 @@ EXIT CODES
           they are listed in RESTORE_FAILURES.txt in the folder you
           restored into (see "ITEMS NOT RESTORED").  Nothing to carry
           on; restore.bat uses the same code
+    5  -- --check-disc only: the image has no ECC data, so there is
+          nothing to repair: that disc was burned without ECC.  If it
+          cannot be read, use another disc with the same label
     64 -- no recovery program on this meta disc can run on this
           computer (see below)
     65 -- you stopped at a question restore.sh asked (the newest

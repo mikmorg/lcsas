@@ -150,6 +150,8 @@ guards applied before/within any tier:
     heir-facing entry point is ``restore.sh --check-disc <image>``
     (``restore.bat --check-disc`` on Windows): it runs
     ``lcsas-ecc verify`` and, on damage, offers ``lcsas-ecc fix``.
+    An image with no ECC data (``lcsas-ecc``'s exit 2) ends the check
+    with the script's exit 5: 2 is the scripts' usage error (#887).
     The parity format is dvdisaster's RS03, unchanged, so the newest
     meta disc's ``lcsas-ecc`` repairs every disc already burned.
   * The tier-1 binary then authenticates every blob (Poly1305 MAC +
