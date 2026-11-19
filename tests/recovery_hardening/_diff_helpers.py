@@ -15,6 +15,13 @@ Three pure functions:
 
 Used by tests/recovery_hardening/test_tier1_vs_tier2_differential.py.
 
+Two more repository helpers (moved here from the #784 test so the
+restore contract table, tests/contract/, uses them too):
+
+  latest_snapshot_id(repo, pwfile) -> snapshot_id
+  rustic_backup(src, repo, pwfile) -> snapshot_id
+      Another `rustic backup` of src into an existing repository.
+
 Plus one tree-inspection helper shared by the #384 wrong-password
 tests:
 
@@ -26,6 +33,7 @@ tests:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 import subprocess
@@ -108,6 +116,27 @@ def build_rustic_repo(src: Path, repo: Path, pwfile: Path) -> str:
             if len(parts) >= 2:
                 return parts[1]
     return ""
+
+
+def latest_snapshot_id(repo: Path, pwfile: Path) -> str:
+    """The id of the newest snapshot in *repo*."""
+    res = subprocess.run(
+        ["rustic", "-r", str(repo), "snapshots", "--json",
+         "--password-file", str(pwfile)],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    snaps = [s for group in json.loads(res.stdout) for s in group["snapshots"]]
+    return str(max(snaps, key=lambda s: s["time"])["id"])
+
+
+def rustic_backup(src: Path, repo: Path, pwfile: Path) -> str:
+    """Another `rustic backup` of *src*; returns the new snapshot id."""
+    subprocess.run(
+        ["rustic", "-r", str(repo), "backup", str(src),
+         "--password-file", str(pwfile)],
+        capture_output=True, check=True, timeout=120,
+    )
+    return latest_snapshot_id(repo, pwfile)
 
 
 def restore_with_tier1(repo: Path, target: Path, pwfile: Path,
