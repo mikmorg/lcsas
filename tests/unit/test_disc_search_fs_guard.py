@@ -91,9 +91,10 @@ def _touches(node: ast.AST) -> Iterator[tuple[int, str]]:
                     yield n.lineno, f"self._fs.{f.attr}("
                 elif f.attr in _PATH_METHODS and not _on_self_fs(f):
                     yield n.lineno, f".{f.attr}("
-        elif isinstance(n, ast.ExceptHandler):
-            if n.type is None or _names(n.type) & (_OS_ERRORS | {"Exception"}):
-                yield n.lineno, "except OSError"
+        elif isinstance(n, ast.ExceptHandler) and (
+            n.type is None or _names(n.type) & (_OS_ERRORS | {"Exception"})
+        ):
+            yield n.lineno, "except OSError"
 
 
 def _split() -> tuple[ast.ClassDef, list[ast.stmt]]:
