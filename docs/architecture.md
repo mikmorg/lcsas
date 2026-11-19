@@ -101,7 +101,7 @@ volumes (
     capacity_bytes INTEGER NOT NULL, -- Raw capacity in bytes
     used_bytes   INTEGER DEFAULT 0,
     location     TEXT DEFAULT 'Home_Shelf', -- staged for (#687), see below
-    status       TEXT,               -- STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED
+    status       TEXT,               -- STAGING → BURNING → BURNED → VERIFIED → DEPRECATED (DESTROYED: old catalogs only, #907)
     created_at   DATETIME,
     closed_at    DATETIME,
     verified_at  DATETIME
@@ -237,21 +237,24 @@ key_escrow (
 
 ```
 STAGING → BURNING → BURNED → VERIFIED → (active use)
-                                        → DEPRECATED → DESTROYED
+                                        → CONSOLIDATING → DEPRECATED
 ```
 
-Valid transitions:
+Valid transitions (`_TRANSITIONS` in `src/lcsas/db/lifecycle.py`; the
+checked copy is in `docs/workflows/consolidate-and-catalog-ops.md`):
 | From | To |
 |------|-----|
-| STAGING | BURNING, DESTROYED |
-| BURNING | BURNED, VERIFIED, STAGING (re-stage), DESTROYED |
-| BURNED | VERIFIED, STAGING (re-burn), DESTROYED |
-| VERIFIED | DEPRECATED, DESTROYED |
-| DEPRECATED | DESTROYED |
+| STAGING | BURNING |
+| BURNING | BURNED, VERIFIED, STAGING (failed or stopped burn) |
+| BURNED | VERIFIED |
+| VERIFIED | DEPRECATED, CONSOLIDATING |
+| CONSOLIDATING | DEPRECATED, VERIFIED |
+| DEPRECATED | (none) |
 
 Transitioning to DEPRECATED is blocked if the volume contains packs that
-exist on no other active volume (unless `force=True`), preventing accidental
-data loss.
+exist on no other active volume, preventing accidental data loss.  The
+volume-wide DESTROYED status is not in the graph (#907); it stays a valid
+schema value for old catalogs.
 
 ---
 

@@ -164,12 +164,16 @@ STARTS: dict[str, Start] = {
     "DEPRECATED, lost": Start(
         "DEPRECATED", disc="lost", notes=_LOST_NOTES,
         what="a lost volume: its only disc recorded lost (ADR 0003)"),
+    # The volume-wide DESTROYED status left the graph (#907) and no
+    # command writes it, but the schema keeps it: an old catalog may hold
+    # it, so what each event does to such a volume stays pinned.
     "DESTROYED + disc": Start(
         "DESTROYED", disc="ACTIVE",
-        what="no command writes DESTROYED today; seeded directly"),
+        what="not in the status graph (#907); only an old catalog holds it; "
+             "seeded directly"),
     "DESTROYED": Start(
-        "DESTROYED", what="no command writes DESTROYED today; seeded "
-                          "directly"),
+        "DESTROYED", what="not in the status graph (#907); only an old "
+                          "catalog holds it; seeded directly"),
 }
 
 # ---------------------------------------------------------------------
@@ -540,13 +544,6 @@ def _stage_consolidation(env: Env) -> None:
     seed_consolidation_tie(env, result.session_id)
 
 
-def _abort_consolidation(env: Env) -> int:
-    from lcsas.consolidate.merger import VolumeMerger
-
-    VolumeMerger(env.conn).abort_consolidation([env.volume_id])
-    return 0
-
-
 def _later_disc(env: Env) -> Path:
     """Stage one more volume, of a new pack: its staging tree is a disc
     made after the volume reached its state, carrying the catalog as it
@@ -770,8 +767,6 @@ EVENTS: dict[str, Event] = {
         lambda env: _main("--config", env.cfg, "session", "abort",
                           env.other_session),
         prepare=_stage_consolidation),
-    "VolumeMerger.abort_consolidation (no command calls it)": Event(
-        "(none: merger method only)", _abort_consolidation),
     # --- deleting -----------------------------------------------------
     "session abort": Event(
         "lcsas session abort S",
@@ -1439,13 +1434,9 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DEPRECATED, lost", "VERIFIED", "Bank ACTIVE; Home DESTROYED",
           events="NOTE DEPRECATED → VERIFIED, VERIFY_PASS"),
         R("DESTROYED + disc", "DESTROYED", "Bank ACTIVE; Home ACTIVE",
-          events="VERIFY_PASS",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="VERIFY_PASS"),
         R("DESTROYED", "DESTROYED", "Bank ACTIVE",
-          events="VERIFY_PASS",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="VERIFY_PASS"),
     ],
     "ISO check passes": [
         R("STAGING", "STAGING",
@@ -1577,9 +1568,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           events="VERIFY_PASS@Home, BURN_RECEIPT_IMPORTED@Home"),
         R("DESTROYED", "DESTROYED", "Home ACTIVE",
-          events="VERIFY_PASS@Home, BURN_RECEIPT_IMPORTED@Home",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="VERIFY_PASS@Home, BURN_RECEIPT_IMPORTED@Home"),
     ],
     "a failing receipt is imported": [
         R("STAGING", "STAGING",
@@ -1657,9 +1646,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
           events="BURN_RECEIPT_IMPORTED@Home"),
         R("DESTROYED", "DESTROYED", "Home ACTIVE",
-          events="BURN_RECEIPT_IMPORTED@Home",
-          suspect=("records an in-service disc on a DESTROYED volume (unreachable today: no "
-                   "command writes DESTROYED)")),
+          events="BURN_RECEIPT_IMPORTED@Home"),
     ],
     "the disc is taken out of service": [
         R("STAGING", "STAGING",
@@ -2054,77 +2041,6 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED"),
         R("DESTROYED + disc", "DESTROYED", "Home ACTIVE"),
         R("DESTROYED", "DESTROYED"),
-    ],
-    "VolumeMerger.abort_consolidation (no command calls it)": [
-        R("STAGING", "STAGING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DESTROYED'])"),
-          deleted_by="reconcile-waiting abort-volume abort"),
-        R("STAGING, rebuilt", "STAGING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DESTROYED'])")),
-        R("STAGING, burn evidence", "STAGING",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DESTROYED'])")),
-        R("STAGING + disc", "STAGING", "Home ACTIVE",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: STAGING → VERIFIED (allowed: "
-                "['BURNING', 'DESTROYED'])")),
-        R("BURNING", "VERIFIED",
-          events="NOTE BURNING → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNING volume VERIFIED "
-                   "with no disc check")),
-        R("BURNING, was BURNED", "VERIFIED",
-          events="NOTE BURNING → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNING volume VERIFIED "
-                   "with no disc check")),
-        R("BURNING + disc", "VERIFIED", "Home ACTIVE",
-          events="NOTE BURNING → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNING volume VERIFIED "
-                   "with no disc check")),
-        R("BURNED, rebuilt", "VERIFIED",
-          events="NOTE BURNED → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNED volume VERIFIED "
-                   "with no disc check")),
-        R("BURNED + disc", "VERIFIED", "Home ACTIVE",
-          events="NOTE BURNED → VERIFIED",
-          suspect=("dead code (no command calls it), and it would make a BURNED volume VERIFIED "
-                   "with no disc check")),
-        R("VERIFIED + disc", "VERIFIED", "Home ACTIVE",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: VERIFIED → VERIFIED (allowed: "
-                "['CONSOLIDATING', 'DEPRECATED…")),
-        R("VERIFIED", "VERIFIED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: VERIFIED → VERIFIED (allowed: "
-                "['CONSOLIDATING', 'DEPRECATED…")),
-        R("CONSOLIDATING + disc", "VERIFIED", "Home ACTIVE",
-          events="NOTE CONSOLIDATING → VERIFIED",
-          suspect="dead code: no command calls it"),
-        R("CONSOLIDATING", "VERIFIED",
-          events="NOTE CONSOLIDATING → VERIFIED",
-          suspect="dead code: no command calls it"),
-        R("DEPRECATED + disc", "DEPRECATED", "Home ACTIVE",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → VERIFIED (allowed: "
-                "['DESTROYED'])")),
-        R("DEPRECATED", "DEPRECATED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → VERIFIED (allowed: "
-                "['DESTROYED'])")),
-        R("DEPRECATED, lost", "DEPRECATED", "Home DESTROYED",
-          rc="ValueError",
-          says=("Invalid status transition for volume 1: DEPRECATED → VERIFIED (allowed: "
-                "['DESTROYED'])")),
-        R("DESTROYED + disc", "DESTROYED", "Home ACTIVE",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → VERIFIED (allowed: [])"),
-        R("DESTROYED", "DESTROYED",
-          rc="ValueError",
-          says="Invalid status transition for volume 1: DESTROYED → VERIFIED (allowed: [])"),
     ],
     "session abort": [
         R("STAGING", "deleted"),
@@ -2711,9 +2627,10 @@ def test_status_write_sites_are_the_ones_the_table_was_written_for():
     events and, inside it, 18 ``_update_status`` and 2 ``_delete_volume``
     calls (events that shared a sequence share one call) and 9 status
     writes (#892).  #906 removed the ISO check's event (2 calls, 1
-    ``_update_status``).  A new one needs rows that reach it."""
+    ``_update_status``), #907 the dead ``abort_consolidation`` (1 call).
+    A new one needs rows that reach it."""
     counts = Counter(site.kind for site in status_write_sites())
-    assert counts == {"lifecycle event": 26, "_update_status": 17,
+    assert counts == {"lifecycle event": 25, "_update_status": 17,
                       "_delete_volume": 2, "status write": 9}
 
 

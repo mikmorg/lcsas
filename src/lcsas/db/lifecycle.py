@@ -30,7 +30,6 @@ from lcsas.constants import (
     STATUS_BURNING,
     STATUS_CONSOLIDATING,
     STATUS_DEPRECATED,
-    STATUS_DESTROYED,
     STATUS_STAGING,
     STATUS_VERIFIED,
 )
@@ -49,22 +48,29 @@ _logger = logging.getLogger(__name__)
 # The status graph: each key maps to the set of statuses a volume may
 # move to from that one.  Private: callers send events, and the events
 # below are the only writers of volumes.status (#892).
+#
+# DESTROYED is not in it (#907): no command writes the volume-wide
+# DESTROYED status ("destroy" is the disc-level 'copy destroy').  It stays
+# a valid value in the volumes.status CHECK constraint, which needs no
+# migration: the tier-1 reader filters on it (db/schema.py
+# TIER1_REQUIRED_VOLUME_STATUS), and an old catalog, or a catalog rebuilt
+# from an old disc catalog, may still hold it.  A volume that is DESTROYED
+# has no key here, so _update_status refuses every change of it.
 _TRANSITIONS: dict[str, set[str]] = {
     # A never-burned volume is deleted or staged again, never deprecated
     # (#905): no command deletes a DEPRECATED volume, so it would stay in
     # the catalog for good.
-    STATUS_STAGING:         {STATUS_BURNING, STATUS_DESTROYED},
-    STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
+    STATUS_STAGING:         {STATUS_BURNING},
+    STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING},
     # A BURNED volume never goes back to BURNING or STAGING (#810): a
     # disc of it exists (a catalog rebuilt from discs records the newest
     # ones as BURNED with no disc row), and STAGING would let 'session
     # abort' or 'reconcile --fix' delete it.  'burn --session' burns a
     # BURNED volume without leaving BURNED, then makes it VERIFIED.
-    STATUS_BURNED:          {STATUS_VERIFIED, STATUS_DESTROYED},
-    STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_DESTROYED, STATUS_CONSOLIDATING},
+    STATUS_BURNED:          {STATUS_VERIFIED},
+    STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_CONSOLIDATING},
     STATUS_CONSOLIDATING:   {STATUS_DEPRECATED, STATUS_VERIFIED},
-    STATUS_DEPRECATED:      {STATUS_DESTROYED},
-    STATUS_DESTROYED:       set(),
+    STATUS_DEPRECATED:      set(),
 }
 
 

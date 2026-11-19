@@ -473,7 +473,7 @@ Key behaviours derived from the schema (the `locations` and
   the same volume to the same location is therefore idempotent and
   resurrects a deprecated disc's row.
 - Volumes can transition through their own lifecycle
-  (`STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`)
+  (`STAGING → BURNING → BURNED → VERIFIED → DEPRECATED`)
   independently of their discs' statuses, with one exception: when a
   volume's last in-service disc is recorded gone, the volume becomes a
   lost volume, recorded as `DEPRECATED` and shown as `LOST`

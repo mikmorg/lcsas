@@ -233,8 +233,8 @@ class TestPickListDegradation:
 
     def test_destroy_vol_a_and_vol_d(self, redundant_db):
         """Destroying VOL_A and VOL_D — d01 only had copies on those two."""
-        update_status(redundant_db, 1, "DESTROYED")  # VOL_A
-        update_status(redundant_db, 4, "DESTROYED")  # VOL_D
+        update_status(redundant_db, 1, "DESTROYED", force=True)  # VOL_A
+        update_status(redundant_db, 4, "DESTROYED", force=True)  # VOL_D
 
         pick = get_pick_list(redundant_db, self.ALL_SHAS)
         found = {p.sha256 for packs in pick.values() for p in packs}
@@ -248,8 +248,8 @@ class TestPickListDegradation:
 
     def test_missing_packs_after_destruction(self, redundant_db):
         """get_missing_packs correctly identifies packs with no viable volume."""
-        update_status(redundant_db, 1, "DESTROYED")  # VOL_A
-        update_status(redundant_db, 4, "DESTROYED")  # VOL_D
+        update_status(redundant_db, 1, "DESTROYED", force=True)  # VOL_A
+        update_status(redundant_db, 4, "DESTROYED", force=True)  # VOL_D
 
         # d01 is on VOL_A + VOL_D only, both destroyed
         # get_missing_packs checks volume_packs (not status), so d01 is still linked
@@ -391,7 +391,7 @@ class TestRestoreFromAnyCombination:
 
     def test_pick_list_with_degraded_volumes(self, redundant_db):
         """Even with one volume destroyed, planner finds alternatives."""
-        update_status(redundant_db, 2, "DESTROYED")  # VOL_B
+        update_status(redundant_db, 2, "DESTROYED", force=True)  # VOL_B
 
         planner = RestorePlanner(redundant_db)
         pick = planner.generate_pick_list(self.ALL_SHAS)

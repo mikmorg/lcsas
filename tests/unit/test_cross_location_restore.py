@@ -227,7 +227,7 @@ class TestSingleVolumeDestroyed:
 
     def _destroy_home_002(self, conn):
         vol = get_volume_by_label(conn, "HOME_002")
-        update_status(conn, vol.volume_id, "DESTROYED")
+        update_status(conn, vol.volume_id, "DESTROYED", force=True)
         destroy_copy(conn, vol.volume_id, "Home_Shelf")
 
     def test_pick_list_routes_to_offsite(self, cross_loc_db):
@@ -321,7 +321,7 @@ class TestMultiVolumeDestruction:
     def _destroy_volumes(self, conn, labels):
         for label in labels:
             vol = get_volume_by_label(conn, label)
-            update_status(conn, vol.volume_id, "DESTROYED")
+            update_status(conn, vol.volume_id, "DESTROYED", force=True)
             destroy_copy(conn, vol.volume_id, VOL_LOCATIONS[label])
 
     def test_destroy_home002_and_off002(self, cross_loc_db):
@@ -417,7 +417,7 @@ class TestPickListRouting:
     def test_routing_shifts_after_home001_destroyed(self, cross_loc_db):
         """Destroying HOME_001 shifts p01-p04, d01, d02 to Offsite."""
         vol = get_volume_by_label(cross_loc_db, "HOME_001")
-        update_status(cross_loc_db, vol.volume_id, "DESTROYED")
+        update_status(cross_loc_db, vol.volume_id, "DESTROYED", force=True)
 
         pick = get_pick_list(cross_loc_db, ALL_SHAS)
         found = {p.sha256 for packs in pick.values() for p in packs}
@@ -445,7 +445,7 @@ class TestCrossLocationCacheAssembly:
 
     def _destroy_home_002(self, conn):
         vol = get_volume_by_label(conn, "HOME_002")
-        update_status(conn, vol.volume_id, "DESTROYED")
+        update_status(conn, vol.volume_id, "DESTROYED", force=True)
         destroy_copy(conn, vol.volume_id, "Home_Shelf")
 
     def test_cache_from_home001_plus_offsite(self, cross_loc_db, volume_dirs, tmp_path):
@@ -481,7 +481,7 @@ class TestCrossLocationCacheAssembly:
         """Complete restore using only Offsite volumes (Home totally lost)."""
         for label in ["HOME_001", "HOME_002"]:
             vol = get_volume_by_label(cross_loc_db, label)
-            update_status(cross_loc_db, vol.volume_id, "DESTROYED")
+            update_status(cross_loc_db, vol.volume_id, "DESTROYED", force=True)
 
         planner = RestorePlanner(cross_loc_db)
         pick = planner.generate_pick_list(ALL_SHAS)
@@ -554,7 +554,7 @@ class TestRepoSpecificCrossLocation:
 
     def _destroy_home_002(self, conn):
         vol = get_volume_by_label(conn, "HOME_002")
-        update_status(conn, vol.volume_id, "DESTROYED")
+        update_status(conn, vol.volume_id, "DESTROYED", force=True)
 
     def test_photos_restore_after_home002_lost(self, cross_loc_db):
         """Photos p01-p08: p01-p04 on HOME_001, p05-p08 on HOME_002.
@@ -611,7 +611,7 @@ class TestProgressiveDegradation:
 
         # Step 1: Destroy HOME_002 → still fully recoverable via Offsite
         vol_h2 = get_volume_by_label(cross_loc_db, "HOME_002")
-        update_status(cross_loc_db, vol_h2.volume_id, "DESTROYED")
+        update_status(cross_loc_db, vol_h2.volume_id, "DESTROYED", force=True)
 
         pick = planner.generate_pick_list(ALL_SHAS)
         assert pick.missing_packs == []
@@ -619,7 +619,7 @@ class TestProgressiveDegradation:
 
         # Step 2: Also destroy OFF_003 → p07, p08, d04 were on HOME_002 + OFF_003
         vol_o3 = get_volume_by_label(cross_loc_db, "OFF_003")
-        update_status(cross_loc_db, vol_o3.volume_id, "DESTROYED")
+        update_status(cross_loc_db, vol_o3.volume_id, "DESTROYED", force=True)
 
         pick = planner.generate_pick_list(ALL_SHAS)
         found = {p.sha256 for packs in pick.volumes.values() for p in packs}
@@ -629,7 +629,7 @@ class TestProgressiveDegradation:
 
         # Step 3: Also destroy OFF_002 → more losses cascade
         vol_o2 = get_volume_by_label(cross_loc_db, "OFF_002")
-        update_status(cross_loc_db, vol_o2.volume_id, "DESTROYED")
+        update_status(cross_loc_db, vol_o2.volume_id, "DESTROYED", force=True)
 
         pick = planner.generate_pick_list(ALL_SHAS)
         found = {p.sha256 for packs in pick.volumes.values() for p in packs}
@@ -648,7 +648,7 @@ class TestProgressiveDegradation:
 
         # Destroy HOME_002: all its packs drop to 1 copy
         vol = get_volume_by_label(cross_loc_db, "HOME_002")
-        update_status(cross_loc_db, vol.volume_id, "DESTROYED")
+        update_status(cross_loc_db, vol.volume_id, "DESTROYED", force=True)
 
         under_2 = get_redundancy_report(cross_loc_db, min_copies=2)
         under_2_shas = {p.sha256 for p in under_2}
@@ -710,7 +710,7 @@ class TestEdgeCaseDestroyedOnly:
         """Request only HOME_002 packs after HOME_002 destroyed.
         They should all route to Offsite."""
         vol = get_volume_by_label(cross_loc_db, "HOME_002")
-        update_status(cross_loc_db, vol.volume_id, "DESTROYED")
+        update_status(cross_loc_db, vol.volume_id, "DESTROYED", force=True)
 
         h2_shas = VOL_PACKS["HOME_002"]
         pick = get_pick_list(cross_loc_db, h2_shas)
@@ -725,7 +725,7 @@ class TestEdgeCaseDestroyedOnly:
         # p05 lives on HOME_002 + OFF_002
         for label in ["HOME_002", "OFF_002"]:
             vol = get_volume_by_label(cross_loc_db, label)
-            update_status(cross_loc_db, vol.volume_id, "DESTROYED")
+            update_status(cross_loc_db, vol.volume_id, "DESTROYED", force=True)
 
         pick = get_pick_list(cross_loc_db, ["p05_sha"])
         found = {p.sha256 for packs in pick.values() for p in packs}
@@ -749,7 +749,7 @@ class TestMinimumDiscCount:
     def test_one_home_destroyed_needs_mixed(self, cross_loc_db):
         """After HOME_002 destroyed, need HOME_001 + multiple Offsite volumes."""
         vol = get_volume_by_label(cross_loc_db, "HOME_002")
-        update_status(cross_loc_db, vol.volume_id, "DESTROYED")
+        update_status(cross_loc_db, vol.volume_id, "DESTROYED", force=True)
 
         pick = get_pick_list(cross_loc_db, ALL_SHAS)
         # HOME_001 for p01-p04, d01, d02

@@ -183,13 +183,3 @@ class VolumeMerger:
         for vid in source_volume_ids:
             lifecycle.consolidation_started(vid, note=note)
         self._conn.commit()
-
-    def abort_consolidation(
-        self,
-        source_volume_ids: list[int],
-    ) -> None:
-        """Revert CONSOLIDATING volumes back to VERIFIED on burn failure."""
-        lifecycle = VolumeLifecycle(self._conn)
-        for vid in source_volume_ids:
-            lifecycle.consolidation_abandoned(vid)
-        self._conn.commit()

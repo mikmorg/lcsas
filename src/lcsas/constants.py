@@ -9,6 +9,9 @@ STATUS_BURNED = "BURNED"
 STATUS_VERIFIED = "VERIFIED"
 STATUS_CONSOLIDATING = "CONSOLIDATING"
 STATUS_DEPRECATED = "DEPRECATED"
+# Volume-wide DESTROYED is no longer in the status graph (#907): no
+# command writes it.  It stays a valid schema value (old catalogs, and
+# the tier-1 reader's filter), so readers still treat it as out of service.
 STATUS_DESTROYED = "DESTROYED"
 
 # Display-only status for a lost volume: a burned volume with no disc left

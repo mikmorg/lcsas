@@ -474,7 +474,7 @@ class TestFullPipelineRestore:
         # Determine VOL_1 id
         vol1 = get_volume_by_label(conn, "VOL_1")
         from tests.unit.volume_status import update_status
-        update_status(conn, vol1.volume_id, "DESTROYED")
+        update_status(conn, vol1.volume_id, "DESTROYED", force=True)
 
         # Pick list should exclude VOL_1
         planner = RestorePlanner(conn)
@@ -625,12 +625,12 @@ class TestMultiTenantEdgeCases:
         assert "LIFE_0" not in pick.volumes
 
         # Destroy another — still available on last one
-        update_status(conn, vols[1].volume_id, "DESTROYED")
+        update_status(conn, vols[1].volume_id, "DESTROYED", force=True)
         pick = planner.generate_pick_list(["lifecycle_pack"])
         assert pick.total_packs == 1
         assert "LIFE_2" in pick.volumes
 
         # Destroy the last one — pack is now missing
-        update_status(conn, vols[2].volume_id, "DESTROYED")
+        update_status(conn, vols[2].volume_id, "DESTROYED", force=True)
         pick = planner.generate_pick_list(["lifecycle_pack"])
         assert pick.total_packs == 0
