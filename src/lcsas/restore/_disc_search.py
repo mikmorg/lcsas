@@ -46,6 +46,10 @@ _DRAIN_BIG_CACHE = 1024 * _MIB
 #: EX_TEMPFAIL, "try again later".
 EXIT_READER_QUIT = 75
 
+#: A volume of a disc catalog that holds a pack: (volume_id, label,
+#: status).  The status may be NULL in a damaged catalog.
+_CatalogVolume = tuple[int, str, str | None]
+
 
 class RestoreAbortedError(Exception):
     """The whole restore must stop now, not just the current file (#658).
@@ -792,6 +796,9 @@ class DiscSearch:
     #   * lookup_volume_labels returned None       -> no catalog (legacy line)
     _CATALOG_HIT_NO_VOLS = "hit-no-vols"
     _CATALOG_MISS = "miss"
+    # Tier 1 names at most this many discs (``vols[8]`` in
+    # disc_locator.c::print_prompt).
+    _PROMPT_MAX_DISCS = 8
 
     def _discover_catalog(self) -> Path | None:
         """Walk pack search paths looking for a disc catalog (``catalog.db``).
@@ -871,9 +878,11 @@ class DiscSearch:
 
     def _query_catalog(
         self, path: Path, pack_id: str,
-    ) -> tuple[list[str], bool, int, str | None] | None:
-        """(labels, pack known, number of discs listed, newest disc
-        listed), or None when the catalog cannot be opened or read.
+    ) -> tuple[list[_CatalogVolume], bool, int, str | None] | None:
+        """(volumes holding the pack, pack known, number of discs
+        listed, newest disc listed), or None when the catalog cannot be
+        opened or read.  Each volume is ``(volume_id, label, status)``,
+        DESTROYED ones included: ``_offered_labels`` applies the rule.
 
         The one place the catalog is queried.
         """
@@ -883,23 +892,26 @@ class DiscSearch:
         try:
             # Three-table join: volume_packs.pack_id is the INT FK, not
             # the sha256 hex we have in hand -- so we go through
-            # packs.sha256.  ORDER BY label keeps the output stable
-            # across SQLite query-planner versions.
-            labels = [row[0] for row in conn.execute(
-                "SELECT v.label FROM volumes v "
-                "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
-                "JOIN packs p ON p.pack_id = vp.pack_id "
-                "WHERE p.sha256 = ? ORDER BY v.label",
-                (pack_id,),
-            )]
-            known = bool(labels) or conn.execute(
+            # packs.sha256.  In volume_id order, as tier 1's
+            # catalog.c::lcsas_catalog_volumes_for_pack.
+            vols: list[_CatalogVolume] = [
+                (int(row[0]), row[1], row[2]) for row in conn.execute(
+                    "SELECT v.volume_id, v.label, v.status FROM volumes v "
+                    "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
+                    "JOIN packs p ON p.pack_id = vp.pack_id "
+                    "WHERE p.sha256 = ? ORDER BY v.volume_id",
+                    (pack_id,),
+                )
+                if isinstance(row[1], str)
+            ]
+            known = bool(vols) or conn.execute(
                 "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1", (pack_id,),
             ).fetchone() is not None
             n_vols = conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0]
             newest = conn.execute(
                 "SELECT label FROM volumes ORDER BY volume_id DESC LIMIT 1"
             ).fetchone()
-            return labels, known, int(n_vols), newest[0] if newest else None
+            return vols, known, int(n_vols), newest[0] if newest else None
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog.
             return None
@@ -913,15 +925,27 @@ class DiscSearch:
     def _lookup_volume_labels(
         self, pack_id: str,
     ) -> tuple[list[str], str] | None:
-        """Resolve a pack ID to disc labels using every catalog seen (#635).
+        """Resolve a pack ID to the labels of the discs the prompt offers.
 
-        Same contract as ``_lookup_catalog_path``, which consults
-        ``catalog_path`` (explicit or auto-discovered).  On top of that,
-        every catalog reachable now is copied locally, and all copies
-        are consulted: the labels are the union, and the pack counts
-        as known if any catalog knows it.  Sets
-        ``_newest_known_label`` to the newest disc in the catalog that
-        lists the most discs, for the prompt's "newer than" hint.
+        Returns
+        -------
+        ``None``
+            No catalog could be reached or read.  Caller should fall
+            back to the legacy "(no catalog available)" framed-prompt
+            line.
+        ``(labels, status)``
+            ``labels`` is the (possibly-empty) list of the labels to
+            offer, by tier 1's rule (``_offered_labels``).  ``status``
+            is ``""`` when there are labels, else one of the
+            ``_CATALOG_*`` sentinels above.
+
+        Consults ``catalog_path`` (explicit or auto-discovered) through
+        ``_lookup_catalog_path``.  On top of that (#635), every catalog
+        reachable now is copied locally, and all copies are consulted:
+        the volumes are the union, and the pack counts as known if any
+        catalog knows it.  Sets ``_newest_known_label`` to the newest
+        disc in the catalog that lists the most discs, for the prompt's
+        "newer than" hint.
         """
         primary = self._lookup_catalog_path(pack_id)
         reachable = self._discover_catalogs()
@@ -929,33 +953,64 @@ class DiscSearch:
             reachable.insert(0, self.catalog_path)
         for cat in reachable:
             self._keep_catalog_copy(cat)
-        labels: set[str] = set(primary[0]) if primary else set()
-        known = primary is not None and (
-            bool(primary[0]) or primary[1] == self._CATALOG_HIT_NO_VOLS
-        )
+        vols: list[_CatalogVolume] = list(primary[0]) if primary else []
+        known = primary is not None and primary[1]
         any_ok = primary is not None
         best_n = -1
         for copy in self._catalog_copies.values():
             result = self._query_catalog(copy, pack_id)
             if result is None:
                 continue
-            c_labels, c_known, n_vols, newest = result
+            c_vols, c_known, n_vols, newest = result
             any_ok = True
-            labels.update(c_labels)
+            vols.extend(c_vols)
             known = known or c_known
             if n_vols > best_n:
                 best_n = n_vols
                 self._newest_known_label = newest
         if not any_ok:
             return None
+        labels = self._offered_labels(vols)
         if labels:
-            return sorted(labels), ""
+            return labels, ""
         return [], self._CATALOG_HIT_NO_VOLS if known else self._CATALOG_MISS
+
+    @classmethod
+    def _offered_labels(cls, vols: Iterable[_CatalogVolume]) -> list[str]:
+        """The labels the disc prompt offers for a pack on *vols*.
+
+        Tier 1's rule (catalog.c::lcsas_catalog_volumes_for_pack, read
+        by disc_locator.c::print_prompt; #896, recovery/docs/TIERS.txt):
+        every volume holding the pack whose status is not DESTROYED, by
+        volume number, at most ``_PROMPT_MAX_DISCS``.  A DEPRECATED
+        volume is offered, lost or not, and so is one with no disc
+        recorded: the disc records (``volume_copies``) are not read.  A
+        NULL status is left out, as SQL's ``status != 'DESTROYED'``
+        leaves it out.
+
+        *vols* may come from several catalog copies (#635).  A label
+        that any copy records as DESTROYED is not offered: DESTROYED is
+        final, so the copy that says so is the newer one.
+        """
+        first: dict[str, int] = {}
+        destroyed: set[str] = set()
+        for volume_id, label, status in vols:
+            if status == "DESTROYED":
+                destroyed.add(label)
+            elif status is not None and (
+                label not in first or volume_id < first[label]
+            ):
+                first[label] = volume_id
+        offered = sorted(
+            (lbl for lbl in first if lbl not in destroyed),
+            key=lambda lbl: (first[lbl], lbl),
+        )
+        return offered[:cls._PROMPT_MAX_DISCS]
 
     def _lookup_catalog_path(
         self, pack_id: str,
-    ) -> tuple[list[str], str] | None:
-        """Resolve a pack ID to the labels of the volumes that carry it.
+    ) -> tuple[list[_CatalogVolume], bool] | None:
+        """The volumes of ``catalog_path`` that hold the pack.
 
         Returns
         -------
@@ -963,12 +1018,12 @@ class DiscSearch:
             No catalog could be reached -- either no ``catalog_path``
             override was passed AND auto-discovery turned up nothing
             under any pack-search root, or the discovered file could not
-            be opened / queried.  Caller should fall back to the legacy
-            "(no catalog available)" framed-prompt line.
-        ``(labels, status)``
-            ``labels`` is the (possibly-empty) list of volume labels for
-            the pack, ordered lexicographically.  ``status`` is one of
-            the ``_CATALOG_*`` sentinels above.
+            be opened / queried.
+        ``(volumes, known)``
+            ``volumes`` lists ``(volume_id, label, status)`` of each
+            volume holding the pack, as ``_query_catalog`` returns them
+            (possibly empty); ``known`` says whether the catalog has the
+            pack at all.
 
         Auto-discovery (issue #253): when ``self.catalog_path is None``,
         every call walks ``self._pack_search_paths`` looking for a
@@ -1010,12 +1065,8 @@ class DiscSearch:
             if was_auto_discovered:
                 self.catalog_path = None
             return None
-        labels, known, _n, _newest = result
-        if labels:
-            return labels, ""
-        # Pack ID present in the catalog but no volume mapping?
-        # Disambiguate that from "pack ID absent from catalog".
-        return [], self._CATALOG_HIT_NO_VOLS if known else self._CATALOG_MISS
+        vols, known, _n, _newest = result
+        return vols, known
 
     @staticmethod
     def _frame_indented(text: str) -> str:
@@ -1064,9 +1115,11 @@ class DiscSearch:
         else:
             labels, status = cat_result
             if labels:
-                # Byte-for-byte match with disc_locator.c so the
-                # blind-restore agent's pattern matcher can't tell tiers
-                # apart on this line.
+                # The heading is disc_locator.c::print_prompt's, byte for
+                # byte, and the discs below it are the ones tier 1 names,
+                # in its order (_offered_labels, #896), so the
+                # blind-restore agent's pattern matcher can't tell the
+                # tiers apart here.
                 lines.append(
                     "| It is on any disc labelled:                              |"
                 )

@@ -26,6 +26,13 @@ from lcsas.restore._disc_search import (
     DiscSearch,
     RestoreAbortedError,
 )
+from tests.contract.disc_catalog import (
+    NO_RECORD,
+    NONE_LISTED,
+    Vol,
+    named_discs,
+    write_catalog,
+)
 
 from .tier3_repo_builder import PASSWORD, build_repo
 
@@ -235,6 +242,100 @@ class TestSwapPromptCatalogStates:
         assert "| Pack abababababababab... is required for the next file.  |" in box
         if lookup is not None and lookup[0]:
             assert any(line.endswith("LLL0042 |") for line in box), box
+
+
+# ── Which discs the prompt names: tier 1's rule (#896) ─────────────
+#
+# Every volume holding the pack that is not DESTROYED, by volume number,
+# at most 8 (catalog.c::lcsas_catalog_volumes_for_pack, the prompt in
+# disc_locator.c; recovery/docs/TIERS.txt).  The labels are chosen so
+# that label order is not volume order: a CD700 volume consolidated onto
+# later BD25 volumes.  The contract table runs the same cases on both
+# readers (tests/contract/restore_contract.py, "disc prompt: ...").
+
+_PACK = "c3" * 32
+_OLD = "LCSAS_CD700_2026_0001"
+_NEW = "LCSAS_BD25_2026_0002"
+
+
+def _prompt_names(
+    tmp_path: Path, vols: list[Vol], *, knows_pack: bool = True,
+    more_roots: list[Path] | None = None,
+) -> tuple[str, ...] | str:
+    """The discs the prompt names for a pack on no disc, with a catalog
+    (``--catalog``) recording *vols* as the volumes holding it."""
+    catalog = tmp_path / "catalog.db"
+    write_catalog(catalog, [_PACK], vols, knows_pack=knows_pack)
+    repo_data = tmp_path / "repo" / "data"
+    search, out = _search(
+        tmp_path, [repo_data, *(more_roots or [])], catalog_path=catalog,
+        interactive=True, prompt_in=lambda: "q\n",
+    )
+    with pytest.raises(RestoreAbortedError):
+        search.read_pack_range(_PACK, 0, 1)
+    return named_discs("".join(out))
+
+
+class TestPromptNamesTier1Discs:
+    @pytest.mark.parametrize(("vols", "knows", "named"), [
+        pytest.param([Vol(_OLD)], True, (_OLD,), id="one volume"),
+        pytest.param([Vol(_OLD), Vol(_NEW)], True, (_OLD, _NEW),
+                     id="two volumes, by volume number"),
+        pytest.param([Vol(_OLD, "DESTROYED", "DESTROYED"), Vol(_NEW)], True,
+                     (_NEW,), id="one of two DESTROYED"),
+        pytest.param([Vol(_OLD, "DEPRECATED"), Vol(_NEW)], True, (_OLD, _NEW),
+                     id="one of two DEPRECATED, its disc on the shelf"),
+        pytest.param([Vol(_OLD, lost=True), Vol(_NEW)], True, (_OLD, _NEW),
+                     id="one of two lost"),
+        pytest.param([Vol(_OLD, disc=None)], True, (_OLD,),
+                     id="a volume with no disc recorded"),
+        pytest.param([Vol(_OLD, "DESTROYED", "DESTROYED")], True,
+                     NONE_LISTED, id="its only volume DESTROYED"),
+        pytest.param([Vol(_OLD), Vol(_NEW)], False, NO_RECORD,
+                     id="pack unknown to the catalog"),
+    ])
+    def test_named(
+        self, tmp_path: Path, vols: list[Vol], knows: bool,
+        named: tuple[str, ...] | str,
+    ) -> None:
+        assert _prompt_names(tmp_path, vols, knows_pack=knows) == named
+
+    def test_every_status_but_destroyed_in_volume_order(
+        self, tmp_path: Path,
+    ) -> None:
+        labels = [_OLD] + [f"LCSAS_BD25_2026_000{n}" for n in range(2, 7)]
+        vols = [
+            Vol(labels[0], "DEPRECATED"),           # consolidated, kept
+            Vol(labels[1], "DESTROYED", "DESTROYED"),
+            Vol(labels[2], lost=True),
+            Vol(labels[3], "CONSOLIDATING"),
+            Vol(labels[4], "BURNED", disc=None),
+            Vol(labels[5], "VERIFIED"),
+        ]
+        assert _prompt_names(tmp_path, vols) == (
+            labels[0], labels[2], labels[3], labels[4], labels[5],
+        )
+
+    def test_at_most_eight_discs(self, tmp_path: Path) -> None:
+        # Tier 1 has room for 8 (vols[8]): the first 8 by volume number.
+        labels = [f"LCSAS_BD25_2026_{n:04d}" for n in range(10, 0, -1)]
+        assert _prompt_names(tmp_path, [Vol(lbl) for lbl in labels]) == (
+            tuple(labels[:8])
+        )
+
+    def test_destroyed_in_a_newer_catalog_copy_is_not_named(
+        self, tmp_path: Path,
+    ) -> None:
+        # #635 unions every catalog seen.  The --catalog one (an older
+        # disc's) still says VERIFIED; the one on the disc in the drive
+        # (newer) says the volume was destroyed since: not named.
+        disc = tmp_path / "media" / "cdrom"
+        disc.mkdir(parents=True)
+        write_catalog(disc / "catalog.db", [_PACK],
+                      [Vol(_OLD, "DESTROYED", "DESTROYED"), Vol(_NEW)])
+        assert _prompt_names(
+            tmp_path, [Vol(_OLD), Vol(_NEW)], more_roots=[disc],
+        ) == (_NEW,)
 
 
 # ── The prompt loop, through read_pack_range (from test_restic_fallback.py,
