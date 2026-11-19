@@ -27,7 +27,7 @@ from .test_restic_fallback import (
     _make_key_file,
 )
 
-__all__ = ["PASSWORD", "Blob", "build_repo"]
+__all__ = ["PASSWORD", "Blob", "RawNode", "build_repo"]
 
 
 @dataclass(frozen=True)
@@ -46,9 +46,20 @@ class Blob:
         return self.blob_id or hashlib.sha256(self.stored).hexdigest()
 
 
+@dataclass(frozen=True)
+class RawNode:
+    """A node stored as given (its ``name`` comes from the tree key).
+
+    For what rustic will not write: a device, which needs root to make,
+    or a node whose ``type`` is unknown or missing.  It has no blobs.
+    """
+
+    node: dict[str, object]
+
+
 #: A file is its content bytes (one plain blob) or a list of Blob.
 #: A directory is a dict of name -> file or directory.
-Tree = dict[str, Union[bytes, list[Blob], "Tree"]]
+Tree = dict[str, Union[bytes, list[Blob], RawNode, "Tree"]]
 
 
 def build_repo(
@@ -92,6 +103,9 @@ def build_repo(
             if isinstance(item, dict):
                 nodes.append({"name": nm, "type": "dir", "mode": 0o755,
                               "subtree": add_tree(item)})
+                continue
+            if isinstance(item, RawNode):
+                nodes.append({"name": nm, **item.node})
                 continue
             blobs = [Blob(item)] if isinstance(item, bytes) else item
             for b in blobs:
