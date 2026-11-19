@@ -314,7 +314,8 @@ def _left_burned_or_verified(
     a note (an rc8/rc9 failing receipt, or an rc1 burn that left it
     BURNED after a failed verify and was then burned again) is never
     deleted by ``session abort``, ``stage --clean`` or ``catalog
-    reconcile --fix``; it stays until removed by hand.
+    reconcile --fix``; the remedy is to burn it again, which makes a new
+    disc of it.
     """
     reason = None
     for (detail,) in conn.execute(
