@@ -265,6 +265,51 @@ def test_compound_commands_flagged(check, cmd):
 
 
 # -----------------------------------------------------------------
+# Since #889 the check splits clauses with transcript.split_clauses,
+# the harness's one splitter.  A quoted path is still that path; a
+# second line, a $(...), an `if` or an assignment before the binary
+# no longer hides it; an operator inside quotes no longer splits.
+# -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        '"$META/recovery/bin/lcsas-restore" restore --target /tmp/x',
+        '"/media/LCSAS META/recovery/bin/rustic" restore latest',
+        "cd /tmp/work\nrustic restore latest --target /tmp/x",
+        "SNAPS=$(rustic snapshots --json)",
+        "RUSTIC_PASSWORD_FILE=/tmp/pw rustic restore latest",
+        "sudo RUSTIC_PASSWORD_FILE=/tmp/pw rustic restore latest",
+        "if rustic restore latest; then echo ok; fi",
+    ],
+    ids=[
+        "quoted-var-path", "quoted-path-with-space", "second-line",
+        "command-substitution", "assignment-prefix", "sudo-assignment",
+        "if-condition",
+    ],
+)
+def test_shapes_the_shared_splitter_catches(check, cmd):
+    assert check.scan_command(cmd), f"expected {cmd!r} to register as bypass"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        # rc10 tier1-missing-3679774: the old split on `|` inside the
+        # quoted pattern read `lcsas-restore` as a command.
+        "restore-shell expect 'NEWEST data disc|Choose a repository|"
+        "Password:|lcsas-restore|Insert|ERROR|error' 120",
+        'echo "next: rustic restore; then done"',
+        "ls /mnt  # rustic restore would go here",
+    ],
+    ids=["quoted-expect-pattern", "quoted-echo", "comment"],
+)
+def test_text_inside_quotes_or_comments_is_not_a_call(check, cmd):
+    assert not check.scan_command(cmd), check.scan_command(cmd)
+
+
+# -----------------------------------------------------------------
 # End-to-end: scan_transcript over a built jsonl matches
 # scan_command's verdict.
 # -----------------------------------------------------------------

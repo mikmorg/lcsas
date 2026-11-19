@@ -15,6 +15,11 @@ Bypass shapes flagged:
     python3 .../standalone_restorer.py ...
     python -m standalone_restorer ...
 
+Each command is split into clauses by transcript.split_clauses, the
+harness's one clause splitter: on newlines and shell operators outside
+quotes, inside $(...) and backticks, with leading keywords (if, then,
+do, ...), variable assignments and sudo dropped.
+
 Wrapper prefixes stripped before checking argv[0]:
 
     sudo, sh, bash, exec, python, python3, python3.12, ...
@@ -35,7 +40,6 @@ Exit codes:
 from __future__ import annotations
 
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -60,8 +64,6 @@ BINARIES = {
     'standalone_restorer',
     'restic',
 }
-
-CLAUSE_SPLIT = re.compile(r'\s*(?:&&|\|\||;|\||&)\s*')
 
 # Tokens that wrap another command and should be peeled off before
 # inspecting argv[0].  `python` matches `python`, `python3`,
@@ -124,13 +126,7 @@ def scan_command(cmd: str) -> list[str]:
     string.  Empty list means no bypass.
     """
     hits: list[str] = []
-    for clause in CLAUSE_SPLIT.split(cmd):
-        try:
-            tokens = shlex.split(clause, posix=True)
-        except ValueError:
-            tokens = clause.split()
-        if not tokens:
-            continue
+    for tokens in transcript.split_clauses(cmd):
         i = _strip_wrappers(tokens)
         if i >= len(tokens):
             continue

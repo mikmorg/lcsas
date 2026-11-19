@@ -233,6 +233,37 @@ def test_split_clauses(text: str, want: list[list[str]]) -> None:
     assert _words(text) == want
 
 
+# The cases the harness's other clause splitters handled, which the one
+# splitter must too (#889): no_bypass_check's CLAUSE_SPLIT + shlex, and
+# verify.sh's clause_args (script_read_check, no_binary_rename_check).
+@pytest.mark.parametrize(("text", "want"), [
+    # shlex took the quotes off a word: a quoted path is still that path.
+    ('"$META/recovery/bin/lcsas-restore" restore',
+     [["$META/recovery/bin/lcsas-restore", "restore"]]),
+    ('"/media/LCSAS META/recovery/bin/lcsas-restore" --repo a',
+     [["/media/LCSAS META/recovery/bin/lcsas-restore", "--repo", "a"]]),
+    ("cat '/media/restore.sh'", [["cat", "/media/restore.sh"]]),
+    ('mv "/mnt/recovery/bin/lcsas-restore" /tmp/x.broken',
+     [["mv", "/mnt/recovery/bin/lcsas-restore", "/tmp/x.broken"]]),
+    ('"${META}/recovery/bin/rustic" restore', [["V/recovery/bin/rustic", "restore"]]),
+    # clause_args: every leading sudo, then VAR=val assignments.
+    ("sudo sudo mv a b", [["mv", "a", "b"]]),
+    ("sudo RUSTIC_PASSWORD=x rustic restore", [["rustic", "restore"]]),
+    ("RUSTIC_PASSWORD=x rustic restore", [["rustic", "restore"]]),
+    # CLAUSE_SPLIT's operators, with no spaces around them.
+    ("a&&b||c;d|e&f", [["a"], ["b"], ["c"], ["d"], ["e"], ["f"]]),
+    # An operator inside quotes does not split (CLAUSE_SPLIT did split it,
+    # which flagged `restore-shell expect '...|lcsas-restore|...'`).
+    ("restore-shell expect 'Password:|lcsas-restore|Insert' 120",
+     [["restore-shell", "expect", "Q", "120"]]),
+    ('echo "a && rustic restore"', [["echo", "Q"]]),
+    # A quoted case pattern with a space is still a case pattern.
+    ('case "$out" in\n  *"restore complete"*) break ;;\nesac', [["break"]]),
+])
+def test_split_clauses_covers_the_old_splitters(text: str, want: list[list[str]]) -> None:
+    assert _words(text) == want
+
+
 def test_clauses_split_each_shell_command_once(tmp_path: Path) -> None:
     t = transcript.load(_write(tmp_path, _bash("ls && df"), _bash("sudo umount /media")))
     got = [(c.words, c.call.index) for c in t.clauses()]

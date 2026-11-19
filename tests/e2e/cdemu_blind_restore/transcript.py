@@ -169,27 +169,42 @@ _HEADER_KEYWORDS = frozenset({"for", "case", "select"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=")
 
 _QUOTED = re.compile(r"'(?P<s>[^']*)'" + r'|"(?P<d>(?:[^"\\]|\\.)*)"')
+# A quoted text that holds none of these keeps its words: a quoted path
+# (`"$META/recovery/bin/lcsas-restore" restore`, `cat "/media/x.sh"`) is
+# still that path.  One that holds any of them, which the clause split,
+# a comment, a redirection or an escape would act on, becomes "Q".
+_KEPT_QUOTE = re.compile(r"""[^\n;&|()<>`#'"\\]+""")
+
+
+def _quoted(inner: str) -> str:
+    if inner == "":
+        return '""'
+    if _KEPT_QUOTE.fullmatch(inner):
+        return shlex.quote(inner)
+    return '"Q"'
 
 
 def _blank_quotes(text: str) -> str:
-    """Each quoted string becomes "Q" (or "" when empty), so the shell
-    operators inside it do not split it.  A double-quoted string that
-    holds a command substitution is opened up instead: the command in
-    `"$(...)"` or in backticks runs, so it must be seen."""
+    """Each quoted string that holds a shell operator becomes "Q", so the
+    operators inside it do not split it; any other keeps its text (as one
+    word), and an empty one stays "".  A double-quoted string that holds a
+    command substitution is opened up instead: the command in `"$(...)"`
+    or in backticks runs, so it must be seen."""
     def one(m: re.Match[str]) -> str:
         if m.group("s") is not None:
-            return '""' if m.group("s") == "" else '"Q"'
+            return _quoted(m.group("s"))
         inner = m.group("d")
         if "$(" in inner or "`" in inner:
             return " " + _blank_quotes(inner) + " "
-        return '""' if inner == "" else '"Q"'
+        return _quoted(inner)
     return _QUOTED.sub(one, text)
 
 
 def blank(text: str) -> str:
-    """*text* with quoted strings, ${...} and $((...)) replaced by
-    placeholders, so the shell operators inside them do not split it.
-    An empty string stays "" so a send of ENTER can be told apart."""
+    """*text* with quoted strings that hold shell operators, ${...} and
+    $((...)) replaced by placeholders, so the shell operators inside them
+    do not split it.  An empty string stays "" so a send of ENTER can be
+    told apart."""
     text = _blank_quotes(text)
     text = re.sub(r"\$\{[^}]*\}", "V", text)
     text = re.sub(r"\$\(\((?:[^()]|\([^()]*\))*\)\)", "A", text)
@@ -204,14 +219,15 @@ def clause_texts(text: str) -> Iterator[str]:
     comments and ``case`` patterns dropped."""
     for line in blank(text).split("\n"):
         line = re.sub(r"(?:^|\s)#.*$", "", line)          # comment, shebang
-        line = re.sub(r"^\s*[^\s()]+\)", "", line)        # case pattern)
+        line = re.sub(r"^\s*(?:[^\s()']|'[^']*')+\)", "", line)  # case pattern)
         yield from re.split(r";;|&&|\|\||\$\(|[;|&()`]", line)
 
 
 def command_words(clause: str) -> list[str]:
     """The command and its arguments in one clause, or [] if none.
     Leading keywords (``if``, ``then``, ``do``, ...) and variable
-    assignments are dropped, and so is ``sudo`` with its flags."""
+    assignments are dropped, and so is ``sudo`` with its flags and the
+    assignments after it."""
     try:
         words = shlex.split(clause, posix=True)
     except ValueError:
@@ -223,8 +239,9 @@ def command_words(clause: str) -> list[str]:
     if words[0] in _HEADER_KEYWORDS:
         return []
     if words[0] == "sudo":
-        words.pop(0)
-        while words and words[0].startswith("-"):
+        # sudo, its flags, and the assignments it takes (`sudo X=1 cmd`).
+        while words and (words[0] == "sudo" or words[0].startswith("-")
+                         or _ASSIGNMENT.match(words[0])):
             words.pop(0)
     return words
 
