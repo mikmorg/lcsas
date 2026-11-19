@@ -53,6 +53,9 @@
 #       of ~/disc-labels.txt (LCSAS_META skipped; label order, starting
 #       over after the last), `sudo mount /dev/sr0 MOUNT_DIR`, then
 #       `send ""` (ENTER).  MOUNT_DIR defaults to /media.
+#       A disc box already on the screen and waiting for its answer
+#       (the agent looked at it before starting the loop) is the first
+#       swap; the loop does not wait for it to be printed again (#917).
 #       On "restore complete": prints RESTORE COMPLETE, answers
 #       "Restore another backup set?" with n, exits 0.
 #       If expect times out (1) or the session ends (2), it stops and
@@ -64,6 +67,42 @@
 
 set -u
 SESSION="${RESTORE_SHELL_SESSION:-r}"
+
+# take_waiting_box: succeed if a disc box is on the screen now, waiting
+# for its answer, and mark it seen, as a matching `expect` would.
+#
+# swap-loop's `expect` waits for NEW output.  The agent nearly always
+# looks at the box first (`expect` marks it seen; `screen` does not),
+# and the restore, waiting at that box, prints nothing more, so the loop
+# waited out its 120 s and stopped after 0 disc swaps: every swap-loop
+# of the 2026-11-18/19 blind runs did (#917).  The agent then swapped
+# by hand, and in three runs scripted the swaps.
+#
+# "Waiting" means the cursor sits on the box's own prompt line (">",
+# nothing typed after it) and the lines above it, up to the one saying
+# "Insert the right disc", are the box's frame.  Once ENTER is sent the
+# terminal echoes it and the cursor leaves that line, so a box already
+# answered is not taken again.
+take_waiting_box() {
+    snap=$(tmux display-message -p -t "$SESSION" \
+            '#{pane_dead} #{history_size} #{cursor_y} #{cursor_x}' \; \
+            capture-pane -p -t "$SESSION" 2>/dev/null) || return 1
+    # shellcheck disable=SC2046  # split the state line on purpose
+    set -- $(printf '%s\n' "$snap" | sed -n 1p)
+    [ "${1:-1}" = 0 ] || return 1
+    printf '%s\n' "$snap" | awk -v y="$3" -v x="$4" '
+        NR > 1 { line[NR - 2] = $0 }
+        END {
+            if (x > 2 || line[y] !~ /^> ?$/) exit 1
+            for (i = y - 1; i >= 0; i--) {
+                if (line[i] ~ /Insert the right disc/) exit 0
+                if (line[i] !~ /^[|+]/) exit 1
+            }
+            exit 1
+        }' || return 1
+    tmux set-option -t "$SESSION" @restore_shell_mark "$(( $2 + $3 )) $4" \
+        2>/dev/null
+}
 
 case "${1:-}" in
     start)
@@ -196,9 +235,18 @@ case "${1:-}" in
         fi
         count=$(printf '%s\n' "$discs" | wc -l)
         swaps=0
+        # A box already on the screen is the first swap (#917).
+        waiting=0
+        take_waiting_box && waiting=1
         while [ "$swaps" -lt 40 ]; do
-            out=$(sh "$0" expect 'Insert the right disc|restore complete' 120)
-            rc=$?
+            if [ "$waiting" = 1 ]; then
+                waiting=0
+                out="[restore-shell] swap-loop: a disc box is waiting on the screen"
+                rc=0
+            else
+                out=$(sh "$0" expect 'Insert the right disc|restore complete' 120)
+                rc=$?
+            fi
             printf '%s\n' "$out"
             if [ "$rc" -ne 0 ]; then
                 echo "[restore-shell] swap-loop: stopped after $swaps disc swaps (expect exit $rc)" >&2
