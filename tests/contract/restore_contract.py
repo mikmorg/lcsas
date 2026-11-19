@@ -135,8 +135,17 @@ class Faults:
     #: same snapshot (the judged run is then a resume).  It must exit 0.
     first_run: Literal["before", "latest"] | None = None
     #: Paths whose data packs are not there for the judged run ("*":
-    #: every pack that holds only data blobs).
+    #: every pack that holds only data blobs).  In a builder repository
+    #: (one pack per blob) a path takes away the packs of the item's own
+    #: blobs (a folder: its tree blob), and ``path#N`` only the pack of
+    #: a file's N-th content blob (from 0).
     missing: tuple[bytes, ...] = ()
+    #: Paths (one data blob each, in a pack of its own) whose pack is
+    #: cut short in the middle of that blob for the judged run.
+    truncated: tuple[bytes, ...] = ()
+    #: Paths (likewise) whose pack has one byte flipped in the middle of
+    #: that blob, so its MAC fails, for the judged run.
+    corrupted: tuple[bytes, ...] = ()
     #: Run with the disc prompt on, and this on stdin.
     answers: bytes | None = None
     #: The target is a 1 MiB tmpfs (needs passwordless ``sudo mount``).
@@ -186,6 +195,8 @@ class Case:
     before: Tree | None = None
     #: "rustic" (real rustic backs up ``tree``) or "builder".
     repo: Literal["rustic", "builder"] = "rustic"
+    #: Builder only: each blob in a pack of its own.
+    pack_per_blob: bool = False
     #: Run only as root ("root"), or only when not root ("user").
     needs: Literal["root", "user"] | None = None
     #: Known differences: reader -> the outcome it gives today.
@@ -202,6 +213,10 @@ class Case:
 
 _DONE = r"restore complete|Restore complete"
 _NOT_ALL = r"finished with errors|could NOT be restored"
+#: RESTORE_FAILURES.txt reasons of tier 3 (prefixes: a pack id and the
+#: repository's path follow the first).
+_PACK_NOT_FOUND = "FileNotFoundError: Pack file not found: "
+_MAC_FAILED = "IntegrityError: MAC verification failed"
 
 # #781: one name of each class rustic stores escaped (quote, backslash,
 # control characters, bytes that are not UTF-8), and a folder and a
@@ -237,6 +252,26 @@ def _builder_refused_tree() -> BuilderTree:
         "bad\\q": b"an unknown escape\n",
         "notype": RawNode({"mode": 0o644}),
         "sub": {"x\\x": b"a short \\x escape\n", "ok": b"ok\n"},
+    }
+
+
+def _builder_spread_file_tree() -> BuilderTree:
+    """A file of three content blobs, each blob in a pack of its own."""
+    from tests.unit.tier3_repo_builder import Blob
+
+    return {
+        "a": b"alpha\n",
+        "big": [Blob(b"big, part one\n"), Blob(b"big, part two\n"),
+                Blob(b"big, part three\n")],
+        "z": b"zed\n",
+    }
+
+
+def _builder_subfolder_tree() -> BuilderTree:
+    return {
+        "a": b"alpha\n",
+        "sub": {"deep": {"y": b"y in sub/deep\n"}, "x": b"x in sub\n"},
+        "z": b"zed\n",
     }
 
 
@@ -441,6 +476,142 @@ CASES: list[Case] = [
             "exits 4.",
         replaces="new",
     ),
+    # #909: what each reader does TODAY when data it needs is missing or
+    # unreadable and there is no disc prompt.  Pinned before the tier-1
+    # change, so the change can be shown to move exactly these rows.
+    Case(
+        name="file in several packs, a later one missing",
+        repo="builder", pack_per_blob=True,
+        tree=_builder_spread_file_tree(),
+        faults=Faults(missing=(b"big#1",)),       # "part two" only
+        expect=Outcome(
+            exit=ReaderExit.FAILED,
+            restored={b"a": File(b"alpha\n"),
+                      b"big": File(b"big, part one\n", 0o600)},
+            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*file restore "
+                    r"failed: \S+/big\b.*tree restore failed",
+        ),
+        differs={"tier3": Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            restored={b"a": File(b"alpha\n"), b"z": File(b"zed\n")},
+            failures=(("big", _PACK_NOT_FOUND),),
+            summary=_NOT_ALL,
+        )},
+        why="tier 1 stops at the missing pack: it leaves the part of the "
+            "file it wrote before it (mode 0600), lists nothing and does not "
+            "restore what comes after (z), exit 1; tier 3 lists the file, "
+            "leaves nothing at its path, restores the rest and exits 4.",
+    ),
+    Case(
+        name="the tree pack of a folder missing",
+        repo="builder", pack_per_blob=True,
+        tree=_builder_subfolder_tree(),
+        faults=Faults(missing=(b"sub",)),         # sub's tree blob
+        expect=Outcome(
+            exit=ReaderExit.FAILED,
+            restored={b"a": File(b"alpha\n"), b"sub": Dir()},
+            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*"
+                    r"tree restore failed",
+        ),
+        differs={"tier3": Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            restored={b"a": File(b"alpha\n"), b"sub": Dir(),
+                      b"z": File(b"zed\n")},
+            failures=(("sub", _PACK_NOT_FOUND),),
+            summary=_NOT_ALL,
+        )},
+        why="both leave the folder empty; tier 1 stops there (exit 1, "
+            "nothing listed, z not restored); tier 3 lists the folder (one "
+            "row, none for what is in it), restores the rest and exits 4.",
+    ),
+    Case(
+        name="every data pack missing",
+        tree={b"a": File(b"alpha\n"), b"d/b": File(b"beta\n" * 50),
+              b"empty": File(b"")},
+        faults=Faults(missing=(b"*",)),
+        expect=Outcome(
+            exit=ReaderExit.FAILED,
+            restored={b"a": File(b"", 0o600)},
+            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*file restore "
+                    r"failed: \S+/a\b.*tree restore failed",
+        ),
+        differs={"tier3": Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            failures=(("a", _PACK_NOT_FOUND), ("d/b", _PACK_NOT_FOUND)),
+            summary=_NOT_ALL,
+        )},
+        why="tier 1 stops at the first file (left empty, mode 0600), so "
+            "not even the empty file or the folder is restored, exit 1; "
+            "tier 3 lists each file that has data, restores the folder and "
+            "the empty file and exits 4.",
+    ),
+    Case(
+        name="older restore there, the newer pack missing",
+        before={b"a": File(b"alpha\n"),
+                b"b": File(b"b, as first backed up\n", 0o640)},
+        tree={b"a": File(b"alpha\n"),
+              b"b": File(b"b, as backed up later: its pack is missing\n")},
+        faults=Faults(first_run="before", missing=(b"b",)),
+        expect=Outcome(
+            exit=ReaderExit.FAILED,
+            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o640)},
+            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*file restore "
+                    r"failed: \S+/b\b.*tree restore failed",
+        ),
+        differs={"tier3": Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            restored={b"a": File(b"alpha\n"),
+                      b"b": File(b"b, as first backed up\n", 0o640)},
+            failures=(("b", _PACK_NOT_FOUND),),
+            summary=_NOT_ALL,
+        )},
+        why="tier 1 empties the file the earlier restore left (same file, "
+            "its old mode kept: the old content is lost) and stops, exit 1; "
+            "tier 3 leaves the earlier file as it was, lists it and exits 4.",
+    ),
+    Case(
+        name="pack cut short",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(truncated=(b"b",)),
+        expect=Outcome(
+            exit=ReaderExit.FAILED,
+            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o600)},
+            summary=r"(?s)pack truncated: .*file restore failed: \S+/b\b"
+                    r".*tree restore failed",
+        ),
+        differs={"tier3": Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            failures=(("b", _MAC_FAILED),),
+            summary=_NOT_ALL,
+        )},
+        why="tier 1 names the short pack, leaves an empty file (mode 0600), "
+            "lists nothing and stops, exit 1; tier 3 reads the short blob, "
+            "lists the file as a MAC failure (it does not say the pack is "
+            "short), restores the rest and exits 4.",
+    ),
+    Case(
+        name="blob fails its MAC",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(corrupted=(b"b",)),
+        expect=Outcome(
+            exit=ReaderExit.FAILED,
+            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o600)},
+            # The file is named with no cause: no pack, no "MAC".
+            summary=r"(?is)\A(?!.*(?:pack (?:truncated|not found)|"
+                    r"MAC (?:fail|verif|mismatch))).*"
+                    r"file restore failed: \S+/b\b.*tree restore failed",
+        ),
+        differs={"tier3": Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            failures=(("b", _MAC_FAILED),),
+            summary=_NOT_ALL,
+        )},
+        why="tier 1 leaves an empty file (mode 0600), prints the file's "
+            "name with no cause, lists nothing and stops, exit 1; tier 3 "
+            "lists the file as a MAC failure, restores the rest and exits 4.",
+    ),
     Case(
         name="usage error",
         tree={b"f": File(b"f\n")},
@@ -481,6 +652,9 @@ class Built:
     snapshot_before: str | None
     missing_packs: list[str]  # pack ids the judged run must not find
     expected_tree: dict[bytes, Entry] | None   # what was backed up
+    #: (pack id, byte offset, "truncated" | "corrupted"): the pack is cut
+    #: at the offset, or has the byte there flipped, for the judged run.
+    damaged_packs: list[tuple[str, int, str]] = field(default_factory=list)
 
 
 def _outside(work: Path) -> Path:
@@ -545,8 +719,10 @@ def _materialise(tree: Tree, root: Path, outside: Path) -> None:
         os.chmod(full, mode)
 
 
-def _index(repo: Path, pwfile: Path) -> dict[str, list[tuple[str, str]]]:
-    """pack id -> [(blob id, blob type)], from rustic's own index."""
+def _index(repo: Path, pwfile: Path,
+           ) -> dict[str, list[tuple[str, str, int, int]]]:
+    """pack id -> [(blob id, blob type, offset, length)], from rustic's
+    own index."""
     def rustic(*args: str) -> str:
         return subprocess.run(
             ["rustic", "-r", str(repo), "--no-cache", *args,
@@ -554,7 +730,7 @@ def _index(repo: Path, pwfile: Path) -> dict[str, list[tuple[str, str]]]:
             capture_output=True, text=True, check=True, timeout=60,
         ).stdout
 
-    packs: dict[str, list[tuple[str, str]]] = {}
+    packs: dict[str, list[tuple[str, str, int, int]]] = {}
     for line in rustic("list", "index").split():
         m = re.search(r"[0-9a-f]{64}", line)
         if not m:
@@ -562,7 +738,8 @@ def _index(repo: Path, pwfile: Path) -> dict[str, list[tuple[str, str]]]:
         doc = json.loads(rustic("cat", "index", m.group(0)))
         for pack in doc["packs"]:
             packs.setdefault(pack["id"], []).extend(
-                (b["id"], b["type"]) for b in pack["blobs"])
+                (b["id"], b["type"], b["offset"], b["length"])
+                for b in pack["blobs"])
     return packs
 
 
@@ -575,8 +752,18 @@ def build(case: Case, work: Path) -> Built:
     if case.repo == "builder":
         from tests.unit import tier3_repo_builder
 
-        repo = tier3_repo_builder.build_repo(work, dict(case.tree))
-        return Built(repo, None, outside, None, [], None)
+        layout: dict[str, list[str]] = {}
+        repo = tier3_repo_builder.build_repo(
+            work, dict(case.tree), pack_per_blob=case.pack_per_blob,
+            layout=layout)
+        gone: list[str] = []
+        for spec in case.faults.missing:
+            path, _, nth = os.fsdecode(spec).partition("#")
+            packs = layout[path]
+            gone += [packs[int(nth)]] if nth else packs
+        assert not (case.faults.truncated or case.faults.corrupted), \
+            "pack damage is for rustic repositories"
+        return Built(repo, None, outside, None, gone, None)
 
     if not shutil.which("rustic"):
         raise Skip("rustic not on PATH")
@@ -594,23 +781,40 @@ def build(case: Case, work: Path) -> Built:
         _materialise(case.tree, src, outside)    # type: ignore[arg-type]
         build_rustic_repo(src, repo, pwfile)
 
+    def blob_id(path: bytes) -> str:
+        return hashlib.sha256(case.tree[path].data or b"").hexdigest()  # type: ignore[index]
+
+    faults = case.faults
+    index = (_index(repo, pwfile)
+             if faults.missing or faults.truncated or faults.corrupted
+             else {})
     missing: list[str] = []
-    if case.faults.missing:
-        index = _index(repo, pwfile)
-        if case.faults.missing == (b"*",):
+    if faults.missing:
+        if faults.missing == (b"*",):
             missing = [p for p, blobs in index.items()
-                       if all(t == "data" for _, t in blobs)]
+                       if all(t == "data" for _, t, _, _ in blobs)]
         else:
-            want = {hashlib.sha256(case.tree[p].data or b"").hexdigest()  # type: ignore[index]
-                    for p in case.faults.missing}
+            want = {blob_id(p) for p in faults.missing}
             missing = [p for p, blobs in index.items()
-                       if any(b in want for b, _ in blobs)]
+                       if any(b in want for b, _, _, _ in blobs)]
             # The other files must still be there to restore.
-            assert all(all(t == "data" and b in want for b, t in index[p])
+            assert all(all(t == "data" and b in want
+                           for b, t, _, _ in index[p])
                        for p in missing), "a missing pack holds other blobs"
         assert missing, f"{case.name}: no pack to take away"
+    damaged: list[tuple[str, int, str]] = []
+    for how, paths in (("truncated", faults.truncated),
+                       ("corrupted", faults.corrupted)):
+        for path in paths:
+            want_id = blob_id(path)
+            hits = [(p, off, length) for p, blobs in index.items()
+                    for b, _, off, length in blobs if b == want_id]
+            assert len(hits) == 1, f"{case.name}: {path!r} is not one blob"
+            pack, off, length = hits[0]
+            assert len(index[pack]) == 1, f"{case.name}: {path!r} shares its pack"
+            damaged.append((pack, off + length // 2, how))
     return Built(repo, src, outside, snapshot_before, missing,
-                 walk(src, follow_outside=outside))
+                 walk(src, follow_outside=outside), damaged)
 
 
 # ── Running a reader ────────────────────────────────────────────────
@@ -752,6 +956,15 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
                     + first.stderr.decode("utf-8", "replace"))
         for pack in built.missing_packs:
             (repo / "data" / pack[:2] / pack).unlink()
+        for pack, at, how in built.damaged_packs:
+            with open(repo / "data" / pack[:2] / pack, "r+b") as f:
+                if how == "truncated":
+                    f.truncate(at)
+                else:
+                    f.seek(at)
+                    byte = f.read(1)
+                    f.seek(at)
+                    f.write(bytes([byte[0] ^ 0xFF]))
         for rel in case.faults.damage:
             hit = repo / rel
             if hit.is_dir():
