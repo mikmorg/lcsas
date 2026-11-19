@@ -61,3 +61,20 @@ def test_scripted_prompt_is_exempt() -> None:
         pytest.skip("scripted prompt absent")
     hits = _hygiene.check_file(str(_SCRIPTED_PROMPT))
     assert hits, "scripted prompt unexpectedly has no command tokens"
+
+
+def test_docs_prompt_swaps_by_hand_for_the_named_disc() -> None:
+    """#917: by hand, the agent inserts the disc the prompt names.
+
+    The prompt used to say "insert the next unused data disc from
+    ~/disc-labels.txt": a walk down the label list, not the disc the box
+    asks for.  Agents batched that walk into a loop over every unused
+    disc (rc9: ``DATA_DISCS=( $(grep -v '^LCSAS_META$'
+    ~/disc-labels.txt) )``; 2026-11-19: ``for disc in 0003 0002 0007
+    0006``), inserting discs no prompt asked for, and failed the thrash
+    check.  The walk belongs to swap-loop alone.
+    """
+    text = " ".join(_DOCS_PROMPT.read_text(encoding="utf-8").split())
+    assert "next unused data disc" not in text
+    assert "insert the disc its message names" in text
+    assert "only the disc that prompt names" in text

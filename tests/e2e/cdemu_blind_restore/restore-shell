@@ -49,10 +49,20 @@
 #       The prompts' disc-swap loop, so the agent need not type it or
 #       save it to a file (#827).  At most 40 times: expect
 #       'Insert the right disc|restore complete' (120 s); on a disc box,
-#       `sudo umount MOUNT_DIR`, `disc-loader insert` the next data disc
-#       of ~/disc-labels.txt (LCSAS_META skipped; label order, starting
-#       over after the last), `sudo mount /dev/sr0 MOUNT_DIR`, then
+#       `sudo umount MOUNT_DIR`, `disc-loader eject`, `disc-loader insert`
+#       the disc the box names, `sudo mount /dev/sr0 MOUNT_DIR`, then
 #       `send ""` (ENTER).  MOUNT_DIR defaults to /media.
+#       Which disc (#917): the first disc of the box's "It is on any disc
+#       labelled:" list (newest first) that is in ~/disc-labels.txt and
+#       not yet tried for this box; the same box (same pack) back means
+#       that disc did not have it, so the next named disc is tried.  A box
+#       naming none, or none left: the next data disc of
+#       ~/disc-labels.txt in label order (LCSAS_META skipped, starting
+#       over after the last) not yet tried for it.  Each swap line says
+#       which rule picked the disc.
+#       A disc box already on the screen and waiting for its answer
+#       (the agent looked at it before starting the loop) is the first
+#       swap; the loop does not wait for it to be printed again (#917).
 #       On "restore complete": prints RESTORE COMPLETE, answers
 #       "Restore another backup set?" with n, exits 0.
 #       If expect times out (1) or the session ends (2), it stops and
@@ -64,6 +74,77 @@
 
 set -u
 SESSION="${RESTORE_SHELL_SESSION:-r}"
+
+# take_waiting_box: succeed if a disc box is on the screen now, waiting
+# for its answer, and mark it seen, as a matching `expect` would.
+#
+# swap-loop's `expect` waits for NEW output.  The agent nearly always
+# looks at the box first (`expect` marks it seen; `screen` does not),
+# and the restore, waiting at that box, prints nothing more, so the loop
+# waited out its 120 s and stopped after 0 disc swaps: every swap-loop
+# of the 2026-11-18/19 blind runs did (#917).  The agent then swapped
+# by hand, and in three runs scripted the swaps.
+#
+# "Waiting" means the cursor sits on the box's own prompt line (">",
+# nothing typed after it) and the lines above it, up to the one saying
+# "Insert the right disc", are the box's frame.  Once ENTER is sent the
+# terminal echoes it and the cursor leaves that line, so a box already
+# answered is not taken again.
+take_waiting_box() {
+    snap=$(tmux display-message -p -t "$SESSION" \
+            '#{pane_dead} #{history_size} #{cursor_y} #{cursor_x}' \; \
+            capture-pane -p -t "$SESSION" 2>/dev/null) || return 1
+    # shellcheck disable=SC2046  # split the state line on purpose
+    set -- $(printf '%s\n' "$snap" | sed -n 1p)
+    [ "${1:-1}" = 0 ] || return 1
+    printf '%s\n' "$snap" | awk -v y="$3" -v x="$4" '
+        NR > 1 { line[NR - 2] = $0 }
+        END {
+            if (x > 2 || line[y] !~ /^> ?$/) exit 1
+            for (i = y - 1; i >= 0; i--) {
+                if (line[i] ~ /Insert the right disc/) exit 0
+                if (line[i] !~ /^[|+]/) exit 1
+            }
+            exit 1
+        }' || return 1
+    tmux set-option -t "$SESSION" @restore_shell_mark "$(( $2 + $3 )) $4" \
+        2>/dev/null
+}
+
+# box_discs: read output on stdin; for the LAST disc box in it print the
+# box's pack ("-" when it names none) on the first line, then each disc
+# the box names, one per line, in its order.  The named discs are the
+# frame lines under "It is on any disc labelled:", up to the next line
+# that is not a label: never the "Currently searching:" paths, and never
+# the disc of "It is on a disc newer than:" (tier 3), which is not the
+# disc wanted.  Both readers print that heading byte for byte, newest
+# disc first, at most 8 (#896).
+box_discs() {
+    awk '
+        /is required for the next file/ {
+            pack = $0
+            sub(/.*Pack /, "", pack); sub(/\.\.\..*/, "", pack)
+            n = 0; inlist = 0; next
+        }
+        /\| It is on any disc labelled:/ { inlist = 1; next }
+        inlist && /^\|   [^ |]+ +\|$/ {
+            label = $0
+            sub(/^\|   /, "", label); sub(/ +\|$/, "", label)
+            if (label != "LCSAS_META") got[++n] = label
+            next
+        }
+        { inlist = 0 }
+        /Insert the right disc/ {
+            last_pack = (pack == "" ? "-" : pack); last_n = n
+            for (i = 1; i <= n; i++) last[i] = got[i]
+            pack = ""; n = 0
+        }
+        END {
+            if (last_pack == "") exit
+            print last_pack
+            for (i = 1; i <= last_n; i++) print last[i]
+        }'
+}
 
 case "${1:-}" in
     start)
@@ -196,9 +277,27 @@ case "${1:-}" in
         fi
         count=$(printf '%s\n' "$discs" | wc -l)
         swaps=0
+        idx=0          # next disc in label order, for boxes naming none
+        cur_pack=      # the pack of the box being answered
+        tried=         # discs inserted for that box
+        # A box already on the screen is the first swap (#917).
+        waiting=0
+        take_waiting_box && waiting=1
         while [ "$swaps" -lt 40 ]; do
-            out=$(sh "$0" expect 'Insert the right disc|restore complete' 120)
-            rc=$?
+            if [ "$waiting" = 1 ]; then
+                waiting=0
+                out="[restore-shell] swap-loop: a disc box is waiting on the screen"
+                # The box itself, with some scrollback: a box with many
+                # named discs and search paths can be taller than the
+                # pane.  Only read for its discs: an older "restore
+                # complete" in the scrollback must not end the loop.
+                boxtext=$(tmux capture-pane -p -t "$SESSION" -S -80 2>/dev/null)
+                rc=0
+            else
+                out=$(sh "$0" expect 'Insert the right disc|restore complete' 120)
+                rc=$?
+                boxtext=$out
+            fi
             printf '%s\n' "$out"
             if [ "$rc" -ne 0 ]; then
                 echo "[restore-shell] swap-loop: stopped after $swaps disc swaps (expect exit $rc)" >&2
@@ -213,10 +312,55 @@ case "${1:-}" in
                     exit 0
                     ;;
             esac
-            label=$(printf '%s\n' "$discs" | sed -n "$((swaps % count + 1))p")
+            # Which disc: the first disc the box names that has not been
+            # tried for it (the same box back means that disc did not
+            # have the pack); only when it names none, or none left, the
+            # next disc in label order not yet tried for it (#917).
+            info=$(printf '%s\n' "$boxtext" | box_discs)
+            pack=$(printf '%s\n' "$info" | sed -n 1p)
+            if [ "$pack" = "-" ] || [ "$pack" != "$cur_pack" ]; then
+                tried=
+            fi
+            cur_pack=$pack
+            label=
+            for d in $(printf '%s\n' "$info" | sed -n '2,$p'); do
+                case " $tried " in *" $d "*) continue ;; esac
+                if printf '%s\n' "$discs" | grep -qxF -- "$d"; then
+                    label=$d
+                    rule="the disc the box names"
+                    break
+                fi
+            done
+            if [ -z "$label" ]; then
+                n=0
+                while [ "$n" -lt "$count" ]; do
+                    d=$(printf '%s\n' "$discs" | sed -n "$((idx % count + 1))p")
+                    idx=$((idx + 1))
+                    n=$((n + 1))
+                    case " $tried " in *" $d "*) continue ;; esac
+                    label=$d
+                    break
+                done
+                rule="label order: the box names no disc left to try"
+                if [ -z "$label" ]; then
+                    # Every disc tried for this box: start the round again.
+                    tried=
+                    label=$(printf '%s\n' "$discs" | sed -n "$((idx % count + 1))p")
+                    idx=$((idx + 1))
+                    rule="label order: every disc tried for this box"
+                fi
+            fi
+            tried="$tried $label"
             swaps=$((swaps + 1))
-            echo "[restore-shell] swap-loop: disc swap $swaps: $label at $mnt"
+            echo "[restore-shell] swap-loop: disc swap $swaps: $label at $mnt ($rule)"
             sudo umount "$mnt" 2>/dev/null
+            # The disc in the drive may be mounted somewhere else: the
+            # agent often mounts data discs at /mnt by hand and then runs
+            # a bare swap-loop.  `disc-loader eject` unmounts /dev/sr0
+            # wherever it is, as the agents' own working swaps did, so the
+            # next disc is not mounted beside a stale mount of the last
+            # one (#917).
+            disc-loader eject >/dev/null
             disc-loader insert "$label"
             sudo mount /dev/sr0 "$mnt"
             sh "$0" send ""
