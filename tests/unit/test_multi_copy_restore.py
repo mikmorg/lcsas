@@ -25,10 +25,11 @@ from lcsas.db.queries import (
 )
 from lcsas.db.repos import register_repo
 from lcsas.db.volume_packs import bulk_link_packs
-from lcsas.db.volumes import create_volume, update_status
+from lcsas.db.volumes import create_volume
 from lcsas.restore.executor import RestoreExecutor
 from lcsas.restore.planner import RestorePlanner
 from lcsas.utils.labels import generate_uuid
+from tests.unit.volume_status import update_status
 
 # =========================================================================
 # Fixtures

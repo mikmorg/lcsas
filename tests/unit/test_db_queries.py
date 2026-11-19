@@ -17,8 +17,9 @@ from lcsas.db.queries import (
     get_volumes_for_pack,
 )
 from lcsas.db.repos import register_repo
-from lcsas.db.volumes import create_volume, get_volume_by_id, update_status, update_used_bytes
+from lcsas.db.volumes import create_volume, get_volume_by_id, update_used_bytes
 from lcsas.utils.labels import generate_uuid
+from tests.unit.volume_status import force_status, update_status
 
 
 class TestUnarchived:
@@ -231,10 +232,7 @@ class TestDurableArchivedSemantics:
         assert get_total_unarchived_bytes(conn) == 100
 
         # Flipping the volume to a durable status flips the pack to archived
-        conn.execute(
-            "UPDATE volumes SET status = 'BURNED' WHERE volume_id = ?",
-            (staging.volume_id,),
-        )
+        force_status(conn, staging.volume_id, "BURNED")
         conn.commit()
         assert get_unarchived_packs(conn) == []
         assert get_total_unarchived_bytes(conn) == 0

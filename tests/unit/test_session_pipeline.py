@@ -43,6 +43,7 @@ from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import get_volume_by_id, get_volume_by_label
 from lcsas.iso.xorriso import SubprocessXorrisoRunner
 from lcsas.utils.hashing import sha256_file
+from tests.unit.volume_status import force_status
 
 requires_xorriso = pytest.mark.skipif(
     not shutil.which("xorriso"), reason="xorriso not installed"
@@ -1123,10 +1124,7 @@ class TestCleanSession:
         result = orch.stage()
         # Every volume BURNED with NO copy row (none STAGING/BURNING).
         for m in result.manifests:
-            conn.execute(
-                "UPDATE volumes SET status='BURNED' WHERE volume_id=?",
-                (m.volume_id,),
-            )
+            force_status(conn, m.volume_id, "BURNED")
         conn.commit()
         for m in result.manifests:
             assert conn.execute(

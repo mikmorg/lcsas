@@ -19,7 +19,7 @@ from lcsas.db.locations import ensure_location
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_copies import add_volume_copy, get_copies_for_volume
-from lcsas.db.volumes import get_volume_by_id, update_status
+from lcsas.db.volumes import get_volume_by_id
 from lcsas.exceptions import BurnError
 from tests.unit.test_session_pipeline import (
     _make_config,
@@ -27,6 +27,7 @@ from tests.unit.test_session_pipeline import (
     _wire_drive_identity,
     _zeros_device_reader,
 )
+from tests.unit.volume_status import update_status
 
 
 class _RecordingPrompt:

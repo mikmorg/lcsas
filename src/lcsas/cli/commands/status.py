@@ -304,6 +304,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     from lcsas.burn.orchestrator import unfinished_stage_refusal
+    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.queries import (
         get_archive_status_summary,
         get_ghost_volumes,
@@ -318,7 +319,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
         staging_incomplete,
     )
     from lcsas.db.volume_copies import find_stale_copies
-    from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
     from lcsas.db.volumes import list_volumes
 
     doc: dict[str, Any] = {}
@@ -387,12 +387,13 @@ def _cmd_status(args: argparse.Namespace) -> int:
         burn_unknown: list[str] = []
         unread = []
         staged_but_burned = False
+        lifecycle = VolumeLifecycle(conn)
         for v in unburned:
-            why = burn_evidence(conn, v.volume_id)
+            why = lifecycle.burn_evidence(v.volume_id)
             if why is not None:
                 burned_unrecorded.append((v.label, f"{v.status}, but {why}"))
                 staged_but_burned = True
-            elif rebuild_burn_unknown(conn, v.volume_id):
+            elif lifecycle.burn_unknown(v.volume_id):
                 burn_unknown.append(v.label)
             else:
                 unread.append(v)

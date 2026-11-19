@@ -20,10 +20,11 @@ from lcsas.db.label_mark import (
     label_seq,
     next_label_seq,
 )
+from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.rebuild import rebuild_catalog
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all, get_schema_version
-from lcsas.db.volumes import create_volume, delete_volume
+from lcsas.db.volumes import create_volume
 from tests.unit.test_session_pipeline import (
     _make_config,
     _seed_packs,
@@ -85,7 +86,7 @@ def test_deleted_volume_number_is_not_reused():
     from lcsas.db.label_mark import raise_label_high_water
     raise_label_high_water(conn, orch_seq)
     conn.commit()
-    delete_volume(conn, vol.volume_id)
+    VolumeLifecycle(conn).stage_failed(vol.volume_id)
     assert next_label_seq(conn, "LCSAS") == 2
 
 

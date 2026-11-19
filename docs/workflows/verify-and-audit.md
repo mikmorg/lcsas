@@ -72,7 +72,7 @@ one place that decides it
 9. If `--disc`: resolve which disc is in the drive (`--location`, or the volume's sole ACTIVE disc), then run `_check_disc_for_volume` (`src/lcsas/cli/commands/verify.py`): an **identity gate** first (read the disc's ISO 9660 Volume ID; a mismatch / unreadable ID is `WRONG_DISC` and records *nothing* — FMA-03), then `verify_disc` (`-check_media` readability), then a **device read-back SHA-256** compared against the hash recorded at stage time (BURN-04). A PASS stamps `last_verified_at` on the disc (FMA-05).
 10. Else (ISO mode): confirm the ISO image exists, then **FMT-01 ECC chain** via `select_ecc_runner()` — prefer real `dvdisaster` (RS03 verify, can detect *and* repair); else fall back to the bundled in-house `lcsas-ecc` (decode-only); if *neither* ECC tool is present, fall back to a portable **SHA-256** compare against the catalog-recorded hash (detect-only).
 11. Append a `VERIFY_PASS` or `VERIFY_FAIL` event with detail describing the source; the valid event types come from `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`) and the underlying insert is `add_event`.
-12. If the verification passed *and* the volume was `BURNED`, promote it to `VERIFIED` via `update_status`.
+12. If the verification passed *and* the volume was `BURNED`, promote it to `VERIFIED`: the `VolumeLifecycle` event `iso_check_passed` or `disc_check_passed` (`src/lcsas/db/lifecycle.py`) decides; a disc check that just recorded the disc of a `STAGING`/`BURNING` volume promotes it too (#678).
 13. Return `0` on pass, `1` on fail.
 
 **Expected outcome:**

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.models import VolumeCopy
 from lcsas.utils.timestamps import utc_now
-
-_logger = logging.getLogger(__name__)
 
 
 def _row_to_copy(row: sqlite3.Row) -> VolumeCopy:
@@ -75,7 +73,8 @@ def add_volume_copy(
 
     A lost volume (DEPRECATED because its last in-service disc went)
     that gets a disc recorded here is back in service (#726): VERIFIED
-    when the disc was verified, else BURNED (:func:`_revive_lost_volume`).
+    when the disc was verified, else BURNED
+    (:meth:`~lcsas.db.lifecycle.VolumeLifecycle.disc_back_in_service`).
     *verified* says whether it was; None reads it from *last_verified_at*.
     A volume deprecated by consolidation stays DEPRECATED.
     """
@@ -108,8 +107,8 @@ def add_volume_copy(
         (volume_id, location, burn_date, notes, iso_sha256,
          iso_size_bytes, last_verified_at, media_serial),
     )
-    _revive_lost_volume(
-        conn, volume_id, location,
+    VolumeLifecycle(conn).disc_back_in_service(
+        volume_id, location=location,
         verified=(last_verified_at is not None if verified is None
                   else verified),
     )
@@ -318,8 +317,8 @@ def touch_last_verified(
     A lost volume whose disc was recorded again before #726 is still
     DEPRECATED with this ACTIVE disc; the disc just read puts it back in
     service, VERIFIED, as recording it would now (#752,
-    :func:`_revive_lost_volume`).  A volume deprecated by consolidation
-    stays DEPRECATED.
+    :meth:`~lcsas.db.lifecycle.VolumeLifecycle.disc_back_in_service`).
+    A volume deprecated by consolidation stays DEPRECATED.
     """
     now = utc_now()
     result = conn.execute(
@@ -328,7 +327,9 @@ def touch_last_verified(
         (now, volume_id, location),
     )
     if result.rowcount > 0:
-        _revive_lost_volume(conn, volume_id, location, verified=True)
+        VolumeLifecycle(conn).disc_back_in_service(
+            volume_id, location=location, verified=True,
+        )
     if commit:
         conn.commit()
     return result.rowcount > 0
@@ -368,122 +369,6 @@ def find_stale_copies(
     return [
         (r["label"], r["location"], r["last_verified_at"]) for r in rows
     ]
-
-
-def _demote_volume_if_last_copy_lost(
-    conn: sqlite3.Connection,
-    volume_id: int,
-    location: str,
-    action: str,
-) -> bool:
-    """Record the volume as DEPRECATED (lost) when its last ACTIVE disc is gone.
-
-    A volume with no disc left in service is a lost volume.  There is no
-    LOST status in the schema (Q33, ADR 0003): it is recorded as
-    DEPRECATED plus the NOTE event written here, and owner displays show
-    it as LOST (``lcsas.db.queries.get_lost_volume_ids``).
-
-    Replica truth (BURN-10): a volume is a live replica iff it has >=1
-    ACTIVE disc — except a volume with zero ``volume_copies`` rows at all,
-    which counts by status alone (legacy).  A volume whose disc rows exist
-    but none are ACTIVE must therefore lose its durable status, or the
-    redundancy report and deprecation guard keep treating a destroyed
-    disc as a valid replica.
-
-    Direct UPDATE rather than ``update_status``: DEPRECATED is not a
-    legal transition from every durable state (e.g. BURNED), and the
-    deprecation-safety guard must not veto recording physical reality.
-    Already-DEPRECATED/DESTROYED volumes are left alone (never resurrect
-    a DESTROYED volume).  Shares the caller's transaction; no commit.
-    """
-    row = conn.execute(
-        """SELECT COUNT(*) AS total,
-                  COALESCE(SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END), 0)
-                      AS active
-           FROM volume_copies WHERE volume_id = ?""",
-        (volume_id,),
-    ).fetchone()
-    if row["total"] == 0 or row["active"] > 0:
-        return False
-    result = conn.execute(
-        """UPDATE volumes SET status = 'DEPRECATED'
-           WHERE volume_id = ? AND status NOT IN ('DEPRECATED', 'DESTROYED')""",
-        (volume_id,),
-    )
-    if result.rowcount == 0:
-        return False
-    from lcsas.constants import AUTO_DEPRECATED_NOTE_PREFIX
-    from lcsas.db.volume_events import add_event
-    # The prefix is what lcsas.db.queries.get_lost_volume_ids matches to
-    # tell a lost volume from one deprecated by consolidation (ADR 0003).
-    add_event(
-        conn, volume_id, "NOTE",
-        location=location,
-        detail=(
-            f"{AUTO_DEPRECATED_NOTE_PREFIX} last in-service disc {action} "
-            f"at {location}"
-        ),
-        commit=False,
-    )
-    return True
-
-
-def _revive_lost_volume(
-    conn: sqlite3.Connection,
-    volume_id: int,
-    location: str,
-    *,
-    verified: bool,
-) -> str | None:
-    """Put a lost volume back in service when a disc of it is recorded (#726).
-
-    The reverse of :func:`_demote_volume_if_last_copy_lost`: a volume
-    DEPRECATED because its last in-service disc went (lost, ADR 0003)
-    that now has an ACTIVE disc again becomes VERIFIED when that disc
-    was verified, else BURNED, as a first disc would.  Then the stage
-    pool, the redundancy report and the deprecation guard count it again.
-    A volume deprecated by consolidation is left alone
-    (``lcsas.db.queries.deprecated_by_loss``).
-
-    Direct UPDATE rather than ``update_status``: DEPRECATED → VERIFIED is
-    not a general transition, only this one.  The NOTE says why.  Shares
-    the caller's transaction; no commit.  Returns the new status, or None
-    when nothing changed.
-    """
-    from lcsas.db.queries import deprecated_by_loss
-
-    if not deprecated_by_loss(conn, volume_id):
-        return None
-    status = "VERIFIED" if verified else "BURNED"
-    now = utc_now()
-    if verified:
-        conn.execute(
-            "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",
-            (status, now, volume_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE volumes SET status = ? WHERE volume_id = ?",
-            (status, volume_id),
-        )
-    from lcsas.db.volume_events import add_event
-    add_event(
-        conn, volume_id, "NOTE",
-        location=location,
-        detail=(
-            f"Status changed: DEPRECATED → {status}; this lost volume has "
-            f"a disc in service again at {location}"
-        ),
-        commit=False,
-    )
-    label = conn.execute(
-        "SELECT label FROM volumes WHERE volume_id = ?", (volume_id,),
-    ).fetchone()[0]
-    _logger.info(
-        "%s was a lost volume; with its disc at %s it is in service "
-        "again (%s).", label, location, status,
-    )
-    return status
 
 
 def _record_disc_fate(
@@ -536,9 +421,9 @@ def deprecate_copy(
     _record_disc_fate(
         conn, volume_id, location, "deprecated (out of service)"
     )
-    demoted = _demote_volume_if_last_copy_lost(
-        conn, volume_id, location, "deprecated"
-    )
+    demoted = VolumeLifecycle(conn).last_disc_lost(
+        volume_id, location=location, action="deprecated",
+    ) is not None
     conn.commit()
     return demoted
 
@@ -576,8 +461,8 @@ def destroy_copy(
         conn, volume_id, location,
         "lost (whereabouts unknown)" if lost else "destroyed",
     )
-    demoted = _demote_volume_if_last_copy_lost(
-        conn, volume_id, location, action
-    )
+    demoted = VolumeLifecycle(conn).last_disc_lost(
+        volume_id, location=location, action=action,
+    ) is not None
     conn.commit()
     return demoted

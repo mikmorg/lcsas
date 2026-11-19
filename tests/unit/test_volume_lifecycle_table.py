@@ -1,13 +1,14 @@
 """What happens to a volume today, for every event and start state (#891).
 
-"What may happen to a volume in status X?" has no one answer in the code:
+"What may happen to a volume in status X?" had no one answer in the code:
 the ``VALID_TRANSITIONS`` graph (``db/volumes.py``), 20 ``update_status``
-calls that step through it, 5 raw ``UPDATE volumes SET status`` writes that
-skip it, and 5 ``delete_volume`` calls, each behind its own guard.  This
-file writes the present behaviour down as one table, so the later
-lifecycle module (#892) can be shown to keep it, and so the owner can read
-the whole list.  It pins behaviour; it does not judge it.  Rows whose
-behaviour looks wrong carry a ``suspect`` note; they are not fixed here.
+calls that stepped through it, 5 raw ``UPDATE volumes SET status`` writes
+that skipped it, and 5 ``delete_volume`` calls, each behind its own guard.
+This file wrote the behaviour down as one table, so the lifecycle module
+(#892, ``db/lifecycle.py``, which now holds all of it) could be shown to
+keep it, and so the owner can read the whole list.  It pins behaviour;
+it does not judge it.  Rows whose behaviour looks wrong carry a
+``suspect`` note; they are not fixed here.
 
 One row per (event, start state): every event crossed with every start,
 except the three staging events, which make the volume and so start from
@@ -17,8 +18,9 @@ orchestrator method, with only xorriso, the drive and the ISO checker
 faked; never by calling ``update_status``.  The start state is forced by
 one helper, :func:`seed`, the only place this file writes the catalog
 directly.  ``test_every_status_write_is_reached_by_a_row`` checks that the
-events reach all 30 status writes (``--sites`` lists which rows reach
-each).
+events reach every status write: since #892 the calls of the
+``VolumeLifecycle`` events and the writes inside ``db/lifecycle.py``
+(``--sites`` lists which rows reach each).
 
 Columns of a row (all observed on the volume the event acts on):
 
@@ -364,24 +366,25 @@ def build_templates(base: Path) -> Templates:
 def seed(env: Env, start: Start) -> None:
     """Force *start* onto the staged volume with raw SQL.
 
-    The one place this file forces a volume's status (#892 step 4
-    replaces it); :func:`seed_replica` and :func:`seed_consolidation_tie`
-    add the other rows a few events need.  Every NOTE is the text
-    production writes for that history, so the rules that read NOTEs
-    (``status_before_burning``, ``deprecated_by_loss``,
-    ``rebuild_burn_unknown``) see what they would.  Seeded history is
+    The one place this file forces a volume's status (through the test
+    helper ``force_status``, #892); :func:`seed_replica` and
+    :func:`seed_consolidation_tie` add the other rows a few events need.
+    Every NOTE is the text production writes for that history, so the
+    rules that read NOTEs (in ``db/lifecycle.py``: the status before a
+    burn, burn evidence, the #758 rebuild flag; ``deprecated_by_loss``)
+    see what they would.  Seeded history is
     dated an hour ago, so what an event writes is always newer (the #666
     guard compares a receipt's burn date with when its disc was recorded
     lost).
     """
+    from tests.unit.volume_status import force_status
+
     conn, vid = env.conn, env.volume_id
     durable = start.status not in ("STAGING", "BURNING")
     verified = start.status not in ("STAGING", "BURNING", "BURNED")
-    conn.execute(
-        "UPDATE volumes SET status = ?, closed_at = ?, verified_at = ? "
-        "WHERE volume_id = ?",
-        (start.status, _ts(_DAY_AGO) if durable else None,
-         _ts(_DAY_AGO) if verified else None, vid))
+    force_status(conn, vid, start.status,
+                 closed_at=_ts(_DAY_AGO) if durable else None,
+                 verified_at=_ts(_DAY_AGO) if verified else None)
     if start.disc is not None:
         conn.execute(
             "INSERT INTO volume_copies (volume_id, location, status, "
@@ -2588,7 +2591,8 @@ def _pairs() -> list[tuple[str, str]]:
 
 @dataclass(frozen=True)
 class Site:
-    kind: str  # "update_status", "raw UPDATE", "delete_volume"
+    kind: str  # "lifecycle event", "_update_status", "_delete_volume",
+    #            "status write"
     path: str  # relative to src/lcsas
     line: int  # the line the call starts on
     text: str
@@ -2597,11 +2601,33 @@ class Site:
         return f"{self.path}:{self.line}"
 
 
+# The methods of ``VolumeLifecycle`` (``db/lifecycle.py``, #892) that only
+# read; every other public method is an event that changes or deletes a
+# volume.
+_LIFECYCLE_READS = frozenset({"burn_evidence", "burn_unknown", "may_delete"})
+_LIFECYCLE = "db/lifecycle.py"
+
+
+@functools.cache
+def lifecycle_events() -> frozenset[str]:
+    from lcsas.db.lifecycle import VolumeLifecycle
+
+    public = {name for name, value in vars(VolumeLifecycle).items()
+              if callable(value) and not name.startswith("_")}
+    assert public >= _LIFECYCLE_READS, "a read-only method was renamed"
+    events = frozenset(public - _LIFECYCLE_READS)
+    assert events, "VolumeLifecycle has no event methods"
+    return events
+
+
 def status_write_sites() -> list[Site]:
-    """Every place that changes or deletes a volume's status: calls of
-    ``update_status`` and ``delete_volume``, and ``execute`` calls whose
-    SQL is an ``UPDATE volumes SET status`` outside ``update_status``
-    itself (``db/volumes.py``)."""
+    """Every place that changes or deletes a volume's status: calls of the
+    ``VolumeLifecycle`` event methods outside ``db/lifecycle.py``; inside
+    it, every call of the status graph's writer ``_update_status`` and of
+    ``_delete_volume`` (the decision points the #891 ``update_status`` and
+    ``delete_volume`` calls were), and every ``execute`` whose SQL writes
+    ``volumes.status`` or deletes a volume.  Nothing else writes them
+    (``test_volume_status_writers.py``)."""
     sites = []
     for path in sorted(SRC.rglob("*.py")):
         rel = path.relative_to(SRC).as_posix()
@@ -2614,14 +2640,18 @@ def status_write_sites() -> list[Site]:
             name = (func.id if isinstance(func, ast.Name)
                     else func.attr if isinstance(func, ast.Attribute) else "")
             kind = ""
-            if name in ("update_status", "delete_volume"):
+            if rel != _LIFECYCLE:
+                if isinstance(func, ast.Attribute) and name in lifecycle_events():
+                    kind = "lifecycle event"
+            elif name in ("_update_status", "_delete_volume"):
                 kind = name
-            elif name == "execute" and rel != "db/volumes.py" and any(
+            elif name == "execute" and any(
                 isinstance(a, ast.Constant) and isinstance(a.value, str)
-                and "UPDATE volumes SET status" in " ".join(a.value.split())
+                and re.search(r"UPDATE volumes SET status|DELETE FROM volumes ",
+                              " ".join(a.value.split()))
                 for a in node.args
             ):
-                kind = "raw UPDATE"
+                kind = "status write"
             if kind:
                 sites.append(Site(kind, rel, node.lineno,
                                   lines[node.lineno - 1].strip()))
@@ -2754,11 +2784,14 @@ def test_row(table, row):
 
 
 def test_status_write_sites_are_the_ones_the_table_was_written_for():
-    """20 ``update_status`` calls, 5 raw status writes, 5 deletions (#891).
-    A new one needs rows that reach it."""
+    """The 20 ``update_status`` calls, 5 raw status writes and 5 deletions
+    the table was written for (#891) are now 28 calls of ``VolumeLifecycle``
+    events and, inside it, 18 ``_update_status`` and 2 ``_delete_volume``
+    calls (events that shared a sequence share one call) and 9 status
+    writes (#892).  A new one needs rows that reach it."""
     counts = Counter(site.kind for site in status_write_sites())
-    assert counts == {"update_status": 20, "raw UPDATE": 5,
-                      "delete_volume": 5}
+    assert counts == {"lifecycle event": 28, "_update_status": 18,
+                      "_delete_volume": 2, "status write": 9}
 
 
 def test_every_status_write_is_reached_by_a_row(table):

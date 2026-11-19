@@ -651,8 +651,10 @@ behaviour.
 - `build_parser()` in `src/lcsas/cli/parser.py` — argparse for `catalog
   import-receipts`.
 - `cmd_catalog_import` in `src/lcsas/cli/commands/catalog.py` — handler and dispatch.
-- `src/lcsas/db/volumes.py` — `update_status`, `mark_closed`,
-  `VALID_TRANSITIONS`.
+- `src/lcsas/db/lifecycle.py` — `VolumeLifecycle`, the receipt
+  events (`passing_receipt_imported`, `unverified_receipt_imported`,
+  `failing_receipt_imported`) and the status graph;
+  `src/lcsas/db/volumes.py` — `mark_closed`.
 - `src/lcsas/db/volume_copies.py` — `add_volume_copy` upsert,
   `get_copy_at_location`, `get_disc_retired_at`.
 - `src/lcsas/db/volume_events.py` — `add_event`, `get_events_for_volume`.
@@ -891,8 +893,8 @@ workflow (the three that could leave the catalog wrong were resolved in
 - Burn pipeline: `src/lcsas/burn/orchestrator.py` — `BurnReceipt`,
   `stage`, `burn_session`, and the manifest + receipt writers.
 - ISO tooling: `src/lcsas/iso/xorriso.py` — `burn_iso`, `verify_disc`.
-- Catalog: `src/lcsas/db/volumes.py` (`VALID_TRANSITIONS`, `update_status`,
-  `mark_closed`), `src/lcsas/db/volume_copies.py` (`add_volume_copy`
+- Catalog: `src/lcsas/db/lifecycle.py` (`VolumeLifecycle`, the status
+  graph), `src/lcsas/db/volumes.py` (`mark_closed`), `src/lcsas/db/volume_copies.py` (`add_volume_copy`
   UPSERT), `src/lcsas/db/volume_events.py` (`add_event`,
   `get_events_for_volume`), `src/lcsas/db/locations.py`
   (`resolve_location`).

@@ -10,17 +10,14 @@ from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.constants import STATUS_CONSOLIDATING, STATUS_VERIFIED
 from lcsas.db.connection import get_memory_connection
+from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import get_pack_ids_for_volume
-from lcsas.db.volumes import (
-    create_volume,
-    delete_volume,
-    get_volume_by_id,
-    update_status,
-)
+from lcsas.db.volumes import create_volume, get_volume_by_id
 from lcsas.utils.labels import generate_uuid
+from tests.unit.volume_status import update_status
 
 
 class TestRound4Fixes:
@@ -62,8 +59,9 @@ class TestRound4Fixes:
         packs_before = get_pack_ids_for_volume(conn, volume_id)
         assert len(packs_before) == 1
 
-        # Simulate deletion: delete_volume should cascade and remove volume_packs
-        delete_volume(conn, volume_id)
+        # Simulate deletion: deleting the volume should cascade and remove
+        # volume_packs
+        VolumeLifecycle(conn).stage_failed(volume_id)
 
         # Verify volume_packs are cleaned up (no orphans)
         packs_after = get_pack_ids_for_volume(conn, volume_id)

@@ -473,7 +473,7 @@ class TestFullPipelineRestore:
 
         # Determine VOL_1 id
         vol1 = get_volume_by_label(conn, "VOL_1")
-        from lcsas.db.volumes import update_status
+        from tests.unit.volume_status import update_status
         update_status(conn, vol1.volume_id, "DESTROYED")
 
         # Pick list should exclude VOL_1
@@ -618,7 +618,7 @@ class TestMultiTenantEdgeCases:
         assert pick.missing_packs == []
 
         # Deprecate one — still available
-        from lcsas.db.volumes import update_status
+        from tests.unit.volume_status import update_status
         update_status(conn, vols[0].volume_id, "DEPRECATED")
         pick = planner.generate_pick_list(["lifecycle_pack"])
         assert pick.total_packs == 1

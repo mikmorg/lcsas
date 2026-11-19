@@ -167,8 +167,9 @@ def test_verify_disc_device_hash_pass_then_byte_flip_fails(
     from lcsas.db.sessions import add_session_volume, create_session
     from lcsas.db.volume_copies import get_copies_for_volume
     from lcsas.db.volume_events import get_events_for_volume
-    from lcsas.db.volumes import create_volume, get_volume_by_label, update_status
+    from lcsas.db.volumes import create_volume, get_volume_by_label
     from lcsas.utils.hashing import sha256_file
+    from tests.unit.volume_status import update_status
 
     label = "LCSAS-E2E-BURN04"
     location = "E2E_Shelf"
@@ -285,8 +286,9 @@ def _register_burned_volume(
     from lcsas.db.connection import get_connection
     from lcsas.db.schema import create_all
     from lcsas.db.sessions import add_session_volume, create_session
-    from lcsas.db.volumes import create_volume, update_status
+    from lcsas.db.volumes import create_volume
     from lcsas.utils.hashing import sha256_file
+    from tests.unit.volume_status import update_status
 
     conn = get_connection(db_path)
     create_all(conn)

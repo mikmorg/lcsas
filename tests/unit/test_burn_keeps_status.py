@@ -26,22 +26,20 @@ import pytest
 from lcsas.burn.orchestrator import BurnOrchestrator
 from lcsas.cli.main import main
 from lcsas.db.connection import get_connection
+from lcsas.db.lifecycle import _status_before_burning
 from lcsas.db.locations import ensure_location
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.sessions import get_session
 from lcsas.db.volume_copies import get_copies_for_volume
 from lcsas.db.volume_events import get_events_for_volume
-from lcsas.db.volumes import (
-    get_volume_by_id,
-    status_before_burning,
-    update_status,
-)
+from lcsas.db.volumes import get_volume_by_id
 from tests.unit.test_session_pipeline import (
     _make_config,
     _seed_packs,
     _wire_drive_identity,
 )
+from tests.unit.volume_status import force_status, update_status
 
 
 class _RecordingPrompt:
@@ -137,9 +135,10 @@ def _status(env, volume_id: int | None = None) -> str:
 def _make_burned(env) -> None:
     """What 'catalog rebuild' writes for a volume whose own disc it read:
     BURNED, no disc record (db/rebuild.py _promote_read_discs)."""
+    force_status(env["conn"], env["volume_id"], "BURNED")
     env["conn"].execute(
-        "UPDATE volumes SET status = 'BURNED', "
-        "created_at = datetime('now', '-48 hours') WHERE volume_id = ?",
+        "UPDATE volumes SET created_at = datetime('now', '-48 hours') "
+        "WHERE volume_id = ?",
         (env["volume_id"],),
     )
     env["conn"].commit()
@@ -243,14 +242,13 @@ def _left_burning_by_older_lcsas(env) -> None:
 
 def test_status_before_burning(one):
     conn, vid = one["conn"], one["volume_id"]
-    assert status_before_burning(conn, vid) == "STAGING"  # no note
+    assert _status_before_burning(conn, vid) == "STAGING"  # no note
     update_status(conn, vid, "BURNING")
-    assert status_before_burning(conn, vid) == "STAGING"
+    assert _status_before_burning(conn, vid) == "STAGING"
     update_status(conn, vid, "STAGING")
-    conn.execute("UPDATE volumes SET status = 'BURNED' WHERE volume_id = ?",
-                 (vid,))
+    force_status(conn, vid, "BURNED")
     update_status(conn, vid, "BURNING", force=True)
-    assert status_before_burning(conn, vid) == "BURNED"
+    assert _status_before_burning(conn, vid) == "BURNED"
 
 
 def test_interrupted_burn_of_burned_volume_goes_back_to_burned(one, caplog):

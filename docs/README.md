@@ -64,6 +64,9 @@ Task-oriented walkthroughs for running an archive and restoring from it:
     a recovery tier; storage stages are named, disc sizes are media types.
   - [0003](adr/0003-lost-volumes-are-not-a-schema-state.md) — lost volumes
     are recorded as DEPRECATED and shown as LOST; no schema change.
+  - [0004](adr/0004-status-changes-go-through-volume-lifecycle-events.md) —
+    a volume's status changes only through `VolumeLifecycle` events
+    (`src/lcsas/db/lifecycle.py`).
 
 ## History
 

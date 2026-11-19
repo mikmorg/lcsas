@@ -23,6 +23,7 @@ from lcsas.db.schema import create_all
 from lcsas.db.volume_copies import add_volume_copy
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume, get_volume_by_label
+from tests.unit.volume_status import force_status
 
 
 def _fake_create_iso(self, source_dir, output_iso, volume_label, **kwargs):
@@ -166,8 +167,7 @@ def test_a_source_that_is_not_verified_is_refused_before_the_prompt(
 ):
     cfg, db = archive
     conn = get_connection(db)
-    conn.execute("UPDATE volumes SET status = ? WHERE label = 'OLD_1'",
-                 (status,))
+    force_status(conn, get_volume_by_label(conn, "OLD_1").volume_id, status)
     conn.commit()
     conn.close()
 
@@ -300,8 +300,7 @@ def test_plain_clean_after_the_burn_keeps_the_sources_consolidating(
         (vid,) = conn.execute(
             "SELECT volume_id FROM volumes WHERE label LIKE 'NEW%'"
         ).fetchone()
-        conn.execute("UPDATE volumes SET status = 'VERIFIED' "
-                     "WHERE volume_id = ?", (vid,))
+        force_status(conn, vid, "VERIFIED")
         add_volume_copy(conn, vid, "Home", commit=False)
         conn.commit()
     finally:
