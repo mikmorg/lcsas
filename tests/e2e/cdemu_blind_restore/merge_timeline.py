@@ -21,8 +21,10 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-# Import transcript.py from this folder, leaving no __pycache__ behind.
-sys.dont_write_bytecode = True
+# Import transcript.py from this folder, leaving no __pycache__ behind
+# when run as a script (an importer, such as a test, keeps its own setting).
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 import transcript  # noqa: E402

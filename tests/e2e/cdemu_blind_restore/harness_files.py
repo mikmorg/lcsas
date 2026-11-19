@@ -37,9 +37,11 @@ import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-# verify.sh's checks import this as root: import transcript.py from this
-# folder without leaving a root-owned __pycache__ in the checkout.
-sys.dont_write_bytecode = True
+# Import transcript.py from this folder.  verify.sh's checks import this
+# as root and turn bytecode writes off first, so no root-owned __pycache__
+# is left in the checkout; run as a script, it turns them off itself.
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 import transcript  # noqa: E402
