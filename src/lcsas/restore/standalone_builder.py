@@ -1,7 +1,7 @@
 """Build tier 3, the Python reader (``standalone_restorer.py``), from source modules.
 
-Concatenates ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py`` and
-``restic_fallback.py`` into a single file that can be placed on every
+Concatenates ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py``,
+``_disc_search.py`` and ``restic_fallback.py`` into a single file that can be placed on every
 data disc.  The output has no imports
 from the ``lcsas`` package — it is completely self-contained and can run
 with nothing but Python ≥ 3.10 stdlib (plus optional ``zstandard``).
@@ -31,14 +31,15 @@ _SRC_DIR = Path(__file__).resolve().parent
 def build_standalone() -> str:
     """Return the text of a self-contained standalone_restorer.py.
 
-    Reads ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py`` and
-    ``restic_fallback.py`` from the same directory, strips
+    Reads ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py``,
+    ``_disc_search.py`` and ``restic_fallback.py`` from the same directory, strips
     ``from lcsas...`` imports, and concatenates them with a ``__main__``
     CLI block.
     """
     aes_src = (_SRC_DIR / "_aes_pure.py").read_text()
     aes_fast_src = (_SRC_DIR / "_aes_fast.py").read_text()
     zstd_src = (_SRC_DIR / "_zstd_pure.py").read_text()
+    search_src = (_SRC_DIR / "_disc_search.py").read_text()
     fallback_src = (_SRC_DIR / "restic_fallback.py").read_text()
 
     # ── Process _aes_pure.py ─────────────────────────────────────
@@ -64,6 +65,11 @@ def build_standalone() -> str:
     zstd_lines = _strip_header(zstd_src)
     zstd_body = "\n".join(zstd_lines)
 
+    # ── Process _disc_search.py ──────────────────────────────────
+    # The disc search (#884): stdlib only, so nothing to rewrite.  It
+    # goes before restic_fallback.py, which imports names from it.
+    search_body = "\n".join(_strip_header(search_src))
+
     # ── Process restic_fallback.py ───────────────────────────────
     # Remove the lcsas import lines (both _aes_pure and _zstd_pure; the
     # latter is imported lazily inside the ImportError branch, so it is
@@ -85,6 +91,22 @@ def build_standalone() -> str:
     # Also handle single-line import form
     fallback_src = re.sub(
         r"^from lcsas\.restore\._aes_pure import .*$\n",
+        "",
+        fallback_src,
+        flags=re.MULTILINE,
+    )
+    # The disc search's names are inlined above (#884): drop the import,
+    # in the parenthesised form and the single-line form.
+    fallback_src = re.sub(
+        r"^from lcsas\.restore\._disc_search import \(\n"
+        r"(?:    .*\n)*"
+        r"\)\n",
+        "",
+        fallback_src,
+        flags=re.MULTILINE,
+    )
+    fallback_src = re.sub(
+        r"^from lcsas\.restore\._disc_search import .*$\n",
         "",
         fallback_src,
         flags=re.MULTILINE,
@@ -118,6 +140,7 @@ def build_standalone() -> str:
         + aes_body + "\n\n"
         + aes_fast_body + "\n\n"
         + zstd_body + "\n\n"
+        + search_body + "\n\n"
         + fallback_body + "\n\n"
         + _CLI_BLOCK
     )
@@ -165,6 +188,7 @@ _HEADER = textwrap.dedent("""\
     #    - src/lcsas/restore/_aes_pure.py   (AES-256-CTR implementation)
     #    - src/lcsas/restore/_aes_fast.py   (native AES-256-CTR selector)
     #    - src/lcsas/restore/_zstd_pure.py  (pure-Python zstd decompressor)
+    #    - src/lcsas/restore/_disc_search.py  (finds packs on the discs)
     #    - src/lcsas/restore/restic_fallback.py  (restic repository reader)
     #
     #  It restores data from a restic/rustic repository using ONLY

@@ -124,7 +124,7 @@ class TestBuildStandalone:
 # ── Native AES selector ─────────────────────────────────────────────
 
 _CONCATENATED = ("_aes_pure.py", "_aes_fast.py", "_zstd_pure.py",
-                 "restic_fallback.py")
+                 "_disc_search.py", "restic_fallback.py")
 
 
 def _top_level_names(source: str) -> set[str]:

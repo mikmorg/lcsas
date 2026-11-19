@@ -31,12 +31,13 @@ _FRONT_ENDS = {"cli", "meta", "__main__"}
 _RESTORE_LEAVES: dict[str, set[str]] = {
     "lcsas.restore.restic_fallback": {
         "lcsas.restore._aes_pure", "lcsas.restore._aes_fast",
-        "lcsas.restore._zstd_pure",
+        "lcsas.restore._zstd_pure", "lcsas.restore._disc_search",
     },
     "lcsas.restore.standalone_builder": set(),
     "lcsas.restore._aes_pure": set(),
     "lcsas.restore._aes_fast": {"lcsas.restore._aes_pure"},
     "lcsas.restore._zstd_pure": set(),
+    "lcsas.restore._disc_search": set(),
 }
 _RESTORE_PUBLIC = {
     "lcsas.restore.restic_fallback", "lcsas.restore.standalone_builder",
