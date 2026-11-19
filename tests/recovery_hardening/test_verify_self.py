@@ -427,6 +427,11 @@ def test_clean_transcript_passes_stumble_checks(tmp_path: Path) -> None:
         "illusion intact",
         "author wrapper",
         "bypass restore.sh",
+        # With the above, every check that reads the transcript: each
+        # line that calls checks.py (#890) passes a clean run.
+        "first disc was LCSAS_META",
+        "RESTORE COMPLETE printed",
+        "rename recovery binaries",
     ):
         status = _check_status(out, check)
         assert status == "PASS", (

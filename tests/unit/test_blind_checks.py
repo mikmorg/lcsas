@@ -14,6 +14,7 @@ their groups, the rc9 replays, the fixture guards) stays in
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -326,3 +327,19 @@ def test_bypass_matches_no_bypass_check(tmp_path: Path) -> None:
     assert hits
     assert checks.did_not_bypass(transcript.load(path)) == checks.Verdict(
         False, f"AGENT BYPASSED restore.sh to call binary directly: {hits[:5]}")
+
+
+# --- verify.sh calls them -----------------------------------------------------
+
+
+def test_verify_sh_calls_each_check_by_its_registered_name() -> None:
+    """Each transcript check line of verify.sh is one checks.py call (the
+    bypass check calls no_bypass_check.py, as before); no Python heredoc
+    or one-liner is left in verify.sh."""
+    text = (HARNESS / "verify.sh").read_text()
+    names = re.findall(r"""python3 '\$HERE_DIR/checks\.py' (\S+) '\$RUN_DIR'""", text)
+    assert sorted(names) == sorted(set(checks.CHECKS) - {"did_not_bypass"})
+    assert text.count("checks.py") == len(names)
+    assert "<<'PY'" not in text
+    assert "python3 -c" not in text
+    assert "python3 '$HERE_DIR/no_bypass_check.py' '$TRANSCRIPT'" in text
