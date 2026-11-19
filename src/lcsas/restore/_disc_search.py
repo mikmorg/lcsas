@@ -110,6 +110,266 @@ def _ds_write(text: str) -> None:
     sys.stderr.flush()
 
 
+# ── The filesystem, as the disc search sees it (#885) ────────────
+
+
+class _DiscFs:
+    """Every filesystem touch of the disc search goes through here.
+
+    Each public method answers with a value and never raises OSError: a
+    path it may not look at is not there (``False``, ``[]``, ``None``),
+    and a failed read or write hands back the error as a value, so the
+    caller can name it in its log line.  A probe that cannot be made
+    therefore degrades to "not found", which ends at the disc prompt:
+    the right outcome for the reader of last resort.  (The rc10 sweep
+    failed four times on a probe that raised where it should have said
+    no: #877, #880, #881, #882.)
+
+    The public methods put the guard around one primitive each (the
+    ``_``-prefixed methods below them), which makes the OS call itself
+    and may raise.  The tests' in-memory tree replaces only the
+    primitives, so the guards here are the ones it exercises.
+
+    Writes to the restore target are not made here: a full target disk
+    still stops the restore (exit 74).
+    """
+
+    # ── Probes: what is there ────────────────────────────────────
+
+    def is_file(self, path: Path) -> bool:
+        """Is *path* a regular file (after links)?  False if it cannot be
+        looked at: pathlib raises PermissionError, not False, when a
+        folder on the way cannot be entered (#881)."""
+        try:
+            return self._is_file(path)
+        except OSError:
+            return False
+
+    def is_dir(self, path: Path) -> bool:
+        """Is *path* a folder (after links)?  False if it cannot be
+        looked at."""
+        try:
+            return self._is_dir(path)
+        except OSError:
+            return False
+
+    def listdir(self, path: Path) -> list[str]:
+        """The names in folder *path*, sorted; empty if it cannot be
+        listed."""
+        try:
+            return sorted(self._listdir(path))
+        except OSError:
+            return []
+
+    def stat(self, path: Path) -> os.stat_result | None:
+        """``os.stat(path)``, or None if it cannot be had."""
+        try:
+            return self._stat(path)
+        except OSError:
+            return None
+
+    def readable(self, path: Path) -> bool:
+        """May this user read *path*, by its mode (#877)?  The open can
+        still be refused (#880): ``read_range`` says so then."""
+        try:
+            return self._readable(path)
+        except OSError:
+            return False
+
+    def realpath(self, path: Path) -> str | None:
+        """*path* with every link resolved, or None if it cannot be."""
+        try:
+            return self._realpath(path)
+        except (OSError, ValueError):
+            return None
+
+    def abspath(self, path: Path) -> str:
+        """*path* made absolute by its text (no links followed).  The
+        text as given if the current folder cannot be had."""
+        try:
+            return self._abspath(path)
+        except OSError:
+            return str(path)
+
+    # ── Reads ────────────────────────────────────────────────────
+
+    def read_range(self, path: Path, offset: int, length: int) -> bytes | OSError:
+        """*length* bytes of *path* from *offset* (-1: to the end), or
+        the error that stopped the read."""
+        try:
+            return self._read_range(path, offset, length)
+        except OSError as exc:
+            return exc
+
+    def open_catalog(self, path: Path) -> sqlite3.Connection | None:
+        """A read-only connection to the disc catalog at *path*, or None
+        if it cannot be opened.  SQLite opens lazily, so a query can
+        still fail with sqlite3.Error: the caller catches that."""
+        try:
+            return self._connect(path)
+        except (OSError, sqlite3.Error):
+            return None
+
+    # ── The pack cache and the catalog copies ────────────────────
+
+    def copy_checked(
+        self, src: Path, dst: Path, pack_id: str, tick: Callable[[int], None],
+    ) -> tuple[str, OSError | None]:
+        """Copy one pack into the cache, checked against its id.
+
+        Returns ``("ok", None)``, ``("mismatch", None)`` (the bytes do
+        not hash to *pack_id*; nothing is kept), ``("cache_full", exc)``
+        (the cache's drive is full or read-only: stop copying that
+        disc) or ``("unreadable", exc)`` (any other error: this pack
+        is read from the disc).
+        """
+        try:
+            ok = self._copy(src, dst, pack_id, tick)
+        except OSError as exc:
+            if exc.errno in _CACHE_SIDE_ERRNOS:
+                return "cache_full", exc
+            return "unreadable", exc
+        return ("ok" if ok else "mismatch"), None
+
+    def free_bytes(self, path: Path) -> tuple[int, int] | None:
+        """(free bytes, size) of the drive holding *path*, or None."""
+        try:
+            return self._disk_usage(path)
+        except OSError:
+            return None
+
+    def tree_bytes(self, path: Path) -> int:
+        """Total size of the files below *path*; what cannot be looked
+        at counts as nothing."""
+        try:
+            return self._tree_bytes(path)
+        except OSError:
+            return 0
+
+    def make_dirs(self, path: Path) -> OSError | None:
+        """Make folder *path* and its parents; the error if that fails."""
+        try:
+            self._makedirs(path)
+        except OSError as exc:
+            return exc
+        return None
+
+    def scratch_dir(self, prefix: str) -> Path | None:
+        """A new private temporary folder, removed when the process
+        exits; None if one cannot be made."""
+        try:
+            return self._mkdtemp(prefix)
+        except OSError:
+            return None
+
+    def write_file(self, path: Path, data: bytes) -> bool:
+        """Write *data* to *path*; False if that fails."""
+        try:
+            self._write(path, data)
+        except OSError:
+            return False
+        return True
+
+    def remove_tree(self, path: Path) -> None:
+        """Remove folder *path* and all below it, as far as possible."""
+        with contextlib.suppress(OSError):
+            self._rmtree(path)
+
+    # ── Primitives: the OS calls themselves; they may raise ──────
+
+    def _is_file(self, path: Path) -> bool:
+        return path.is_file()
+
+    def _is_dir(self, path: Path) -> bool:
+        return path.is_dir()
+
+    def _listdir(self, path: Path) -> list[str]:
+        return os.listdir(path)
+
+    def _stat(self, path: Path) -> os.stat_result:
+        return os.stat(path)
+
+    def _readable(self, path: Path) -> bool:
+        return os.access(path, os.R_OK)
+
+    def _realpath(self, path: Path) -> str:
+        return os.path.realpath(path)
+
+    def _abspath(self, path: Path) -> str:
+        return os.path.abspath(path)
+
+    def _read_range(self, path: Path, offset: int, length: int) -> bytes:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            return f.read(length)
+
+    def _connect(self, path: Path) -> sqlite3.Connection:
+        # immutable=1: ISO 9660 is read-only so SQLite must not try to
+        # create WAL/shm sidecar files.  Without this, sqlite3.connect()
+        # with mode=ro raises OperationalError on iso9660 mounts AND
+        # (critically) leaves a kernel reference on the mount point that
+        # makes `umount /media` fail with EBUSY, preventing disc swaps.
+        # Issue #284 root cause 2.
+        return sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+
+    def _copy(
+        self, src: Path, dst: Path, pack_id: str, tick: Callable[[int], None],
+    ) -> bool:
+        """Written to ``<dst>.part`` and renamed once complete, so a
+        scratched disc, a full drive or a killed run never leaves a
+        short pack that the cache would trust from then on.  False (and
+        nothing kept) when the bytes read do not hash to *pack_id*."""
+        part = dst.with_name(dst.name + ".part")
+        digest = hashlib.sha256()
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            with open(src, "rb") as fin, open(part, "wb") as fout:
+                while True:
+                    chunk = fin.read(_MIB)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    fout.write(chunk)
+                    tick(len(chunk))
+            if digest.hexdigest() != pack_id:
+                part.unlink(missing_ok=True)
+                return False
+            os.replace(part, dst)
+        except OSError:
+            with contextlib.suppress(OSError):
+                part.unlink(missing_ok=True)
+            raise
+        return True
+
+    def _disk_usage(self, path: Path) -> tuple[int, int]:
+        usage = shutil.disk_usage(path)
+        return usage.free, usage.total
+
+    def _tree_bytes(self, path: Path) -> int:
+        used = 0
+        with contextlib.suppress(OSError):
+            for dirpath, _dirs, files in os.walk(path):
+                for f in files:
+                    with contextlib.suppress(OSError):
+                        used += os.stat(os.path.join(dirpath, f)).st_size
+        return used
+
+    def _makedirs(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+
+    def _mkdtemp(self, prefix: str) -> Path:
+        made = Path(tempfile.mkdtemp(prefix=prefix))
+        atexit.register(shutil.rmtree, str(made), True)
+        return made
+
+    def _write(self, path: Path, data: bytes) -> None:
+        with open(path, "wb") as f:
+            f.write(data)
+
+    def _rmtree(self, path: Path) -> None:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 # ── The disc search ──────────────────────────────────────────────
 
 
@@ -135,6 +395,7 @@ class DiscSearch:
         log: Callable[[str], None],
         prompt_in: Callable[[], str] | None = None,
         prompt_out: Callable[[str], None] | None = None,
+        fs: _DiscFs | None = None,
     ) -> None:
         """Set up the search.
 
@@ -160,7 +421,10 @@ class DiscSearch:
                 prompt ("" at the end of input).  Default: stdin.
             prompt_out: Writes the prompt and the lines around it.
                 Default: stderr, flushed.
+            fs: Every filesystem touch of the search goes through it
+                (#885).  Default: the real filesystem.
         """
+        self._fs = fs if fs is not None else _DiscFs()
         self.interactive = interactive
         self.catalog_path = catalog_path
         self._repo_data = repo_data
@@ -200,11 +464,11 @@ class DiscSearch:
         self._drain_failed: set[str] = set()
         self._drain_warned: set[str] = set()
         if pack_cache is not None and str(pack_cache):
-            try:
-                pack_cache.mkdir(parents=True, exist_ok=True)
+            err = self._fs.make_dirs(pack_cache)
+            if err is None:
                 self._pack_cache = pack_cache
-            except OSError as exc:
-                self._log(f"Cannot create the pack cache {pack_cache}: {exc}; "
+            else:
+                self._log(f"Cannot create the pack cache {pack_cache}: {err}; "
                           "the discs are read directly.")
 
     # ── Interface ────────────────────────────────────────────────
@@ -221,7 +485,7 @@ class DiscSearch:
         that never calls this) is removed when the process exits.
         """
         if self._catalog_copy_dir is not None:
-            shutil.rmtree(self._catalog_copy_dir, ignore_errors=True)
+            self._fs.remove_tree(self._catalog_copy_dir)
         self._catalog_copy_dir = None
         self._catalog_copies = {}
 
@@ -275,7 +539,7 @@ class DiscSearch:
                 (root / "data" / prefix / pack_id, root / "data"),
                 (root / "data" / pack_id, root / "data"),
             ):
-                if _is_file(candidate):
+                if self._fs.is_file(candidate):
                     if self._on_live_meta(candidate):
                         continue
                     # A copy this user cannot read (a folder only root may
@@ -283,7 +547,7 @@ class DiscSearch:
                     # disc if none is found, as tier 1 does.
                     if str(candidate) in self._unreadable:
                         continue
-                    if not os.access(candidate, os.R_OK):
+                    if not self._fs.readable(candidate):
                         continue
                     if self._pack_cache is not None:
                         self._drain_disc(data_dir)
@@ -303,15 +567,15 @@ class DiscSearch:
         meta = self._meta_disc
         if meta is None:
             return False
-        return _is_file(meta / "recovery" / "scripts" / "restore.sh")
+        return self._fs.is_file(meta / "recovery" / "scripts" / "restore.sh")
 
     def _on_live_meta(self, path: Path) -> bool:
         """Is *path* on the meta disc, while it is mounted?  (tier 1:
         path_under, by the path's text.)"""
         if self._meta_disc is None or not self._meta_is_live():
             return False
-        meta = os.path.abspath(self._meta_disc).rstrip(os.sep) or os.sep
-        here = os.path.abspath(path)
+        meta = self._fs.abspath(self._meta_disc).rstrip(os.sep) or os.sep
+        here = self._fs.abspath(path)
         return here == meta or here.startswith(meta.rstrip(os.sep) + os.sep)
 
     def _live_roots(self) -> list[Path]:
@@ -336,29 +600,25 @@ class DiscSearch:
         listed.  Folders already among the roots are not added twice.
         """
         roots = self._live_roots()
-        have = {os.path.abspath(r) for r in roots}
-        skip = {os.path.abspath(self._repo_data)}
+        have = {self._fs.abspath(r) for r in roots}
+        skip = {self._fs.abspath(self._repo_data)}
         if self._pack_cache is not None:
-            skip.add(os.path.abspath(self._pack_cache))
+            skip.add(self._fs.abspath(self._pack_cache))
         found: list[Path] = []
         for root in roots:
-            if os.path.abspath(root) in skip or _is_dir(root / "data"):
+            if self._fs.abspath(root) in skip or self._fs.is_dir(root / "data"):
                 continue
-            try:
-                names = sorted(os.listdir(root))
-            except OSError:
-                continue
-            for name in names:
+            for name in self._fs.listdir(root):
                 # Hidden folders are never a mounted disc.
                 if name.startswith("."):
                     continue
                 if len(name) == 2 and all(c in "0123456789abcdef" for c in name):
                     continue
                 child = root / name
-                key = os.path.abspath(child)
+                key = self._fs.abspath(child)
                 if key in have or key in skip:
                     continue
-                if not _is_dir(child) or self._on_live_meta(child):
+                if not self._fs.is_dir(child) or self._on_live_meta(child):
                     continue
                 have.add(key)
                 found.append(child)
@@ -373,7 +633,7 @@ class DiscSearch:
         path = self._pack_cache / "data" / pack_id[:2] / pack_id
         if str(path) in self._unreadable:
             return None
-        return path if _is_file(path) else None
+        return path if self._fs.is_file(path) else None
 
     def _drain_visible_discs(self) -> None:
         """Copy every data disc now in a search root into the cache.
@@ -387,18 +647,17 @@ class DiscSearch:
         self._refresh_discovered()
         for root in self._all_roots():
             data_dir = root / "data"
-            if _is_dir(data_dir):
+            if self._fs.is_dir(data_dir):
                 self._drain_disc(data_dir)
 
     def _is_not_a_disc(self, data_dir: Path) -> bool:
         """True for the repository's own data folder and for the cache
         (or a folder inside it): those are never copied."""
         assert self._pack_cache is not None
-        try:
-            real = os.path.realpath(data_dir)
-            cache = os.path.realpath(self._pack_cache)
-            own = os.path.realpath(self._repo_data)
-        except (OSError, ValueError):
+        real = self._fs.realpath(data_dir)
+        cache = self._fs.realpath(self._pack_cache)
+        own = self._fs.realpath(self._repo_data)
+        if real is None or cache is None or own is None:
             return True
         if real == own:
             return True
@@ -422,19 +681,18 @@ class DiscSearch:
         def consider(path: Path, name: str) -> None:
             if name not in wanted or name in self._drain_failed:
                 return
-            if (cache / "data" / name[:2] / name).exists():
+            # Already in the cache.  A copy that cannot be looked at
+            # counts as missing, and is copied again.
+            if self._fs.stat(cache / "data" / name[:2] / name) is not None:
                 return
-            try:
-                st = path.stat()
-            except OSError:
-                return
-            if stat.S_ISREG(st.st_mode):
+            st = self._fs.stat(path)
+            if st is not None and stat.S_ISREG(st.st_mode):
                 found.append((path, name, st.st_size))
 
-        for entry in _listdir(data_dir):
+        for entry in self._fs.listdir(data_dir):
             path = data_dir / entry
-            if len(entry) == 2 and _is_dir(path):
-                for name in _listdir(path):
+            if len(entry) == 2 and self._fs.is_dir(path):
+                for name in self._fs.listdir(path):
                     consider(path / name, name)
             else:
                 consider(path, entry)
@@ -451,31 +709,27 @@ class DiscSearch:
         """
         if self._pack_cache is None or self._is_not_a_disc(data_dir):
             return
-        try:
-            st = os.stat(data_dir)
-            key = (str(data_dir), st.st_dev, st.st_ino, st.st_mtime_ns)
-            if key in self._drain_refused:
-                return
-            todo = self._disc_packs(data_dir)
-        except OSError:
+        st = self._fs.stat(data_dir)
+        if st is None:
             return
+        key = (str(data_dir), st.st_dev, st.st_ino, st.st_mtime_ns)
+        if key in self._drain_refused:
+            return
+        todo = self._disc_packs(data_dir)
         if not todo:
             return
         need = sum(size for _path, _pid, size in todo)
-        name = _disc_name(data_dir.parent)
+        name = self._disc_name(data_dir.parent)
         cache = self._pack_cache
         self._note_big_cache(cache)
-        try:
-            usage = shutil.disk_usage(cache)
-        except OSError:
-            usage = None
-        if usage is not None and not _drain_fits(usage.free, usage.total, need):
+        usage = self._fs.free_bytes(cache)
+        if usage is not None and not _drain_fits(usage[0], usage[1], need):
             self._drain_refused.add(key)
             if "space" not in self._drain_warned:
                 self._drain_warned.add("space")
                 self._log(
                     f"WARNING: the cache at {cache} has "
-                    f"{usage.free // _MIB} MB free, too little to copy "
+                    f"{usage[0] // _MIB} MB free, too little to copy "
                     f"disc {name} ({_mb_ceil(need)} MB) and keep some to "
                     "spare; not copying discs that do not fit, so they "
                     "may be asked for again.  Set LCSAS_PACK_CACHE_DIR "
@@ -498,21 +752,20 @@ class DiscSearch:
                   "From a disc this can take several minutes.")
         for src, pid, _size in todo:
             dst = cache / "data" / pid[:2] / pid
-            try:
-                ok = _copy_pack(src, dst, pid, tick)
-            except OSError as exc:
-                if exc.errno in _CACHE_SIDE_ERRNOS:
-                    # The cache's drive is full or read-only: stop.
-                    self._drain_refused.add(key)
-                    self._log(f"could not copy disc {name} to the cache "
-                              f"({exc}); its packs are read from the disc.")
-                    break
+            outcome, exc = self._fs.copy_checked(src, dst, pid, tick)
+            if outcome == "cache_full":
+                # The cache's drive is full or read-only: stop.
+                self._drain_refused.add(key)
+                self._log(f"could not copy disc {name} to the cache "
+                          f"({exc}); its packs are read from the disc.")
+                break
+            if outcome == "unreadable":
                 # One unreadable pack: copy the rest (tier 1 does).
                 self._drain_failed.add(pid)
                 self._log(f"could not copy pack {pid[:16]}... of disc {name} "
                           f"to the cache ({exc}); it is read from the disc.")
                 continue
-            if not ok:
+            if outcome == "mismatch":
                 self._drain_failed.add(pid)
                 self._log(f"pack {pid[:16]}... on disc {name} does not match "
                           "its id; not copied to the cache.")
@@ -523,12 +776,7 @@ class DiscSearch:
         """Say once when the cache holds more than 1 GiB (tier 1 too)."""
         if "big" in self._drain_warned:
             return
-        used = 0
-        with contextlib.suppress(OSError):
-            for dirpath, _dirs, files in os.walk(cache / "data"):
-                for f in files:
-                    with contextlib.suppress(OSError):
-                        used += os.stat(os.path.join(dirpath, f)).st_size
+        used = self._fs.tree_bytes(cache / "data")
         if used > _DRAIN_BIG_CACHE:
             self._drain_warned.add("big")
             self._log(f"WARNING: pack cache at {cache} is "
@@ -588,58 +836,50 @@ class DiscSearch:
                 root.parent / "catalog.db",
                 root / "recovery" / "catalog.db",
             ):
-                # resolve(strict=False): the file itself need not exist.
-                try:
-                    key = candidate.resolve(strict=False)
-                except OSError:
-                    key = candidate
+                # Links resolved; the file itself need not exist.
+                real = self._fs.realpath(candidate)
+                key = Path(real) if real is not None else candidate
                 if key in seen:
                     continue
                 seen.add(key)
-                if _is_file(candidate):
+                if self._fs.is_file(candidate):
                     found.append(candidate)
         return found
 
     def _keep_catalog_copy(self, path: Path) -> None:
         """Copy a reachable catalog to a private temp folder, once per content.
 
-        The copy outlives the disc it came from (#635).  Errors are
-        swallowed: the prompt must never fail because a copy could not
-        be made.
+        The copy outlives the disc it came from (#635).  A copy
+        that cannot be made is not made: the prompt must never fail
+        because of it.
         """
-        try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            if digest in self._catalog_copies:
-                return
-            if self._catalog_copy_dir is None:
-                self._catalog_copy_dir = Path(
-                    tempfile.mkdtemp(prefix="lcsas-tier3-catalogs-")
-                )
-                atexit.register(
-                    shutil.rmtree, str(self._catalog_copy_dir), True
-                )
-            dst = self._catalog_copy_dir / f"{digest[:16]}.db"
-            shutil.copyfile(path, dst)
-            self._catalog_copies[digest] = dst
-        except OSError:
+        data = self._fs.read_range(path, 0, -1)
+        if isinstance(data, OSError):
             return
+        digest = hashlib.sha256(data).hexdigest()
+        if digest in self._catalog_copies:
+            return
+        if self._catalog_copy_dir is None:
+            self._catalog_copy_dir = self._fs.scratch_dir(
+                "lcsas-tier3-catalogs-"
+            )
+            if self._catalog_copy_dir is None:
+                return
+        dst = self._catalog_copy_dir / f"{digest[:16]}.db"
+        if self._fs.write_file(dst, data):
+            self._catalog_copies[digest] = dst
 
-    @staticmethod
     def _query_catalog(
-        path: Path, pack_id: str,
-    ) -> tuple[list[str], bool, int, str | None]:
-        """(labels, pack known, number of discs listed, newest disc listed).
+        self, path: Path, pack_id: str,
+    ) -> tuple[list[str], bool, int, str | None] | None:
+        """(labels, pack known, number of discs listed, newest disc
+        listed), or None when the catalog cannot be opened or read.
 
-        The one place the catalog is queried.  Raises sqlite3.Error on an
-        unreadable catalog.
+        The one place the catalog is queried.
         """
-        # immutable=1: ISO 9660 is read-only so SQLite must not try to
-        # create WAL/shm sidecar files.  Without this, sqlite3.connect()
-        # with mode=ro raises OperationalError on iso9660 mounts AND
-        # (critically) leaves a kernel reference on the mount point that
-        # makes `umount /media` fail with EBUSY, preventing disc swaps.
-        # Issue #284 root cause 2.
-        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+        conn = self._fs.open_catalog(path)
+        if conn is None:
+            return None
         try:
             # Three-table join: volume_packs.pack_id is the INT FK, not
             # the sha256 hex we have in hand -- so we go through
@@ -660,6 +900,9 @@ class DiscSearch:
                 "SELECT label FROM volumes ORDER BY volume_id DESC LIMIT 1"
             ).fetchone()
             return labels, known, int(n_vols), newest[0] if newest else None
+        except sqlite3.Error:
+            # Corrupt / locked / missing-tables catalog.
+            return None
         finally:
             # Explicit close is required: `with sqlite3.connect() as c:`
             # is a transaction context manager, not a connection closer.
@@ -682,7 +925,7 @@ class DiscSearch:
         """
         primary = self._lookup_catalog_path(pack_id)
         reachable = self._discover_catalogs()
-        if self.catalog_path is not None and _is_file(self.catalog_path):
+        if self.catalog_path is not None and self._fs.is_file(self.catalog_path):
             reachable.insert(0, self.catalog_path)
         for cat in reachable:
             self._keep_catalog_copy(cat)
@@ -693,12 +936,10 @@ class DiscSearch:
         any_ok = primary is not None
         best_n = -1
         for copy in self._catalog_copies.values():
-            try:
-                c_labels, c_known, n_vols, newest = self._query_catalog(
-                    copy, pack_id,
-                )
-            except sqlite3.Error:
+            result = self._query_catalog(copy, pack_id)
+            if result is None:
                 continue
+            c_labels, c_known, n_vols, newest = result
             any_ok = True
             labels.update(c_labels)
             known = known or c_known
@@ -755,11 +996,8 @@ class DiscSearch:
             self._prompt_out(
                 f"[lcsas-restore] auto-discovered catalog at {discovered}\n"
             )
-        try:
-            labels, known, _n, _newest = self._query_catalog(
-                self.catalog_path, pack_id,
-            )
-        except sqlite3.Error:
+        result = self._query_catalog(self.catalog_path, pack_id)
+        if result is None:
             # Corrupt / locked / missing-tables catalog: treat as "no
             # catalog" so the heir at least sees the legacy prompt.
             #
@@ -772,6 +1010,7 @@ class DiscSearch:
             if was_auto_discovered:
                 self.catalog_path = None
             return None
+        labels, known, _n, _newest = result
         if labels:
             return labels, ""
         # Pack ID present in the catalog but no volume mapping?
@@ -806,11 +1045,9 @@ class DiscSearch:
         ]
 
         # The catalog only adds a hint; a disc or folder that cannot be
-        # read must never stop the prompt (rc10 sweep).
-        try:
-            cat_result = self._lookup_volume_labels(pack_id)
-        except OSError:
-            cat_result = None
+        # read must never stop the prompt (rc10 sweep): every probe of it
+        # goes through _DiscFs, which says "not there" instead of raising.
+        cat_result = self._lookup_volume_labels(pack_id)
         if cat_result is None:
             # No --catalog supplied (or catalog unreadable).  Keep the
             # legacy "no catalog available" wording so backwards-compat
@@ -942,16 +1179,28 @@ class DiscSearch:
         prompt as for a pack not found (rc10 sweep, tier1-missing)."""
         while True:
             pack_path = self._find_pack_path(pack_id)
+            data = self._fs.read_range(pack_path, offset, length)
+            if not isinstance(data, OSError):
+                return data
+            if str(pack_path) in self._unreadable:
+                # Not reached: the search never offers a copy set aside.
+                raise data
+            self._unreadable.add(str(pack_path))
+            self._log(f"cannot read {pack_path} ({data.strerror or data}); "
+                      "looking for another copy.")
+
+    def _disc_name(self, root: Path) -> str:
+        """The disc's label from its ``volume_info.json``, else its path."""
+        raw = self._fs.read_range(root / "volume_info.json", 0, 1024 * 1024)
+        if not isinstance(raw, OSError):
             try:
-                with open(pack_path, "rb") as f:
-                    f.seek(offset)
-                    return f.read(length)
-            except OSError as exc:
-                if str(pack_path) in self._unreadable:
-                    raise
-                self._unreadable.add(str(pack_path))
-                self._log(f"cannot read {pack_path} ({exc.strerror or exc}); "
-                          "looking for another copy.")
+                doc = json.loads(raw)
+            except ValueError:
+                doc = None
+            label = doc.get("label") if isinstance(doc, dict) else None
+            if isinstance(label, str) and label.strip():
+                return _visible(label.strip())
+        return str(root)
 
 
 # ── Pack cache helpers (#602) ────────────────────────────────────
@@ -967,77 +1216,3 @@ def _drain_fits(free: int, total: int, need: int) -> bool:
 def _mb_ceil(n: int) -> int:
     """*n* bytes in MiB, rounded up (as tier 1 prints them)."""
     return (n + _MIB - 1) // _MIB
-
-
-def _disc_name(root: Path) -> str:
-    """The disc's label from its ``volume_info.json``, else its path."""
-    try:
-        with open(root / "volume_info.json", "rb") as f:
-            doc = json.loads(f.read(1024 * 1024))
-        label = doc.get("label") if isinstance(doc, dict) else None
-        if isinstance(label, str) and label.strip():
-            return _visible(label.strip())
-    except (OSError, ValueError):
-        pass
-    return str(root)
-
-
-
-def _is_file(path: Path) -> bool:
-    """``path.is_file()`` that says False for a path it may not look at.
-
-    pathlib raises PermissionError (not False) when a folder on the way
-    cannot be entered; a disc search must pass over such a folder.
-    """
-    try:
-        return path.is_file()
-    except OSError:
-        return False
-
-
-def _is_dir(path: Path) -> bool:
-    """``path.is_dir()`` that says False for a path it may not look at."""
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
-
-
-def _listdir(path: Path) -> list[str]:
-    """Sorted names in *path*; empty for a folder it may not list."""
-    try:
-        return sorted(os.listdir(path))
-    except OSError:
-        return []
-
-def _copy_pack(
-    src: Path, dst: Path, pack_id: str, tick: Callable[[int], None],
-) -> bool:
-    """Copy one pack into the cache.  Returns False (and keeps nothing)
-    when the bytes read do not hash to *pack_id*.
-
-    Written to ``<dst>.part`` and renamed once complete, so a scratched
-    disc, a full drive or a killed run never leaves a short pack that
-    the cache would trust from then on.  Raises OSError.
-    """
-    part = dst.with_name(dst.name + ".part")
-    digest = hashlib.sha256()
-    try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        with open(src, "rb") as fin, open(part, "wb") as fout:
-            while True:
-                chunk = fin.read(_MIB)
-                if not chunk:
-                    break
-                digest.update(chunk)
-                fout.write(chunk)
-                tick(len(chunk))
-        if digest.hexdigest() != pack_id:
-            part.unlink(missing_ok=True)
-            return False
-        os.replace(part, dst)
-    except OSError:
-        with contextlib.suppress(OSError):
-            part.unlink(missing_ok=True)
-        raise
-    return True
