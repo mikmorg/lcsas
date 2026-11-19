@@ -768,8 +768,11 @@ reporting (FMA-08).
 
 LCSAS encodes the volume lifecycle as a finite-state machine, enforced
 at the catalog layer.  The full transition table is the private
-`_TRANSITIONS` dict in `src/lcsas/db/lifecycle.py`; callers change a status only by sending
-a `VolumeLifecycle` event (#892):
+`_TRANSITIONS` dict in `src/lcsas/db/lifecycle.py`; callers change a
+status only by sending a `VolumeLifecycle` event
+([ADR 0004](../adr/0004-status-changes-go-through-volume-lifecycle-events.md)).
+`tests/unit/test_lifecycle_docs_table.py` checks this block against
+`_TRANSITIONS`, and the event table below against the event list:
 
 ```text
 STAGING       → BURNING, DEPRECATED, DESTROYED
@@ -790,19 +793,35 @@ passes.  A failed verify returns a never-burned volume to `STAGING`
 the legal statuses (`src/lcsas/db/schema.py`).  The `CONSOLIDATING`
 status was added by the v4→v5 migration in the same module.
 
-**Which commands trigger each transition (for this category):**
+**Which event makes each change.**  Every `VolumeLifecycle` event, the
+commands that send it, and what it does to the volume's status.  What
+each event does from every start state is pinned by
+`tests/unit/test_volume_lifecycle_table.py` (#891).
 
-| From → To                      | Trigger                                            | Source                                          |
-| ------------------------------ | -------------------------------------------------- | ----------------------------------------------- |
-| `STAGING`/`BURNING`/`BURNED → VERIFIED` | `catalog import-receipts` w/ `verify_passed=true` and a hash matching the staged ISO (offline-burn receipt; #669, #670) | `cmd_catalog_import`   |
-| `STAGING`/`BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=null` (`burn-iso --no-verify`) | `cmd_catalog_import`   |
-| `BURNING → STAGING` (or back to `BURNED` when it was `BURNED` before that burn), or stays `STAGING`/`BURNED` | `catalog import-receipts` w/ `verify_passed=false`, volume with no disc (#483, #670, #810) | `cmd_catalog_import`                     |
-| `BURNED → VERIFIED`            | `lcsas verify --mark-verified`                     | `cmd_verify` in `src/lcsas/cli/commands/verify.py`         |
-| `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just after staging succeeds) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
-| `CONSOLIDATING → VERIFIED`     | `lcsas session abort` or `lcsas stage --clean --force` of the consolidation's burn session (#817) | `BurnOrchestrator.clean_session`, `src/lcsas/consolidate/merger.py` |
-| `CONSOLIDATING → DEPRECATED`   | `lcsas consolidate --deprecate` (post-verification) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
-| `VERIFIED → DEPRECATED`        | `lcsas consolidate --deprecate` (no `--execute` first) | Same as above (also legal per `_TRANSITIONS`). |
-| `DEPRECATED → DESTROYED`       | No first-class CLI command yet — see *Gaps*       | `_TRANSITIONS` in `src/lcsas/db/lifecycle.py` |
+| Event (`VolumeLifecycle.`)    | Sent by                                            | Status change                                   |
+| ----------------------------- | -------------------------------------------------- | ----------------------------------------------- |
+| `stage_failed`                | `lcsas stage`, when mastering, ECC or re-mastering a volume fails | the volume is deleted (nothing checked: the stage made it) |
+| `burn_started`                | `lcsas burn --session`                             | `STAGING → BURNING`, committed; a `VERIFIED`, lost or `BURNED` volume keeps its status (#726, #810) |
+| `burn_succeeded`              | `lcsas burn`, the disc reads back right            | `BURNING`/`BURNED → VERIFIED`, disc recorded; a re-burn keeps its status (a lost volume comes back through `disc_back_in_service`) |
+| `burn_failed`                 | `lcsas burn`, the read-back fails                  | `BURNING → STAGING` (#483); a re-burn keeps its status and gets `VERIFY_FAIL_REBURN`; `BURNED` stays |
+| `burn_stopped`                | `lcsas burn`, stopped by an error or Ctrl-C        | `BURNING → STAGING` (#668)                      |
+| `burn_interrupted_recovered`  | the next `lcsas burn` after a burn was killed      | `BURNING → STAGING`, or `→ BURNED` when it was `BURNED` before that burn (#810) |
+| `verified_by_hand`            | `lcsas verify --mark-verified`                     | `STAGING`/`BURNED → VERIFIED` (a `STAGING` one through `BURNING`) |
+| `iso_check_passed`            | `lcsas verify <label>`, `lcsas verify --all`       | `BURNED → VERIFIED`                             |
+| `disc_check_passed`           | `lcsas verify --disc`, `lcsas verify --all --disc` | `BURNED → VERIFIED`; `STAGING`/`BURNING → VERIFIED` when the check recorded the disc (#678) |
+| `passing_receipt_imported`    | `catalog import-receipts`, `verify_passed=true` (#669, #670) | first disc: `STAGING`/`BURNING`/`BURNED → VERIFIED`; disc recorded |
+| `unverified_receipt_imported` | `catalog import-receipts`, `verify_passed=null` (`burn-iso --no-verify`) | `STAGING`/`BURNING → BURNED`; disc recorded |
+| `failing_receipt_imported`    | `catalog import-receipts`, `verify_passed=false`   | first disc: `BURNING →` the status before its burn (#483, #810); no disc recorded |
+| `last_disc_lost`              | `lcsas copy deprecate`/`destroy [--lost]` of the last in-service disc | `→ DEPRECATED` plus an `auto-deprecated:` note, outside the graph (ADR 0003) |
+| `disc_back_in_service`        | a disc of a lost volume recorded or read again     | `DEPRECATED → VERIFIED`/`BURNED`, outside the graph (#726, #752) |
+| `consolidation_started`       | `lcsas consolidate --execute`, just after staging succeeds | `VERIFIED → CONSOLIDATING`               |
+| `consolidation_finished`      | `lcsas consolidate --deprecate`                    | `VERIFIED`/`CONSOLIDATING → DEPRECATED` (the graph also allows `STAGING`, #905) |
+| `consolidation_abandoned`     | `lcsas session abort` or `stage --clean --force` of the consolidation's burn session (#817); `VolumeMerger.abort_consolidation` (no command, #907) | `CONSOLIDATING → VERIFIED` |
+| `never_burned_deleted`        | `lcsas session abort [--volume]`, `stage --clean --force`, `catalog reconcile --fix` | the volume is deleted when `may_delete` allows it |
+| `disc_catalog_status_adopted` | `lcsas catalog rebuild`                            | the freshest disc catalog's status (FMA-06), outside the graph, no note |
+| `own_disc_read_in_rebuild`    | `lcsas catalog rebuild`, reading the volume's own disc | `STAGING`/`BURNING → BURNED` (#678), no note |
+
+No event writes the volume-wide `DESTROYED` status (#907); see *Gaps*.
 
 The lifecycle's private `_update_status` (`src/lcsas/db/lifecycle.py`) enforces the
 table and, on the `* → DEPRECATED` edge, additionally runs
