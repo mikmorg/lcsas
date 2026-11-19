@@ -644,7 +644,7 @@ scrypt, zstd) that also rides on **every data disc**, so any single disc is
 restorable with nothing but a Python 3.10+ interpreter.
 
 **Vendoring vs runtime dependency:** sqlite + zstd ship as audited C source
-in `recovery/vendored/` (pinned in `recovery/MANIFEST.sha256`) and we
+in `recovery/vendored/` (pinned in `recovery/VENDORED.sha256`) and we
 compile them ourselves — that is source we own, not an opaque runtime
 dependency. Rustic and CPython (tiers 2/3) *are* runtime dependencies: we
 ship pinned prebuilt artifacts (`recovery/UPSTREAM.sha256`).

@@ -1,0 +1,9 @@
+526b52a9fffdd637c37d90bd1b68886af7e2a41a9e4215c5dbde134c010d7e04  ./vendored/sqlite/README.txt
+a19d72cfdec88839d8bf3afe6d18c097064babce67727bb55b5879ed9ddfbfad  ./vendored/sqlite/SHA256.txt
+c01235302fe80da901fb70c7622c39147e29d9f29b7f6eb746b23517f320c90d  ./vendored/sqlite/sqlite3.c
+d088aa96aa70db50f02acc5c86eca61a5d17556e4c363b9c06079239bf7f87b1  ./vendored/sqlite/sqlite3.h
+7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8  ./vendored/zstd/LICENSE
+afc7bc993a9c105034366f37d6cd5dc1bf5b7a0288ee0daf7bdfa25922c6f15e  ./vendored/zstd/README.txt
+5e0e4dd2643905010e8a227b0a8e4f031e982a9cb759ffddc7957a463000e11a  ./vendored/zstd/SHA256.txt
+4fab9cf39160cd15fbd9fbc2fd637ee300002fa70e307f85e8a7e45c1e057906  ./vendored/zstd/zstd.h
+85864a70ce85b8c1697d7f5fe9b54dea031212a9b5cf8ea23c16abd28fb92007  ./vendored/zstd/zstddeclib.c
