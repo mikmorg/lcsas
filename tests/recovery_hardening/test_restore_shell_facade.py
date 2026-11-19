@@ -478,3 +478,161 @@ def test_swap_loop_needs_a_data_disc(swap_env: dict[str, str], tmp_path: Path) -
     assert rc.returncode == 2
     assert "no data disc" in rc.stderr
     assert _actions(swap_env) == []
+
+
+# --- #917: swap-loop inserts the disc the box names ---------------------------
+#
+# A fake restore that prints tier 1's box (disc_locator.c::print_prompt)
+# for each pack of a spec.  It finds the pack only once the disc that holds
+# it is the one last inserted (read from the stub disc-loader's log).  A
+# wrong disc gets "(still not found ...)" and the same box again, as tier 1
+# does.  Spec lines: PACK HOLDER NAMED...  NAMED is the box's "It is on any
+# disc labelled:" list, "-" for a box that lists none, or "newer:LABEL" for
+# tier 3's "It is on a disc newer than: LABEL".
+
+_FAKE_TIER1 = r'''
+log=$1; spec=$2
+frame() { printf '|   %-54s |\n' "$1"; }
+box() {
+    echo
+    echo "+----------------------------------------------------------+"
+    printf '| Pack %.16s... is required for the next file.  |\n' "$1"
+    case "$2" in
+        -) echo "| (catalog has the pack, but lists no disc for it)         |" ;;
+        newer:*)
+            echo "| (catalog has the pack, but lists no disc for it)         |"
+            echo "| It is on a disc newer than:                              |"
+            frame "${2#newer:}"
+            echo "| Insert your newest data disc: its catalog names it.      |" ;;
+        *)
+            echo "| It is on any disc labelled:                              |"
+            for d in $2; do frame "$d"; done ;;
+    esac
+    echo "|                                                          |"
+    echo "| Currently searching:                                     |"
+    frame /media
+    frame LCSAS_D3
+    frame /media/lcsas-blind/LCSAS_D3
+    echo "|                                                          |"
+    echo "| Insert the right disc and press ENTER to retry.          |"
+    echo "| Type 'q' then ENTER to abort.                            |"
+    echo "| (A disc that mounts by itself is found without ENTER.)   |"
+    echo "+----------------------------------------------------------+"
+    printf '> '
+}
+exec 3< "$spec"
+while read -r pack holder named <&3; do
+    tries=0
+    box "$pack" "$named"
+    while :; do
+        read -r _
+        cur=$(grep 'disc-loader insert' "$log" 2>/dev/null | tail -n 1 | cut -d' ' -f3)
+        [ "$cur" = "$holder" ] && break
+        tries=$((tries + 1))
+        [ "$tries" -lt 12 ] || { echo "fatal: never found"; exit 3; }
+        echo "(still not found -- check the disc label and try again)"
+        box "$pack" "$named"
+    done
+    echo "[lcsas-restore] found $pack...; continuing."
+done
+echo "[lcsas-restore] restore complete"
+printf 'Restore another backup set from these discs? [y/N] '
+read -r a
+echo "answer=$a"
+'''
+
+
+def _start_fake_tier1(
+    env: dict[str, str], tmp_path: Path, spec: list[str],
+) -> None:
+    script = tmp_path / "fake_tier1.sh"
+    script.write_text(_FAKE_TIER1)
+    spec_file = tmp_path / "spec.txt"
+    spec_file.write_text("".join(f"{line}\n" for line in spec))
+    _start(env, "sh", str(script), env["SWAP_LOG"], str(spec_file))
+
+
+def _inserts(env: dict[str, str]) -> list[str]:
+    return [a.split()[2] for a in _actions(env)
+            if a.startswith("disc-loader insert")]
+
+
+def test_swap_loop_inserts_the_one_disc_the_box_names(
+    swap_env: dict[str, str], tmp_path: Path,
+) -> None:
+    """The box names one disc: that disc goes in, not the first in label
+    order.  LCSAS_D3 in the "Currently searching:" paths is not named."""
+    _start_fake_tier1(swap_env, tmp_path, [
+        "aaaaaaaaaaaaaaaa11 LCSAS_D2 LCSAS_D2",
+    ])
+    done = _swap_loop_within(swap_env, 60)
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert _inserts(swap_env) == ["LCSAS_D2"]
+    assert "LCSAS_D2 at /media (the disc the box names)" in done.stdout
+    _wait_on_screen(swap_env, "answer=n")
+
+
+def test_swap_loop_tries_the_next_named_disc_when_the_box_comes_back(
+    swap_env: dict[str, str], tmp_path: Path,
+) -> None:
+    """Two discs named, and the first does not hold the pack: the same box
+    comes back, and the second named disc goes in, not one in label order."""
+    _start_fake_tier1(swap_env, tmp_path, [
+        "bbbbbbbbbbbbbbbb22 LCSAS_D3 LCSAS_D2 LCSAS_D3",
+    ])
+    done = _swap_loop_within(swap_env, 60)
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert _inserts(swap_env) == ["LCSAS_D2", "LCSAS_D3"]
+
+
+@pytest.mark.parametrize("named", ["-", "newer:LCSAS_D3"])
+def test_swap_loop_falls_back_to_label_order_when_the_box_names_none(
+    swap_env: dict[str, str], tmp_path: Path, named: str,
+) -> None:
+    """No disc named, or only tier 3's "newer than" disc, which is not the
+    disc wanted: label order, skipping the discs already tried."""
+    _start_fake_tier1(swap_env, tmp_path, [
+        f"cccccccccccccccc33 LCSAS_D2 {named}",
+    ])
+    done = _swap_loop_within(swap_env, 60)
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert _inserts(swap_env) == ["LCSAS_D1", "LCSAS_D2"]
+    assert "(label order: the box names no disc left to try)" in done.stdout
+
+
+def test_swap_loop_reads_a_waiting_box_from_the_screen(
+    swap_env: dict[str, str], tmp_path: Path,
+) -> None:
+    """The agent's own expect returned the box: swap-loop reads the disc
+    it names off the screen."""
+    _start_fake_tier1(swap_env, tmp_path, [
+        "dddddddddddddddd44 LCSAS_D3 LCSAS_D3",
+    ])
+    seen = _rs(swap_env, "expect", "Insert the right disc", "30")
+    assert seen.returncode == 0, f"{seen.stdout}\n{seen.stderr}"
+    time.sleep(0.3)  # the "> " after the box
+    done = _swap_loop_within(swap_env, 60)
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert "a disc box is waiting on the screen" in done.stdout
+    assert _inserts(swap_env) == ["LCSAS_D3"]
+
+
+def test_swap_loop_inserts_exactly_the_discs_asked_for(
+    swap_env: dict[str, str], tmp_path: Path,
+) -> None:
+    """The order of the 2026-11-19 red runs: 0001, 0005, 0004, 0003, 0002
+    of eight data discs.  Those five go in, in that order, and nothing
+    else (the thrash check allows 6)."""
+    labels = tmp_path / "eight.txt"
+    eight = [f"LCSAS_TEST_TINY_2026_{n:04d}" for n in range(1, 9)]
+    labels.write_text("LCSAS_META\n" + "".join(f"{d}\n" for d in eight))
+    env = {**swap_env, "RESTORE_SHELL_DISC_LABELS": str(labels)}
+    order = [1, 5, 4, 3, 2]
+    _start_fake_tier1(env, tmp_path, [
+        f"{n:02d}{'e' * 14}{n:02d} {eight[n - 1]} {eight[n - 1]}"
+        for n in order
+    ])
+    done = _swap_loop_within(env, 90)
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert _inserts(env) == [eight[n - 1] for n in order]
+    _wait_on_screen(env, "answer=n")
