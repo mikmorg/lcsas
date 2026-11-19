@@ -25,7 +25,6 @@ Runs by default; skips when rustic or the lcsas-restore binary is absent
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import socket
@@ -40,6 +39,8 @@ from tests.recovery_hardening._diff_helpers import (
     build_rustic_repo,
     find_restore_bin,
     find_restored_root,
+    latest_snapshot_id,
+    rustic_backup,
 )
 
 pytestmark = [
@@ -181,27 +182,6 @@ def test_links_and_specials_restore_alike(tmp_path: Path) -> None:
         assert not (out / FAILURES).exists()
 
 
-def _latest_id(repo: Path, pwfile: Path) -> str:
-    """The id of the newest snapshot in *repo*."""
-    res = subprocess.run(
-        ["rustic", "-r", str(repo), "snapshots", "--json",
-         "--password-file", str(pwfile)],
-        capture_output=True, text=True, check=True, timeout=60,
-    )
-    snaps = [s for group in json.loads(res.stdout) for s in group["snapshots"]]
-    return str(max(snaps, key=lambda s: s["time"])["id"])
-
-
-def _backup(src: Path, repo: Path, pwfile: Path) -> str:
-    """Another `rustic backup` of *src*; returns the new snapshot id."""
-    subprocess.run(
-        ["rustic", "-r", str(repo), "backup", str(src),
-         "--password-file", str(pwfile)],
-        capture_output=True, check=True, timeout=120,
-    )
-    return _latest_id(repo, pwfile)
-
-
 def test_restore_over_earlier_restore_writes_nothing_outside(
     tmp_path: Path,
 ) -> None:
@@ -228,7 +208,7 @@ def test_restore_over_earlier_restore_writes_nothing_outside(
     pwfile = tmp_path / "pw"
     pwfile.write_text(PASSWORD + "\n")
     build_rustic_repo(src, repo, pwfile)
-    snap_a = _latest_id(repo, pwfile)
+    snap_a = latest_snapshot_id(repo, pwfile)
 
     (src / "d" / "x").unlink()
     (src / "d" / "x").write_text("B\n")
@@ -239,7 +219,7 @@ def test_restore_over_earlier_restore_writes_nothing_outside(
     os.symlink("d/x", src / "l")
     (src / "q").unlink()
     (src / "q").write_text("q\n")
-    snap_b = _backup(src, repo, pwfile)
+    snap_b = rustic_backup(src, repo, pwfile)
 
     for tier in ("tier1", "tier3"):
         target = tmp_path / f"{tier}_out"
