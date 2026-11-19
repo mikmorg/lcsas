@@ -919,10 +919,12 @@ def test_fixture_verbose_pack_cache_logs(tmp_path: Path) -> None:
     assert "opportunistic pack cache" in res.stderr, res.stderr
 
 
-def test_fixture_broken_snapshot_target_restore_fails(tmp_path: Path) -> None:
-    """--snapshot <broken-tree-snapshot> --target ... exercises main.c
-    lines 494-495 (ERROR: tree restore failed + goto out) — the main
-    path's response when lcsas_tree_restore returns -1."""
+def test_fixture_broken_snapshot_lists_and_exits_4(tmp_path: Path) -> None:
+    """--snapshot <broken-tree-snapshot>: its one file names a blob the
+    index does not hold.  #909: the file is listed in
+    RESTORE_FAILURES.txt (the reason tier 3 gives too), nothing is left
+    at its path, and the restore finishes with exit 4 (it stopped with
+    exit 1 before)."""
     repo = _fixture_repo()
     if repo is None:
         pytest.skip("fixture repo not generated; run gen_fixture.py")
@@ -942,8 +944,44 @@ def test_fixture_broken_snapshot_target_restore_fails(tmp_path: Path) -> None:
         "--snapshot", broken_snap,
         timeout=10,
     )
-    assert res.returncode != 0
+    err = res.stdout + res.stderr
+    assert res.returncode == 4, err
+    assert "finished with errors" in err, err
+    assert "tree restore failed" not in err, err
+    rows = (target / "RESTORE_FAILURES.txt").read_text()
+    assert (f"{target}/missing_content.txt\tblob not in index: {'f' * 64}\t"
+            in rows), rows
+    assert not (target / "missing_content.txt").exists()
+    assert not (target / "missing_content.txt.lcsas-partial").exists()
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                    reason="needs a non-root POSIX user (DAC)")
+def test_fixture_unwritable_target_restore_fails(tmp_path: Path) -> None:
+    """A target folder this user cannot write to: the first file cannot
+    be created, which stops the walk (#909 lists only data that cannot
+    be read), so main.c prints "ERROR: tree restore failed" and exits 1
+    -- the main path's response when lcsas_tree_restore returns -1."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    target = tmp_path / "restored"
+    target.mkdir()
+    target.chmod(0o555)
+    try:
+        res = _run(
+            bin_path,
+            "--repo", str(repo),
+            "--password-file", str(pwfile),
+            "--target", str(target),
+            timeout=10,
+        )
+    finally:
+        target.chmod(0o755)
     err = (res.stdout + res.stderr).lower()
+    assert res.returncode == 1, err
     assert "tree restore failed" in err, err
 
 

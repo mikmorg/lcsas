@@ -101,8 +101,8 @@
 
 /* Distinct exit status for "the restore finished, but some items could
  * not be restored" (#872): each is named in a NOT RESTORED line and
- * listed in RESTORE_FAILURES.txt.  Exit 1 stays "failed" (a damaged
- * disc, a missing pack: run again to carry on).  restore.sh and
+ * listed in RESTORE_FAILURES.txt (#909: a missing or damaged pack too).
+ * Exit 1 stays "failed" (the walk stopped early: run again).  restore.sh and
  * restore.bat use 4 for this outcome too, so they pass it on. */
 #define EXIT_NOT_ALL_RESTORED 4
 

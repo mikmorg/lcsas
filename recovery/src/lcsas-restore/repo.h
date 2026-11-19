@@ -162,8 +162,32 @@ int lcsas_snapshot_time_cmp(const char *a, const char *b);
 long lcsas_snapshot_find(const lcsas_snapshot_list *l, const char *id);
 
 /*
+ * Issue #909 -- why lcsas_repo_read_blob could not read a blob, for the
+ * per-item row in RESTORE_FAILURES.txt (tier 3 gives the same reasons).
+ * The restore lists the item and goes on.  Any other failure (out of
+ * memory, a blob larger than tier 1 can hold) is -1: the restore
+ * stops.  All are negative, so a caller that tests `!= 0` still sees a
+ * failure.
+ *
+ *   LCSAS_REPO_ERR_NOT_FOUND    no copy of the pack was found.  Also
+ *                               after 'q' (or the end of input) at the
+ *                               disc prompt: the locator's reader_quit
+ *                               is then set, and the caller stops the
+ *                               restore (exit 75) instead.
+ *   LCSAS_REPO_ERR_DAMAGED      the pack is shorter than the index says,
+ *                               the MAC fails, the zstd frame is bad or
+ *                               the content hash is wrong
+ *   LCSAS_REPO_ERR_UNREADABLE   a copy was found but could not be opened
+ *                               or read (EIO, EACCES, a drive that went)
+ */
+#define LCSAS_REPO_ERR_NOT_FOUND   (-3)
+#define LCSAS_REPO_ERR_DAMAGED     (-4)
+#define LCSAS_REPO_ERR_UNREADABLE  (-5)
+
+/*
  * Read, decrypt, and authenticate a blob.  Returns malloc'd buffer in *out
- * (caller frees) and length in *out_len.  Returns 0 on success.
+ * (caller frees) and length in *out_len.  Returns 0 on success, one of
+ * the LCSAS_REPO_ERR_* codes above, or -1.
  *
  * `repo_path` is searched first (back-compat single-disc behaviour).
  * Then if `extra_locator` is non-NULL, it provides additional pack

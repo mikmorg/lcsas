@@ -23,6 +23,7 @@
 #include "json_q.h"
 #include "lcsas_io.h"
 #include "hex.h"
+#include "disc_locator.h"
 #include "posix_compat.h"
 
 #include <errno.h>
@@ -110,9 +111,10 @@ typedef struct {
  * format and reasons as tier 3).  There are three kinds:
  *
  *   NR_FAILED   an error (a refused name, a link target that cannot be
- *               used, an unknown item type, a folder in the way).  The
- *               walk carries on, and the restore ends "finished with
- *               errors" (LCSAS_TREE_INCOMPLETE, exit 1).
+ *               used, an unknown item type, a folder in the way, data
+ *               that cannot be read, #909).  The walk carries on, and
+ *               the restore ends "finished with errors"
+ *               (LCSAS_TREE_INCOMPLETE, exit 4).
  *   NR_SPECIAL  a pipe, socket or device this system would not create
  *               (a device needs root; Windows has none of them).  It
  *               holds no data: listed, exit code unaffected.
@@ -192,22 +194,26 @@ visible_text(char *out, const char *s, size_t n)
 }
 
 /* "<dir>/<name>\t<reason>\t" with each part made visible; malloc'd,
- * or NULL when out of memory.  *path_len gets the length of the path
+ * or NULL when out of memory.  A NULL `name` makes `dir` the whole
+ * path (#909: a folder whose listing cannot be read, the restore
+ * target itself included).  *path_len gets the length of the path
  * part. */
 static char *
 nr_row(const char *dir, const char *name, size_t name_len,
        const char *reason, size_t *path_len)
 {
     size_t dl = strlen(dir), rl = strlen(reason);
-    size_t pn = visible_text(NULL, dir, dl) + 1
-                + visible_text(NULL, name, name_len);
+    size_t pn = visible_text(NULL, dir, dl)
+                + (name ? 1 + visible_text(NULL, name, name_len) : 0);
     size_t total = pn + 1 + visible_text(NULL, reason, rl) + 1;
     char *row = (char *)malloc(total + 1);
     size_t o = 0;
     if (!row) return NULL;
     o += visible_text(row + o, dir, dl);
-    row[o++] = '/';
-    o += visible_text(row + o, name, name_len);
+    if (name) {
+        row[o++] = '/';
+        o += visible_text(row + o, name, name_len);
+    }
     row[o++] = '\t';
     o += visible_text(row + o, reason, rl);
     row[o++] = '\t';
@@ -734,6 +740,70 @@ lcsas_progress_finish(const lcsas_progress *p)
     emit_progress_line(p);
 }
 
+/* Issue #909 -- a file or folder whose data could not be read is listed
+ * (NOT RESTORED line, RESTORE_FAILURES.txt row) and the walk goes on;
+ * the restore then ends LCSAS_TREE_INCOMPLETE (exit 4), as tier 3's.
+ * restore_file_node returns this once it has listed the file. */
+#define TREE_ITEM_LISTED 3
+
+/* Issue #909 -- the RESTORE_FAILURES.txt reason for a blob that
+ * lcsas_repo_read_blob could not read (its return code `code`), naming
+ * the pack; tier 3 writes the same text.  Returns 0 with the reason in
+ * `reason` (96 bytes), or -1 when the restore must stop instead: 'q'
+ * (or the end of input) at the disc prompt (exit 75), checked first,
+ * or a failure that is not about this item (out of memory). */
+static int
+read_fail_reason(int code, const unsigned char pack_id[LCSAS_BLOB_ID_LEN],
+                 const struct lcsas_disc_locator *locator, char *reason)
+{
+    const char *what;
+    char hex[LCSAS_HEX_BLOB_ID_LEN + 1];
+    if (locator && locator->reader_quit) return -1;
+    if (code == LCSAS_REPO_ERR_NOT_FOUND) what = "pack not found";
+    else if (code == LCSAS_REPO_ERR_DAMAGED) what = "pack damaged";
+    else if (code == LCSAS_REPO_ERR_UNREADABLE) what = "pack unreadable";
+    else return -1;
+    lcsas_hex_encode(pack_id, LCSAS_BLOB_ID_LEN, hex);
+    hex[LCSAS_HEX_BLOB_ID_LEN] = '\0';
+    sprintf(reason, "%s: %s", what, hex);
+    return 0;
+}
+
+/* Issue #909 -- "blob not in index: <id>", the id as stored (at most
+ * 64 characters of it; the row makes it visible). */
+static void
+not_in_index_reason(const char *id, size_t len, char *reason)
+{
+    if (len > LCSAS_HEX_BLOB_ID_LEN) len = LCSAS_HEX_BLOB_ID_LEN;
+    sprintf(reason, "blob not in index: %.*s", (int)len, id);
+}
+
+/* Issue #784 -- what the snapshot has at a path, for make_way(). */
+#define WANT_DIR   0
+#define WANT_FILE  1
+#define WANT_OTHER 2   /* a symlink or a special file */
+
+static const char *make_way(const char *path, int want);
+
+/* Issue #909 -- the name a file is written under until it is complete
+ * (tier 3 uses the same one). */
+#define PARTIAL_SUFFIX ".lcsas-partial"
+
+/* Issue #909 -- the partial file's path (the caller keeps a file's path
+ * under 4096 bytes) and a NOT RESTORED reason: one buffer each for the
+ * whole walk, as g_link_target, not on the stack.  restore_file_node
+ * may be inlined into the recursive walk, whose per-frame stack the
+ * depth cap is sized for (T1C-04); each is used before any recursion. */
+static char g_partial[4096 + sizeof PARTIAL_SUFFIX];
+static char g_reason[96];
+
+/* Restore one file node to `target_path`.  The content is written to
+ * "<target_path>.lcsas-partial", which gets the node's owner, mode,
+ * xattrs and times and is then moved onto `target_path` (#909): a file
+ * an earlier restore left there is replaced only by a complete file,
+ * and kept as it was when this one fails.  Returns 0; TREE_ITEM_LISTED
+ * when the file's data could not be read (it is listed, nothing is left
+ * at either path); LCSAS_TREE_DISK_FULL; or -1 (the walk stops). */
 static int
 restore_file_node(const char *repo_path,
                   const lcsas_master_key *mk,
@@ -745,7 +815,8 @@ restore_file_node(const char *repo_path,
                   const char *target_path,
                   struct lcsas_disc_locator *locator,
                   lcsas_progress *progress,
-                  hardlink_map *hlmap)
+                  hardlink_map *hlmap,
+                  nr_report *rep)
 {
     long content_idx = lcsas_json_obj_get(src, toks, node_idx, "content");
     int fd;
@@ -754,6 +825,15 @@ restore_file_node(const char *repo_path,
     long found = 0;
     int rc = 0;
     unsigned int final_posix_mode = 0644;
+    char *partial = g_partial;
+    char *reason = g_reason;
+    const char *why;
+    /* #909: a hardlink key is recorded only once its file is complete,
+     * so a later name never links to a file that failed. */
+    int hl_record = 0;
+    long long hl_dev = 0, hl_ino = 0;
+
+    sprintf(partial, "%s" PARTIAL_SUFFIX, target_path);
 
     /* Issue #92 — idempotent resume: skip files that are already fully
      * restored.  We compare the on-disk file size against the "size"
@@ -809,9 +889,15 @@ restore_file_node(const char *repo_path,
 #endif
                 }
                 if (same) {
+                    int pk = lcsas_entry_kind(partial);
                     fprintf(stderr,
                             "[lcsas-restore] skipping already-restored: %s\n",
                             target_path);
+                    /* #909: a partial file a later, stopped run left
+                     * is not needed (tier 3 removes it too). */
+                    if (pk == LCSAS_ENTRY_FILE || pk == LCSAS_ENTRY_LINK) {
+                        (void)unlink(partial);
+                    }
 #ifndef _WIN32
                     if (hlmap) {
                         long long dev = 0, ino = 0;
@@ -867,15 +953,18 @@ restore_file_node(const char *repo_path,
                 /* link() failed (cross-device? EXDEV on weird
                  * filesystems?) — fall through to normal restore. */
             } else {
-                /* First occurrence: record path so subsequent nodes
-                 * with the same inode become link()s. */
-                (void)hardlink_map_insert(hlmap, device, inode,
-                                          target_path);
+                /* First occurrence: record the path once the file is
+                 * complete (below), so subsequent nodes with the same
+                 * inode become link()s. */
+                hl_record = 1;
+                hl_dev = device;
+                hl_ino = inode;
             }
         }
     }
 #else
     (void)hlmap;
+    (void)hl_record; (void)hl_dev; (void)hl_ino;
 #endif
 
     /* Pull the "mode" field from the tree node (restic stores it as
@@ -890,9 +979,24 @@ restore_file_node(const char *repo_path,
      * overwriting a setuid binary).  Setting the bits via fchmod
      * inside lcsas_create_file gets clobbered by the content loop.
      * Setting them ONE LAST TIME after the loop sticks. */
+    /* #909, #784: never write through what is at the partial file's
+     * path: a link or an old partial file is removed, a folder stops
+     * the restore. */
+    why = make_way(partial, WANT_FILE);
+    if (why) {
+        fprintf(stderr, "ERROR: %s: %s\n", partial, why);
+        errno = 0;
+        return -1;
+    }
     {
         final_posix_mode = node_posix_mode(src, toks, node_idx, 0644);
-        fd = lcsas_create_file(target_path, final_posix_mode);
+#ifdef _WIN32
+        /* Writable while it is written, so a failed one can be removed;
+         * lcsas_replace_file makes it read-only when the mode says so. */
+        fd = lcsas_create_file(partial, final_posix_mode | 0200);
+#else
+        fd = lcsas_create_file(partial, final_posix_mode);
+#endif
         /* #654: errno now describes only what fails from here on (the
          * resume stat and the hardlink unlink above leave ENOENT). */
         if (fd >= 0) errno = 0;
@@ -932,19 +1036,29 @@ restore_file_node(const char *repo_path,
 
             found++;
 
-            if (toks[t].size != 64) { rc = -1; break; }
-            if (lcsas_hex_decode(src + toks[t].start, 32, id) != 0) {
-                rc = -1; break;
+            /* #909: an id that is not 64 hex digits is not in the
+             * index either (tier 3 lists it the same way). */
+            loc = NULL;
+            if (toks[t].size == 64
+                    && lcsas_hex_decode(src + toks[t].start, 32, id) == 0) {
+                loc = lcsas_blob_index_find(ix, id);
             }
-            loc = lcsas_blob_index_find(ix, id);
             if (!loc) {
-                fprintf(stderr, "blob not in index: %.64s\n",
+                fprintf(stderr, "blob not in index: %.*s\n",
+                        (int)(toks[t].size < 64 ? toks[t].size : 64),
                         src + toks[t].start);
-                rc = -1; break;
+                not_in_index_reason(src + toks[t].start,
+                                    (size_t)toks[t].size, reason);
+                rc = TREE_ITEM_LISTED; break;
             }
-            if (lcsas_repo_read_blob(repo_path, mk, loc, locator,
-                                     &blob, &blob_len) != 0) {
-                rc = -1; break;
+            {
+                int brc = lcsas_repo_read_blob(repo_path, mk, loc, locator,
+                                               &blob, &blob_len);
+                if (brc != 0) {
+                    rc = read_fail_reason(brc, loc->pack_id, locator, reason)
+                         == 0 ? TREE_ITEM_LISTED : -1;
+                    break;
+                }
             }
             {
 #ifndef _WIN32
@@ -1024,29 +1138,51 @@ restore_file_node(const char *repo_path,
      * order).  A change of owner clears setuid/setgid on Linux, so the
      * owner goes first and the mode after it; the times go last.
      *
-     * Issue #188 — futimens() sets the times through the open fd. */
+     * Issue #188 — futimens() sets the times through the open fd.
+     *
+     * Issue #909 — all of it on the partial file; a rename keeps it. */
     if (rc == 0) {
         struct timespec ts[2];
-        apply_node_ownership(src, toks, node_idx, target_path);
+        apply_node_ownership(src, toks, node_idx, partial);
         {
             int chmod_rc = fchmod(fd, (mode_t)final_posix_mode);
             (void)chmod_rc;
         }
-        apply_node_xattrs(src, toks, ntoks, node_idx, target_path);
+        apply_node_xattrs(src, toks, ntoks, node_idx, partial);
         if (decode_node_mtime(src, toks, node_idx, ts) == 0) {
             (void)futimens(fd, ts);
         }
     }
 #endif
 
+    /* Windows will not rename or remove an open file: close first. */
     close(fd);
+    if (rc == 0) {
+        if (lcsas_replace_file(partial, target_path, final_posix_mode) != 0) {
+            int saved_errno = errno;
+            (void)unlink(partial);
+            errno = saved_errno;
+            return -1;
+        }
+#ifndef _WIN32
+        if (hl_record) {
+            (void)hardlink_map_insert(hlmap, hl_dev, hl_ino, target_path);
+        }
+#endif
+        return 0;
+    }
+    /* #909: nothing is left at either path; an older copy at
+     * target_path is kept as it was.  A full disk gets its space back. */
+    {
+        int saved_errno = errno;
+        (void)unlink(partial);
+        errno = saved_errno;
+    }
+    if (rc == TREE_ITEM_LISTED) {
+        nr_report_item(rep, NR_FAILED, target_path, NULL, 0, reason);
+    }
     return rc;
 }
-
-/* Issue #784 -- what the snapshot has at a path, for make_way(). */
-#define WANT_DIR   0
-#define WANT_FILE  1
-#define WANT_OTHER 2   /* a symlink or a special file */
 
 /* Issue #784 -- make room at `path` (a path below the restore target)
  * for the item the snapshot has there, when the target folder already
@@ -1238,15 +1374,29 @@ tree_restore_recurse(const char *repo_path,
         return -1;
     }
 
-    if (lcsas_hex_decode(tree_id_hex, 32, tree_id) != 0) return -1;
-    loc = lcsas_blob_index_find(ix, tree_id);
+    /* Issue #909 -- a folder whose listing (tree blob) cannot be read is
+     * listed, left empty, and the walk goes on, as in tier 3: the row
+     * is the folder itself (the restore target, for the root tree). */
+    loc = NULL;
+    if (lcsas_hex_decode(tree_id_hex, 32, tree_id) == 0) {
+        loc = lcsas_blob_index_find(ix, tree_id);
+    }
     if (!loc) {
         fprintf(stderr, "tree blob not found: %s\n", tree_id_hex);
-        return -1;
+        not_in_index_reason(tree_id_hex, strlen(tree_id_hex), g_reason);
+        nr_report_item(rep, NR_FAILED, target_dir, NULL, 0, g_reason);
+        return 0;
     }
-    if (lcsas_repo_read_blob(repo_path, mk, loc, locator,
-                             &blob, &blob_len) != 0) {
-        return -1;
+    {
+        int brc = lcsas_repo_read_blob(repo_path, mk, loc, locator,
+                                       &blob, &blob_len);
+        if (brc != 0) {
+            if (read_fail_reason(brc, loc->pack_id, locator, g_reason) != 0) {
+                return -1;
+            }
+            nr_report_item(rep, NR_FAILED, target_dir, NULL, 0, g_reason);
+            return 0;
+        }
     }
 
     /* Trees can be large; grow the token buffer on demand (T1C-01).
@@ -1367,7 +1517,9 @@ tree_restore_recurse(const char *repo_path,
                 frc = restore_file_node(repo_path, mk, ix,
                                         (char *)blob, toks, ntoks, t,
                                         node_path, locator, progress,
-                                        hlmap);
+                                        hlmap, rep);
+                /* #909: its data could not be read; it is listed. */
+                if (frc == TREE_ITEM_LISTED) continue;
                 if (frc != 0) {
                     /* Issue #654 — name the system error when there is
                      * one, so "permission denied" or "read-only file
