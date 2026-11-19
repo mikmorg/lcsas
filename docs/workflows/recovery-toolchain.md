@@ -29,7 +29,7 @@ package manager can still drive the full restore pipeline.
 The **recovery toolchain** is the most durable layer of that story:
 a minimal restore reader written in **C89**, compiled against
 **vendored** sqlite + zstd C source we ship and audit ourselves
-(`recovery/vendored/`, pinned in `recovery/MANIFEST.sha256`).  Its
+(`recovery/vendored/`, pinned in `recovery/VENDORED.sha256`).  Its
 only runtime dependency is a kernel + a static libc — no Rust, no
 Python, no third-party shared library.  The `recovery/` tree gives us:
 
@@ -48,8 +48,9 @@ Python, no third-party shared library.  The `recovery/` tree gives us:
    under `recovery/bin/<arch>/`, built with reproducible flags
    (`SOURCE_DATE_EPOCH` pinned) so each artefact's SHA-256 is stable
    across rebuilds.
-4. A **SHA-256 manifest** (`recovery/MANIFEST.sha256`) covering the
-   source + scripts that ships on every meta disc, so an heir
+4. A **SHA-256 manifest** (`recovery/MANIFEST.sha256`) covering every
+   file under `recovery/` on the meta disc, computed when the disc is
+   built (#894), so an heir
    restoring decades from now can check that nothing has bit-rotted or
    been tampered with.
 
@@ -80,7 +81,7 @@ root):
 ```
 recovery/
 ├── Makefile                       # C89 build rules + per-arch cross targets
-├── MANIFEST.sha256                # checked-in hashes of source + scripts
+├── VENDORED.sha256                # pinned hashes of the vendored sqlite + zstd source
 ├── UPSTREAM.sha256                # pinned hashes of upstream rustic, restic, CPython, musl loader
 ├── VERSION  TOOLCHAIN             # pinned toolchain provenance
 ├── src/                           # C89 source: lcsas-restore, lcsas-iso9660,
@@ -207,8 +208,7 @@ The `recovery/Makefile` `all:` target builds the full family per arch:
 
 **Expected outcome:** Fresh binaries under `recovery/bin/<arch>/`
 (`lcsas-restore` always; `lcsas-ecc` and the others where the target
-supports them).  `lcsas recovery build` does **not** rewrite the
-manifest — run `lcsas recovery manifest` for that.  Exit code 0.
+supports them).  Exit code 0.
 
 **Variant axes that apply:**
 
@@ -282,8 +282,8 @@ bare-path gate referenced in `recovery/docs/TIERS.txt`.
 
 ## `lcsas recovery manifest` — produce the SHA-256 manifest
 
-**Purpose:** Hash every tracked file under `recovery/` and write the
-result to `recovery/MANIFEST.sha256` (one `sha256sum`-format line per
+**Purpose:** Hash every file under `recovery/` and write the
+result to `recovery/build/MANIFEST.sha256` (one `sha256sum`-format line per
 file, sorted by path).  The manifest covers the **source + scripts**
 we ship and audit — it deliberately **excludes** the transient
 `build/` tree — so an heir decades from now can confirm the C
@@ -299,14 +299,14 @@ manifest covers source, not binaries).
    to `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`).
 2. The handler calls `RecoveryBuilder.write_manifest(output)`
    (`src/lcsas/recovery/build.py`), defaulting to
-   `recovery/MANIFEST.sha256`.
+   `recovery/build/MANIFEST.sha256`.
 3. `write_manifest` walks `recovery/` with `os.walk`, skipping
    `build/`, `__pycache__/`, `.git/`, and the manifest file itself;
    hashes each file with stdlib `hashlib.sha256`; emits
    `<hex>  <relpath>` lines sorted by path for deterministic diffs.
 4. The CLI prints `wrote <path> (<N> files)`.
 
-**Expected outcome:** A `recovery/MANIFEST.sha256` covering every
+**Expected outcome:** A `recovery/build/MANIFEST.sha256` covering every
 source/script file under `recovery/` (not the cross-built binaries,
 which are reproducible-but-rebuildable).  Exit 0.
 
@@ -323,12 +323,14 @@ copy is audited by `lcsas meta verify` against the merged
 `recovery/MANIFEST.sha256` in the built meta disc tree (see
 [`meta-disc.md`](meta-disc.md)).
 
-**What goes onto the meta disc:** the committed
-`recovery/MANIFEST.sha256`, written by `make -C recovery manifest`, lists
-the git-tracked files under `recovery/` (minus `bin/` and the two
-manifests), and `lcsas meta build` bundles the same set: from a git
-checkout it copies only the tracked files, plus `recovery/bin/` as it
-stands. Untracked files, such as the fuzzer output a local
+**What goes onto the meta disc:** this listing is a developer's tool,
+not the disc's manifest.  `lcsas meta build` bundles the git-tracked
+files under `recovery/` (minus the developer records in
+`DEV_ONLY_RECOVERY_FILES`), plus `recovery/bin/` as it stands, and then
+computes the disc's `recovery/MANIFEST.sha256` and
+`recovery/docs/MANIFEST.sha256` from those files (#894; neither is kept
+in git).  `make -C recovery manifest` writes the manifests a disc built
+from the checkout would carry to `recovery/build/manifest/`, for review. Untracked files, such as the fuzzer output a local
 `make audit-gate` adds to `recovery/fuzz/corpus/`, never reach the disc,
 so `lcsas meta verify --strict` passes even when the checkout has them
 (#562). Tracked files are copied with any local edits, so build a meta
@@ -337,7 +339,8 @@ disc reproducible.
 
 **Source refs:** `cmd_recovery` (`src/lcsas/cli/commands/recovery.py`);
 `RecoveryBuilder.write_manifest` (`src/lcsas/recovery/build.py`);
-`recovery/MANIFEST.sha256`; `recovery/UPSTREAM.sha256`.
+`recovery_manifests` (`src/lcsas/meta/builder.py`);
+`recovery/VENDORED.sha256`; `recovery/UPSTREAM.sha256`.
 
 ---
 
@@ -529,7 +532,7 @@ the full `(OS, machine)` matrix and explicit rejections.
   `lcsas-iso9660` / `lcsas-keyshare` / `lcsas-ecc`),
   `test:`, `test-bare-path:`, `repro-check:`, and per-arch
   `bin/<arch>/lcsas-*` rules.
-- `recovery/MANIFEST.sha256` — source/script hashes (manifest output).
+- `recovery/VENDORED.sha256` — pinned vendored sqlite + zstd source hashes.
 - `recovery/UPSTREAM.sha256` — pinned upstream rustic + CPython hashes.
 - `recovery/scripts/restore.sh` / `restore.bat` / `detect_arch.sh` —
   the on-disc tier dispatchers.

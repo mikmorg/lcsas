@@ -23,7 +23,6 @@ on:
       - "recovery/vendored/**"
       - "recovery/scripts/**"
       - "recovery/Makefile"
-      - "recovery/MANIFEST.sha256"
   pull_request:
 
 jobs:
@@ -48,7 +47,6 @@ jobs:
           recovery/vendored/**
           recovery/scripts/**
           recovery/Makefile
-          recovery/MANIFEST.sha256
           EOF
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"

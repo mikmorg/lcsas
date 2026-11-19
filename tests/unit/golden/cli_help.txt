@@ -735,7 +735,7 @@ positional arguments:
                         arch.
     test                Run the recovery toolchain unit-test suite.
     manifest            Compute SHA-256 of every file in recovery/ ->
-                        MANIFEST.sha256.
+                        build/MANIFEST.sha256.
     verify              Verify reproducible build: builds twice, byte-compares
                         output.
 
@@ -767,7 +767,7 @@ options:
   -h, --help            show this help message and exit
   --output OUTPUT, -o OUTPUT
                         Output manifest path (default:
-                        recovery/MANIFEST.sha256).
+                        recovery/build/MANIFEST.sha256).
 ===== lcsas recovery verify --help =====
 usage: lcsas recovery verify [-h]
 
