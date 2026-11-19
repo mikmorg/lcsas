@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.contract.restore_contract import ReaderExit
 from tests.e2e import restore_sh_driver as drv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -101,7 +102,9 @@ def test_tier1_prompt_text_is_real(needle):
 def test_tier1_done_and_quit_code_are_real():
     main_c = TIER1_MAIN.read_text(encoding="utf-8")
     assert drv.TIER1_DONE.decode() in main_c
-    assert f"#define EXIT_READER_QUIT {drv.EXIT_DISC_PROMPT_QUIT}" in main_c
+    # That tier 1 exits 75 at the disc prompt is run in the restore
+    # contract table (#886, case "disc missing, q at the prompt").
+    assert drv.EXIT_DISC_PROMPT_QUIT == ReaderExit.READER_QUIT
 
 
 @pytest.mark.parametrize("needle", [

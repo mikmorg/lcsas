@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.contract.restore_contract import ReaderExit
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 BUILDER = REPO_ROOT / "src" / "lcsas" / "restore" / "standalone_builder.py"
@@ -740,13 +742,15 @@ def test_tier1_exit_4_is_the_scripts_exit_4() -> None:
     """#872: tier 1 exits 4 when it finished with items not restored, and
     restore.sh and restore.bat take its 4 as that, with no guess from
     its words or the list.  Since #875 restore.sh takes tier 3's 4 the
-    same way: one check in the tiers 1 and 3 arm of tier_ended."""
-    main_c = (TIER1_C / "main.c").read_text()
+    same way: one check in the tiers 1 and 3 arm of tier_ended.
+
+    That the readers exit 4 is run, not read, in the restore contract
+    table (#886: tests/contract/, cases "names refused and not
+    decodable" and "restore over an earlier restore"); this test pins
+    only the scripts' side."""
     sh = RESTORE_SH.read_text()
     bat = (REPO_ROOT / "recovery" / "scripts" / "restore.bat").read_text()
-    assert "#define EXIT_NOT_ALL_RESTORED 4" in main_c
-    tail = main_c[main_c.index("if (tree_rc == LCSAS_TREE_INCOMPLETE)"):]
-    assert "rc = EXIT_NOT_ALL_RESTORED;" in tail[:tail.index("goto out;")]
+    assert ReaderExit.NOT_ALL_RESTORED == 4
     assert "EXIT_NOT_ALL_RESTORED=4" in sh
     arm = sh[sh.index("tier_ended() {"):]
     arm = arm[arm.index("        lcsas|python)"):arm.index("        rustic|restic)")]
