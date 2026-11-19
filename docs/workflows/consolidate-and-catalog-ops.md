@@ -24,8 +24,8 @@ A healthy LCSAS archive evolves through three overlapping phases:
    sparsely-populated originals can be deprecated.
 3. **Deprecation.**  Each volume walks through a strict status
    ladder.  `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED →
-   DESTROYED` (the `VALID_TRANSITIONS` table in
-   `src/lcsas/db/volumes.py`).  Each step is its own catalog
+   DESTROYED` (the status graph `_TRANSITIONS` in
+   `src/lcsas/db/lifecycle.py`, written only through `VolumeLifecycle` events).  Each step is its own catalog
    transition with its own audit-trail entry in `volume_events`;
    nothing is implicit.  In a multi-copy archive, a volume's disc can
    be DEPRECATED at one location while its disc at another is still
@@ -159,7 +159,7 @@ post-verification step.
 - All dry-run / plan prerequisites above.
 - `--config` is required (`cmd_consolidate`).
 - Every source volume is `VERIFIED` (the only legal source for
-  `CONSOLIDATING` — `VALID_TRANSITIONS` in `src/lcsas/db/volumes.py`).
+  `CONSOLIDATING` — `_TRANSITIONS` in `src/lcsas/db/lifecycle.py`).
 - The packs are still on the mirror: staging copies them from there.
 - Interactive terminal (stdin is `tty`) for the irreversible-change
   confirmation prompt (`cmd_consolidate`).
@@ -269,7 +269,7 @@ two-phase consolidation.
   (`check_deprecation_safe` in `src/lcsas/db/volumes.py`).
 - Sources are in `VERIFIED` or `CONSOLIDATING` — both are legal
   predecessors of `DEPRECATED`
-  (`VALID_TRANSITIONS` in `src/lcsas/db/volumes.py`).
+  (`_TRANSITIONS` in `src/lcsas/db/lifecycle.py`).
 
 **Steps:**
 1. Parse args; resolve the catalog path; build a `VolumeMerger`
@@ -278,19 +278,17 @@ two-phase consolidation.
    before the `--deprecate` branch — `cmd_consolidate`).
 3. Enter the `--deprecate` branch (`cmd_consolidate`).
 4. Call `merger.deprecate_sources(volume_ids)`
-   (`src/lcsas/consolidate/merger.py`).  For each ID this calls
-   `update_status(conn, vid, "DEPRECATED", commit=False)`.
-   `update_status` then:
+   (`src/lcsas/consolidate/merger.py`).  For each ID this sends the
+   lifecycle event `VolumeLifecycle.consolidation_finished(vid)`
+   (`src/lcsas/db/lifecycle.py`), which:
    1. Validates the transition (`VERIFIED` or `CONSOLIDATING` →
-      `DEPRECATED` are both legal — `VALID_TRANSITIONS` in
-      `src/lcsas/db/volumes.py`).
-   2. Runs `check_deprecation_safe` inside a SAVEPOINT to find packs
-      that would become unreplicated; if any exist, ROLLBACK and raise
-      (`src/lcsas/db/volumes.py`).
+      `DEPRECATED` are both legal — `_TRANSITIONS`).
+   2. Runs `check_deprecation_safe` (`src/lcsas/db/volumes.py`) inside
+      a SAVEPOINT to find packs that would become unreplicated; if any
+      exist, ROLLBACK and raise.
    3. Writes the status change.
    4. Inserts a `NOTE` event into `volume_events` with detail
-      `"Status changed: <prev> → DEPRECATED"`
-      (`src/lcsas/db/volumes.py`).
+      `"Status changed: <prev> → DEPRECATED"`.
 5. After the loop, commit (`src/lcsas/consolidate/merger.py`).
 6. Log the deprecated count and return 0 (`cmd_consolidate`).
 
@@ -322,7 +320,7 @@ two-phase consolidation.
 - **Multi-repository** — the safety check spans repositories; a pack only
   on this volume and another repository's volume still counts as replicated.
 - **Optical-drive count** — irrelevant.
-- **Multi-copy** — *critical*: `update_status` changes only the
+- **Multi-copy** — *critical*: `consolidation_finished` changes only the
   `volumes.status` row, not `volume_copies`.  In an N-location
   archive, each disc needs its own
   `lcsas copy deprecate <volume_label> <location>` /
@@ -347,8 +345,8 @@ two-phase consolidation.
 **Source refs:**
 - `cmd_consolidate` (`--deprecate` branch) in `src/lcsas/cli/commands/consolidate.py`
 - `src/lcsas/consolidate/merger.py` — `deprecate_sources`
-- `src/lcsas/db/volumes.py` (status update with audit + safety;
-  `check_deprecation_safe`)
+- `src/lcsas/db/lifecycle.py` (status update with audit + safety);
+  `check_deprecation_safe` in `src/lcsas/db/volumes.py`
 - `src/lcsas/db/volume_copies.py` (per-location lifecycle)
 
 ---
@@ -455,13 +453,13 @@ catalog and physical reality (FMA-01).  Two independent checks:
    longer take.  It is listed separately and `--fix` leaves it alone
    unless `--include-waiting` is given (#647).
    A volume whose events show a good disc of it was burned (the check
-   `session abort` and `stage --clean` use, `burn_evidence()` in
-   `src/lcsas/db/volume_events.py`, #737) is not a ghost either: its
+   `session abort` and `stage --clean` use, `VolumeLifecycle.burn_evidence()`
+   in `src/lcsas/db/lifecycle.py`, #737) is not a ghost either: its
    disc is just not recorded yet. It is listed with the reason and the
    way to record the disc, and `--fix` never deletes it, even with
    `--include-waiting` (#746).
    A volume a catalog rebuild left with no record of whether it was
-   burned (`rebuild_burn_unknown()`, see `lcsas catalog rebuild`
+   burned (`VolumeLifecycle.burn_unknown()`, see `lcsas catalog rebuild`
    below, #758) is not a ghost either. It is listed with the way to
    record its disc, and `--fix` never deletes it. If no disc of it was
    ever burned, `lcsas session abort --volume <label> --never-burned`
@@ -485,7 +483,7 @@ catalog and physical reality (FMA-01).  Two independent checks:
    drifted volume (report-only) (`src/lcsas/db/queries.py`).
 4. Query `get_ghost_volumes(conn, older_than_hours)`, set aside (and
    list) those with burn evidence (`burn_evidence`, always), then those
-   a rebuild left with an unknown burn state (`rebuild_burn_unknown`,
+   a rebuild left with an unknown burn state (`burn_unknown`,
    always), then those whose staged ISO still exists (`staged_iso_present`,
    `src/lcsas/db/sessions.py`) unless `--include-waiting`; if no ghost
    is left, log the all-clear and return 0 (`src/lcsas/db/queries.py`).
@@ -498,8 +496,8 @@ catalog and physical reality (FMA-01).  Two independent checks:
    confirmation, which warns that a receipt for a deleted volume can no
    longer be imported and that its ISOs are orphaned (abort on
    `EOFError` or any other answer); then
-   `delete_volume` each ghost and report the reclaimed pack count
-   (`src/lcsas/db/volumes.py`).
+   delete each ghost (`VolumeLifecycle.never_burned_deleted`, `src/lcsas/db/lifecycle.py`)
+   and report the reclaimed pack count.
 
 **Expected outcome:**
 - Report-only run: exit 0 if no ghosts; exit 1 if any ghost exists
@@ -769,8 +767,9 @@ reporting (FMA-08).
 ## Volume lifecycle state transitions
 
 LCSAS encodes the volume lifecycle as a finite-state machine, enforced
-at the catalog layer.  The full transition table is the
-`VALID_TRANSITIONS` dict in `src/lcsas/db/volumes.py`:
+at the catalog layer.  The full transition table is the private
+`_TRANSITIONS` dict in `src/lcsas/db/lifecycle.py`; callers change a status only by sending
+a `VolumeLifecycle` event (#892):
 
 ```text
 STAGING       → BURNING, DEPRECATED, DESTROYED
@@ -802,14 +801,14 @@ status was added by the v4→v5 migration in the same module.
 | `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just after staging succeeds) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → VERIFIED`     | `lcsas session abort` or `lcsas stage --clean --force` of the consolidation's burn session (#817) | `BurnOrchestrator.clean_session`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → DEPRECATED`   | `lcsas consolidate --deprecate` (post-verification) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
-| `VERIFIED → DEPRECATED`        | `lcsas consolidate --deprecate` (no `--execute` first) | Same as above (also legal per `VALID_TRANSITIONS`). |
-| `DEPRECATED → DESTROYED`       | No first-class CLI command yet — see *Gaps*       | `VALID_TRANSITIONS` in `src/lcsas/db/volumes.py` |
+| `VERIFIED → DEPRECATED`        | `lcsas consolidate --deprecate` (no `--execute` first) | Same as above (also legal per `_TRANSITIONS`). |
+| `DEPRECATED → DESTROYED`       | No first-class CLI command yet — see *Gaps*       | `_TRANSITIONS` in `src/lcsas/db/lifecycle.py` |
 
-`update_status` itself enforces the table and, on the
-`* → DEPRECATED` edge, additionally runs `check_deprecation_safe`
-inside a SAVEPOINT to refuse the transition if any pack would become
-unreplicated (`src/lcsas/db/volumes.py`).  Pass `force=True` to
-override (logged at WARNING — `src/lcsas/db/volumes.py`).
+The lifecycle's private `_update_status` (`src/lcsas/db/lifecycle.py`) enforces the
+table and, on the `* → DEPRECATED` edge, additionally runs
+`check_deprecation_safe` inside a SAVEPOINT to refuse the transition if
+any pack would become unreplicated.  Only the `verify --disc` event for
+a disc it just recorded (#678) bypasses the table (logged at WARNING).
 
 **Per-location lifecycle (`volume_copies`):** independently from the
 volume-wide status above, each disc has its own status of
@@ -821,8 +820,8 @@ volume-wide status above, each disc has its own status of
 `lcsas copy destroy [--lost] <volume_label> <location>`.  A lost disc is
 recorded `DESTROYED` like a destroyed one; only its `NOTE` event says
 "lost".  Recording a volume's last in-service disc gone makes it a lost
-volume: `_demote_volume_if_last_copy_lost` writes `DEPRECATED` directly
-(bypassing `update_status`) plus an `auto-deprecated:` `NOTE`, and owner
+volume: the lifecycle event `last_disc_lost` writes `DEPRECATED` directly
+(outside the status graph) plus an `auto-deprecated:` `NOTE`, and owner
 displays show it as `LOST`
 ([ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)).  *The deprecation
 triggered by `consolidate --deprecate` does NOT cascade into
@@ -831,14 +830,14 @@ triggered by `consolidate --deprecate` does NOT cascade into
 
 **Gaps for this section:**
 - No first-class `lcsas destroy <volume>` command exists for the
-  *volume-wide* `DEPRECATED → DESTROYED` edge; it is only reachable by
-  directly calling `update_status` (e.g. from a script).  (Destroying
+  *volume-wide* `DEPRECATED → DESTROYED` edge; no lifecycle event
+  writes it (#907).  (Destroying
   one disc is recorded via `lcsas copy destroy`.)
 - `consolidate --deprecate` does not propagate a volume-level
   DEPRECATED status to the matching `volume_copies` rows.
 - No test asserts that a forced `DESTROYED → *` (terminal-state)
-  transition is rejected by `update_status` (it should be — empty
-  transition set in `VALID_TRANSITIONS`, `src/lcsas/db/volumes.py`).
+  transition is rejected by `_update_status` (it should be — empty
+  transition set in `_TRANSITIONS`, `src/lcsas/db/lifecycle.py`).
 
 ---
 
@@ -866,8 +865,8 @@ Python layer as `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`).
 | `catalog rebuild`                             | merges `volume_events` rows from the disc catalogs (no synthetic "rebuilt" event) | n/a |
 | `loc move` (`cmd_location`, out of category)  | `LOCATION_MOVE` (record-keeping precedent) | `<free text>`                  |
 
-Events are inserted by `add_event` (`src/lcsas/db/volume_events.py`)
-and `update_status` (`src/lcsas/db/volumes.py`).  Queries:
+Events are inserted by `add_event` (`src/lcsas/db/volume_events.py`),
+called by the `VolumeLifecycle` events (`src/lcsas/db/lifecycle.py`) among others.  Queries:
 `get_events_for_volume`, `get_latest_event`, `get_event`
 (`src/lcsas/db/volume_events.py`).
 
@@ -885,5 +884,5 @@ and `update_status` (`src/lcsas/db/volumes.py`).  Queries:
 **Source refs:**
 - `src/lcsas/db/schema.py` — `volume_events` DDL
 - `src/lcsas/db/volume_events.py` — CRUD + `VALID_EVENT_TYPES`
-- `src/lcsas/db/volumes.py` — automatic `NOTE` insertion on
+- `src/lcsas/db/lifecycle.py` — automatic `NOTE` insertion on
   status transitions

@@ -12,13 +12,15 @@ same way:
 
 - A **deprecated volume** has been superseded: another volume holds every
   pack on it, so its discs are no longer needed. `lcsas consolidate
-  --deprecate` makes one through `update_status()`, which writes the
-  `NOTE` event `Status changed: <prev> → DEPRECATED`.
+  --deprecate` makes one through the lifecycle event
+  `VolumeLifecycle.consolidation_finished()`, which writes the `NOTE`
+  event `Status changed: <prev> → DEPRECATED`.
 - A **lost volume** is a burned volume with no disc left in service. Its
   packs must be burned again unless another volume already holds them.
   Since BURN-10, `lcsas copy deprecate` / `lcsas copy destroy` on a
-  volume's last in-service disc calls `_demote_volume_if_last_copy_lost()`
-  (`src/lcsas/db/volume_copies.py`), which writes `DEPRECATED` straight
+  volume's last in-service disc sends the lifecycle event
+  `VolumeLifecycle.last_disc_lost()` (`src/lcsas/db/lifecycle.py`, #892),
+  which writes `DEPRECATED` straight
   into `volumes.status` and adds a `NOTE` event starting
   `auto-deprecated: last in-service disc …`.
 
@@ -46,7 +48,7 @@ attack (`docs/DISC_CONFIDENTIALITY.md`).
    `volume_packs`, `volume_copies`, `volume_events` and `session_volumes`
    intact. Every query that enumerates statuses would then need `LOST`
    added: the ten `IN` / `NOT IN ('DEPRECATED', 'DESTROYED')` filters
-   in `src/lcsas/db/queries.py` alone, plus `VALID_TRANSITIONS`, the
+   in `src/lcsas/db/queries.py` alone, plus the status graph, the
    status rank that `catalog rebuild` uses to merge disc catalogs, and
    the verify filters. Every disc burned afterwards would carry a v11
    disc catalog.
@@ -118,13 +120,14 @@ attack (`docs/DISC_CONFIDENTIALITY.md`).
 6. **A lost volume that gets a disc back is back in service (#726).**
    When a disc of a lost volume is recorded again (`lcsas burn` of its
    burn session, an imported burn receipt, or `lcsas verify <label> --disc
-   --location <where>`), `add_volume_copy()` calls `_revive_lost_volume()`
-   (`src/lcsas/db/volume_copies.py`). It sets the volume `VERIFIED` when
+   --location <where>`), `add_volume_copy()` sends the lifecycle event
+   `VolumeLifecycle.disc_back_in_service()` (`src/lcsas/db/lifecycle.py`,
+   #892). It sets the volume `VERIFIED` when
    the disc was verified, else `BURNED`, as a first disc would, and writes
    the `NOTE` `Status changed: DEPRECATED → <status>; this lost volume has
    a disc in service again at <location>`. The redundancy report, the
    stage pool and the deprecation guard then count it again. This is a
-   direct update, like the auto-deprecation: `VALID_TRANSITIONS` still has
+   direct update, like the auto-deprecation: the status graph still has
    no way out of `DEPRECATED` except `DESTROYED`, so a volume deprecated by
    consolidation never comes back by accident. Because the newest
    deprecating note decides, a lost volume that came back and was later
@@ -132,7 +135,7 @@ attack (`docs/DISC_CONFIDENTIALITY.md`).
    A catalog from before #726 can hold a lost volume that got its disc
    recorded and stayed `DEPRECATED` with an `ACTIVE` disc. Reading that
    disc with `lcsas verify <label> --disc` revives it the same way:
-   `touch_last_verified()` calls `_revive_lost_volume()` when the check
+   `touch_last_verified()` sends `disc_back_in_service()` when the check
    passes (#752).
 
 ## Consequences

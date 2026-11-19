@@ -672,7 +672,8 @@ Session statuses (set by `update_session_status` and
 - **`CLEANED`** — `clean_session` removed ISOs and the staging directory
   (`BurnOrchestrator.clean_session`).
 
-Volume statuses (set by `update_status` / `mark_closed`):
+Volume statuses (set by the `VolumeLifecycle` events in
+`src/lcsas/db/lifecycle.py`):
 
 - **`STAGING`** — set by `create_volume` during `_stage_single_volume`.
   Also where a never-burned volume falls back if its burn fails its
