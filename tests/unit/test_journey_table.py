@@ -38,10 +38,12 @@ def test_journey_names_are_unique_and_typed_lines_cover_the_questions() -> None:
     assert len(names) == len(set(names))
     driver_keys = {p.key for p in PROMPTS if p.by_driver}
     for j in JOURNEYS:
-        for script in ("sh", "bat"):
-            asked = [k for k in j.expect_for(script).asked if k not in driver_keys]
-            # One typed line per question the person answers.
-            assert len(asked) == len(j.typed), (j.name, script, asked)
+        for leg in (j, j.then) if j.then is not None else (j,):
+            for script in ("sh", "bat"):
+                asked = [k for k in leg.expect_for(script).asked
+                         if k not in driver_keys]
+                # One typed line per question the person answers.
+                assert len(asked) == len(leg.typed_for(script)), (j.name, script, asked)
 
 
 def _keys(text: str, script: str) -> list[str]:

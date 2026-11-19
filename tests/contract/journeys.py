@@ -38,7 +38,10 @@ Harness limits (not differences between the scripts):
   restore.bat).  The batch driver lays the tools folder out as the copy
   does and starts the copy in it with ``LCSAS_RELOCATED=D:\\``, as the
   relaunch line does; "tools folder removed" is then the ``.done`` the
-  copy leaves for the relaunch line to act on.
+  copy leaves for the relaunch line to act on.  For the same reason a
+  journey that carries on (:class:`Leg`) runs the Desktop launcher with
+  its ``(goto) 2>nul & `` taken out, as test_restore_bat_journey_wine
+  does.  Real cmd runs both lines only in CI's windows-e2e job.
 - Tier 1's disc questions are answered by the drivers (the disc it
   names goes in), and are not part of ``asked``: they are the same
   program's in both scripts, and how many there are depends on where
@@ -105,6 +108,17 @@ class Card:
 
 Typed = str | Newest | Pick | Password | Card
 NEWEST = Newest()
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """On the command line: the start of the id of the set ``name``'s
+    snapshot, as ``--list-snapshots`` prints it."""
+
+    name: str
+
+
+Arg = str | Snapshot
 
 
 # ── The questions, by key phrase per script ─────────────────────────
@@ -234,6 +248,18 @@ DIFFERENCES: dict[str, Difference] = {
              "command line), but no issue records the decision"),
         deliberate=False,
     ),
+    "unknown arguments": Difference(
+        what=("restore.bat passes over any argument but --snapshot ID "
+              "(:parse_args): `restore.bat --repo NAME` with a NAME no set "
+              "has goes on with the set(s) there, and with one set restores "
+              "it.  restore.sh stops on an unknown --repo (#802) and exits 2 "
+              "on an unknown flag"),
+        why=("not in #895's list.  restore.bat chooses a set by LCSAS_REPO "
+             "(which it checks, see the LCSAS_REPO journey), so this may be "
+             "by design, but a reader who types restore.sh's flags gets no "
+             "word that they were not used: a possible bug, for the owner"),
+        deliberate=False,
+    ),
 }
 
 
@@ -265,12 +291,47 @@ class Differs:
     asked: tuple[str, ...] | None = None
     exit: int | None = None
     tools_folder: str | None = None
+    says: tuple[str, ...] | None = None
+    #: The lines typed, when the questions differ.
+    typed: tuple[Typed, ...] | None = None
+
+
+class _PerScript:
+    """typed_for and expect_for, for a journey and for its second leg."""
+
+    typed: tuple[Typed, ...]
+    expect: Expect
+    differs: dict[str, Differs]
+
+    def typed_for(self, script: str) -> tuple[Typed, ...]:
+        d = self.differs.get(script)
+        return self.typed if d is None or d.typed is None else d.typed
+
+    def expect_for(self, script: str) -> Expect:
+        d = self.differs.get(script)
+        if d is None:
+            return self.expect
+        over: dict[str, Any] = {k: getattr(d, k)
+                                for k in ("asked", "exit", "tools_folder", "says")
+                                if getattr(d, k) is not None}
+        return replace(self.expect, **over)
 
 
 @dataclass(frozen=True)
-class Journey:
+class Leg(_PerScript):
+    """The person carries on a restore that stopped: restore.sh's
+    ``<tools>/resume.sh``, restore.bat's "Resume LCSAS restore.bat" on
+    the Desktop.  The drive is empty when it starts."""
+
+    typed: tuple[Typed, ...]
+    expect: Expect
+    differs: dict[str, Differs] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Journey(_PerScript):
     name: str
-    #: A key of :data:`ARCHIVES`.
+    #: A key of :data:`ARCHIVES` or :data:`ALTERED`.
     archive: str
     typed: tuple[Typed, ...]
     expect: Expect
@@ -278,14 +339,12 @@ class Journey:
     differs: dict[str, Differs] = field(default_factory=dict)
     #: Extra environment for both scripts.
     env: dict[str, str] = field(default_factory=dict)
-
-    def expect_for(self, script: str) -> Expect:
-        d = self.differs.get(script)
-        if d is None:
-            return self.expect
-        over: dict[str, Any] = {k: getattr(d, k) for k in ("asked", "exit", "tools_folder")
-                                if getattr(d, k) is not None}
-        return replace(self.expect, **over)
+    #: On both scripts' command lines.
+    args: tuple[Arg, ...] = ()
+    #: Type q at tier 1's n-th disc question (1 = the first).
+    quit_at_disc: int | None = None
+    #: What happens when the person carries on.
+    then: Leg | None = None
 
 
 # ── The archives: real rustic sets, burned, unpacked ────────────────
@@ -302,15 +361,42 @@ class ArchiveSpec:
     file_bytes: int
     others: tuple[str, ...] = ()
     splits: tuple[tuple[str, int, int], ...] = ()
+    #: Sets made after the META disc was burned: on the data discs only,
+    #: so a script finds them only by reading the newest data disc (#605).
+    not_on_meta: tuple[str, ...] = ()
 
 
 ARCHIVES: dict[str, ArchiveSpec] = {
     # One set, small: one data disc.
     "one set": ArchiveSpec("Holiday photos", file_count=3, file_bytes=32 * 1024),
-    # Two sets, the second split 2-of-3; the first spans two data discs.
+    # Two sets, the second split 2-of-3; the first spans two data discs
+    # and was made after the META disc (#605).
     "two sets": ArchiveSpec("Holiday photos", file_count=4, file_bytes=384 * 1024,
                             others=("Family documents",),
-                            splits=(("Family documents", 2, 3),)),
+                            splits=(("Family documents", 2, 3),),
+                            not_on_meta=("Holiday photos",)),
+}
+
+
+@dataclass(frozen=True)
+class Altered:
+    """An archive made from another by changing its data discs: the
+    copies are the base's, then ``how``:
+
+    - "damaged pack": a byte in the middle of the largest pack (a data
+      pack) flipped, as a scratch the ECC could not repair leaves it;
+    - "huge packs": every pack in each disc's catalog said to be 10 TB, so
+      no disk has room for what the catalog says the set needs.  Not
+      100 TB or more: restore.bat's set /a cannot count that many MB, and
+      it then skips the check (see :space_check)."""
+
+    base: str
+    how: str
+
+
+ALTERED: dict[str, Altered] = {
+    "one set, a pack damaged": Altered("one set", "damaged pack"),
+    "one set, catalog sizes huge": Altered("one set", "huge packs"),
 }
 
 
@@ -324,6 +410,8 @@ class ArchiveSet:
     manifest: dict[str, str]
     #: Each share card's words, card 1 first (a split set only).
     cards: tuple[str, ...] = ()
+    #: The id of its one snapshot.
+    snapshot: str = ""
 
 
 @dataclass(frozen=True)
@@ -357,6 +445,33 @@ def writable(root: Path) -> None:
                 os.chmod(os.path.join(dirpath, name), 0o644)
 
 
+def alter_archive(base: Archive, how: str, workdir: Path) -> Archive:
+    """The archive ``base`` with its data discs changed (:class:`Altered`)."""
+    import sqlite3
+
+    discs: dict[str, Path] = {}
+    for label, disc in base.discs.items():
+        discs[label] = workdir / "discs" / label
+        shutil.copytree(disc, discs[label])
+        writable(discs[label])
+    if how == "damaged pack":
+        pack = max((p for d in discs.values() for p in (d / "data").rglob("*")
+                    if p.is_file()), key=lambda p: p.stat().st_size)
+        data = bytearray(pack.read_bytes())
+        data[len(data) // 2] ^= 0xFF
+        pack.write_bytes(bytes(data))
+    elif how == "huge packs":
+        for d in discs.values():
+            with contextlib.closing(sqlite3.connect(d / "catalog.db")) as conn:
+                conn.execute("UPDATE packs SET size_bytes = ?", (10**13,))
+                conn.commit()
+    else:
+        raise ValueError(f"no such alteration: {how!r}")
+    for d in discs.values():
+        _read_only(d)
+    return replace(base, discs=discs)
+
+
 def build_archive(spec: ArchiveSpec, workdir: Path) -> Archive:
     """Build ``spec`` under ``workdir`` (needs rustic and xorriso)."""
     from lcsas.keyshare import extract_mnemonic
@@ -386,6 +501,9 @@ def build_archive(spec: ArchiveSpec, workdir: Path) -> Archive:
     os.rename(workdir / "meta_stage", meta)
     for p in workdir.glob("catalog.db*"):
         p.unlink()
+    for fs in (fx.restore_set, *fx.other_sets):
+        if fs.name in spec.not_on_meta:
+            shutil.rmtree(meta / "metadata" / fs.repo_id)
     for d in (*discs.values(), meta):
         writable(d)
         _read_only(d)
@@ -395,11 +513,13 @@ def build_archive(spec: ArchiveSpec, workdir: Path) -> Archive:
     for fs, pw in zip((fx.restore_set, *fx.other_sets), pw_files, strict=True):
         cards = tuple(extract_mnemonic((workdir / c).read_text(encoding="utf-8"))
                       for c in fs.cards)
+        snaps = sorted(p.name for p in (next(iter(discs.values())) / "metadata"
+                                        / fs.repo_id / "snapshots").iterdir())
         sets[fs.name] = ArchiveSet(
             repo_id=fs.repo_id, name=fs.name, name_cmd=fs.name_cmd,
             password=pw.read_text().strip(),
             manifest=json.loads((workdir / fs.manifest).read_text()),
-            cards=cards,
+            cards=cards, snapshot=snaps[0] if len(snaps) == 1 else "",
         )
     for scrap in ("mirror", "staging", "sources", "meta_stage.iso"):
         shutil.rmtree(workdir / scrap, ignore_errors=True)
@@ -422,11 +542,23 @@ class JourneyResult:
     untyped: int
     seconds: float
     output: str = field(repr=False, default="")
+    #: The second leg (:class:`Leg`), when the journey has one.
+    then: JourneyResult | None = None
 
 
 def mismatches(journey: Journey, got: JourneyResult, archive: Archive) -> list[str]:
     """What in ``got`` differs from what ``journey`` expects of its script."""
-    want = journey.expect_for(got.script)
+    out = _leg_mismatches(journey.expect_for(got.script), got, archive)
+    if journey.then is not None:
+        if got.then is None:
+            out.append("then: the restore was not carried on")
+        else:
+            out += [f"then: {m}" for m in _leg_mismatches(
+                journey.then.expect_for(got.script), got.then, archive)]
+    return out
+
+
+def _leg_mismatches(want: Expect, got: JourneyResult, archive: Archive) -> list[str]:
     out: list[str] = []
     if got.exit != want.exit:
         out.append(f"exit {got.exit}, want {want.exit}")
@@ -480,6 +612,15 @@ def _bat_menu_number(screen: str, set_: ArchiveSet) -> str:
         if text == set_.name_cmd or text.startswith(set_.name_cmd + " (password split"):
             return num
     raise AssertionError(f"{set_.name_cmd!r} is not on restore.bat's menu:\n{menu}")
+
+
+def arg_text(item: Arg, archive: Archive) -> str:
+    """A command-line argument of a journey, as typed."""
+    if isinstance(item, Snapshot):
+        snap = archive.sets[item.name].snapshot
+        assert snap, f"{item.name} has not exactly one snapshot"
+        return snap[:8]
+    return item
 
 
 def type_line(item: Typed, script: str, archive: Archive, screen: str) -> str:
@@ -561,46 +702,56 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
         os.rename(shelf / label, drive)
         in_drive.append(label)
 
-    typed = list(journey.typed)
-    asked: list[str] = []
-    discs = [0]
-    picker = DiscPicker(list(archive.discs))
-    over = [0]
-
-    def answer(prompt: Prompt, _n: int) -> bytes:
-        if prompt.kind == "disc":
-            discs[0] += 1
-            label = picker.pick(prompt.labels)
-            if label is None:
-                return b"q\n"
-            insert(label)
-            return ENTER
-        asked.append(prompt.kind)
-        if not typed:
-            over[0] += 1
-            return b"q\n"
-        item = typed.pop(0)
-        if isinstance(item, Newest):
-            insert(archive.newest)
-            return ENTER
-        return (type_line(item, "sh", archive, "") + "\n").encode()
-
     env = build_restore_env(home=work / "home", tools_dir=tools, mount_dir=mount,
                             meta_disc=archive.meta, tmpdir=work / "tmp")
     env.update(journey.env)
-    cmd = ["sh", str(archive.meta / "restore.sh"), "--target", str(target)]
-    t0 = time.monotonic()
-    try:
-        rc, out = drive_restore(cmd, env, answer, timeout=timeout, scanner=_ShScanner())
-    finally:
-        eject()
-    seconds = time.monotonic() - t0
-    return JourneyResult(
-        script="sh", exit=rc, asked=asked, disc_prompts=discs[0],
-        restored=_restored_shas(target),
-        tools_folder="kept" if tools.exists() else "removed",
-        untyped=len(typed) - over[0], seconds=seconds, output=out,
-    )
+
+    def leg(cmd: list[str], typed_: tuple[Typed, ...],
+            quit_at: int | None) -> JourneyResult:
+        typed = list(typed_)
+        asked: list[str] = []
+        discs = [0]
+        picker = DiscPicker(list(archive.discs))
+        over = [0]
+
+        def answer(prompt: Prompt, _n: int) -> bytes:
+            if prompt.kind == "disc":
+                discs[0] += 1
+                label = picker.pick(prompt.labels)
+                if label is None or discs[0] == quit_at:
+                    return b"q\n"
+                insert(label)
+                return ENTER
+            asked.append(prompt.kind)
+            if not typed:
+                over[0] += 1
+                return b"q\n"
+            item = typed.pop(0)
+            if isinstance(item, Newest):
+                insert(archive.newest)
+                return ENTER
+            return (type_line(item, "sh", archive, "") + "\n").encode()
+
+        t0 = time.monotonic()
+        try:
+            rc, out = drive_restore(cmd, env, answer, timeout=timeout,
+                                    scanner=_ShScanner())
+        finally:
+            eject()
+        return JourneyResult(
+            script="sh", exit=rc, asked=asked, disc_prompts=discs[0],
+            restored=_restored_shas(target),
+            tools_folder="kept" if tools.exists() else "removed",
+            untyped=len(typed) - over[0], seconds=time.monotonic() - t0, output=out,
+        )
+
+    result = leg(["sh", str(archive.meta / "restore.sh"), "--target", str(target),
+                  *(arg_text(a, archive) for a in journey.args)],
+                 journey.typed_for("sh"), journey.quit_at_disc)
+    if journey.then is not None and (tools / "resume.sh").is_file():
+        result.then = leg(["sh", str(tools / "resume.sh")],
+                          journey.then.typed_for("sh"), None)
+    return result
 
 
 # ── restore.bat under wine ──────────────────────────────────────────
@@ -634,7 +785,10 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
     ``_Wine`` of test_restore_bat_journey_wine, its drives reset).
     ``run_no`` makes the run's folders on C: its own."""
     from tests.e2e.restore_sh_driver import DiscPicker
-    from tests.recovery_hardening.test_restore_bat_journey_wine import _Run
+    from tests.recovery_hardening.test_restore_bat_journey_wine import (
+        _replay_launcher,
+        _Run,
+    )
     from tests.recovery_hardening.test_restore_bat_wine_smoke import _map_drive
 
     name = f"lcsas-j{run_no}"
@@ -643,67 +797,81 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
     target = wine.drive_c / f"restored-{run_no}"
     _bat_tools_copy(archive, tools)
     _map_drive(wine.prefix, "d", archive.meta)  # the one drive: META in
-    typed = list(journey.typed)
-    asked: list[str] = []
-    discs = 0
-    over = 0
-    picker = DiscPicker(list(archive.discs))
-    t0 = time.monotonic()
-    run = _Run(wine, f"C:\\{name}\\recovery\\scripts\\restore.bat",
-               {"LCSAS_RELOCATED": "D:\\", **journey.env})
-    try:
-        while True:
-            text = run.text
-            hit = find_prompt(text, run.pos, "bat")
-            if hit is None:
-                if run.proc.poll() is not None:
-                    run._pump.join(timeout=5)
-                    if find_prompt(run.text, run.pos, "bat") is not None:
-                        continue
-                    break
-                if time.monotonic() > run.deadline:
-                    break
-                time.sleep(0.2)
-                continue
-            run.pos = hit.end
-            if hit.key == "pause":
-                run.send("")
-            elif hit.key == "disc":
-                discs += 1
-                label = picker.pick(box_labels(text[hit.start:hit.end]))
-                if label is None:
-                    run.send("q")
-                else:
-                    _map_drive(wine.prefix, "d", archive.discs[label])
-                    run.send("")
-            elif hit.key == "folder":
-                asked.append(hit.key)
-                run.send(target_win)
-            else:
-                asked.append(hit.key)
-                if not typed:
-                    over += 1
-                    run.send("q")
+
+    def leg(cmd: str, env: dict[str, str], typed_: tuple[Typed, ...],
+            quit_at: int | None) -> JourneyResult:
+        typed = list(typed_)
+        asked: list[str] = []
+        discs = 0
+        over = 0
+        picker = DiscPicker(list(archive.discs))
+        t0 = time.monotonic()
+        run = _Run(wine, cmd, env)
+        try:
+            while True:
+                text = run.text
+                hit = find_prompt(text, run.pos, "bat")
+                if hit is None:
+                    if run.proc.poll() is not None:
+                        run._pump.join(timeout=5)
+                        if find_prompt(run.text, run.pos, "bat") is not None:
+                            continue
+                        break
+                    if time.monotonic() > run.deadline:
+                        break
+                    time.sleep(0.2)
                     continue
-                item = typed.pop(0)
-                if isinstance(item, Newest):
-                    _map_drive(wine.prefix, "d", archive.discs[archive.newest])
+                run.pos = hit.end
+                if hit.key == "pause":
                     run.send("")
+                elif hit.key == "disc":
+                    discs += 1
+                    label = picker.pick(box_labels(text[hit.start:hit.end]))
+                    if label is None or discs == quit_at:
+                        run.send("q")
+                    else:
+                        _map_drive(wine.prefix, "d", archive.discs[label])
+                        run.send("")
+                elif hit.key == "folder":
+                    asked.append(hit.key)
+                    run.send(target_win)
                 else:
-                    run.send(type_line(item, "bat", archive, text[:hit.end]))
-    finally:
-        rc = run.finish()
-    seconds = time.monotonic() - t0
-    if not tools.exists():
-        folder = "removed"
-    else:
-        # The relaunch line deletes a tools folder holding .done.
-        folder = "removed" if (tools / ".done").exists() else "kept"
-    result = JourneyResult(
-        script="bat", exit=rc, asked=asked, disc_prompts=discs,
-        restored=_restored_shas(target), tools_folder=folder,
-        untyped=len(typed) - over, seconds=seconds, output=run.text,
-    )
+                    asked.append(hit.key)
+                    if not typed:
+                        over += 1
+                        run.send("q")
+                        continue
+                    item = typed.pop(0)
+                    if isinstance(item, Newest):
+                        _map_drive(wine.prefix, "d", archive.discs[archive.newest])
+                        run.send("")
+                    else:
+                        run.send(type_line(item, "bat", archive, text[:hit.end]))
+        finally:
+            rc = run.finish()
+        if not tools.exists():
+            folder = "removed"
+        else:
+            # The relaunch line deletes a tools folder holding .done.
+            folder = "removed" if (tools / ".done").exists() else "kept"
+        return JourneyResult(
+            script="bat", exit=rc, asked=asked, disc_prompts=discs,
+            restored=_restored_shas(target), tools_folder=folder,
+            untyped=len(typed) - over, seconds=time.monotonic() - t0,
+            output=run.text,
+        )
+
+    args = "".join(f' "{arg_text(a, archive)}"' for a in journey.args)
+    result = leg(f"C:\\{name}\\recovery\\scripts\\restore.bat{args}",
+                 {"LCSAS_RELOCATED": "D:\\", **journey.env},
+                 journey.typed_for("bat"), journey.quit_at_disc)
+    launcher = wine.desktop / "Resume LCSAS restore.bat"
+    if journey.then is not None and launcher.is_file():
+        # The drive is empty; the launcher runs as wine can run it (its
+        # (goto) line without the `(goto) 2>nul & `, the harness limit).
+        _map_drive(wine.prefix, "d", wine.prefix / "_no_drive")
+        result.then = leg(_replay_launcher(wine, launcher), dict(journey.env),
+                          journey.then.typed_for("bat"), None)
     for d in (tools, target):
         writable(d)
         shutil.rmtree(d, ignore_errors=True)
@@ -714,6 +882,9 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
 
 PHOTOS = "Holiday photos"
 DOCS = "Family documents"
+#: A set no archive has (not one of its names in other letters: a name
+#: matched case-blind is #627 item 8).
+UNKNOWN_SET = "Garden photos"
 
 JOURNEYS: tuple[Journey, ...] = (
     Journey(
@@ -749,5 +920,86 @@ JOURNEYS: tuple[Journey, ...] = (
         differs={"bat": Differs(because=("menu by number", "folder question"),
                                 asked=("newest data disc", "which set", "folder",
                                        "card 1", "card 1", "card 2", "another set"))},
+    ),
+    Journey(
+        name="wrong password, then the right one",
+        archive="one set",
+        typed=(NEWEST, Password(PHOTOS, wrong=True), Password(PHOTOS)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "password", "password"),
+                      restored=PHOTOS, tools_folder="removed"),
+        differs={"bat": Differs(because=("folder question",),
+                                asked=("newest data disc", "folder", "password",
+                                       "password"))},
+    ),
+    Journey(
+        name="q at the disc prompt, then carry on from the tools folder",
+        archive="two sets",
+        typed=(NEWEST, Pick(PHOTOS), Password(PHOTOS)),
+        quit_at_disc=1,
+        expect=Expect(exit=ScriptExit.READER_QUIT,
+                      asked=("newest data disc", "which set", "password"),
+                      tools_folder="kept", disc_asked=True),
+        differs={"bat": Differs(because=("menu by number", "folder question"),
+                                asked=("newest data disc", "which set", "folder",
+                                       "password"))},
+        then=Leg(typed=(Password(PHOTOS), "n"),
+                 expect=Expect(exit=ScriptExit.OK, asked=("password", "another set"),
+                               restored=PHOTOS, tools_folder="removed",
+                               disc_asked=True)),
+    ),
+    Journey(
+        name="not enough space: the question, answered yes",
+        archive="one set, catalog sizes huge",
+        typed=(NEWEST, "y", Password(PHOTOS)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "space", "password"),
+                      restored=PHOTOS, tools_folder="removed"),
+        differs={"bat": Differs(because=("folder question",),
+                                asked=("newest data disc", "folder", "space",
+                                       "password"))},
+    ),
+    Journey(
+        name="some items not restored: exit 4, the failures file named",
+        archive="one set, a pack damaged",
+        typed=(NEWEST, Password(PHOTOS)),
+        expect=Expect(exit=ScriptExit.NOT_ALL_RESTORED,
+                      asked=("newest data disc", "password"),
+                      tools_folder="removed",
+                      says=(r"could not be restored", r"RESTORE_FAILURES\.txt")),
+        differs={"bat": Differs(because=("folder question",),
+                                asked=("newest data disc", "folder", "password"))},
+    ),
+    Journey(
+        name="--repo with an unknown name",
+        archive="one set",
+        args=("--repo", UNKNOWN_SET),
+        typed=(NEWEST,),
+        expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
+                      says=(r"not among", re.escape(PHOTOS))),
+        # restore.bat has no --repo: it passes over the words and goes on
+        # with the one set there.  q at its password question stops it.
+        differs={"bat": Differs(because=("unknown arguments", "folder question"),
+                                typed=(NEWEST, "q"),
+                                asked=("newest data disc", "folder", "password"),
+                                exit=ScriptExit.WRONG_PASSWORD, says=())},
+    ),
+    Journey(
+        name="LCSAS_REPO with an unknown name",
+        archive="one set",
+        env={"LCSAS_REPO": UNKNOWN_SET},
+        typed=(NEWEST,),
+        expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
+                      says=(r"not among", re.escape(PHOTOS))),
+    ),
+    Journey(
+        name="--snapshot names the snapshot",
+        archive="one set",
+        args=("--snapshot", Snapshot(PHOTOS)),
+        typed=(NEWEST, Password(PHOTOS)),
+        expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "password"),
+                      restored=PHOTOS, tools_folder="removed"),
+        differs={"bat": Differs(because=("folder question",),
+                                asked=("newest data disc", "folder", "password"))},
     ),
 )

@@ -25,10 +25,12 @@ from pathlib import Path
 import pytest
 
 from tests.contract.journeys import (
+    ALTERED,
     ARCHIVES,
     JOURNEYS,
     Archive,
     Journey,
+    alter_archive,
     build_archive,
     mismatches,
     run_journey_bat,
@@ -60,7 +62,8 @@ pytestmark = [
 
 
 class _Archives:
-    """Each archive of ARCHIVES, built the first time a journey needs it."""
+    """Each archive of ARCHIVES or ALTERED, built the first time a
+    journey needs it."""
 
     def __init__(self, base: Path) -> None:
         self._base = base
@@ -68,8 +71,12 @@ class _Archives:
 
     def __getitem__(self, key: str) -> Archive:
         if key not in self._built:
-            self._built[key] = build_archive(ARCHIVES[key],
-                                             self._base / key.replace(" ", "-"))
+            work = self._base / key.replace(" ", "-").replace(",", "")
+            if key in ALTERED:
+                alt = ALTERED[key]
+                self._built[key] = alter_archive(self[alt.base], alt.how, work)
+            else:
+                self._built[key] = build_archive(ARCHIVES[key], work)
         return self._built[key]
 
     def close(self) -> None:
@@ -92,18 +99,21 @@ _bat_runs = [0]
 
 def _check(journey: Journey, result, archive: Archive) -> None:
     bad = mismatches(journey, result, archive)
+    then = ""
+    if result.then is not None:
+        then = (f"\n--- carrying on: output (last 4000 characters) ---\n"
+                f"{result.then.output[-4000:]}")
     assert not bad, (
         f"{journey.name} through restore.{result.script} "
         f"({result.seconds:.0f} s):\n  " + "\n  ".join(bad)
-        + f"\n--- output (last 6000 characters) ---\n{result.output[-6000:]}")
+        + f"\n--- output (last 6000 characters) ---\n{result.output[-6000:]}" + then)
 
 
 @pytest.mark.parametrize("journey", JOURNEYS, ids=[j.name for j in JOURNEYS])
-def test_journey_restore_sh(journey: Journey, archives: _Archives, tmp_path: Path,
-                            record_property) -> None:
+def test_journey_restore_sh(journey: Journey, archives: _Archives,
+                            tmp_path: Path) -> None:
     archive = archives[journey.archive]
     result = run_journey_sh(journey, archive, tmp_path)
-    record_property("seconds", f"{result.seconds:.1f}")
     _check(journey, result, archive)
 
 
@@ -112,11 +122,10 @@ def test_journey_restore_sh(journey: Journey, archives: _Archives, tmp_path: Pat
                            "Windows programs")
 @pytest.mark.parametrize("journey", JOURNEYS, ids=[j.name for j in JOURNEYS])
 def test_journey_restore_bat(journey: Journey, archives: _Archives,
-                             request: pytest.FixtureRequest, record_property) -> None:
+                             request: pytest.FixtureRequest) -> None:
     archive = archives[journey.archive]
     prefix = request.getfixturevalue("fresh")
     _bat_runs[0] += 1
     result = run_journey_bat(journey, archive, prefix, _bat_runs[0])
-    record_property("seconds", f"{result.seconds:.1f}")
     _check(journey, result, archive)
 
