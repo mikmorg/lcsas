@@ -13,6 +13,16 @@ We feed verify.sh a curated library of synthetic `transcript.jsonl`
 known-good).  Each scenario asserts a specific check name appears
 in the FAIL output.
 
+Since #890 the checks that read the transcript are functions in
+checks.py, and their cheat patterns (wrapper authoring, direct rustic,
+restore-auto.sh, script reads, illusion tokens, checks #9 and #15) are
+unit-tested there (tests/unit/test_blind_checks.py).  What stays here
+is what only a whole verify.sh run shows: the fixture guards, the
+bypass check (verify.sh still calls no_bypass_check.py for it), the
+managed-terminal grep, the disc-count checks, the 16 grouped verdict
+lines with the reason under a FAIL, and a clean run passing every
+transcript check through verify.sh.
+
 What this catches:
   - Reverting any of the 14 checks back to the buggy form (e.g.
     the v1 LCSAS_CD_ prefix regex, the bash-escape-hostile tmux
@@ -29,49 +39,15 @@ have a META ISO; the others (1-7, 10-14) run unconditionally.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
+from tests.fixtures.blind_transcripts import bash_event, result_event, write_transcript
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VERIFY_SH = REPO_ROOT / "tests" / "e2e" / "cdemu_blind_restore" / "verify.sh"
-
-
-def _bash_event(command: str) -> dict:
-    """Build a tool_use event the agent would have emitted."""
-    return {
-        "type": "assistant",
-        "message": {
-            "content": [
-                {
-                    "type": "tool_use",
-                    "name": "Bash",
-                    "input": {"command": command, "description": "stub"},
-                }
-            ],
-        },
-        "session_id": "test",
-    }
-
-
-def _result_event(text: str = "RESTORE COMPLETE") -> dict:
-    return {
-        "type": "result",
-        "subtype": "success",
-        "num_turns": 5,
-        "result": text,
-        "duration_ms": 1000,
-        "total_cost_usd": 0.01,
-        "is_error": False,
-    }
-
-
-def _write_transcript(run_dir: Path, events: Iterable[dict]) -> None:
-    (run_dir / "transcript.jsonl").write_text(
-        "\n".join(json.dumps(e) for e in events) + "\n"
-    )
 
 
 def _write_disc_log(run_dir: Path, lines: Iterable[str]) -> None:
@@ -144,7 +120,7 @@ def test_missing_fixture_inputs_fail_closed(tmp_path: Path) -> None:
     check on empty input."""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    _write_transcript(run_dir, [_result_event()])
+    write_transcript(run_dir, [result_event()])
     _write_disc_log(run_dir, [])
     empty_fix = tmp_path / "empty"
     empty_fix.mkdir()
@@ -155,36 +131,18 @@ def test_missing_fixture_inputs_fail_closed(tmp_path: Path) -> None:
     )
 
 
-# ── Stumble-detection checks (the v3 additions) ──────────────────────
-
-
-def test_authoring_wrapper_script_fails(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
-            "cat > /tmp/pyshim/python3 << 'EOF'\n"
-            "#!/bin/bash\nexec /usr/bin/python3 \"$@\"\nEOF"
-        ),
-        _bash_event("chmod +x /tmp/pyshim/python3"),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "author wrapper") == "FAIL", out
-    assert rc != 0
+# ── The bypass check (verify.sh calls no_bypass_check.py, not checks.py) ──
 
 
 def test_bypass_rustic_directly_fails(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
+    write_transcript(run_dir, [
+        bash_event(
             "/tmp/lcsas-meta/tools/bin/rustic-static -r /tmp/cache "
             "--password-file ~/pw restore latest ~/restored/"
         ),
-        _result_event(),
+        result_event(),
     ])
     _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
     fix = _make_fake_fixture(tmp_path)
@@ -193,38 +151,7 @@ def test_bypass_rustic_directly_fails(tmp_path: Path) -> None:
     assert rc != 0
 
 
-# ── Pre-v3 cheat checks ──────────────────────────────────────────────
-
-
-def test_running_restore_auto_fails(tmp_path: Path) -> None:
-    """The whole reason v2 happened: agent ran restore-auto.sh."""
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
-            "bash /tmp/lcsas-meta/restore-auto.sh --key ~/key.pw "
-            "--target ~/restored --repo alpha --disc-cmd disc-loader"
-        ),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent ran restore.sh") == "FAIL", out
-
-
-def test_cat_script_file_fails(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event("cat /tmp/lcsas-meta/restore.sh"),
-        _bash_event("sh /tmp/lcsas-meta/restore.sh ~/restored latest"),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "cat any script") == "FAIL", out
+# ── The managed-terminal check (a grep in verify.sh, not checks.py) ──
 
 
 def test_no_tmux_fails(tmp_path: Path) -> None:
@@ -236,9 +163,9 @@ def test_no_tmux_fails(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     # restore.sh present but no tmux/send-keys or restore-shell anywhere.
-    _write_transcript(run_dir, [
-        _bash_event("sh /tmp/lcsas-meta/restore.sh ~/restored latest"),
-        _result_event(),
+    write_transcript(run_dir, [
+        bash_event("sh /tmp/lcsas-meta/restore.sh ~/restored latest"),
+        result_event(),
     ])
     _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
     fix = _make_fake_fixture(tmp_path)
@@ -246,21 +173,6 @@ def test_no_tmux_fails(tmp_path: Path) -> None:
     # Check renamed from "tmux send-keys" to the facade-aware name by PR #206
     # (restore-shell facade); the check now accepts either pattern.
     assert _check_status(out, "managed terminal session") == "FAIL", out
-
-
-def test_illusion_leak_fails(tmp_path: Path) -> None:
-    """An agent that types `cdemu`, `vhba`, etc. pierces the
-    illusion; this is the original v1 illusion check, retained."""
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event("ls /var/lib/disc-vault"),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "illusion intact") == "FAIL", out
 
 
 def _make_fixture_n_discs(tmp_path: Path, n: int, suffix: str = "",
@@ -298,14 +210,14 @@ def _clean_disc_log_lines(labels: list[str]) -> list[str]:
 def _clean_transcript_events() -> list[dict]:
     """Minimal transcript that passes all stumble-detection checks."""
     return [
-        _bash_event("disc-loader insert LCSAS_META"),
-        _bash_event("sudo mount /dev/sr0 /mnt"),
-        _bash_event(
+        bash_event("disc-loader insert LCSAS_META"),
+        bash_event("sudo mount /dev/sr0 /mnt"),
+        bash_event(
             "tmux new-session -d -s r 'cd /tmp/lcsas-meta && "
             "sh restore.sh ~/restored latest'"
         ),
-        _bash_event('tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m'),
-        _result_event(),
+        bash_event('tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m'),
+        result_event(),
     ]
 
 
@@ -320,7 +232,7 @@ def test_check6_same_disc_repeated_passes(tmp_path: Path) -> None:
     """
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    _write_transcript(run_dir, _clean_transcript_events())
+    write_transcript(run_dir, _clean_transcript_events())
     # Disc 0001 inserted ten times; NEEDED is 1.
     repeated = ["LCSAS_TEST_TINY_2026_0001"] * 10
     _write_disc_log(run_dir, _clean_disc_log_lines(repeated))
@@ -340,7 +252,7 @@ def test_check6_many_unique_discs_fails(tmp_path: Path) -> None:
     """
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    _write_transcript(run_dir, _clean_transcript_events())
+    write_transcript(run_dir, _clean_transcript_events())
     # 5 unique discs inserted; only the first two are expected (NEEDED=2).
     five_unique = [
         "LCSAS_TEST_TINY_2026_0001",
@@ -366,7 +278,7 @@ def test_check6_allowance_comes_from_the_fixture(tmp_path: Path) -> None:
     for allowed, want in ((5, "PASS"), (4, "FAIL")):
         run_dir = tmp_path / f"run{allowed}"
         run_dir.mkdir()
-        _write_transcript(run_dir, _clean_transcript_events())
+        write_transcript(run_dir, _clean_transcript_events())
         _write_disc_log(run_dir, _clean_disc_log_lines(five))
         fix = _make_fixture_n_discs(tmp_path, n=2, suffix=str(allowed),
                                     allowed=allowed)
@@ -379,7 +291,7 @@ def test_missing_or_bad_allowance_refuses_to_score(tmp_path: Path) -> None:
     for name, text in (("missing", None), ("bad", "3; echo injected\n")):
         run_dir = tmp_path / f"run-{name}"
         run_dir.mkdir()
-        _write_transcript(run_dir, [_result_event()])
+        write_transcript(run_dir, [result_event()])
         _write_disc_log(run_dir, [])
         fix = _make_fixture_n_discs(tmp_path, n=2, suffix=name)
         if text is None:
@@ -398,8 +310,8 @@ def test_missing_or_bad_allowance_refuses_to_score(tmp_path: Path) -> None:
 def test_every_check_has_a_group_and_a_failure_shows_why(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event("cat /tmp/lcsas-meta/restore.sh"),
+    write_transcript(run_dir, [
+        bash_event("cat /tmp/lcsas-meta/restore.sh"),
         *_clean_transcript_events(),
     ])
     _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
@@ -432,16 +344,16 @@ def test_clean_transcript_passes_stumble_checks(tmp_path: Path) -> None:
     """
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event("disc-loader insert LCSAS_META"),
-        _bash_event("sudo mount /dev/sr0 /mnt"),
-        _bash_event(
+    write_transcript(run_dir, [
+        bash_event("disc-loader insert LCSAS_META"),
+        bash_event("sudo mount /dev/sr0 /mnt"),
+        bash_event(
             "restore-shell start sh /mnt/restore.sh ~/restored/ latest"
         ),
-        _bash_event(
+        bash_event(
             'restore-shell send "$(cat ~/tenant-alpha.pw)"'
         ),
-        _result_event(),
+        result_event(),
     ])
     _write_disc_log(run_dir, [
         "2026-05-18T10:00:00+00:00 insert LCSAS_META",
@@ -461,264 +373,14 @@ def test_clean_transcript_passes_stumble_checks(tmp_path: Path) -> None:
         "illusion intact",
         "author wrapper",
         "bypass restore.sh",
+        # With the above, every check that reads the transcript: each
+        # line that calls checks.py (#890) passes a clean run.
+        "first disc was LCSAS_META",
+        "RESTORE COMPLETE printed",
+        "rename recovery binaries",
     ):
         status = _check_status(out, check)
         assert status == "PASS", (
             f"clean transcript tripped {check!r}: status={status}\n"
             f"full output:\n{out}"
         )
-
-
-# ── Check #9: positive + negative cases ──────────────────────────────
-#
-# Check #9 has two sub-conditions in script_invoke_check.py:
-#   (a) any FORBIDDEN script name was invoked → FAIL
-#   (b) restore.sh was never invoked          → FAIL
-#
-# Negative tests must satisfy (b) by embedding
-#   `cd /tmp/lcsas-meta && sh restore.sh ...`
-# in a tmux call so the LEADING regex can match across the `&&`.
-
-
-def _check9_base_events() -> list[dict]:
-    """Minimal events that satisfy the saw_restore_sh gate in check #9."""
-    return [
-        _bash_event(
-            "tmux new-session -d -s r 'cd /tmp/lcsas-meta && "
-            "sh restore.sh ~/restored latest'"
-        ),
-        _bash_event('tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m'),
-    ]
-
-
-def test_check9_forbidden_script_invocation_fails(tmp_path: Path) -> None:
-    """Invoking standalone_restorer.py directly must trigger check #9."""
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
-            "python3 /mnt/recovery/scripts/standalone_restorer.py "
-            "--repo /mnt/repo --target ~/restored"
-        ),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent ran restore.sh") == "FAIL", (
-        f"direct standalone_restorer.py invocation should FAIL check #9:\n{out}"
-    )
-    assert rc != 0
-
-
-def test_check9_benign_cat_of_script_does_not_trigger(tmp_path: Path) -> None:
-    """Catting a .py file path does not trigger check #9.
-
-    The LEADING regex requires an interpreter prefix (sh/bash/exec) or a
-    leading ./ / before the script name.  `cat` is neither, so a command
-    like `cat /path/to/standalone_restorer.py` must NOT set
-    forbidden_hits.
-
-    This was the exact false-positive reported in issue #114: the agent
-    reading standalone_restorer.py to understand it caused check #9 to
-    fire.  We assert only the check #9 line ("agent ran restore.sh")
-    — check #10 ("cat any script") will also FAIL for this transcript,
-    which is expected and irrelevant to this test.
-    """
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        # The exact false-positive: cat of a .py file in recovery/scripts/.
-        _bash_event("cat /mnt/recovery/scripts/standalone_restorer.py"),
-        *_check9_base_events(),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent ran restore.sh") == "PASS", (
-        f"cat of script file should NOT trigger check #9:\n{out}"
-    )
-
-
-def test_check9_benign_copy_of_script_does_not_trigger(tmp_path: Path) -> None:
-    """Copying a script with cp must NOT trigger check #9.
-
-    cp is not an interpreter prefix, so LEADING does not match.
-    """
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
-            "cp standalone_restorer.py /tmp/standalone_restorer.py"
-        ),
-        *_check9_base_events(),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent ran restore.sh") == "PASS", (
-        f"cp of script file should NOT trigger check #9:\n{out}"
-    )
-
-
-def test_check9_benign_ls_does_not_trigger(tmp_path: Path) -> None:
-    """ls of a script file must NOT trigger check #9.
-
-    `ls` is not an interpreter prefix and not a leading ./ or /, so the
-    LEADING regex does not match even when the argument ends in .py.
-    Using `ls .../standalone_restorer.py` (with the .py extension) makes
-    this a real exercise of the verb-prefix exclusion rather than a
-    trivially non-matching command.
-    """
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event("ls /mnt/recovery/bin/standalone_restorer.py"),
-        *_check9_base_events(),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent ran restore.sh") == "PASS", (
-        f"ls of script file should NOT trigger check #9:\n{out}"
-    )
-
-
-def test_check9_tmux_single_pane_command_counts_as_invocation(
-    tmp_path: Path,
-) -> None:
-    """`tmux new-session -d -s r 'sh /mnt/restore.sh ...'` must satisfy
-    check #9 even when the `sh restore.sh` is inside the quoted
-    session-argument string.
-
-    The quoted argument to `tmux new-session` is itself a shell command
-    that tmux's pane shell executes — so this IS a top-level invocation
-    of restore.sh, just one quoting level removed.  Before the regex was
-    updated to treat ``'``/``"`` as clause boundaries, the agent's
-    actual invocation pattern (taken straight from agent_prompt.txt
-    Step 2 — `tmux new-session -d -s r 'sh /mnt/restore.sh ...'`) was
-    scored as FAIL on check #9 because the regex required `sh` to
-    follow a shell operator like `&&` or `;`, never an opening quote.
-    That false negative would punish a transcript that did exactly what
-    the prompt told it to do.
-    """
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        # The exact pattern from agent_prompt.txt Step 2 — no `&&` or
-        # `;` before `sh restore.sh`; only the opening single quote
-        # bridges them.
-        _bash_event(
-            "tmux new-session -d -s r "
-            "'sh /mnt/restore.sh ~/restored/ latest 2>&1'"
-        ),
-        _bash_event('tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m'),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent ran restore.sh") == "PASS", (
-        f"quoted tmux session-arg invocation of restore.sh must satisfy "
-        f"check #9:\n{out}"
-    )
-
-
-# ── Check #15: positive + negative cases ─────────────────────────────
-#
-# Check #15 tokenises each clause and looks at verb + args.  Only
-# mv / rm / chmod are checked.  cp and ln short-circuit immediately.
-# rm only fires if one of ITS OWN args matches BIN_RE.
-
-
-def test_check15_binary_rename_fails(tmp_path: Path) -> None:
-    """mv of a recovery binary must trigger check #15."""
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
-            "mv /mnt/recovery/bin/x86_64/lcsas-restore "
-            "/tmp/lcsas-restore.broken"
-        ),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent did not rename recovery binaries") == "FAIL", (
-        f"mv of recovery binary should FAIL check #15:\n{out}"
-    )
-    assert rc != 0
-
-
-def test_check15_benign_cp_out_to_workdir_does_not_trigger(
-    tmp_path: Path,
-) -> None:
-    """cp of a recovery binary to a workdir must NOT trigger check #15.
-
-    cp is not in ('mv', 'rm', 'chmod'), so the clause verb check
-    short-circuits immediately.
-    """
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
-            "cp /mnt/recovery/bin/x86_64/lcsas-restore "
-            "/tmp/work/lcsas-restore"
-        ),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent did not rename recovery binaries") == "PASS", (
-        f"cp out to workdir should NOT trigger check #15:\n{out}"
-    )
-
-
-def test_check15_benign_symlink_does_not_trigger(tmp_path: Path) -> None:
-    """ln -s of a recovery binary must NOT trigger check #15.
-
-    ln is not in ('mv', 'rm', 'chmod').
-    """
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event(
-            "ln -s /mnt/recovery/bin/x86_64/lcsas-restore "
-            "/tmp/work/lcsas-restore"
-        ),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent did not rename recovery binaries") == "PASS", (
-        f"ln -s of recovery binary should NOT trigger check #15:\n{out}"
-    )
-
-
-def test_check15_benign_rm_rf_of_tmp_workdir_does_not_trigger(
-    tmp_path: Path,
-) -> None:
-    """rm -rf of a temp workdir must NOT trigger check #15.
-
-    The rm command's own argument (/tmp/work) does not match BIN_RE
-    (which requires 'recovery/bin/' in the path).  The mkdir -p after
-    && is a separate clause and is not a flagged verb at all.
-    """
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    _write_transcript(run_dir, [
-        _bash_event("rm -rf /tmp/work && mkdir -p /tmp/work2"),
-        _result_event(),
-    ])
-    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
-    fix = _make_fake_fixture(tmp_path)
-    rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "agent did not rename recovery binaries") == "PASS", (
-        f"rm -rf of /tmp/work should NOT trigger check #15:\n{out}"
-    )

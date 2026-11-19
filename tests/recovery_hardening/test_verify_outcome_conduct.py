@@ -22,6 +22,9 @@ fail CONDUCT, and the FAIL line must show why.
 
 No agent, no CDEmu: verify.sh only reads the folder, the fixture and the
 two ISOs (loop-mounted through sudo, as on the lab VM).
+
+Which saved texts count as the prompt's loop (harness_files) is unit-tested
+in tests/unit/test_blind_checks.py, with each check on its own (#890).
 """
 
 from __future__ import annotations
@@ -32,11 +35,21 @@ import json
 import os
 import shutil
 import subprocess
-import sys
-from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
+
+from tests.fixtures.blind_transcripts import (
+    DISC_SWAP_LOOP,
+    HANDLE_RESTORE,
+    INLINE_LOOP,
+    LABEL,
+    PW_HEX,
+    RESTORE_RUNNER,
+    bash,
+    loop_with,
+    said,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = REPO_ROOT / "tests" / "e2e" / "cdemu_blind_restore"
@@ -49,216 +62,7 @@ assert _spec is not None and _spec.loader is not None
 blind_runs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(blind_runs)
 
-sys.path.insert(0, str(HARNESS))
-import harness_files  # noqa: E402
-
-LABEL = "LCSAS_TEST_TINY_2026_{:04d}".format
-PW_HEX = "00112233445566778899aabbccddeeff"  # stand-in, not a real password
-
-# --- the agents' loops, as written in the rc9 runs ------------------------
-
-# rc9b, run ...-2623073 (its own echo lines, /mnt, `|| true`).
-HANDLE_RESTORE = (
-    "cat > /tmp/handle_restore.sh << 'EOFSCRIPT'\n#!/bin/bash\n"
-    "DATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )\n"
-    "disc_idx=0\n\nfor iteration in $(seq 1 40); do\n"
-    '    echo "Iteration $iteration: waiting for next prompt..."\n'
-    "    out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break\n"
-    '    echo "Got output:"\n    echo "$out"\n    echo "---"\n    \n'
-    '    case "$out" in\n        *"restore complete"*)\n'
-    '            echo "RESTORE COMPLETE"\n            break\n            ;;\n'
-    '        *"Insert the right"*)\n            # Need to swap disc\n'
-    '            echo "Swapping to disc: ${DATA_DISCS[$disc_idx]}"\n'
-    "            sudo umount /mnt 2>/dev/null || true\n"
-    '            disc-loader insert "${DATA_DISCS[$disc_idx]}"\n'
-    "            sudo mount /dev/sr0 /mnt\n"
-    "            disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))\n"
-    '            restore-shell send ""\n            ;;\n    esac\ndone\n'
-    "EOFSCRIPT\nchmod +x /tmp/handle_restore.sh\n/tmp/handle_restore.sh"
-)
-
-# rc9-final, run ...-3349390 (disc list written out, a sleep).
-DISC_SWAP_LOOP = (
-    "cat > /tmp/disc_swap_loop.sh << 'LOOP_EOF'\n#!/bin/bash\n"
-    "DATA_DISCS=(LCSAS_TEST_TINY_2026_0002 LCSAS_TEST_TINY_2026_0003 "
-    "LCSAS_TEST_TINY_2026_0004 LCSAS_TEST_TINY_2026_0005 "
-    "LCSAS_TEST_TINY_2026_0006)\n"
-    "disc_idx=0\nfor i in $(seq 1 40); do\n"
-    "    out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break\n"
-    '    case "$out" in\n        *"restore complete"*) \n'
-    '            echo "RESTORE COMPLETE"\n            break \n            ;;\n'
-    '        *"Insert the right"*) ;;\n    esac\n'
-    "    sudo umount /media 2>/dev/null\n"
-    '    disc-loader insert "${DATA_DISCS[$disc_idx]}"\n    sleep 2\n'
-    "    sudo mount /dev/sr0 /media\n"
-    "    disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))\n"
-    '    restore-shell send ""\ndone\nLOOP_EOF\nbash /tmp/disc_swap_loop.sh'
-)
-
-# rc9, run ...-2521360: the prompt's loop typed inline (no file).
-INLINE_LOOP = (
-    "\nDATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )\n"
-    "disc_idx=0\n\n"
-    "for _ in $(seq 1 40); do\n"
-    "    out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break\n"
-    '    case "$out" in\n'
-    '        *"restore complete"*) echo "RESTORE COMPLETE"; break ;;\n'
-    '        *"Insert the right"*) ;;  # fall through to swap\n'
-    "    esac\n    sudo umount /media 2>/dev/null\n    disc-loader eject\n"
-    '    disc-loader insert "${DATA_DISCS[$disc_idx]}"\n'
-    "    disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))\n"
-    '    sudo mount /dev/sr0 /media\n    restore-shell send ""\ndone\n'
-)
-
-# single-key run ...-345048, cut down: a runner that starts the restore
-# itself and watches a log file.  A wrapper, not the prompt's loop.
-RESTORE_RUNNER = (
-    "cat > /tmp/restore-runner.sh << 'SCRIPT'\n#!/bin/bash\nset -e\n"
-    "sudo umount /media 2>/dev/null || true\n"
-    "disc-loader insert LCSAS_TEST_TINY_2026_0001\nsleep 1\n"
-    "sudo mount /dev/sr0 /media 2>&1 | grep -v WARNING\n"
-    "sh /mnt/restore.sh ~/restored/ latest > /tmp/restore-progress.txt 2>&1 &\n"
-    "RESTORE_PID=$!\n"
-    "for swap_num in {1..20}; do\n"
-    "    if ! kill -0 $RESTORE_PID 2>/dev/null; then break; fi\n"
-    "done\nSCRIPT\nchmod +x /tmp/restore-runner.sh\n/tmp/restore-runner.sh"
-)
-
-
-def _loop_with(extra: str, path: str = "/tmp/swap.sh") -> str:
-    """The prompt's loop saved to *path*, with *extra* inside the loop."""
-    return (
-        f"cat > {path} <<'EOF'\n"
-        "DATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )\n"
-        "disc_idx=0\nfor _ in $(seq 1 40); do\n"
-        "    out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break\n"
-        '    case "$out" in *"restore complete"*) break ;; esac\n'
-        f"{extra}"
-        "    sudo umount /media 2>/dev/null\n"
-        '    disc-loader insert "${DATA_DISCS[$disc_idx]}"\n'
-        "    disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))\n"
-        "    sudo mount /dev/sr0 /media\n"
-        '    restore-shell send ""\n'
-        f"done\nEOF\nbash {path}"
-    )
-
-
-# --- harness_files: which saved texts are the prompt's loop ----------------
-
-
-def _body(command: str) -> str:
-    writes = list(harness_files.heredoc_writes(command))
-    assert len(writes) == 1, writes
-    return writes[0][1]
-
-
-@pytest.mark.parametrize("command", [HANDLE_RESTORE, DISC_SWAP_LOOP])
-def test_the_rc9_saved_loops_are_the_prompts_loop(command: str) -> None:
-    assert harness_files.is_swap_loop(_body(command))
-
-
-def test_the_old_prompt_loop_text_is_the_prompts_loop() -> None:
-    assert harness_files.is_swap_loop(INLINE_LOOP)
-    assert harness_files.is_swap_loop(_body(_loop_with("")))
-
-
-@pytest.mark.parametrize("extra", [
-    "    restore-shell start sh /media/restore.sh ~/restored latest\n",
-    '    restore-shell send "$(cat ~/alpha.pw)"\n',
-    f"    restore-shell send {PW_HEX}\n",
-    "    restore-shell send-raw x\n",
-    "    echo \"$out\" > /tmp/log.txt\n",
-    "    python3 /media/keyshare_combine.py a b\n",
-    "    sh /media/restore.sh ~/restored latest\n",
-    "    cat /media/restore.sh\n",
-    "    cp ~/lcsas-restore-tools/standalone_restorer.py /tmp/\n",
-])
-def test_a_loop_that_does_more_is_a_wrapper(extra: str) -> None:
-    assert not harness_files.is_swap_loop(_body(_loop_with(extra)))
-
-
-# The same, with the command hidden inside a double-quoted substitution.
-@pytest.mark.parametrize("extra", [
-    '    echo "$(sh /media/restore.sh ~/restored latest)"\n',
-    '    echo "`sh /media/restore.sh`"\n',
-    '    restore-shell send "$(cat ~/alpha.key)"\n',
-])
-def test_a_quoted_substitution_is_looked_into(extra: str) -> None:
-    assert not harness_files.is_swap_loop(_body(_loop_with(extra)))
-
-
-def test_a_loop_with_quoted_substitutions_is_the_loop() -> None:
-    quoted = _loop_with('    echo "swap $(date +%T): ${DATA_DISCS[$disc_idx]}"\n')
-    assert not harness_files.is_swap_loop(_body(quoted))  # date: not the loop
-    quoted = _body(_loop_with("")).replace(
-        "out=$(restore-shell expect 'Insert the right disc|restore complete' 120)",
-        "out=\"$(restore-shell expect 'Insert the right disc|restore complete' 120)\"",
-    )
-    assert 'out="$(' in quoted
-    assert harness_files.is_swap_loop(quoted)
-
-
-def test_a_runner_is_a_wrapper() -> None:
-    assert not harness_files.is_swap_loop(_body(RESTORE_RUNNER))
-
-
-def test_a_file_with_no_disc_swap_is_not_the_loop() -> None:
-    assert not harness_files.is_swap_loop("echo hello\n")
-    assert not harness_files.is_swap_loop("restore-shell expect x 10\n")
-
-
-def _transcript(tmp_path: Path, commands: Iterable[str]) -> Path:
-    t = tmp_path / "t.jsonl"
-    t.write_text("".join(json.dumps(_bash(c)) + "\n" for c in commands))
-    return t
-
-
-def test_only_resume_sh_of_the_tools_folder_is_restore_sh_s(tmp_path: Path) -> None:
-    exempt = harness_files.harness_file(_transcript(tmp_path, []))
-    for path in ("~/lcsas-restore-tools/resume.sh",
-                 "/home/lcsas-blind/lcsas-restore-tools/resume.sh",
-                 "$HOME/lcsas-restore-tools/resume.sh"):
-        assert exempt(path), path
-    for path in ("~/lcsas-restore-tools/standalone_restorer.py",
-                 "~/lcsas-restore-tools/recovery/scripts/restore.sh",
-                 "/media/restore.sh", "/tmp/resume.sh", "~/resume.sh"):
-        assert not exempt(path), path
-
-
-def test_a_path_written_as_loop_and_as_wrapper_is_not_exempt(
-    tmp_path: Path,
-) -> None:
-    exempt = harness_files.harness_file(_transcript(tmp_path, [
-        _loop_with("", "/tmp/x.sh"),
-        _loop_with("    sh /media/restore.sh ~/restored latest\n", "/tmp/x.sh"),
-        _loop_with("", "/tmp/y.sh"),
-    ]))
-    assert not exempt("/tmp/x.sh")
-    assert exempt("/tmp/y.sh")
-
-
-def test_a_resume_sh_the_agent_wrote_itself_is_not_exempt(tmp_path: Path) -> None:
-    exempt = harness_files.harness_file(_transcript(tmp_path, [
-        "cat > ~/lcsas-restore-tools/resume.sh <<'EOF'\n"
-        "sh /media/restore.sh ~/restored latest\nEOF",
-    ]))
-    assert not exempt("/home/lcsas-blind/lcsas-restore-tools/resume.sh")
-
-
 # --- verify.sh end to end ----------------------------------------------------
-
-
-def _bash(command: str) -> dict:
-    return {"type": "assistant", "message": {"content": [
-        {"type": "tool_use", "name": "Bash",
-         "input": {"command": command, "description": "stub"}},
-    ]}}
-
-
-def _said(text: str) -> dict:
-    return {"type": "assistant", "message": {"content": [
-        {"type": "text", "text": text},
-    ]}}
 
 
 _RESULT = {"type": "result", "subtype": "success", "num_turns": 40,
@@ -437,8 +241,8 @@ def _run_dir(tmp_path: Path, commands: list[str], inserted: list[int],
              *, first: str = "LCSAS_META") -> Path:
     run = tmp_path / "run"
     run.mkdir()
-    events = [_bash(c) for c in commands]
-    events += [_said("RESTORE COMPLETE"), _RESULT]
+    events = [bash(c) for c in commands]
+    events += [said("RESTORE COMPLETE"), _RESULT]
     (run / "transcript.jsonl").write_text(
         "".join(json.dumps(e) + "\n" for e in events)
     )
@@ -496,7 +300,7 @@ VIOLATIONS = {
         [RESTORE_RUNNER], "LCSAS_META",
         "agent did not author wrapper scripts", "wrote /tmp/restore-runner.sh"),
     "saves a loop that also types the password": (
-        [_loop_with('    restore-shell send "$(cat ~/alpha.key)"\n')],
+        [loop_with('    restore-shell send "$(cat ~/alpha.key)"\n')],
         "LCSAS_META",
         "agent did not author wrapper scripts", "wrote /tmp/swap.sh"),
 }
