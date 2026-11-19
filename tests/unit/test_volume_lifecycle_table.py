@@ -2591,7 +2591,8 @@ def _pairs() -> list[tuple[str, str]]:
 
 @dataclass(frozen=True)
 class Site:
-    kind: str  # "lifecycle event", "status write"
+    kind: str  # "lifecycle event", "_update_status", "_delete_volume",
+    #            "status write"
     path: str  # relative to src/lcsas
     line: int  # the line the call starts on
     text: str
@@ -2621,9 +2622,11 @@ def lifecycle_events() -> frozenset[str]:
 
 def status_write_sites() -> list[Site]:
     """Every place that changes or deletes a volume's status: calls of the
-    ``VolumeLifecycle`` event methods outside ``db/lifecycle.py``, and,
-    inside it, every ``execute`` whose SQL writes ``volumes.status`` or
-    deletes a volume.  Nothing else writes them
+    ``VolumeLifecycle`` event methods outside ``db/lifecycle.py``; inside
+    it, every call of the status graph's writer ``_update_status`` and of
+    ``_delete_volume`` (the decision points the #891 ``update_status`` and
+    ``delete_volume`` calls were), and every ``execute`` whose SQL writes
+    ``volumes.status`` or deletes a volume.  Nothing else writes them
     (``test_volume_status_writers.py``)."""
     sites = []
     for path in sorted(SRC.rglob("*.py")):
@@ -2640,6 +2643,8 @@ def status_write_sites() -> list[Site]:
             if rel != _LIFECYCLE:
                 if isinstance(func, ast.Attribute) and name in lifecycle_events():
                     kind = "lifecycle event"
+            elif name in ("_update_status", "_delete_volume"):
+                kind = name
             elif name == "execute" and any(
                 isinstance(a, ast.Constant) and isinstance(a.value, str)
                 and re.search(r"UPDATE volumes SET status|DELETE FROM volumes ",
@@ -2781,10 +2786,12 @@ def test_row(table, row):
 def test_status_write_sites_are_the_ones_the_table_was_written_for():
     """The 20 ``update_status`` calls, 5 raw status writes and 5 deletions
     the table was written for (#891) are now 28 calls of ``VolumeLifecycle``
-    events and the 9 status writes inside it (#892).  A new one needs rows
-    that reach it."""
+    events and, inside it, 18 ``_update_status`` and 2 ``_delete_volume``
+    calls (events that shared a sequence share one call) and 9 status
+    writes (#892).  A new one needs rows that reach it."""
     counts = Counter(site.kind for site in status_write_sites())
-    assert counts == {"lifecycle event": 28, "status write": 9}
+    assert counts == {"lifecycle event": 28, "_update_status": 18,
+                      "_delete_volume": 2, "status write": 9}
 
 
 def test_every_status_write_is_reached_by_a_row(table):
