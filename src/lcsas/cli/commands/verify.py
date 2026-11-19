@@ -162,12 +162,10 @@ def _mark_verified(
     ISO's hash, and the volume is closed, as an imported receipt does.
     ``last_verified_at`` stays NULL: nothing here read the disc.
     """
-    from lcsas.db.locations import ensure_location
+    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.queries import get_lost_volume_ids, volume_display_status
-    from lcsas.db.sessions import get_staged_iso
-    from lcsas.db.volume_copies import add_volume_copy, get_copies_for_volume
-    from lcsas.db.volume_events import add_event
-    from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volumes import get_volume_by_label
 
     vol = get_volume_by_label(conn, label)
     if vol is None:
@@ -200,28 +198,13 @@ def _mark_verified(
         )
         return 1
 
-    if vol.status == "STAGING":
-        update_status(conn, vol.volume_id, "BURNING", commit=False)
-    update_status(conn, vol.volume_id, "VERIFIED", commit=False)
-    logger.info(f"Volume {vol.label}: status {vol.status} → VERIFIED")
-    if not active and location:
-        ensure_location(conn, location, commit=False)
-        staged = get_staged_iso(conn, vol.volume_id)
-        add_volume_copy(
-            conn, vol.volume_id, location,
-            notes="Recorded by verify --mark-verified",
-            iso_sha256=staged[0] if staged else None,
-            iso_size_bytes=staged[1] if staged else None,
-            commit=False,
-        )
-        logger.info(f"Volume {vol.label}: disc recorded at {location}")
-    if vol.closed_at is None:
-        mark_closed(conn, vol.volume_id, commit=False)
-    add_event(
-        conn, vol.volume_id, "VERIFY_PASS",
-        location=location,
+    VolumeLifecycle(conn).verified_by_hand(
+        vol.volume_id, location=location, record_disc=not active,
         detail=detail or "Manual verification (remote)",
     )
+    logger.info(f"Volume {vol.label}: status {vol.status} → VERIFIED")
+    if not active and location:
+        logger.info(f"Volume {vol.label}: disc recorded at {location}")
     return 0
 
 
@@ -233,8 +216,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     - Manual marking: --mark-verified / --mark-failed for remote workflows
     - All volumes: --all to verify every BURNED/VERIFIED volume
     """
+    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.volume_events import add_event
-    from lcsas.db.volumes import get_volume_by_label, update_status
+    from lcsas.db.volumes import get_volume_by_label
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
@@ -429,14 +413,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
         detail = args.detail or ("Disc verify" if args.disc else f"ISO verify: {iso_path}")
         add_event(conn, vol.volume_id, event_type, detail=detail)
 
-        # If verification passed on a BURNED volume, promote to VERIFIED
-        if passed and vol.status == "BURNED":
-            update_status(conn, vol.volume_id, "VERIFIED")
-            logger.info(f"Volume {vol.label}: promoted BURNED → VERIFIED")
-        elif passed and recorded_disc and vol.status in ("STAGING", "BURNING"):
-            # #678: the disc was identified, read, and is now recorded —
-            # the same evidence a burn's own check gives.
-            update_status(conn, vol.volume_id, "VERIFIED", force=True)
+        # A passing check may promote the volume to VERIFIED: a BURNED
+        # one, or (#678) a STAGING/BURNING one whose disc this check
+        # identified, read and recorded.
+        promoted = None
+        if passed and args.disc:
+            promoted = VolumeLifecycle(conn).disc_check_passed(
+                vol.volume_id, disc_recorded=recorded_disc,
+            )
+        elif passed:
+            promoted = VolumeLifecycle(conn).iso_check_passed(vol.volume_id)
+        if promoted is not None:
             logger.info(
                 f"Volume {vol.label}: promoted {vol.status} → VERIFIED"
             )
@@ -446,9 +433,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any) -> int:
     """Verify all BURNED/VERIFIED volumes in one run, optionally at a location."""
+    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.volume_copies import get_copies_for_volume
     from lcsas.db.volume_events import add_event
-    from lcsas.db.volumes import list_volumes, update_status
+    from lcsas.db.volumes import list_volumes
 
     vols_burned = list_volumes(conn, status_filter="BURNED")
     vols_verified = list_volumes(conn, status_filter="VERIFIED")
@@ -537,8 +525,7 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
 
         if ok:
             passed_count += 1
-            if vol.status == "BURNED":
-                update_status(conn, vol.volume_id, "VERIFIED")
+            VolumeLifecycle(conn).iso_check_passed(vol.volume_id)
             logger.info(f"  {vol.label}: PASS")
         else:
             failed_count += 1
@@ -566,9 +553,9 @@ def _verify_all_disc(
     and leaves the stamp untouched; a wrong disc in the drive records
     nothing (FMA-03: owner error is not evidence).
     """
+    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.volume_copies import touch_last_verified
     from lcsas.db.volume_events import add_event
-    from lcsas.db.volumes import get_volume_by_id, update_status
 
     params: tuple[Any, ...] = ()
     where = "vc.status = 'ACTIVE' AND v.status IN ('BURNED', 'VERIFIED')"
@@ -615,10 +602,12 @@ def _verify_all_disc(
             add_event(conn, row["volume_id"], "VERIFY_PASS",
                       location=location, detail="Batch disc verify")
             logger.info(f"  Stamped last_verified_at on the disc at {location}")
-            # Re-read status: an earlier disc of the same volume may
-            # already have promoted it in this run.
-            if get_volume_by_id(conn, row["volume_id"]).status == "BURNED":
-                update_status(conn, row["volume_id"], "VERIFIED")
+            # The lifecycle reads the status afresh: an earlier disc of
+            # the same volume may already have promoted it in this run.
+            promoted = VolumeLifecycle(conn).disc_check_passed(
+                row["volume_id"],
+            )
+            if promoted is not None:
                 logger.info(f"Volume {label}: promoted BURNED → VERIFIED")
             results.append((label, location, "PASS"))
         elif outcome == "FAIL":
