@@ -2597,14 +2597,37 @@ class Site:
         return f"{self.path}:{self.line}"
 
 
+# The methods of ``VolumeLifecycle`` (``db/lifecycle.py``, #892) that only
+# read; every other public method is an event that changes or deletes a
+# volume.
+_LIFECYCLE_READS = frozenset({"burn_evidence", "burn_unknown", "may_delete"})
+_LIFECYCLE = "db/lifecycle.py"
+
+
+@functools.cache
+def lifecycle_events() -> frozenset[str]:
+    from lcsas.db.lifecycle import VolumeLifecycle
+
+    public = {name for name, value in vars(VolumeLifecycle).items()
+              if callable(value) and not name.startswith("_")}
+    assert public >= _LIFECYCLE_READS, "a read-only method was renamed"
+    events = frozenset(public - _LIFECYCLE_READS)
+    assert events, "VolumeLifecycle has no event methods"
+    return events
+
+
 def status_write_sites() -> list[Site]:
-    """Every place that changes or deletes a volume's status: calls of
-    ``update_status`` and ``delete_volume``, and ``execute`` calls whose
-    SQL is an ``UPDATE volumes SET status`` outside ``update_status``
-    itself (``db/volumes.py``)."""
+    """Every place that changes or deletes a volume's status: calls of the
+    ``VolumeLifecycle`` event methods outside ``db/lifecycle.py``; calls of
+    ``update_status`` and ``delete_volume`` outside it; and ``execute``
+    calls whose SQL is an ``UPDATE volumes SET status`` outside
+    ``update_status`` itself (``db/volumes.py``) and the lifecycle
+    module."""
     sites = []
     for path in sorted(SRC.rglob("*.py")):
         rel = path.relative_to(SRC).as_posix()
+        if rel == _LIFECYCLE:
+            continue
         source = path.read_text(encoding="utf-8")
         lines = source.splitlines()
         for node in ast.walk(ast.parse(source)):
@@ -2616,6 +2639,8 @@ def status_write_sites() -> list[Site]:
             kind = ""
             if name in ("update_status", "delete_volume"):
                 kind = name
+            elif isinstance(func, ast.Attribute) and name in lifecycle_events():
+                kind = "lifecycle event"
             elif name == "execute" and rel != "db/volumes.py" and any(
                 isinstance(a, ast.Constant) and isinstance(a.value, str)
                 and "UPDATE volumes SET status" in " ".join(a.value.split())
