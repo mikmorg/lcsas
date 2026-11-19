@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from lcsas.constants import STATUS_BURNED, STATUS_VERIFIED
 from lcsas.db.models import VolumeEvent
 from lcsas.utils.timestamps import utc_now
 
@@ -161,6 +162,13 @@ def burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
     - ``LOCATION_MOVE``: a recorded disc was moved.
     - ``VERIFY_FAIL_REBURN``: written only when an earlier disc of
       the volume was recorded.
+    - A status note saying the volume was BURNED or VERIFIED when a
+      burn of it started (#904,
+      :func:`lcsas.db.volumes.status_before_burning`).  An LCSAS from
+      before #810 (rc1 to rc9, the rc7 install among them) moved a
+      BURNED volume to BURNING for its burn, writing the note "Status
+      changed: BURNED → BURNING"; a burn killed then leaves the volume
+      BURNING, and that note is its only record of the disc.
 
     ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
     to STAGING and is re-staged or aborted (BURN-05, #483).
@@ -190,6 +198,11 @@ def burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
             return f"a disc of it was moved{where}"
         else:
             return f"a disc of it was burned again{where}"
+    from lcsas.db.volumes import status_before_burning
+
+    before = status_before_burning(conn, volume_id)
+    if before in (STATUS_BURNED, STATUS_VERIFIED):
+        return f"it was {before} when a burn of it started"
     return None
 
 

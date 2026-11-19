@@ -33,7 +33,7 @@ from lcsas.db.queries import get_unarchived_packs
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.sessions import get_session
-from lcsas.db.volume_events import add_event
+from lcsas.db.volume_events import add_event, burn_evidence
 from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import get_volume_by_label
 
@@ -289,6 +289,83 @@ def test_abort_still_deletes_never_burned_and_failed_volumes(staged, setup):
     assert get_volume_by_label(conn, manifest.volume_label) is None
     assert len(get_unarchived_packs(conn)) == 2
     assert get_session(conn, result.session_id).status == "CLEANED"
+
+
+# ---------------------------------------------------------------------
+# #904: a volume an older LCSAS moved from BURNED to BURNING
+# ---------------------------------------------------------------------
+
+# The notes update_status() wrote in rc1 to rc9 (the rc7 install among
+# them): "Status changed: {current} → {status}", unchanged since it was
+# added (d24dcbf).  BURNED → BURNING was allowed from BURN-05 (4c74bde,
+# before rc1) until #810 (rc10).  Written as literals, not through
+# update_status(), so the test keeps the text such catalogs already hold
+# even if the writer changes.
+_RC7_NOTES_BURNED_THEN_BURNING = (
+    "Status changed: STAGING → BURNING",
+    "Status changed: BURNING → BURNED",
+    "Status changed: BURNED → BURNING",
+)
+_WAS_BURNED = "it was BURNED when a burn of it started"
+
+
+def _rc7_history(conn, volume_id: int, status: str,
+                 notes: tuple[str, ...]) -> None:
+    """Give the volume *status* and *notes*, as the older LCSAS left it."""
+    conn.execute("UPDATE volumes SET status = ? WHERE volume_id = ?",
+                 (status, volume_id))
+    for detail in notes:
+        add_event(conn, volume_id, "NOTE", detail=detail)
+
+
+@pytest.mark.parametrize("status, notes", [
+    # The burn of a BURNED volume was killed: it is still BURNING.
+    ("BURNING", _RC7_NOTES_BURNED_THEN_BURNING),
+    # The burn failed and the older LCSAS set it STAGING (#810).
+    ("STAGING", (*_RC7_NOTES_BURNED_THEN_BURNING,
+                 "Status changed: BURNING → STAGING")),
+])
+def test_burned_before_its_burn_is_never_deleted(staged, status, notes):
+    orch, conn, result, manifest = staged
+    _rc7_history(conn, manifest.volume_id, status, notes)
+
+    assert burn_evidence(conn, manifest.volume_id) == _WAS_BURNED
+    for call in (
+        lambda: orch.abort_session(result.session_id),
+        lambda: orch.abort_session(result.session_id, never_burned=True),
+        lambda: orch.clean_session(result.session_id),
+        lambda: orch.clean_session(result.session_id, force=True),
+        lambda: orch.abort_volume(manifest.volume_label),
+        lambda: orch.abort_volume(manifest.volume_label, never_burned=True),
+    ):
+        with pytest.raises(ValueError,
+                           match=f"is {status}, but {_WAS_BURNED}"):
+            call()
+    vol = get_volume_by_label(conn, manifest.volume_label)
+    assert vol is not None and vol.status == status
+    assert get_pack_ids_for_volume(conn, manifest.volume_id)
+    assert manifest.iso_path is not None and manifest.iso_path.exists()
+    assert get_session(conn, result.session_id).status == "STAGED"
+
+
+@pytest.mark.parametrize("notes", [
+    # A staged volume whose burn was killed (#668).
+    ("Status changed: STAGING → BURNING",),
+    # Only the newest "→ BURNING" note counts (status_before_burning),
+    # and this burn started from STAGING.  A known limit, outside #904:
+    # the older BURNED → BURNING note above no longer protects it, though
+    # a disc of it may exist.  Pinned so a change to that is deliberate.
+    (*_RC7_NOTES_BURNED_THEN_BURNING, "Status changed: BURNING → STAGING",
+     "Status changed: STAGING → BURNING"),
+])
+def test_burning_from_staging_is_still_deleted(staged, notes):
+    orch, conn, result, manifest = staged
+    _rc7_history(conn, manifest.volume_id, "BURNING", notes)
+
+    assert burn_evidence(conn, manifest.volume_id) is None
+    summary = orch.abort_session(result.session_id)
+    assert summary.labels == [manifest.volume_label]
+    assert get_volume_by_label(conn, manifest.volume_label) is None
 
 
 def test_mixed_session_deletes_nothing(tmp_path):
