@@ -122,6 +122,7 @@ def harness(tmp_path: Path) -> dict[str, Path]:
     here.mkdir()
     shutil.copy2(HARNESS / "run_variant.sh", here / "run_variant.sh")
     shutil.copy2(HARNESS / "blind_runs.py", here / "blind_runs.py")
+    shutil.copy2(HARNESS / "transcript.py", here / "transcript.py")  # blind_runs reads with it
     (here / "XFAIL.list").write_text("# ledger\nno-catalog issue=#1 expires=2099-01-01\n")
     for name, body in (
         ("setup.py", "#!/bin/sh\nexit 0\n"),

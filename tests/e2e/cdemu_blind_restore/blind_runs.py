@@ -49,6 +49,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
+# run_variant.sh runs this as root: import transcript.py from this folder
+# without leaving a root-owned __pycache__ in the checkout.
+sys.dont_write_bytecode = True
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import transcript  # noqa: E402
+
 # verify.sh's `check` calls of each group (#827).  A pass needs every one
 # of them to have run and passed; a 0/0 or 15/15 run is not a pass.
 # Pinned against verify.sh by tests/unit/test_blind_runs.py.
@@ -127,7 +134,7 @@ def prune(
     return removed, failed
 
 
-def run_stats(transcript: Path) -> dict[str, object]:
+def run_stats(transcript_path: Path) -> dict[str, object]:
     """Cost and turns of a run, from the LAST ``result`` event of its own
     transcript (not a grep over the run folder, which also matches the
     same keys quoted inside tool output).  ``turns`` is the CLI's
@@ -136,30 +143,15 @@ def run_stats(transcript: Path) -> dict[str, object]:
     stats: dict[str, object] = {"cost_usd": None, "turns": None,
                                 "tool_calls": 0, "agent_result": None}
     try:
-        lines = transcript.read_text(errors="replace").splitlines()
+        t = transcript.load(transcript_path)
     except OSError:
         return stats
-    tool_calls = 0
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        if event.get("type") == "result":
-            stats["cost_usd"] = event.get("total_cost_usd")
-            stats["turns"] = event.get("num_turns")
-            stats["agent_result"] = event.get("subtype")
-        if event.get("type") == "assistant":
-            msg = event.get("message")
-            content = (msg if isinstance(msg, dict) else {}).get("content")
-            if isinstance(content, list):
-                tool_calls += sum(
-                    1 for b in content
-                    if isinstance(b, dict) and b.get("type") == "tool_use"
-                )
-    stats["tool_calls"] = tool_calls
+    if t.results:
+        last = t.results[-1]
+        stats["cost_usd"] = last.get("total_cost_usd")
+        stats["turns"] = last.get("num_turns")
+        stats["agent_result"] = last.get("subtype")
+    stats["tool_calls"] = len(t.calls)
     return stats
 
 
@@ -209,11 +201,11 @@ def score(
     if not run_dir.is_dir():
         result["error"] = f"run folder {run_dir} does not exist"
         return 2, result, ""
-    transcript = run_dir / "transcript.jsonl"
-    if not transcript.is_file():
+    transcript_path = run_dir / "transcript.jsonl"
+    if not transcript_path.is_file():
         result["error"] = f"no transcript in {run_dir}: the agent never ran"
         return 2, result, ""
-    result.update(run_stats(transcript))
+    result.update(run_stats(transcript_path))
     proc = subprocess.run(
         [*verify_cmd, str(run_dir)],
         capture_output=True, text=True, check=False,

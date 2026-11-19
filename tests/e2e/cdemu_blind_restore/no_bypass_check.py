@@ -34,10 +34,17 @@ Exit codes:
 
 from __future__ import annotations
 
-import json
 import re
 import shlex
 import sys
+from pathlib import Path
+
+# verify.sh runs this as root: import transcript.py from this folder
+# without leaving a root-owned __pycache__ in the checkout.
+sys.dont_write_bytecode = True
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import transcript  # noqa: E402
 
 # Binary names (without path) that are considered recovery drivers.
 # argv[0] (after stripping wrappers) is matched against this set
@@ -140,24 +147,11 @@ def scan_command(cmd: str) -> list[str]:
 
 def scan_transcript(path: str) -> list[str]:
     """Walk a transcript.jsonl and return all bypass hits across
-    every tool_use command.
+    every shell command the agent ran.
     """
     hits: list[str] = []
-    with open(path) as fh:
-        for line in fh:
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            msg = d.get('message')
-            content = (msg if isinstance(msg, dict) else {}).get('content', [])
-            if not isinstance(content, list):
-                continue
-            for c in content:
-                if c.get('type') != 'tool_use':
-                    continue
-                cmd = c.get('input', {}).get('command', '')
-                hits.extend(scan_command(cmd))
+    for call in transcript.load(path).bash():
+        hits.extend(scan_command(call.command))
     return hits
 
 
