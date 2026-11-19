@@ -9,6 +9,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.snapshots import DISC_BLANKED_SNAPSHOT_COLUMNS
 
 _logger = logging.getLogger(__name__)
@@ -339,9 +340,8 @@ def _merge_one_disc(
                 # Freshest view so far — its status wins, downgrades to
                 # DEPRECATED/DESTROYED included.
                 if src_status != tgt_status:
-                    target.execute(
-                        "UPDATE volumes SET status = ? WHERE volume_id = ?",
-                        (src_status, volume_id),
+                    VolumeLifecycle(target).disc_catalog_status_adopted(
+                        volume_id, src_status,
                     )
                 status_freshness[uuid_] = source_freshness
             elif (
@@ -635,10 +635,7 @@ def _promote_read_discs(
                 f"--disc --location <where it is kept>'."
             )
             continue
-        conn.execute(
-            "UPDATE volumes SET status = 'BURNED' WHERE volume_id = ?",
-            (volume_id,),
-        )
+        VolumeLifecycle(conn).own_disc_read_in_rebuild(volume_id)
         result.needs_verify.append(label)
     conn.commit()
     result.needs_verify.sort()
@@ -667,13 +664,9 @@ def _mark_burn_unknown(
     a note newer than every disc would stop a later rebuild into this
     catalog from taking a fresher disc's view of any volume.
     """
-    from lcsas.db.volume_events import (
-        REBUILD_UNKNOWN_NOTE_PREFIX,
-        add_event,
-        burn_evidence,
-        rebuild_burn_unknown,
-    )
+    from lcsas.db.volume_events import REBUILD_UNKNOWN_NOTE_PREFIX, add_event
 
+    lifecycle = VolumeLifecycle(conn)
     rows = conn.execute(
         """SELECT v.volume_id, v.label, v.uuid, v.created_at FROM volumes v
            WHERE v.status IN ('STAGING', 'BURNING')
@@ -682,9 +675,9 @@ def _mark_burn_unknown(
            ORDER BY v.label"""
     ).fetchall()
     for volume_id, label, uuid_, created_at in rows:
-        if uuid_ in known_uuids or burn_evidence(conn, volume_id) is not None:
+        if uuid_ in known_uuids or lifecycle.burn_evidence(volume_id) is not None:
             continue
-        if not rebuild_burn_unknown(conn, volume_id):
+        if not lifecycle.burn_unknown(volume_id):
             add_event(
                 conn, volume_id, "NOTE",
                 detail=(
