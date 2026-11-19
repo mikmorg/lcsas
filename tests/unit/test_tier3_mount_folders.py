@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from lcsas.restore import restic_fallback as fb
+from lcsas.restore._disc_search import DiscSearch, RestoreAbortedError
 from lcsas.restore.standalone_builder import build_standalone
 
 from .tier3_repo_builder import PASSWORD, build_repo
@@ -45,6 +46,30 @@ def _repo_and_disc(tmp_path: Path, mount_dir: Path, label: str) -> Path:
 def _check(target: Path) -> None:
     assert (target / "a.txt").read_bytes() == b"alpha\n"
     assert (target / "d" / "b.txt").read_bytes() == b"bravo\n"
+
+
+def _search(repo: Path, roots: list[Path], **kw: object) -> DiscSearch:
+    """The disc search a restorer of *repo* over *roots* would use."""
+    return DiscSearch(
+        roots, repo_data=repo / "data", log=lambda _msg: None,
+        **kw,  # type: ignore[arg-type]
+    )
+
+
+def _searched(repo: Path, roots: list[Path], **kw: object) -> list[str]:
+    """The folders the disc prompt of such a search says it is
+    searching (the roots, then the discs found below them), as it prints
+    them: a long path is cut from the left, so each keeps its last name.
+    The prompt is answered 'q'."""
+    out: list[str] = []
+    search = _search(repo, roots, interactive=True,
+                     prompt_in=lambda: "q\n", prompt_out=out.append, **kw)
+    with pytest.raises(RestoreAbortedError):
+        search.read_pack_range("ff" * 32, 0, 1)
+    box = "".join(out).split("\n")
+    start = box.index("| Currently searching:".ljust(59) + "|") + 1
+    end = box.index("|" + " " * 58 + "|", start)
+    return [line.strip("| ").rstrip() for line in box[start:end]]
 
 
 @pytest.mark.parametrize(
@@ -84,22 +109,19 @@ def test_a_disc_mounted_at_the_prompt_under_a_new_name_is_found(
     mounts = tmp_path / "media" / "user"
     repo = _repo_and_disc(tmp_path, tmp_path / "shelf", "LCSAS-0002")
     mounts.mkdir(parents=True)
-    restorer = fb.PurePythonRestorer(
-        repo, password=PASSWORD, pack_search_paths=[repo / "data", mounts],
-        interactive=True,
-    )
     prompts: list[str] = []
 
-    class Reader:
-        def readline(self) -> str:
-            os.rename(tmp_path / "shelf" / "LCSAS-0002", mounts / "LCSAS-0002")
-            return "\n"
+    def enter() -> str:
+        os.rename(tmp_path / "shelf" / "LCSAS-0002", mounts / "LCSAS-0002")
+        return "\n"
 
-    monkeypatch.setattr(restorer, "_print_swap_prompt", prompts.append)
-    monkeypatch.setattr(sys, "stdin", Reader())
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD, pack_search_paths=[repo / "data", mounts],
+        interactive=True, prompt_in=enter, prompt_out=prompts.append,
+    )
     restorer.restore(tmp_path / "out")
     assert restorer.failures == 0
-    assert len(prompts) == 1
+    assert "".join(prompts).count("is required for the next file") == 1
     _check(tmp_path / "out")
 
 
@@ -122,16 +144,17 @@ def test_nothing_on_the_mounted_meta_disc_is_used(tmp_path: Path) -> None:
     sentinel.write_text("#!/bin/sh\n")
     pack = next(p for p in (meta / "data").rglob("*") if p.is_file()).name
 
-    restorer = fb.PurePythonRestorer(
-        repo, password=PASSWORD, pack_search_paths=[repo / "data", mounts],
-        interactive=False, meta_disc=meta,
-    )
-    assert restorer._scan_pack_search_paths(pack) is None
-    assert meta not in restorer._all_roots()
+    search = _search(repo, [repo / "data", mounts], meta_disc=meta)
+    with pytest.raises(FileNotFoundError):
+        search.read_pack_range(pack, 0, 1)
+    assert not [f for f in _searched(repo, [repo / "data", mounts],
+                                     meta_disc=meta)
+                if f.endswith("LCSAS-META")]
     # The meta disc came out and a data disc went in at the same place
     # (no restore.sh there): it is searched.
     sentinel.unlink()
-    assert restorer._scan_pack_search_paths(pack) is not None
+    first = next(p for p in (meta / "data").rglob("*") if p.is_file())
+    assert search.read_pack_range(pack, 0, 4) == first.read_bytes()[:4]
 
 
 def test_a_meta_disc_passed_as_a_root_is_skipped_while_mounted(
@@ -139,11 +162,7 @@ def test_a_meta_disc_passed_as_a_root_is_skipped_while_mounted(
 ) -> None:
     mounts = tmp_path / "media" / "user"
     meta = _meta(mounts)
-    restorer = fb.PurePythonRestorer(
-        build_repo(tmp_path, _TREE), password=PASSWORD,
-        pack_search_paths=[meta], interactive=False, meta_disc=meta,
-    )
-    assert restorer._live_roots() == []
+    assert _searched(build_repo(tmp_path, _TREE), [meta], meta_disc=meta) == []
 
 
 def test_disc_roots_and_pack_folders_are_not_listed(tmp_path: Path) -> None:
@@ -155,13 +174,13 @@ def test_disc_roots_and_pack_folders_are_not_listed(tmp_path: Path) -> None:
     (disc / "metadata").mkdir()
     (repo / "data" / "ab").mkdir()
     cache = tmp_path / "cache"
-    restorer = fb.PurePythonRestorer(
-        repo, password=PASSWORD,
-        pack_search_paths=[repo / "data", disc, mounts, tmp_path],
-        interactive=False, pack_cache_dir=cache,
-    )
-    restorer._refresh_discovered()
-    found = {p.name for p in restorer._discovered}
+    # The prompt lists the roots, then the discs found below them.
+    names = [f.rsplit("/", 1)[-1] for f in _searched(
+        repo, [repo / "data", disc, mounts, tmp_path], pack_cache=cache,
+    )]
+    found = names[4:]
+    assert names[:4] == ["data", "LCSAS-0001", "media", tmp_path.name]
+    assert found, names                     # tmp_path's folders are listed
     assert "metadata" not in found          # disc root not listed
     assert "ab" not in found                # repo data not listed
     assert "LCSAS-0001" not in found        # already a root
@@ -301,19 +320,17 @@ def test_the_disc_prompt_passes_over_a_folder_that_cannot_be_entered(
     (blocked / "data").mkdir(parents=True)
     (blocked / "catalog.db").write_bytes(b"not a catalog")
     blocked.chmod(0)
+
+    def enter() -> str:
+        shelf = tmp_path / "shelf" / "LCSAS-0002"
+        if shelf.exists():
+            os.rename(shelf, mounts / "LCSAS-0002")
+        return "\n"
+
     restorer = fb.PurePythonRestorer(
         repo, password=PASSWORD, pack_search_paths=[repo / "data", mounts],
-        interactive=True,
+        interactive=True, prompt_in=enter,
     )
-
-    class Reader:
-        def readline(self) -> str:
-            shelf = tmp_path / "shelf" / "LCSAS-0002"
-            if shelf.exists():
-                os.rename(shelf, mounts / "LCSAS-0002")
-            return "\n"
-
-    monkeypatch.setattr(sys, "stdin", Reader())
     try:
         restorer.restore(tmp_path / "out")
     finally:

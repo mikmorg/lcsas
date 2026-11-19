@@ -10,8 +10,9 @@ and tier-3's prompt falls back to ``(no catalog available)`` even
 though every inserted data disc carries the holographic catalog at
 ``<root>/catalog.db``.
 
-The fix is in ``PurePythonRestorer``: when ``catalog_path is None``, the
-disc-swap prompt's catalog lookup walks ``self._pack_search_paths``
+The fix is in the Python reader's disc search (``DiscSearch``, which
+``PurePythonRestorer`` reads packs through): when ``catalog_path is
+None``, the disc-swap prompt's catalog lookup walks the search roots
 looking for a holographic ``catalog.db``.  On first hit the path is
 cached for the session; until then, every prompt cycle re-tries
 discovery -- giving the operator a chance to mount a disc and have the
@@ -35,9 +36,11 @@ This module pins three behaviours of the auto-discovery code path:
     the volume label.  This is the variant-blind scenario #253 was
     filed against.
 
-We test via ``capsys`` on ``_print_swap_prompt`` and direct probes of
-``_lookup_volume_labels`` -- no rustic / xorriso / cdemu, so this runs
-under ``make test-unit``.
+We ask the search for a pack that is on no reachable disc, so the prompt
+fires (answered 'q'), and read it via ``capsys``: its catalog lines, and
+the "auto-discovered catalog at" line it prints each time it discovers a
+catalog -- no rustic / xorriso / cdemu, so this runs under ``make
+test-unit``.
 """
 
 from __future__ import annotations
@@ -46,7 +49,9 @@ import sqlite3
 import textwrap
 from pathlib import Path
 
-from lcsas.restore.restic_fallback import PurePythonRestorer
+import pytest
+
+from lcsas.restore._disc_search import DiscSearch, RestoreAbortedError
 
 # Reuse the synthetic pack hash + volume label conventions from the
 # sibling #248 test so audit trails line up across the two fixtures.
@@ -115,26 +120,45 @@ def _make_catalog(path: Path) -> None:
     conn.close()
 
 
-def _make_restorer(
+def _make_search(
     tmp_path: Path,
     *,
     pack_search_paths: list[Path],
-) -> PurePythonRestorer:
-    """Build a PurePythonRestorer with auto-discovery enabled.
+    catalog_path: Path | None = None,
+) -> DiscSearch:
+    """Build the disc search a restorer would use, with auto-discovery
+    enabled unless *catalog_path* is given.
 
-    ``catalog_path`` is left unset so the discovery code path fires.
-    The repo/password stay synthetic -- we only exercise the
-    swap-prompt rendering.
+    The repository stays synthetic -- we only exercise the swap-prompt
+    rendering.  The reader answers 'q' at the prompt.
     """
-    repo = tmp_path / "repo"
-    (repo / "data").mkdir(parents=True, exist_ok=True)
-    return PurePythonRestorer(
-        repo_path=repo,
-        password=b"unused",
-        pack_search_paths=pack_search_paths,
+    repo_data = tmp_path / "repo" / "data"
+    repo_data.mkdir(parents=True, exist_ok=True)
+    return DiscSearch(
+        pack_search_paths,
+        catalog_path=catalog_path,  # None: auto-discovery
         interactive=True,
-        catalog_path=None,  # auto-discovery, explicit for clarity
+        repo_data=repo_data,
+        log=lambda _msg: None,
+        prompt_in=lambda: "q\n",
     )
+
+
+def _show_prompt(search: DiscSearch, capsys) -> str:
+    """Ask *search* for ``_PACK_HASH`` (on no reachable disc): the disc
+    prompt fires and the 'q' answer stops it.  Returns its stderr."""
+    capsys.readouterr()
+    with pytest.raises(RestoreAbortedError):
+        search.read_pack_range(_PACK_HASH, 0, 1)
+    return capsys.readouterr().err
+
+
+def _discovered(err: str) -> list[str]:
+    """The catalogs a prompt says it auto-discovered.  The line is
+    printed only when a catalog is discovered: while one is cached, or
+    an explicit ``--catalog`` is in use, there is none."""
+    tag = "[lcsas-restore] auto-discovered catalog at "
+    return [line[len(tag):] for line in err.splitlines() if line.startswith(tag)]
 
 
 def test_auto_discover_catalog_at_mount_root(tmp_path: Path, capsys) -> None:
@@ -152,10 +176,9 @@ def test_auto_discover_catalog_at_mount_root(tmp_path: Path, capsys) -> None:
     mount_root.mkdir()
     _make_catalog(mount_root / "catalog.db")
 
-    restorer = _make_restorer(tmp_path, pack_search_paths=[mount_root])
-    restorer._print_swap_prompt(_PACK_HASH)
+    search = _make_search(tmp_path, pack_search_paths=[mount_root])
+    stderr = _show_prompt(search, capsys)
 
-    stderr = capsys.readouterr().err
     assert "It is on any disc labelled:" in stderr, (
         "auto-discovered catalog did not surface the tier-1 disc-label "
         f"block; stderr was:\n{stderr}"
@@ -187,10 +210,9 @@ def test_auto_discover_catalog_via_parent_traversal(
     data_dir.mkdir(parents=True)
     _make_catalog(mount_root / "catalog.db")
 
-    restorer = _make_restorer(tmp_path, pack_search_paths=[data_dir])
-    restorer._print_swap_prompt(_PACK_HASH)
+    search = _make_search(tmp_path, pack_search_paths=[data_dir])
+    stderr = _show_prompt(search, capsys)
 
-    stderr = capsys.readouterr().err
     assert "It is on any disc labelled:" in stderr, (
         "parent-traversal discovery failed -- catalog at "
         f"<root>/../catalog.db was not located.  Stderr:\n{stderr}"
@@ -208,46 +230,49 @@ def test_auto_discover_picks_up_catalog_appearing_mid_restore(
     catalog that now lives on the mounted disc.
 
     This is the only test in the suite that exercises the cache-on-hit
-    + retry-on-miss semantic together: prompt 1 returns ``None`` from
-    ``_lookup_volume_labels`` (catalog not yet present), prompt 2
-    discovers it, caches it, and returns labels.
+    + retry-on-miss semantic together: prompt 1 finds no catalog (not
+    yet present), prompt 2 discovers it and caches it, and prompt 3
+    uses the cached one without discovering again.
     """
     mount_root = tmp_path / "mnt"
     mount_root.mkdir()
 
-    restorer = _make_restorer(tmp_path, pack_search_paths=[mount_root])
+    search = _make_search(tmp_path, pack_search_paths=[mount_root])
 
     # Prompt 1: no catalog yet.  Legacy fallback line expected.
-    restorer._print_swap_prompt(_PACK_HASH)
-    first = capsys.readouterr().err
+    first = _show_prompt(search, capsys)
     assert "(tier-3 Python reader: no catalog available)" in first, (
         "expected legacy fallback line on FIRST prompt (catalog not yet "
         f"reachable); stderr was:\n{first}"
     )
-    # Sanity: discovery genuinely failed, so the path stays None.
-    assert restorer.catalog_path is None, (
-        f"catalog_path mutated despite no catalog present: {restorer.catalog_path}"
+    # Sanity: discovery genuinely failed, so nothing was discovered.
+    assert _discovered(first) == [], (
+        f"a catalog was discovered despite none present: {first}"
     )
 
     # Operator now "inserts" a data disc carrying the catalog.
     _make_catalog(mount_root / "catalog.db")
 
     # Prompt 2: discovery must succeed THIS time.
-    restorer._print_swap_prompt(_PACK_HASH)
-    second = capsys.readouterr().err
+    second = _show_prompt(search, capsys)
     assert "It is on any disc labelled:" in second, (
         "auto-discovery did not pick up the newly-mounted catalog on the "
         f"second prompt; stderr was:\n{second}"
     )
     assert _VOLUME_LABEL in second
-    # Cached for future prompts.
-    assert restorer.catalog_path == mount_root / "catalog.db", (
-        f"catalog_path not cached after successful discovery: "
-        f"{restorer.catalog_path}"
+    assert _discovered(second) == [str(mount_root / "catalog.db")], second
+    # Cached for future prompts: the next one uses it without
+    # discovering it again.
+    third = _show_prompt(search, capsys)
+    assert _VOLUME_LABEL in third
+    assert _discovered(third) == [], (
+        f"catalog not cached after successful discovery: {third}"
     )
 
 
-def test_explicit_catalog_path_skips_auto_discovery(tmp_path: Path) -> None:
+def test_explicit_catalog_path_skips_auto_discovery(
+    tmp_path: Path, capsys
+) -> None:
     """When ``catalog_path`` IS supplied explicitly, auto-discovery
     must NOT override it -- the override has higher priority and
     callers (including ``restore.sh``'s startup-time pick) rely on
@@ -268,25 +293,19 @@ def test_explicit_catalog_path_skips_auto_discovery(tmp_path: Path) -> None:
     # so we can assert the EXPLICIT path is the active one.
     _make_catalog(mount_root / "catalog.db")
 
-    repo = tmp_path / "repo"
-    (repo / "data").mkdir(parents=True)
-    restorer = PurePythonRestorer(
-        repo_path=repo,
-        password=b"unused",
-        pack_search_paths=[mount_root],
-        interactive=True,
-        catalog_path=explicit,
+    search = _make_search(
+        tmp_path, pack_search_paths=[mount_root], catalog_path=explicit,
     )
-    assert restorer.catalog_path == explicit
-    # Trigger a lookup -- catalog_path should NOT be reassigned.
-    result = restorer._lookup_volume_labels(_PACK_HASH)
-    assert result is not None
-    labels, _status = result
-    assert labels == [_VOLUME_LABEL]
-    assert restorer.catalog_path == explicit, (
-        f"explicit catalog_path was overwritten by auto-discovery: "
-        f"{restorer.catalog_path} (expected {explicit})"
-    )
+    # Trigger lookups -- the explicit catalog must stay the one in use:
+    # nothing is ever auto-discovered in its place.
+    for _ in range(2):
+        stderr = _show_prompt(search, capsys)
+        assert "It is on any disc labelled:" in stderr, stderr
+        assert _VOLUME_LABEL in stderr
+        assert _discovered(stderr) == [], (
+            f"explicit catalog_path was overwritten by auto-discovery: "
+            f"{stderr} (expected {explicit})"
+        )
 
 
 def test_auto_discover_returns_none_when_no_catalog_anywhere(
@@ -304,17 +323,15 @@ def test_auto_discover_returns_none_when_no_catalog_anywhere(
     mount_root.mkdir()
     # No catalog placed anywhere.
 
-    restorer = _make_restorer(tmp_path, pack_search_paths=[mount_root])
-    result = restorer._lookup_volume_labels(_PACK_HASH)
-    assert result is None
-    assert restorer.catalog_path is None
-
-    restorer._print_swap_prompt(_PACK_HASH)
-    stderr = capsys.readouterr().err
+    search = _make_search(tmp_path, pack_search_paths=[mount_root])
+    stderr = _show_prompt(search, capsys)
+    assert _discovered(stderr) == []
     assert "(tier-3 Python reader: no catalog available)" in stderr
 
 
-def test_discover_catalog_probes_recovery_subpath(tmp_path: Path) -> None:
+def test_discover_catalog_probes_recovery_subpath(
+    tmp_path: Path, capsys
+) -> None:
     """The meta-disc's local-recovery layout drops catalog.db at
     ``<root>/recovery/catalog.db`` (see restore.sh's ramdir copy at
     line 154-159).  Auto-discovery must probe that path too so a
@@ -325,15 +342,17 @@ def test_discover_catalog_probes_recovery_subpath(tmp_path: Path) -> None:
     (mount_root / "recovery").mkdir(parents=True)
     _make_catalog(mount_root / "recovery" / "catalog.db")
 
-    restorer = _make_restorer(tmp_path, pack_search_paths=[mount_root])
-    discovered = restorer._discover_catalog()
-    assert discovered == mount_root / "recovery" / "catalog.db", (
+    search = _make_search(tmp_path, pack_search_paths=[mount_root])
+    stderr = _show_prompt(search, capsys)
+    discovered = _discovered(stderr)
+    assert discovered == [str(mount_root / "recovery" / "catalog.db")], (
         f"recovery-subpath catalog not discovered; got {discovered}"
     )
+    assert _VOLUME_LABEL in stderr
 
 
 def test_auto_discovered_corrupt_catalog_is_evicted_for_retry(
-    tmp_path: Path,
+    tmp_path: Path, capsys
 ) -> None:
     """If auto-discovery picks up a corrupt ``catalog.db`` (e.g. a
     truncated file on a half-mounted disc), the cache must be evicted
@@ -359,19 +378,23 @@ def test_auto_discovered_corrupt_catalog_is_evicted_for_retry(
     (bad_root / "catalog.db").write_bytes(b"not a sqlite database")
     _make_catalog(good_root / "catalog.db")
 
-    restorer = _make_restorer(
+    search = _make_search(
         tmp_path, pack_search_paths=[bad_root, good_root]
     )
     # Prompt 1: discovery finds the corrupt one first, opens it,
     # sqlite3.Error fires, cache evicted.  Since #635 the lookup also
     # reads every catalog reachable now, so the good one answers at once.
-    result1 = restorer._lookup_volume_labels(_PACK_HASH)
-    assert result1 == ([_VOLUME_LABEL], ""), (
-        f"expected the reachable good catalog to answer, got {result1}"
+    first = _show_prompt(search, capsys)
+    assert _discovered(first) == [str(bad_root / "catalog.db")], first
+    assert "It is on any disc labelled:" in first, (
+        f"expected the reachable good catalog to answer, got {first}"
     )
-    assert restorer.catalog_path is None, (
-        "auto-discovered corrupt catalog was NOT evicted from cache: "
-        f"{restorer.catalog_path}"
+    assert _VOLUME_LABEL in first
+    # Evicted: the next prompt discovers again (a cached path would be
+    # used without discovery), and finds the corrupt one first again.
+    again = _show_prompt(search, capsys)
+    assert _discovered(again) == [str(bad_root / "catalog.db")], (
+        f"auto-discovered corrupt catalog was NOT evicted from cache: {again}"
     )
 
     # Operator effectively ejects the bad disc; here we just delete the
@@ -379,49 +402,47 @@ def test_auto_discovered_corrupt_catalog_is_evicted_for_retry(
     (bad_root / "catalog.db").unlink()
 
     # Prompt 2: discovery picks up the good catalog, returns labels.
-    result2 = restorer._lookup_volume_labels(_PACK_HASH)
-    assert result2 is not None, (
-        "expected catalog hit on retry after evicting corrupt entry; "
-        f"catalog_path is {restorer.catalog_path}"
+    second = _show_prompt(search, capsys)
+    assert _discovered(second) == [str(good_root / "catalog.db")], (
+        f"expected catalog hit on retry after evicting corrupt entry: {second}"
     )
-    labels, _status = result2
-    assert labels == [_VOLUME_LABEL]
-    assert restorer.catalog_path == good_root / "catalog.db"
+    assert "It is on any disc labelled:" in second
+    assert _VOLUME_LABEL in second
+    # ... and keeps it: the next prompt does not discover again.
+    assert _discovered(_show_prompt(search, capsys)) == []
 
 
-def test_explicit_corrupt_catalog_stays_cached(tmp_path: Path) -> None:
+def test_explicit_corrupt_catalog_stays_cached(tmp_path: Path, capsys) -> None:
     """An explicit ``--catalog`` pointing at a corrupt file must NOT
     be auto-evicted -- the operator asked for THAT catalog and a
     silent substitution would surprise them.
 
-    Behaviour pinned: ``self.catalog_path`` stays set to the explicit
-    file across lookups.  Since #635 the lookup also reads every disc
-    catalog reachable now (it adds labels, it does not replace the
-    explicit catalog), so the healthy one still names the disc.
+    Behaviour pinned: the explicit file stays the catalog in use across
+    lookups (nothing is auto-discovered in its place).  Since #635 the
+    lookup also reads every disc catalog reachable now (it adds labels,
+    it does not replace the explicit catalog), so the healthy one still
+    names the disc.
     """
     explicit = tmp_path / "explicit.db"
     explicit.write_bytes(b"not a sqlite database")
 
     # Also drop a healthy auto-discoverable catalog -- if eviction
-    # fired, discovery would find this and the test would see labels.
+    # fired, discovery would find this and the prompt would say so.
     good_root = tmp_path / "good"
     good_root.mkdir()
     _make_catalog(good_root / "catalog.db")
 
-    repo = tmp_path / "repo"
-    (repo / "data").mkdir(parents=True)
-    restorer = PurePythonRestorer(
-        repo_path=repo,
-        password=b"unused",
-        pack_search_paths=[good_root],
-        interactive=True,
-        catalog_path=explicit,
+    search = _make_search(
+        tmp_path, pack_search_paths=[good_root], catalog_path=explicit,
     )
-    assert restorer._lookup_volume_labels(_PACK_HASH) == ([_VOLUME_LABEL], "")
-    assert restorer.catalog_path == explicit, (
+    first = _show_prompt(search, capsys)
+    assert "It is on any disc labelled:" in first
+    assert _VOLUME_LABEL in first
+    assert _discovered(first) == [], (
         "explicit catalog was auto-evicted -- operator's --catalog choice "
-        f"got silently dropped: {restorer.catalog_path}"
+        f"got silently dropped: {first}"
     )
     # Second lookup: the explicit path is still the one in use.
-    assert restorer._lookup_volume_labels(_PACK_HASH) == ([_VOLUME_LABEL], "")
-    assert restorer.catalog_path == explicit
+    second = _show_prompt(search, capsys)
+    assert _VOLUME_LABEL in second
+    assert _discovered(second) == []

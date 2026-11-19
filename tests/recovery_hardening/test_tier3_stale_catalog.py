@@ -29,7 +29,9 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from lcsas.restore.restic_fallback import PurePythonRestorer
+import pytest
+
+from lcsas.restore._disc_search import DiscSearch, RestoreAbortedError
 
 LABELS = [f"LCSAS_CD700_2026_000{n}" for n in (1, 2, 3)]
 # One pack per disc.
@@ -80,18 +82,22 @@ class Drive:
             shutil.copytree(self.store / LABELS[n - 1], self.mount)
 
 
-def _restorer(tmp_path: Path, drive: Drive) -> PurePythonRestorer:
+def _restorer(tmp_path: Path, drive: Drive) -> DiscSearch:
+    """The disc search of a tier-3 restore with the drive as its one
+    mount point.  The reader answers 'q' at the prompt."""
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
-    return PurePythonRestorer(
-        repo_path=repo, password=b"unused",
-        pack_search_paths=[drive.mount], interactive=True,
+    return DiscSearch(
+        [drive.mount], interactive=True, repo_data=repo / "data",
+        log=lambda _msg: None, prompt_in=lambda: "q\n",
     )
 
 
-def _prompt(r: PurePythonRestorer, pack: str, capsys) -> str:
+def _prompt(r: DiscSearch, pack: str, capsys) -> str:
+    """The disc prompt for *pack* (on no disc in the drive)."""
     capsys.readouterr()
-    r._print_swap_prompt(pack)
+    with pytest.raises(RestoreAbortedError):
+        r.read_pack_range(pack, 0, 1)
     return capsys.readouterr().err
 
 

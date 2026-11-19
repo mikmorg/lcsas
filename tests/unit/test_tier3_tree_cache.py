@@ -87,19 +87,20 @@ def test_cache_is_emptied_when_the_restore_stops(
     """A stop at the disc prompt (#658) also empties the cache."""
     monkeypatch.delenv("LCSAS_PROGRESS", raising=False)
     repo = build_repo(tmp_path, _TREE)
+    # The reader answers 'q' at the disc prompt.
     restorer = fb.PurePythonRestorer(repo, password=PASSWORD,
-                                     interactive=False)
+                                     interactive=True,
+                                     prompt_in=lambda: "q\n",
+                                     prompt_out=lambda _text: None)
 
     real_count = restorer._count_files
-
-    def stop(_pack_id: str) -> Path:
-        raise fb.RestoreAbortedError("stopped", exit_code=fb.EXIT_READER_QUIT)
 
     def count_then_stop(tree_id: str) -> int:
         n = real_count(tree_id)
         assert restorer._tree_cache  # the count pass filled it
-        # Every tree is cached, so the next pack read is a file's data.
-        monkeypatch.setattr(restorer, "_find_pack_path", stop)
+        # Every tree is cached, so the next pack read is a file's data:
+        # take the disc out, and that read stops at the disc prompt.
+        (repo / "data").rename(tmp_path / "shelf")
         return n
 
     monkeypatch.setattr(restorer, "_count_files", count_then_stop)

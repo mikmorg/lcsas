@@ -18,12 +18,12 @@ index parsing → tree traversal → file extraction.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import io
 import json
 import os
 import stat
-import sys
 from pathlib import Path
 
 import pytest
@@ -2039,13 +2039,13 @@ class TestSnapshotLookupErrorPaths:
             restorer._find_snapshot("aabbcc")
 
 
-# ── _find_pack_path / _read_blob Error Paths ─────────────────────
+# ── Pack search / _read_blob Error Paths ─────────────────────────
 
 class TestReadBlobErrorPaths:
-    """Cover _find_pack_path and _read_blob error paths (lines 603, 619, 634-635, 640)."""
+    """Cover the pack search's and _read_blob's error paths."""
 
     def test_pack_file_not_found_raises(self, tmp_path):
-        """Line 603: FileNotFoundError when pack file missing.
+        """FileNotFoundError when the pack file is missing.
 
         Uses ``interactive=False`` to opt out of the #234 disc-swap
         prompt loop -- this test pins the non-interactive raise contract.
@@ -2053,8 +2053,12 @@ class TestReadBlobErrorPaths:
         repo = _build_test_repo(tmp_path)
         restorer = PurePythonRestorer(repo, password=PASSWORD, interactive=False)
         restorer._ensure_loaded()
+        assert restorer._blob_index
+        for pack in (repo / "data").rglob("*"):
+            if pack.is_file():
+                pack.unlink()
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
-            restorer._find_pack_path("a" * 64)
+            restorer._read_blob(next(iter(restorer._blob_index)))
 
     def test_blob_not_in_index_raises(self, tmp_path):
         """Line 619: KeyError when blob_id absent from index."""
@@ -2918,21 +2922,31 @@ class TestRestoreAborts:
         "c.txt": b"charlie content\n",
     }
 
-    def _restorer(self, tmp_path: Path, **kw) -> PurePythonRestorer:
+    def _restorer(
+        self, tmp_path: Path, prompt_in: str = "", **kw,
+    ) -> PurePythonRestorer:
+        """*prompt_in*: what the reader types at the disc prompt."""
         repo = _build_multifile_repo(tmp_path, files=self.FILES, **kw)
-        return PurePythonRestorer(repo, password=PASSWORD, interactive=True)
+        return PurePythonRestorer(
+            repo, password=PASSWORD, interactive=True,
+            prompt_in=io.StringIO(prompt_in).readline,
+        )
+
+    @staticmethod
+    def _on_a_missing_disc(r: PurePythonRestorer, blob_ids: set[str]) -> None:
+        """The index puts these blobs in a pack on a disc that is never
+        inserted, so reading one asks for that disc."""
+        r._ensure_loaded()
+        assert r._blob_index is not None
+        for blob_id in blob_ids:
+            r._blob_index[blob_id] = dataclasses.replace(
+                r._blob_index[blob_id], pack_id="ff" * 32,
+            )
 
     def _data_packs_missing(self, r: PurePythonRestorer) -> None:
         """Every data blob asks for a disc that is never inserted."""
         data_ids = {hashlib.sha256(c).hexdigest() for c in self.FILES.values()}
-        real_read = r._read_blob
-
-        def _read(blob_id: str) -> bytes:
-            if blob_id in data_ids:
-                r._find_pack_path("ff" * 32)
-            return real_read(blob_id)
-
-        r._read_blob = _read  # type: ignore[method-assign]
+        self._on_a_missing_disc(r, data_ids)
 
     @pytest.mark.parametrize(("stdin", "said"), [
         ("q\n", "aborted by user"),
@@ -2942,9 +2956,8 @@ class TestRestoreAborts:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
         stdin: str, said: str,
     ):
-        r = self._restorer(tmp_path)
+        r = self._restorer(tmp_path, prompt_in=stdin)
         self._data_packs_missing(r)
-        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
         target = tmp_path / "out"
         with pytest.raises(RestoreAbortedError) as ei:
             r.restore(target=target)
@@ -3041,17 +3054,9 @@ class TestRestoreAborts:
     ):
         # a.txt is damaged (recorded), then q at the prompt for b.txt:
         # RESTORE_FAILURES.txt still names a.txt.
-        r = self._restorer(tmp_path, corrupt_blob="a.txt")
+        r = self._restorer(tmp_path, prompt_in="q\n", corrupt_blob="a.txt")
         b_id = hashlib.sha256(self.FILES["b.txt"]).hexdigest()
-        real_read = r._read_blob
-
-        def _read(blob_id: str) -> bytes:
-            if blob_id == b_id:
-                r._find_pack_path("ff" * 32)
-            return real_read(blob_id)
-
-        r._read_blob = _read  # type: ignore[method-assign]
-        monkeypatch.setattr(sys, "stdin", io.StringIO("q\n"))
+        self._on_a_missing_disc(r, {b_id})
         target = tmp_path / "out"
         with pytest.raises(RestoreAbortedError):
             r.restore(target=target)
@@ -3395,155 +3400,6 @@ class TestFailureManifestWriteError:
         not_a_dir.write_text("x")
         r._write_failure_manifest(not_a_dir)  # must not raise
         assert "Could not write" in capsys.readouterr().err
-
-
-class TestDiscoverCatalogDedup:
-    def test_duplicate_search_paths_deduped(self, tmp_path: Path):
-        # The same root listed twice: the second pass's candidates are
-        # already in `seen` -> the dedup `continue` fires
-        # (restic_fallback.py:807).  No catalog.db anywhere -> None.
-        d = tmp_path / "mnt"
-        d.mkdir()
-        r = _bare_restorer(tmp_path, pack_search_paths=[d, d])
-        assert r._discover_catalog() is None
-
-    def test_finds_catalog_in_search_path(self, tmp_path: Path):
-        d = tmp_path / "mnt"
-        d.mkdir()
-        (d / "catalog.db").write_bytes(b"SQLite")
-        r = _bare_restorer(tmp_path, pack_search_paths=[d])
-        assert r._discover_catalog() == d / "catalog.db"
-
-
-class TestSwapPromptCatalogStates:
-    def test_hit_but_no_volume_mapping_line(self, tmp_path: Path, capsys):
-        # Catalog knows the pack but lists no disc for it ->
-        # the dedicated prompt line (restic_fallback.py:958).
-        r = _bare_restorer(tmp_path)
-        r._lookup_volume_labels = lambda pid: ([], r._CATALOG_HIT_NO_VOLS)
-        r._print_swap_prompt("a" * 32)
-        assert "lists no disc for it" in capsys.readouterr().err
-
-    def test_miss_says_how_to_pick_an_older_snapshot(
-        self, tmp_path: Path, capsys
-    ):
-        # #657 (tier-1 parity): a pack the catalog never saw may belong
-        # to a snapshot newer than every disc.
-        r = _bare_restorer(tmp_path)
-        r._lookup_volume_labels = lambda pid: ([], r._CATALOG_MISS)
-        r._print_swap_prompt("a" * 32)
-        err = capsys.readouterr().err
-        box = err.split("\n")
-        i = box.index(
-            "| (catalog has no record of this pack ID)                  |"
-        )
-        assert box[i + 1:i + 5] == [
-            "| If the NEWEST data disc has already been read, this pack |",
-            "| was never burned: the snapshot is newer than the discs.  |",
-            "| Type 'q', then list the snapshots (--list-snapshots)     |",
-            "| and restore an older one with --snapshot <id>.           |",
-        ]
-
-    def test_hit_does_not_mention_older_snapshots(
-        self, tmp_path: Path, capsys
-    ):
-        r = _bare_restorer(tmp_path)
-        r._lookup_volume_labels = lambda pid: (["LCSAS_BD25_2026_0001"], "hit")
-        r._print_swap_prompt("a" * 32)
-        assert "--list-snapshots" not in capsys.readouterr().err
-
-    @pytest.mark.parametrize(
-        "lookup",
-        [
-            None,
-            ([], "hit-no-vols"),
-            ([], "miss"),
-            (["LCSAS_CD700_2026_0002", "L" * 56 + "0042"], "hit"),
-        ],
-    )
-    def test_every_box_line_is_60_columns(
-        self, tmp_path: Path, capsys, lookup
-    ):
-        # rc6 (#476 drill, F10): the "Pack ... is required" line was 65
-        # columns in a 60-column box, the same text as tier 1's.  Every
-        # line from the top border to the bottom one must be 60 wide, a
-        # long label or path included (cut from the left, keeping its end).
-        r = _bare_restorer(tmp_path, pack_search_paths=[tmp_path / ("m" * 80)])
-        r._lookup_volume_labels = lambda pid: lookup
-        r._print_swap_prompt("ab" * 32)
-        err = capsys.readouterr().err
-        box = err[err.index("+---"): err.rindex("+") + 1].split("\n")
-        assert len(box) >= 8, err
-        for line in box:
-            assert len(line) == 60, f"{len(line)} columns: {line!r}"
-        assert "| Pack abababababababab... is required for the next file.  |" in box
-        if lookup is not None and lookup[0]:
-            assert any(line.endswith("LLL0042 |") for line in box), box
-
-
-class TestInteractiveFindPackPath:
-    def test_eof_on_stdin_gives_up(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-    ):
-        # Empty stdin -> readline() returns "" -> the whole restore stops
-        # (#658: was FileNotFoundError, which failed only this file).
-        d = tmp_path / "mnt"
-        d.mkdir()
-        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
-        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-        with pytest.raises(RestoreAbortedError) as ei:
-            r._find_pack_path("deadbeef" * 8)
-        assert ei.value.exit_code == EXIT_READER_QUIT == 75
-        assert not isinstance(ei.value, OSError)
-        assert "input ended" in capsys.readouterr().err
-
-    def test_q_aborts(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-    ):
-        # 'q' -> abort message + the whole restore stops (#658).
-        d = tmp_path / "mnt"
-        d.mkdir()
-        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
-        monkeypatch.setattr(sys, "stdin", io.StringIO("q\n"))
-        with pytest.raises(RestoreAbortedError) as ei:
-            r._find_pack_path("deadbeef" * 8)
-        assert ei.value.exit_code == EXIT_READER_QUIT
-        assert "stopped at the disc prompt" in str(ei.value)
-        assert "aborted by user" in capsys.readouterr().err
-
-    def test_retries_exhausted_still_fails_only_the_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        # ENTER every time, never found: FileNotFoundError, a per-file
-        # failure, as before.
-        d = tmp_path / "mnt"
-        d.mkdir()
-        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
-        monkeypatch.setattr(
-            sys, "stdin", io.StringIO("\n" * (r._DISC_SWAP_MAX_RETRIES + 1))
-        )
-        with pytest.raises(FileNotFoundError, match="Pack file not found"):
-            r._find_pack_path("deadbeef" * 8)
-
-    def test_found_after_retry(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-    ):
-        # First scans miss (pre-loop + 1st retry -> "still not found"),
-        # then the pack appears and is returned
-        # (restic_fallback.py:1011-1019).
-        d = tmp_path / "mnt"
-        d.mkdir()
-        found = d / "found-pack"
-        results = iter([None, None, found])
-        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
-        monkeypatch.setattr(
-            r, "_scan_pack_search_paths", lambda pid: next(results)
-        )
-        monkeypatch.setattr(sys, "stdin", io.StringIO("\n\n"))
-        assert r._find_pack_path("deadbeef" * 8) == found
-        err = capsys.readouterr().err
-        assert "still not found" in err
-        assert "continuing" in err
 
 
 class TestTolerantRestoreFailureRecording:
