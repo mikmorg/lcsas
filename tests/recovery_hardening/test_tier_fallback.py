@@ -1,5 +1,4 @@
-"""Hardening test #10: restore.sh tier fallback under
-LCSAS_TIER_FALLBACK=1.
+"""Hardening #10: restore.sh tier fallback under LCSAS_TIER_FALLBACK=1.
 
 The v3 blind run revealed that `restore.sh` `exec`s tier 1 and has
 no fall-through if tier 1 crashes mid-restore.  The agent worked

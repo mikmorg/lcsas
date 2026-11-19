@@ -1,5 +1,4 @@
-"""Hardening test (issue #225): restore.sh terminal error UX when
-the meta disc lacks ALL three tier binaries.
+"""Hardening (#225): restore.sh error UX when the meta disc lacks all three tier binaries.
 
 The worst-case scenario is a meta disc that carries no working
 recovery binary at any tier: tier-1 (lcsas-restore), tier-2

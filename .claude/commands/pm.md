@@ -89,7 +89,7 @@ worker's brief:
 - The behaviour they must add a test for, with a sketch of the
   test (input → assertion)
 - Any cross-file conventions they must follow (see
-  `tests/recovery_hardening/README.md` and the catalogue table)
+  `tests/recovery_hardening/README.md`)
 - The acceptance gate (`pytest tests/recovery_hardening/ -q` +
   any unit suite that maps to their area)
 

@@ -1,5 +1,4 @@
-"""Hardening test (GATE-06): the blind-restore XFAIL ledger must stay
-honest and expire.
+"""Hardening (GATE-06): the blind-restore XFAIL ledger must stay honest and expire.
 
 The ``tier1-missing`` blind variant was a permanent XFAIL with no expiry
 and no mechanism that ever forced promotion (issue #227).  This test

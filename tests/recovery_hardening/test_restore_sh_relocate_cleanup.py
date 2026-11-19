@@ -1,4 +1,6 @@
-"""Hardening (#508, #609, #612): relocation copies one target into the
+"""Hardening (#508, #609, #612): relocation copies one target, says so, and cleans up.
+
+Hardening (#508, #609, #612): relocation copies one target into the
 tools folder, says so, and cleans up after a restore that succeeds.
 
 relocate_to_ram used to copy the meta disc's whole recovery/bin tree

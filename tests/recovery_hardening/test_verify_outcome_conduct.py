@@ -1,5 +1,4 @@
-"""verify.sh scores OUTCOME and CONDUCT apart, and CONDUCT ignores files
-the test rig made (#827).
+"""verify.sh scores OUTCOME and CONDUCT apart, ignoring files the rig made (#827).
 
 In the rc9 sweep the split-key-docs variant failed three runs that had
 restored every file intact.  CONDUCT checks fired on files that were not

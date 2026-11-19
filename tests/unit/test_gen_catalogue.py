@@ -1,13 +1,12 @@
-"""Unit tests for tools/gen_hardening_catalogue.py."""
+"""Unit tests for tools/gen_hardening_catalogue.py (prints; never writes)."""
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Import the generator module without having it on sys.path already.
-# ---------------------------------------------------------------------------
+import pytest
 
 _TOOLS_DIR = Path(__file__).parent.parent.parent / "tools"
 _GEN_SCRIPT = _TOOLS_DIR / "gen_hardening_catalogue.py"
@@ -27,174 +26,62 @@ def _load_gen():
 GEN = _load_gen()
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+def test_all_test_files_present_in_printed_table(capsys) -> None:
+    expected_files = sorted(_TEST_DIR.glob("test_*.py"))
+    assert expected_files, "No test_*.py files found; is the path correct?"
+    assert GEN.run(_TEST_DIR) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("| File | Catches |")
+    for py_path in expected_files:
+        assert f"`{py_path.name}`" in out
 
 
-class TestAllTestFilesPresent:
-    """gen-catalogue table must contain every test_*.py in recovery_hardening."""
-
-    def test_all_test_files_present(self, tmp_path: Path) -> None:
-        # Copy the real README to a temp location so we don't mutate the real one.
-        real_readme = _TEST_DIR / "README.md"
-        temp_readme = tmp_path / "README.md"
-        temp_readme.write_bytes(real_readme.read_bytes())
-
-        GEN.run(_TEST_DIR, temp_readme, check_mode=False)
-        generated = temp_readme.read_text(encoding="utf-8")
-
-        expected_files = sorted(_TEST_DIR.glob("test_*.py"))
-        assert expected_files, "No test_*.py files found — is the path correct?"
-
-        for py_path in expected_files:
-            assert py_path.name in generated, (
-                f"{py_path.name} is missing from the generated catalogue table"
-            )
+def test_run_writes_nothing(tmp_path: Path) -> None:
+    (tmp_path / "test_a.py").write_text('"""Catches a."""\n', encoding="utf-8")
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    GEN.run(tmp_path)
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
 
 
-class TestIdempotent:
-    """Running the generator twice must produce bit-identical output."""
-
-    def test_idempotent(self, tmp_path: Path) -> None:
-        real_readme = _TEST_DIR / "README.md"
-        temp_readme = tmp_path / "README.md"
-        temp_readme.write_bytes(real_readme.read_bytes())
-
-        GEN.run(_TEST_DIR, temp_readme, check_mode=False)
-        first_pass = temp_readme.read_bytes()
-
-        GEN.run(_TEST_DIR, temp_readme, check_mode=False)
-        second_pass = temp_readme.read_bytes()
-
-        assert first_pass == second_pass, "Generator output is not idempotent"
+def test_no_docstring_placeholder(tmp_path: Path) -> None:
+    (tmp_path / "test_has_doc.py").write_text(
+        '"""Catches something important."""\n\nimport os\n', encoding="utf-8"
+    )
+    (tmp_path / "test_no_doc.py").write_text(
+        "import os\n\ndef test_something():\n    pass\n", encoding="utf-8"
+    )
+    table = GEN.build_table(tmp_path)
+    assert "| `test_no_doc.py` | (no description) |" in table
+    assert "| `test_has_doc.py` | Catches something important. |" in table
 
 
-class TestRealReadmeIsFresh:
-    """The checked-in README must already match the generator (#459).
-
-    Every other test here runs the generator against a temp copy, which
-    proved ``--check`` works while nothing ever ran it against the real
-    file -- and the table drifted 15 files stale.  This is the enforcement.
-    """
-
-    def test_real_readme_matches_generator(self) -> None:
-        exit_code = GEN.run(_TEST_DIR, _TEST_DIR / "README.md", check_mode=True)
-        assert exit_code == 0, (
-            "tests/recovery_hardening/README.md catalogue is stale: a "
-            "hardening test was added, removed, or had its docstring's "
-            "first line changed.  Run:  make gen-catalogue"
-        )
+def test_extract_description_takes_first_nonblank_line(tmp_path: Path) -> None:
+    f = tmp_path / "test_x.py"
+    f.write_text('"""\n\nFirst line.\n\nSecond.\n"""\n', encoding="utf-8")
+    assert GEN.extract_description(f) == "First line."
 
 
-class TestUnknownArgsRejected:
-    """An unrecognised flag must fail, never fall through to rewrite (#459)."""
-
-    def test_unknown_arg_fails_without_writing(self, monkeypatch) -> None:
+class TestArgs:
+    def test_unknown_arg_fails_without_running(self, monkeypatch) -> None:
         def _no_run(*_args, **_kwargs):
             raise AssertionError("run() must not be reached on a bad argv")
 
         monkeypatch.setattr(GEN, "run", _no_run)
-        for argv in (["--chek"], ["--dry-run"], ["--check", "--verbose"]):
+        for argv in (["--chek"], ["--dry-run"], ["--check"]):
             assert GEN.main(argv) != 0, argv
 
-    def test_help_prints_usage_without_writing(self, monkeypatch, capsys) -> None:
-        def _no_run(*_args, **_kwargs):
-            raise AssertionError("--help must not reach run()")
-
-        monkeypatch.setattr(GEN, "run", _no_run)
+    def test_help_prints_usage(self, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(GEN, "run", lambda *_a, **_k: pytest.fail("ran"))
         assert GEN.main(["--help"]) == 0
-        assert "--check" in capsys.readouterr().out
-
-    def test_check_alone_is_still_accepted(self, monkeypatch) -> None:
-        seen: dict[str, bool] = {}
-
-        def _fake_run(_test_dir, _readme, check_mode):
-            seen["check_mode"] = check_mode
-            return 0
-
-        monkeypatch.setattr(GEN, "run", _fake_run)
-        assert GEN.main(["--check"]) == 0
-        assert seen == {"check_mode": True}
+        assert "stdout" in capsys.readouterr().out
 
 
-class TestCheckModeFailsWhenStale:
-    """--check must exit non-zero when the README is out of date."""
-
-    def test_check_mode_fails_when_stale(self, tmp_path: Path) -> None:
-        real_readme = _TEST_DIR / "README.md"
-        temp_readme = tmp_path / "README.md"
-
-        # Write a README that is missing the last test file's row.
-        content = real_readme.read_text(encoding="utf-8")
-        # Remove one filename from the table section to make it stale.
-        test_files = sorted(_TEST_DIR.glob("test_*.py"))
-        assert test_files, "No test_*.py files found"
-        # Remove the last file's row.
-        last_name = test_files[-1].name
-        stale_content = content.replace(f"| `{last_name}` |", "| `_removed_` |")
-        # If the original didn't have that row (e.g. README has not been generated),
-        # force-write a minimal stale table.
-        if stale_content == content:
-            # Just strip all table rows (keep header + separator only).
-            lines = content.splitlines(keepends=True)
-            out_lines = []
-            in_table_rows = False
-            for line in lines:
-                if line.startswith("| File | Catches |"):
-                    out_lines.append(line)
-                    in_table_rows = True
-                    continue
-                if in_table_rows and line.startswith("|------"):
-                    out_lines.append(line)
-                    continue
-                if in_table_rows and line.startswith("|"):
-                    continue  # drop all data rows
-                else:
-                    in_table_rows = False
-                    out_lines.append(line)
-            stale_content = "".join(out_lines)
-
-        temp_readme.write_text(stale_content, encoding="utf-8")
-
-        exit_code = GEN.run(_TEST_DIR, temp_readme, check_mode=True)
-        assert exit_code != 0, "--check should exit non-zero when README is stale"
-        # The file must not have been modified in check mode.
-        assert temp_readme.read_text(encoding="utf-8") == stale_content, (
-            "--check mode must not modify the file"
-        )
-
-
-class TestNoDocstringPlaceholder:
-    """A test file with no module docstring should produce '(no description)'."""
-
-    def test_no_docstring_placeholder(self, tmp_path: Path) -> None:
-        # Create a synthetic test dir with one file that has no docstring.
-        synth_dir = tmp_path / "recovery_hardening"
-        synth_dir.mkdir()
-
-        # File with docstring.
-        (synth_dir / "test_has_doc.py").write_text(
-            '"""Catches something important."""\n\nimport os\n', encoding="utf-8"
-        )
-        # File without docstring.
-        (synth_dir / "test_no_doc.py").write_text(
-            "import os\n\ndef test_something():\n    pass\n", encoding="utf-8"
-        )
-
-        # We need a README.md in the temp dir with the Catalogue header.
-        synth_readme = tmp_path / "README.md"
-        synth_readme.write_text(
-            "# Header\n\n## Catalogue\n\n| File | Catches |\n|------|---------|"
-            "\n| `test_placeholder.py` | old |"
-            "\n\n## Next Section\n\nContent.\n",
-            encoding="utf-8",
-        )
-
-        GEN.run(synth_dir, synth_readme, check_mode=False)
-        generated = synth_readme.read_text(encoding="utf-8")
-
-        assert "test_no_doc.py" in generated
-        assert "(no description)" in generated
-        assert "test_has_doc.py" in generated
-        assert "Catches something important." in generated
+def test_first_docstring_line_is_a_whole_sentence() -> None:
+    """The printed catalogue shows only line 1, so it must stand alone (#894)."""
+    bad = []
+    for py_path in sorted(_TEST_DIR.glob("test_*.py")):
+        doc = ast.get_docstring(ast.parse(py_path.read_text(encoding="utf-8")))
+        first = next((ln.strip() for ln in (doc or "").splitlines() if ln.strip()), "")
+        if not first.endswith((".", ".)", "?", "!")) or len(first) > 100:
+            bad.append(f"{py_path.name}: {first!r}")
+    assert not bad, "first docstring line must be one whole sentence:\n" + "\n".join(bad)

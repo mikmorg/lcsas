@@ -1,5 +1,4 @@
-"""Hardening test (issue #227): restore.sh skips tier 2 when the
-archive is multi-disc.
+"""Hardening (#227): restore.sh skips tier 2 when the archive is multi-disc.
 
 rustic-static (tier 2) expects all packs to live in a single local
 ``$REPO/data/`` directory.  LCSAS's holographic multi-disc layout

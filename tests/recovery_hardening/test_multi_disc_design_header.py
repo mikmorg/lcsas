@@ -1,4 +1,5 @@
-"""
+"""Static guard: MULTI_DISC_DESIGN.txt is marked a design-intent document (#110).
+
 test_multi_disc_design_header.py -- static regression guard ensuring
 MULTI_DISC_DESIGN.txt is clearly marked as a design-intent document and
 cross-references the operator guide in RECOVER.txt (closes #110).

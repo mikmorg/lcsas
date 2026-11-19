@@ -1,6 +1,4 @@
-"""
-test_rebuild_docs.py -- static regression guard for the mixed-age-discs
-catalog-rebuild caveat in recovery/docs/RECOVER.txt (FMA-06).
+"""Static guard for the mixed-age-discs catalog-rebuild caveat in RECOVER.txt (FMA-06).
 
 FAILURE MODE CAUGHT
 -------------------
