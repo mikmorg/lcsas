@@ -241,3 +241,17 @@ def test_swap_loop_mounts_data_discs_at_media() -> None:
         'sudo mount /dev/sr0 "$mnt"', 'sh "$0" send ""',
     )]
     assert order == sorted(order), loop
+
+
+def test_scripted_prompts_say_the_box_names_the_disc() -> None:
+    """#917: the disc box names its disc ("It is on any disc labelled:"),
+    and swap-loop inserts that disc.  The prompts used to say the box
+    "shows a pack hash, not a disc label" and to insert "the next unused
+    data disc", a walk down the label list that agents typed out as a
+    loop over every disc."""
+    for prompt in (AGENT_PROMPT, AGENT_PROMPT.with_name("agent_prompt_split.txt")):
+        text = " ".join(prompt.read_text().split())
+        assert "pack hash, not a disc label" not in text, prompt.name
+        assert "next unused data disc" not in text, prompt.name
+        assert "`It is on any disc labelled:`" in text, prompt.name
+        assert "with the disc the box names" in text, prompt.name

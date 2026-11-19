@@ -574,11 +574,13 @@ def _check_burned_fixture(conn, iso_files: list[Path]) -> None:
 def _thrash_allowance(alpha_labels: list[str], data_labels: list[str]) -> int:
     """How many distinct data discs a correct restore inserts (#836).
 
-    The prompts' disc-swap loop (``restore-shell swap-loop``) cycles
-    through the discs in label order, so a correct restore inserts every
-    disc up to the last alpha disc, plus the newest data disc, which
-    restore.sh offers for its catalog.  verify.sh's thrash check allows
-    exactly that many; setup writes it to thrash_allowance.txt.
+    The prompts' disc-swap loop (``restore-shell swap-loop``) inserts
+    the disc each box names, and only for a box that names none cycles
+    through the discs in label order (#917).  Either way a correct
+    restore inserts at most every disc up to the last alpha disc, plus
+    the newest data disc, which restore.sh offers for its catalog.
+    verify.sh's thrash check allows exactly that many; setup writes it
+    to thrash_allowance.txt.
     """
     data = sorted(data_labels)
     last_alpha = max(data.index(label) for label in alpha_labels)
