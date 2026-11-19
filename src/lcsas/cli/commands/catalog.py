@@ -133,6 +133,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     an old receipt never brings back a disc recorded lost or destroyed
     (#666).
     """
+    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.locations import (
         UnknownLocationError,
         list_locations,
@@ -140,18 +141,11 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     )
     from lcsas.db.sessions import get_staged_iso, staging_incomplete
     from lcsas.db.volume_copies import (
-        add_volume_copy,
-        get_copies_for_volume,
         get_copy_at_location,
         get_disc_retired_at,
     )
     from lcsas.db.volume_events import add_event, get_events_for_volume
-    from lcsas.db.volumes import (
-        get_volume_by_label,
-        mark_closed,
-        status_before_burning,
-        update_status,
-    )
+    from lcsas.db.volumes import get_volume_by_label
 
     config = _load_config_opt(args)
     if config is None:
@@ -506,77 +500,45 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     continue
 
             event_detail = f"Offline burn receipt: {name}"
+            lifecycle = VolumeLifecycle(conn)
             if verify_failed:
-                if first_disc and not get_copies_for_volume(conn, vol.volume_id):
-                    # #483: a disc that failed verification returns a
-                    # never-burned volume to STAGING, as burn_session does,
-                    # so its packs go back to the unarchived pool.  A BURNED
-                    # volume stays BURNED (#810): a disc of it exists.  A
-                    # BURNING one goes back to the status it had before its
-                    # burn.  The event records the attempt.
-                    if vol.status == "BURNING":
-                        update_status(
-                            conn, vol.volume_id,
-                            status_before_burning(conn, vol.volume_id),
-                            commit=False,
-                        )
-                    add_event(conn, vol.volume_id, "VERIFY_FAIL",
-                              location=location, detail=event_detail,
-                              commit=False)
-                else:
-                    add_event(conn, vol.volume_id, "VERIFY_FAIL_REBURN",
-                              location=location, detail=event_detail,
-                              commit=False)
+                # #483: no disc is recorded; a BURNING volume's first disc
+                # failing returns it to the status before its burn, so its
+                # packs go back to the unarchived pool.  A BURNED volume
+                # stays BURNED (#810): a disc of it exists.
+                lifecycle.failing_receipt_imported(
+                    vol.volume_id, first_disc=first_disc, location=location,
+                    detail=event_detail,
+                )
                 logger.warning(
                     f"Receipt '{receipt_file}': the disc for '{label}' "
                     f"FAILED verification at {location}.  No disc was "
                     "recorded; that location still needs this volume.  "
                     + _reburn_hint(conn, vol.volume_id, location)
                 )
-            else:
-                if verify_passed:
-                    if first_disc:
-                        if vol.status == "STAGING":
-                            update_status(conn, vol.volume_id, "BURNING",
-                                          commit=False)
-                        update_status(conn, vol.volume_id, "VERIFIED",
-                                      commit=False)
-                        mark_closed(conn, vol.volume_id, commit=False)
-                    # One VERIFY_PASS per passing disc, as the direct burn
-                    # writes: `lcsas status` reads the newest verify result
-                    # at each location (#671).
-                    add_event(conn, vol.volume_id, "VERIFY_PASS",
-                              location=location, detail=event_detail,
-                              commit=False)
-                else:
-                    if vol.status == "STAGING":
-                        update_status(conn, vol.volume_id, "BURNING",
-                                      commit=False)
-                    if vol.status in ("STAGING", "BURNING"):
-                        update_status(conn, vol.volume_id, "BURNED",
-                                      commit=False)
-                    logger.warning(
-                        f"Receipt '{receipt_file}': '{label}' was burned at "
-                        f"{location} without verification (burn-iso "
-                        "--no-verify).  Recorded, but not as VERIFIED: check "
-                        f"it with `lcsas verify {label} --disc`."
-                    )
-                add_volume_copy(
-                    conn,
-                    volume_id=vol.volume_id,
-                    location=location,
-                    burn_date=burn_date,
-                    iso_sha256=receipt_hash or None,
+            elif verify_passed:
+                lifecycle.passing_receipt_imported(
+                    vol.volume_id, first_disc=first_disc, location=location,
+                    burn_date=burn_date, iso_sha256=receipt_hash or None,
                     iso_size_bytes=receipt_size,
                     # #646: burn-iso read the disc back right after the
                     # burn and compared its SHA-256 with the ISO (#664),
                     # as the direct burn path does, so the disc was
-                    # verified then.  --no-verify (null) leaves it NULL.
-                    last_verified_at=(
-                        _receipt_verified_at(burn_date)
-                        if verify_passed else None
-                    ),
-                    commit=False,
+                    # verified then.
+                    verified_at=_receipt_verified_at(burn_date),
+                    detail=event_detail,
+                )
+            else:
+                logger.warning(
+                    f"Receipt '{receipt_file}': '{label}' was burned at "
+                    f"{location} without verification (burn-iso "
+                    "--no-verify).  Recorded, but not as VERIFIED: check "
+                    f"it with `lcsas verify {label} --disc`."
+                )
+                lifecycle.unverified_receipt_imported(
+                    vol.volume_id, location=location, burn_date=burn_date,
+                    iso_sha256=receipt_hash or None,
+                    iso_size_bytes=receipt_size,
                 )
 
             add_event(
@@ -676,6 +638,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     2. Durable volumes without an ACTIVE disc — status says a disc exists
        but no disc record backs it.  Report-only.
     """
+    from lcsas.db.lifecycle import VolumeLifecycle
     from lcsas.db.models import Volume
     from lcsas.db.queries import (
         get_durable_volumes_without_active_copies,
@@ -685,14 +648,13 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         volume_display_status,
     )
     from lcsas.db.sessions import staged_iso_present
-    from lcsas.db.volume_events import burn_evidence, rebuild_burn_unknown
-    from lcsas.db.volumes import delete_volume
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
     include_waiting = getattr(args, "include_waiting", False)
 
     with _open_catalog(args, db_path=db_path) as conn:
+        lifecycle = VolumeLifecycle(conn)
         candidates = get_ghost_volumes(conn, args.older_than_hours)
         # #746: a volume with no disc record whose events show a good disc
         # of it was burned (the #737 check session abort and stage --clean
@@ -700,7 +662,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         # --include-waiting; its disc just needs recording.
         burned_unrecorded: list[tuple[Volume, str]] = []
         for v in candidates:
-            evidence = burn_evidence(conn, v.volume_id)
+            evidence = lifecycle.burn_evidence(v.volume_id)
             if evidence is not None:
                 burned_unrecorded.append((v, evidence))
         if burned_unrecorded:
@@ -727,7 +689,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         # with --include-waiting; 'session abort --never-burned' is the
         # owner's way to say it never was.
         unknown = [v for v in candidates
-                   if rebuild_burn_unknown(conn, v.volume_id)]
+                   if lifecycle.burn_unknown(v.volume_id)]
         if unknown:
             unknown_ids = {v.volume_id for v in unknown}
             candidates = [v for v in candidates
@@ -848,7 +810,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         ).fetchone()[0]
         for v in ghosts:
             logger.info("Deleting ghost volume %s", v.label)
-            delete_volume(conn, v.volume_id)
+            lifecycle.never_burned_deleted(v.volume_id)
         logger.info(
             "Deleted %d ghost volume(s); %d pack(s) returned to the "
             "unarchived pool (re-run 'lcsas stage' to re-select them).",
