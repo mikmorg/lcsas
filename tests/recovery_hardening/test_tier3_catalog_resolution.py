@@ -24,9 +24,12 @@ This module pins the three branches the framed prompt must drive when
     (``disc_locator.c:739``): the prompt prints
     ``(catalog has no record of this pack ID)``.
 
-We test by driving ``PurePythonRestorer._print_swap_prompt`` directly
-through ``capsys`` -- no rustic / xorriso required, so this runs
-under ``make test-unit`` as well as the recovery-hardening suite.
+We test by asking the Python reader's disc search (``DiscSearch``, the
+search ``PurePythonRestorer`` reads packs through) for a pack that is on
+no reachable disc: it prints the framed prompt to stderr, read through
+``capsys``, and the reader answers 'q'.  No rustic / xorriso required,
+so this runs under ``make test-unit`` as well as the recovery-hardening
+suite.
 
 A fourth test exercises the ``--catalog`` flag on the generated
 ``standalone_restorer.py`` CLI to make sure the plumbing through
@@ -42,12 +45,14 @@ import sys
 import textwrap
 from pathlib import Path
 
-from lcsas.restore.restic_fallback import PurePythonRestorer
+import pytest
+
+from lcsas.restore._disc_search import DiscSearch, RestoreAbortedError
 from lcsas.restore.standalone_builder import build_standalone
 
 # A 64-char lowercase hex sha256-ish string used as a synthetic pack
 # hash throughout these tests.  Format must match what restic emits
-# (and what _print_swap_prompt slices to 16 chars).
+# (and what the prompt slices to 16 chars).
 _PACK_HASH_PRESENT = (
     "ba2288e55901265a0123456789abcdef"
     "0123456789abcdef0123456789abcdef"
@@ -134,26 +139,34 @@ def _make_catalog(
     conn.close()
 
 
-def _make_restorer(
+def _make_search(
     tmp_path: Path,
     *,
     catalog_path: Path | None,
-) -> PurePythonRestorer:
-    """Build a PurePythonRestorer whose constructor short-circuits to
-    the disc-swap prompt path without touching a real restic repo.
+) -> DiscSearch:
+    """Build the disc search a restorer of a synthetic repository would
+    use, with its own ``data/`` as the only search root.
 
-    We never call .restore() -- this is a unit test of the prompt
-    rendering only.  The repo / password stay synthetic.
+    We never restore -- this is a unit test of the prompt rendering
+    only.  The reader answers 'q' at the prompt.
     """
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
-    return PurePythonRestorer(
-        repo_path=repo,
-        password=b"unused",
-        pack_search_paths=[repo / "data"],
-        interactive=True,
+    return DiscSearch(
+        [repo / "data"],
         catalog_path=catalog_path,
+        interactive=True,
+        repo_data=repo / "data",
+        log=lambda _msg: None,
+        prompt_in=lambda: "q\n",
     )
+
+
+def _show_prompt(search: DiscSearch, pack_id: str) -> None:
+    """Ask *search* for *pack_id*: the disc prompt goes to stderr, and
+    the 'q' answer stops the restore."""
+    with pytest.raises(RestoreAbortedError):
+        search.read_pack_range(pack_id, 0, 1)
 
 
 def test_prompt_includes_volume_label_when_catalog_supplied(
@@ -173,8 +186,8 @@ def test_prompt_includes_volume_label_when_catalog_supplied(
         pack_hash=_PACK_HASH_PRESENT,
         volume_label=_VOLUME_LABEL,
     )
-    restorer = _make_restorer(tmp_path, catalog_path=catalog)
-    restorer._print_swap_prompt(_PACK_HASH_PRESENT)
+    search = _make_search(tmp_path, catalog_path=catalog)
+    _show_prompt(search, _PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
     assert "It is on any disc labelled:" in captured, (
@@ -203,8 +216,8 @@ def test_prompt_falls_back_when_no_catalog_supplied(
     must still get the existing tier-3 prompt -- the catalog hint is
     an enrichment, not a requirement.
     """
-    restorer = _make_restorer(tmp_path, catalog_path=None)
-    restorer._print_swap_prompt(_PACK_HASH_PRESENT)
+    search = _make_search(tmp_path, catalog_path=None)
+    _show_prompt(search, _PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
     assert "(tier-3 Python reader: no catalog available)" in captured, (
@@ -234,8 +247,8 @@ def test_prompt_reports_unknown_pack_when_catalog_lacks_record(
         pack_hash=_PACK_HASH_PRESENT,
         volume_label=_VOLUME_LABEL,
     )
-    restorer = _make_restorer(tmp_path, catalog_path=catalog)
-    restorer._print_swap_prompt(_PACK_HASH_ABSENT)
+    search = _make_search(tmp_path, catalog_path=catalog)
+    _show_prompt(search, _PACK_HASH_ABSENT)
 
     captured = capsys.readouterr().err
     assert "(catalog has no record of this pack ID)" in captured, (
@@ -266,8 +279,8 @@ def test_prompt_handles_corrupt_catalog_gracefully(
     """
     catalog = tmp_path / "catalog.db"
     catalog.write_bytes(b"not a sqlite database")
-    restorer = _make_restorer(tmp_path, catalog_path=catalog)
-    restorer._print_swap_prompt(_PACK_HASH_PRESENT)
+    search = _make_search(tmp_path, catalog_path=catalog)
+    _show_prompt(search, _PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
     assert "(tier-3 Python reader: no catalog available)" in captured, (
@@ -276,12 +289,12 @@ def test_prompt_handles_corrupt_catalog_gracefully(
     )
 
 
-def test_lookup_volume_labels_returns_no_volume_mapping_state(
-    tmp_path: Path,
+def test_prompt_reports_pack_with_no_volume_mapping(
+    tmp_path: Path, capsys
 ) -> None:
-    """Direct probe of ``_lookup_volume_labels``: a catalog that has
-    the pack hash but no ``volume_packs`` row must return the
-    ``_CATALOG_HIT_NO_VOLS`` sentinel.
+    """A catalog that has the pack hash but no ``volume_packs`` row is
+    the third catalog state (the pack is known, no disc is listed):
+    no label, but not "no record" either.
 
     This is the rare-but-real case where a pack was registered in the
     catalog (e.g. mid-burn) but never bound to a volume copy.  The
@@ -295,12 +308,17 @@ def test_lookup_volume_labels_returns_no_volume_mapping_state(
         volume_label=_VOLUME_LABEL,
         map_to_volume=False,
     )
-    restorer = _make_restorer(tmp_path, catalog_path=catalog)
-    result = restorer._lookup_volume_labels(_PACK_HASH_PRESENT)
-    assert result is not None
-    labels, status = result
-    assert labels == []
-    assert status == PurePythonRestorer._CATALOG_HIT_NO_VOLS
+    search = _make_search(tmp_path, catalog_path=catalog)
+    _show_prompt(search, _PACK_HASH_PRESENT)
+
+    captured = capsys.readouterr().err
+    assert "(catalog has the pack, but lists no disc for it)" in captured, (
+        f"expected the no-volume-mapping line; stderr was:\n{captured}"
+    )
+    # Not one of the other three states.
+    assert "It is on any disc labelled:" not in captured
+    assert "(catalog has no record of this pack ID)" not in captured
+    assert "no catalog available" not in captured
 
 
 def test_standalone_restorer_exposes_catalog_flag(tmp_path: Path) -> None:

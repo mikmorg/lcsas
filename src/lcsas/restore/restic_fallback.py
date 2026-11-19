@@ -52,7 +52,6 @@ import hashlib
 import json
 import os
 import re
-import shutil  # noqa: F401  (commit-2 shim, #884: tests patch fb.shutil)
 import stat
 import sys
 from collections.abc import Callable, Collection, Iterator
@@ -70,17 +69,15 @@ from lcsas.restore._aes_pure import (
 from lcsas.restore._disc_search import (
     _DISK_FULL_ERRNOS,
     DiscSearch,
-    _copy_pack,
     _visible,
 )
+
+# Re-exported: callers import these from here.
 from lcsas.restore._disc_search import (
     EXIT_READER_QUIT as EXIT_READER_QUIT,
 )
 from lcsas.restore._disc_search import (
     RestoreAbortedError as RestoreAbortedError,
-)
-from lcsas.restore._disc_search import (
-    _drain_fits as _drain_fits,  # commit-2 shim (#884)
 )
 
 # ── Progress reporting tunables ──────────────────────────────────
@@ -984,6 +981,8 @@ class PurePythonRestorer:
         pack_cache_dir: Path | None = None,
         resume: bool = True,
         meta_disc: Path | None = None,
+        prompt_in: Callable[[], str] | None = None,
+        prompt_out: Callable[[str], None] | None = None,
     ) -> None:
         """Initialize the restorer.
 
@@ -999,14 +998,15 @@ class PurePythonRestorer:
                 for single-disc / pre-assembled-cache callers.  Multi-disc tier-3
                 invocation passes one ``--mount-point`` per data disc (see
                 ``recovery/scripts/restore.sh``).
-            interactive: If True (default), ``_find_pack_path`` prints the
+            interactive: If True (default), the disc search
+                (``DiscSearch`` in ``_disc_search.py``) prints the
                 LCSAS disc-swap prompt to stderr and blocks on stdin when
                 a pack is not found in any configured search path, then
-                rescans (up to ``_DISC_SWAP_MAX_RETRIES`` times).  ``q`` or
-                the end of input there raises ``RestoreAbortedError``,
-                which stops the whole restore (#658).  If False,
-                ``_find_pack_path`` raises FileNotFoundError on miss
-                (matches pre-#234 behaviour; tests that pin the raise
+                rescans (up to ``DiscSearch._DISC_SWAP_MAX_RETRIES`` times).
+                ``q`` or the end of input there raises
+                ``RestoreAbortedError``, which stops the whole restore
+                (#658).  If False, the search raises FileNotFoundError on
+                a miss (matches pre-#234 behaviour; tests that pin the raise
                 contract must opt out explicitly).  The tier-3 CLI sets
                 this from ``--interactive on|off|auto`` (auto = isatty);
                 see ``standalone_builder.py``.
@@ -1026,8 +1026,9 @@ class PurePythonRestorer:
                 disc-swap prompt cycle re-scans the mount roots so a catalog
                 that becomes reachable mid-restore (e.g. the heir just
                 inserted a data disc that carries a disc catalog)
-                is picked up on the next prompt fire.  See ``_discover_catalog``
-                for the search order.  This addresses issue #253 -- without
+                is picked up on the next prompt fire.  See
+                ``DiscSearch._discover_catalog`` for the search order.
+                This addresses issue #253 -- without
                 it, ``restore.sh``'s one-shot catalog-pick scan misses any
                 catalog that lives on a data disc not yet mounted at startup.
             strict: If False (default), tree traversal is *tolerant*: a
@@ -1058,6 +1059,10 @@ class PurePythonRestorer:
                 mounted at ``/media/<user>/<LABEL>`` under the root
                 ``/media/<user>``), as tier 1 searches its mount
                 parents.
+            prompt_in: Reads one line of the answer at the disc prompt
+                ("" at the end of input).  ``None`` (the default): stdin.
+            prompt_out: Writes the disc prompt and the lines around it.
+                ``None`` (the default): stderr.
         """
         self.repo_path = repo_path
         self._strict = strict
@@ -1103,16 +1108,12 @@ class PurePythonRestorer:
             interactive=interactive,
             repo_data=repo_path / "data",
             log=lambda msg: _log(msg),
+            prompt_in=prompt_in,
+            prompt_out=prompt_out,
         )
         # The search is told this repository's pack ids before its
         # first read (see _read_blob).
         self._index_packs_set = False
-        # Commit-2 shim (#884), removed with the forwarding below: the
-        # cache copy goes through this module's _copy_pack, looked up at
-        # each call.
-        self._search._copy_pack_fn = (
-            lambda src, dst, pid, tick: _copy_pack(src, dst, pid, tick)
-        )
 
         # Progress reporting state — reset at the top of every
         # restore() call.  _progress_enabled is read from the env once
@@ -2096,44 +2097,6 @@ class PurePythonRestorer:
             "indexed_blobs": len(self._blob_index),
             "has_zstd": _HAS_ZSTD,
         }
-
-
-# ── Commit-2 shim (#884): the old private names, forwarded ───────
-#
-# The disc search moved to DiscSearch.  Until the tests that reach
-# inside are ported (the next commit), each old name on a restorer reads
-# and writes the same name on its search, so a test that replaces one
-# (``restorer._print_swap_prompt = ...``) replaces the search's own.
-
-
-def _forward_to_search(name: str) -> Any:
-    """A property: ``restorer.<name>`` is ``restorer._search.<name>``."""
-    return property(
-        lambda self: getattr(self._search, name),
-        lambda self, value: setattr(self._search, name, value),
-    )
-
-
-for _old_name in (
-    "_scan_pack_search_paths", "_probe_roots", "_meta_is_live",
-    "_on_live_meta", "_live_roots", "_all_roots", "_refresh_discovered",
-    "_cached_pack", "_drain_visible_discs", "_is_not_a_disc",
-    "_repo_pack_ids", "_disc_packs", "_drain_disc", "_note_big_cache",
-    "_discover_catalog", "_discover_catalogs", "_keep_catalog_copy",
-    "_query_catalog", "_lookup_volume_labels", "_lookup_catalog_path",
-    "_frame_indented", "_print_swap_prompt", "_find_pack_path",
-    "_pack_search_paths", "_discovered", "_unreadable", "_meta_disc",
-    "_pack_cache", "_index_packs", "_drain_refused", "_drain_failed",
-    "_drain_warned", "catalog_path", "_catalog_copies",
-    "_catalog_copy_dir", "_newest_known_label", "interactive",
-):
-    setattr(PurePythonRestorer, _old_name, _forward_to_search(_old_name))
-for _old_name, _new_name in (("_read_pack_range", "read_pack_range"),):
-    setattr(PurePythonRestorer, _old_name, _forward_to_search(_new_name))
-for _old_name in (
-    "_DISC_SWAP_MAX_RETRIES", "_CATALOG_HIT_NO_VOLS", "_CATALOG_MISS",
-):
-    setattr(PurePythonRestorer, _old_name, getattr(DiscSearch, _old_name))
 
 
 # ── Resume (#729) ────────────────────────────────────────────────

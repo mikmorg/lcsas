@@ -167,9 +167,6 @@ class DiscSearch:
         self._log = log
         self._prompt_in = prompt_in if prompt_in is not None else _ds_read_line
         self._prompt_out = prompt_out if prompt_out is not None else _ds_write
-        self._copy_pack_fn: Callable[
-            [Path, Path, str, Callable[[int], None]], bool
-        ] = _copy_pack
         # The roots, in search order.
         self._pack_search_paths: list[Path] = list(roots)
 
@@ -493,34 +490,34 @@ class DiscSearch:
             progress["done"] += n
             if progress["next"] <= progress["done"] < need:
                 self._log(f"copying disc {name} to the cache: "
-                     f"{progress['done'] // _MIB} of {_mb_ceil(need)} MB")
+                          f"{progress['done'] // _MIB} of {_mb_ceil(need)} MB")
                 while progress["next"] <= progress["done"]:
                     progress["next"] += step
 
         self._log(f"copying disc {name} to the cache: {_mb_ceil(need)} MB.  "
-             "From a disc this can take several minutes.")
+                  "From a disc this can take several minutes.")
         for src, pid, _size in todo:
             dst = cache / "data" / pid[:2] / pid
             try:
-                ok = self._copy_pack_fn(src, dst, pid, tick)
+                ok = _copy_pack(src, dst, pid, tick)
             except OSError as exc:
                 if exc.errno in _CACHE_SIDE_ERRNOS:
                     # The cache's drive is full or read-only: stop.
                     self._drain_refused.add(key)
                     self._log(f"could not copy disc {name} to the cache "
-                         f"({exc}); its packs are read from the disc.")
+                              f"({exc}); its packs are read from the disc.")
                     break
                 # One unreadable pack: copy the rest (tier 1 does).
                 self._drain_failed.add(pid)
                 self._log(f"could not copy pack {pid[:16]}... of disc {name} "
-                     f"to the cache ({exc}); it is read from the disc.")
+                          f"to the cache ({exc}); it is read from the disc.")
                 continue
             if not ok:
                 self._drain_failed.add(pid)
                 self._log(f"pack {pid[:16]}... on disc {name} does not match "
-                     "its id; not copied to the cache.")
+                          "its id; not copied to the cache.")
         self._log(f"copied {_mb_ceil(progress['done'])} of {_mb_ceil(need)} MB "
-             f"from disc {name} to the cache.")
+                  f"from disc {name} to the cache.")
 
     def _note_big_cache(self, cache: Path) -> None:
         """Say once when the cache holds more than 1 GiB (tier 1 too)."""
@@ -535,8 +532,8 @@ class DiscSearch:
         if used > _DRAIN_BIG_CACHE:
             self._drain_warned.add("big")
             self._log(f"WARNING: pack cache at {cache} is "
-                 f"{used / (1 << 30):.1f} GB; set LCSAS_PACK_CACHE_DIR= "
-                 "(empty) to disable further copies if disk is tight.")
+                      f"{used / (1 << 30):.1f} GB; set LCSAS_PACK_CACHE_DIR= "
+                      "(empty) to disable further copies if disk is tight.")
 
     # Sentinels returned by _lookup_volume_labels to disambiguate the
     # three catalog states the framed prompt needs to print, mirroring
@@ -954,7 +951,7 @@ class DiscSearch:
                     raise
                 self._unreadable.add(str(pack_path))
                 self._log(f"cannot read {pack_path} ({exc.strerror or exc}); "
-                     "looking for another copy.")
+                          "looking for another copy.")
 
 
 # ── Pack cache helpers (#602) ────────────────────────────────────

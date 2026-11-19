@@ -14,11 +14,10 @@ prompt names.
 
 from __future__ import annotations
 
-import collections
-import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -98,25 +97,25 @@ def _restore(
     """Restore the archive with a scripted disc swap; return the
     archive, the pack named by each prompt, and the target."""
     arc = Archive(tmp_path)
+    prompts: list[str] = []
+
+    def prompt_out(text: str) -> None:
+        """The prompt names the first 16 hex digits of the pack."""
+        for m in re.finditer(r"\| Pack ([0-9a-f]{16})\.\.\. is required", text):
+            (pack_id,) = (p for p in arc.disc_of if p.startswith(m[1]))
+            prompts.append(pack_id)
+
+    def prompt_in() -> str:
+        """ENTER after putting in the disc the prompt asked for."""
+        arc.insert(arc.disc_of[prompts[-1]])
+        return "\n"
+
     restorer = fb.PurePythonRestorer(
         arc.repo, password=PASSWORD,
         pack_search_paths=[arc.repo / "data", arc.drive],
         interactive=True, pack_cache_dir=cache,
+        prompt_in=prompt_in, prompt_out=prompt_out,
     )
-    prompts: list[str] = []
-
-    def prompt(pack_id: str) -> None:
-        prompts.append(pack_id)
-
-    class Reader:
-        """stdin: ENTER after putting in the disc the prompt asked for."""
-
-        def readline(self) -> str:
-            arc.insert(arc.disc_of[prompts[-1]])
-            return "\n"
-
-    monkeypatch.setattr(restorer, "_print_swap_prompt", prompt)
-    monkeypatch.setattr(sys, "stdin", Reader())
     target = tmp_path / "out"
     restorer.restore(target)
     assert restorer.failures == 0
@@ -158,7 +157,7 @@ def test_a_disc_too_big_for_the_drive_is_not_copied(
     margin free.  The restore still completes, from the discs."""
     usage = namedtuple("usage", "total used free")
     monkeypatch.setattr(
-        fb.shutil, "disk_usage", lambda _p: usage(10**12, 10**12 - 1000, 1000)
+        shutil, "disk_usage", lambda _p: usage(10**12, 10**12 - 1000, 1000)
     )
     cache = tmp_path / "cache"
     _arc, prompts, _target = _restore(tmp_path, monkeypatch, cache)
@@ -166,29 +165,6 @@ def test_a_disc_too_big_for_the_drive_is_not_copied(
     assert len(prompts) > N_DISCS
     err = capsys.readouterr().err
     assert err.count("too little to copy") == 1
-
-
-def test_drain_fits_keeps_a_margin() -> None:
-    gib = 1 << 30
-    assert fb._drain_fits(free=10 * gib, total=100 * gib, need=8 * gib)
-    assert not fb._drain_fits(free=10 * gib, total=100 * gib, need=9 * gib + 1)
-    # 5% of a small drive.
-    assert fb._drain_fits(free=200, total=1000, need=150)
-    assert not fb._drain_fits(free=200, total=1000, need=151)
-    assert not fb._drain_fits(free=100, total=1000, need=101)
-
-
-def test_a_damaged_pack_is_not_kept_in_the_cache(tmp_path: Path) -> None:
-    src = tmp_path / "pack"
-    src.write_bytes(b"not what the id says")
-    dst = tmp_path / "cache" / "data" / "ab" / ("ab" * 32)
-    assert fb._copy_pack(src, dst, "ab" * 32, lambda _n: None) is False
-    assert not dst.exists()
-    assert not dst.with_name(dst.name + ".part").exists()
-    good = hashlib.sha256(src.read_bytes()).hexdigest()
-    dst = tmp_path / "cache" / "data" / good[:2] / good
-    assert fb._copy_pack(src, dst, good, lambda _n: None) is True
-    assert dst.read_bytes() == src.read_bytes()
 
 
 def test_only_this_repositorys_packs_are_copied(
@@ -270,59 +246,17 @@ def test_a_cache_that_cannot_be_made_is_turned_off(
     blocker = tmp_path / "file"
     blocker.write_bytes(b"")
     repo = build_repo(tmp_path, {"a.txt": b"alpha\n"})
-    restorer = fb.PurePythonRestorer(
-        repo, password=PASSWORD, interactive=False,
-        pack_cache_dir=blocker / "cache",
-    )
-    assert restorer._pack_cache is None
-    assert "Cannot create the pack cache" in capsys.readouterr().err
-    restorer.restore(tmp_path / "out")
-    assert (tmp_path / "out" / "a.txt").read_bytes() == b"alpha\n"
-
-
-def test_a_pack_that_cannot_be_copied_is_tried_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """One unreadable pack (EIO) and one with bytes that do not match
-    its id: each is tried once, the other packs are still copied, and
-    the restore completes from the disc."""
-    repo = build_repo(
-        tmp_path, {f"f{i}.txt": f"file {i}\n".encode() for i in range(6)},
-        pack_per_blob=True,
-    )
+    # The packs are on a disc, which a working cache would copy.
     disc = tmp_path / "disc"
     shutil.move(str(repo / "data"), str(disc / "data"))
     (repo / "data").mkdir()
-    packs = sorted(p for p in (disc / "data").rglob("*") if p.is_file())
-    unreadable, padded = packs[0].name, packs[1]
-    # Bytes after the last blob: every blob still reads, the hash does not.
-    with open(padded, "ab") as f:
-        f.write(b"\0")
-
-    tries: collections.Counter[str] = collections.Counter()
-    real_copy = fb._copy_pack
-
-    def copy(src: Path, dst: Path, pack_id: str, tick: object) -> bool:
-        tries[pack_id] += 1
-        if pack_id == unreadable:
-            raise OSError(errno.EIO, "Input/output error")
-        return real_copy(src, dst, pack_id, tick)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(fb, "_copy_pack", copy)
-    cache = tmp_path / "cache"
     restorer = fb.PurePythonRestorer(
         repo, password=PASSWORD, pack_search_paths=[repo / "data", disc],
-        interactive=False, pack_cache_dir=cache,
+        interactive=False, pack_cache_dir=blocker / "cache",
     )
+    assert "Cannot create the pack cache" in capsys.readouterr().err
     restorer.restore(tmp_path / "out")
-    assert restorer.failures == 0
-    for i in range(6):
-        assert (tmp_path / "out" / f"f{i}.txt").read_bytes() == f"file {i}\n".encode()
-    assert tries[unreadable] == 1
-    assert tries[padded.name] == 1
-    cached = {p.name for p in (cache / "data").rglob("*") if p.is_file()}
-    assert cached == {p.name for p in packs} - {unreadable, padded.name}
-    err = capsys.readouterr().err
-    assert err.count("does not match its id") == 1
-    assert err.count("Input/output error") == 1
+    assert (tmp_path / "out" / "a.txt").read_bytes() == b"alpha\n"
+    # The cache is off: nothing was copied (DiscSearch's own check of
+    # this is test_disc_search.py::test_a_cache_that_cannot_be_made_is_off).
+    assert "to the cache" not in capsys.readouterr().err
