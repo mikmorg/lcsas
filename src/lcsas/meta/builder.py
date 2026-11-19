@@ -1062,7 +1062,6 @@ class MetaVolumeBuilder:
         if dst.exists():
             shutil.rmtree(str(dst))
         self._copy_recovery_tree(src, dst)
-        self._drop_dev_only_manifest_rows(dst)
 
         # _write_restore_script copies scripts/restore.sh to the disc
         # root as restore.sh, the disc's one restore driver (#689).
@@ -1157,34 +1156,6 @@ class MetaVolumeBuilder:
                 str(bin_src), str(dst / "bin"),
                 ignore=shutil.ignore_patterns(*_RECOVERY_DEBRIS),
             )
-
-    @staticmethod
-    def _drop_dev_only_manifest_rows(dst: Path) -> None:
-        """Remove the rows of the files left off the disc (#724).
-
-        The source manifests list every authored file, the developer
-        records too; on the disc a row for an absent file would make
-        ``meta verify`` and an heir's ``sha256sum -c`` fail.
-        """
-        manifests = {
-            dst / "MANIFEST.sha256": {
-                f"./{rel}" for rel in DEV_ONLY_RECOVERY_FILES
-            },
-            dst / "docs" / "MANIFEST.sha256": {
-                f"./{rel.removeprefix('docs/')}"
-                for rel in DEV_ONLY_RECOVERY_FILES if rel.startswith("docs/")
-            },
-        }
-        for manifest, gone in manifests.items():
-            if not manifest.is_file():
-                continue
-            lines = manifest.read_text(encoding="utf-8").splitlines()
-            kept = [
-                ln for ln in lines
-                if ln.strip().split("  ", 1)[-1] not in gone
-            ]
-            if len(kept) != len(lines):
-                manifest.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
     def unlisted_recovery_files(self) -> list[str]:
         """Files under the built recovery/ that its MANIFEST.sha256 omits.
