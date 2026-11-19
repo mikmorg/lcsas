@@ -1,8 +1,10 @@
-"""Generate the ## Catalogue table in tests/recovery_hardening/README.md.
+"""Print the catalogue of tests/recovery_hardening/test_*.py as a Markdown table.
 
 Usage:
-    python3 tools/gen_hardening_catalogue.py           # rewrite README.md in-place
-    python3 tools/gen_hardening_catalogue.py --check   # exit non-zero if README.md is stale
+    python3 tools/gen_hardening_catalogue.py           # print the table to stdout
+
+Each row is a test file plus the first line of its module docstring.  Nothing
+is written to disk; the table is deliberately not committed (#894).
 """
 
 from __future__ import annotations
@@ -10,7 +12,6 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
-
 
 # ---------------------------------------------------------------------------
 # Core helpers (accept explicit paths so unit tests can pass temp dirs)
@@ -50,68 +51,10 @@ def build_table(test_dir: Path) -> str:
     return "\n".join(lines)
 
 
-def rewrite_readme(readme_path: Path, table: str) -> bytes:
-    """Return the new README.md bytes with the Catalogue table replaced.
-
-    Keeps everything before the table header and everything after the last
-    table row unchanged.  Raises ValueError if the Catalogue section is not
-    found.
-    """
-    original = readme_path.read_text(encoding="utf-8")
-    lines = original.splitlines(keepends=True)
-
-    # Locate the table header line.
-    header_idx: int | None = None
-    for i, line in enumerate(lines):
-        if line.startswith("| File | Catches |"):
-            header_idx = i
-            break
-
-    if header_idx is None:
-        raise ValueError(
-            f"Could not find '| File | Catches |' header in {readme_path}"
-        )
-
-    # Skip the separator line immediately after the header.
-    sep_idx = header_idx + 1
-
-    # Find the first line after the separator that does NOT start with '|'.
-    after_table_idx = sep_idx + 1
-    while after_table_idx < len(lines) and lines[after_table_idx].startswith("|"):
-        after_table_idx += 1
-
-    # Replace header + separator + rows with fresh table; keep surrounding content.
-    prefix_lines = lines[:header_idx]
-    suffix_lines = lines[after_table_idx:]
-
-    new_content = (
-        "".join(prefix_lines)
-        + table
-        + "\n"
-        + "".join(suffix_lines)
-    )
-
-    return new_content.encode("utf-8")
-
-
-def run(test_dir: Path, readme_path: Path, check_mode: bool) -> int:
-    """Core logic.  Returns 0 on success, 1 on stale (check mode)."""
-    table = build_table(test_dir)
-    new_bytes = rewrite_readme(readme_path, table)
-
-    if check_mode:
-        current_bytes = readme_path.read_bytes()
-        if current_bytes == new_bytes:
-            return 0
-        print(
-            "ERROR: tests/recovery_hardening/README.md is out of date.\n"
-            "Run:  python3 tools/gen_hardening_catalogue.py",
-            file=sys.stderr,
-        )
-        return 1
-    else:
-        readme_path.write_bytes(new_bytes)
-        return 0
+def run(test_dir: Path) -> int:
+    """Print the catalogue table to stdout.  Never writes any file."""
+    print(build_table(test_dir))
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -126,23 +69,15 @@ def main(argv: list[str] | None = None) -> int:
     if "-h" in argv or "--help" in argv:
         print(__doc__)
         return 0
-    # Anything but --check used to fall through to rewrite mode, so a
-    # typo'd or check-like flag (--chek, --help) silently edited the
-    # README instead of failing (#459).
-    unknown = [arg for arg in argv if arg != "--check"]
-    if unknown:
+    if argv:
         print(
-            f"ERROR: unknown argument(s): {' '.join(unknown)}\n{__doc__}",
+            f"ERROR: unknown argument(s): {' '.join(argv)}\n{__doc__}",
             file=sys.stderr,
         )
         return 2
-    check_mode = "--check" in argv
 
     repo_root = Path(__file__).parent.parent
-    test_dir = repo_root / "tests" / "recovery_hardening"
-    readme_path = test_dir / "README.md"
-
-    return run(test_dir, readme_path, check_mode)
+    return run(repo_root / "tests" / "recovery_hardening")
 
 
 if __name__ == "__main__":

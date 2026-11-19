@@ -1,6 +1,4 @@
-"""
-test_disc_swap_docs.py -- static regression guard for the MULTI-DISC RESTORE
-operator guide in recovery/docs/RECOVER.txt.
+"""Static guard for the MULTI-DISC RESTORE operator guide in recovery/docs/RECOVER.txt.
 
 FAILURE MODE CAUGHT
 -------------------

@@ -1,5 +1,4 @@
-"""Hardening test (GATE-06): restore.sh drives the full tier1-missing
-multi-disc fallback chain to a byte-identical restore.
+"""Hardening (GATE-06): restore.sh runs the tier1-missing multi-disc chain byte-identically.
 
 The recovery cascade's whole reason for tiers 2 and 3 is the case where
 tier 1 (the C ``lcsas-restore`` binary) is absent or won't run on the

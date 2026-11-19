@@ -1,5 +1,4 @@
-"""test_live_usb_procedure_docs.py -- static doc-pinning gate for the
-live-USB no-OS recovery procedure [BOOT-04].
+"""Static doc-pinning gate for the live-USB no-OS recovery procedure (BOOT-04).
 
 FAILURE MODE CAUGHT
 -------------------

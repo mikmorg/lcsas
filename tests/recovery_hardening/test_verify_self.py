@@ -1,5 +1,4 @@
-"""Hardening test #6 + #9: verify.sh must fail closed on every known
-cheat pattern, and must PASS a clean transcript.
+"""Hardening #6 + #9: verify.sh fails closed on every cheat pattern and passes a clean run.
 
 verify.sh is the gate that scores the blind-restore e2e.  If it
 fails open — passes a transcript that has a cheat in it — every

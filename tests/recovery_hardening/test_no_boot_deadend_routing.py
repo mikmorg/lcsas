@@ -1,6 +1,4 @@
-"""
-test_no_boot_deadend_routing.py -- static regression guard against the
-boot-the-disc dead end in the heir-facing recovery routing (BOOT-01).
+"""Static guard against the boot-the-disc dead end in the heir-facing routing (BOOT-01).
 
 FAILURE MODE CAUGHT
 -------------------

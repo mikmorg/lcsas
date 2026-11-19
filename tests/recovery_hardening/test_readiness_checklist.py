@@ -1,4 +1,5 @@
-"""
+"""Static guard for the operator production-readiness checklist.
+
 test_readiness_checklist.py -- static regression guard for the operator
 production-readiness checklist in docs/development/recovery/READINESS_CHECKLIST.txt.
 

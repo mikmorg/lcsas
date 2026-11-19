@@ -1,5 +1,4 @@
-"""Hardening: the tier-1 coverage-exemptions contract cannot silently rot or
-decouple (GATE-11, issue #383).
+"""Hardening: the tier-1 coverage-exemptions contract cannot silently rot (GATE-11, #383).
 
 `recovery/docs/EXEMPTIONS.md` is the live, enforced list of every uncovered
 line in `recovery/src/lcsas-restore/*.c`.  It went RED-but-unnoticed on the

@@ -1,4 +1,5 @@
-"""
+"""Docs-vs-reality gate for `lcsas ...` invocations in the on-disc recovery docs (BOOT-01).
+
 test_boot_docs_reality.py -- docs-vs-reality contract gate for `lcsas ...`
 invocations in the on-disc recovery documentation (BOOT-01; recovery-docs
 leg of the UX-02 contract).

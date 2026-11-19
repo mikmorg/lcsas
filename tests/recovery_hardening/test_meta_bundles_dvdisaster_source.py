@@ -1,5 +1,4 @@
-"""Hardening test (FMT-02): the dvdisaster RS03 source must be pinned,
-bundled, and the spec must be re-implementable.
+"""Hardening (FMT-02): the dvdisaster RS03 source is pinned, bundled and re-implementable.
 
 `docs/DVDISASTER_RS03_FORMAT.md` is the survivability artifact for the
 day the dvdisaster binary no longer runs.  It is only re-implementable
