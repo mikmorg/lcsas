@@ -229,10 +229,10 @@ class Case:
 
 _DONE = r"restore complete|Restore complete"
 _NOT_ALL = r"finished with errors|could NOT be restored"
-#: RESTORE_FAILURES.txt reasons of tier 3 (prefixes: a pack id and the
-#: repository's path follow the first).
-_PACK_NOT_FOUND = "FileNotFoundError: Pack file not found: "
-_MAC_FAILED = "IntegrityError: MAC verification failed"
+#: RESTORE_FAILURES.txt reasons (#909: the same text from both readers;
+#: the 64-hex pack id follows).
+_PACK_NOT_FOUND = "pack not found: "
+_PACK_DAMAGED = "pack damaged: "
 
 # #781: one name of each class rustic stores escaped (quote, backslash,
 # control characters, bytes that are not UTF-8), and a folder and a
@@ -510,7 +510,7 @@ CASES: list[Case] = [
         differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
             restored={b"a": File(b"alpha\n")},
-            failures=(("b", "FileNotFoundError: Pack file not found"),),
+            failures=(("b", _PACK_NOT_FOUND),),
             summary=_NOT_ALL,
         )},
         why="with no disc prompt, tier 1 stops at the first pack it cannot "
@@ -625,7 +625,7 @@ CASES: list[Case] = [
         ),
         differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
-            failures=(("b", _MAC_FAILED),),
+            failures=(("b", _PACK_DAMAGED),),
             summary=_NOT_ALL,
         )},
         why="tier 1 names the short pack, leaves an empty file (mode 0600), "
@@ -648,7 +648,7 @@ CASES: list[Case] = [
         ),
         differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
-            failures=(("b", _MAC_FAILED),),
+            failures=(("b", _PACK_DAMAGED),),
             summary=_NOT_ALL,
         )},
         why="tier 1 leaves an empty file (mode 0600), prints the file's "

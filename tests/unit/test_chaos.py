@@ -323,7 +323,8 @@ class TestMissingPacks:
         restorer.restore(target=tmp_path / "out")
         assert restorer.failures > 0
         manifest = (tmp_path / "out" / "RESTORE_FAILURES.txt").read_text()
-        assert "Pack file not found" in manifest
+        # #909: the reason tier 1 gives too: "pack not found: <pack id>".
+        assert f"pack not found: {pack_id}" in manifest
 
     def test_entire_data_dir_missing(self, tmp_path):
         """Removing data/ entirely should raise FileNotFoundError."""

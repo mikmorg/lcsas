@@ -458,6 +458,9 @@ class DiscSearch:
         # may read, a damaged disc): never chosen again this run, so the
         # search goes on to another copy or to the disc prompt.
         self._unreadable: set[str] = set()
+        # #909: the packs with such a copy, so a pack that is then not
+        # found is listed as unreadable (as tier 1 lists it), not missing.
+        self._unreadable_packs: set[str] = set()
         self._meta_disc = meta_disc if meta_disc and str(meta_disc) else None
 
         # #602: the pack cache (None: off), this repository's pack ids
@@ -555,6 +558,8 @@ class DiscSearch:
                     if str(candidate) in self._unreadable:
                         continue
                     if not self._fs.readable(candidate):
+                        # #909: listed as unreadable if no copy is read.
+                        self._unreadable_packs.add(pack_id)
                         continue
                     if self._pack_cache is not None:
                         self._drain_disc(data_dir)
@@ -1260,8 +1265,13 @@ class DiscSearch:
                 # Not reached: the search never offers a copy set aside.
                 raise data
             self._unreadable.add(str(pack_path))
+            self._unreadable_packs.add(pack_id)
             self._log(f"cannot read {pack_path} ({data.strerror or data}); "
                       "looking for another copy.")
+
+    def pack_was_unreadable(self, pack_id: str) -> bool:
+        """Was a copy of *pack_id* found but not readable this run (#909)?"""
+        return pack_id in self._unreadable_packs
 
     def _disc_name(self, root: Path) -> str:
         """The disc's label from its ``volume_info.json``, else its path."""
