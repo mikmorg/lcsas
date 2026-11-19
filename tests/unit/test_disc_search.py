@@ -61,15 +61,18 @@ def test_drain_fits_keeps_a_margin() -> None:
 
 
 def test_a_damaged_pack_is_not_kept_in_the_cache(tmp_path: Path) -> None:
+    fs = ds._DiscFs()
     src = tmp_path / "pack"
     src.write_bytes(b"not what the id says")
     dst = tmp_path / "cache" / "data" / "ab" / ("ab" * 32)
-    assert ds._copy_pack(src, dst, "ab" * 32, lambda _n: None) is False
+    assert fs.copy_checked(src, dst, "ab" * 32, lambda _n: None) == (
+        "mismatch", None,
+    )
     assert not dst.exists()
     assert not dst.with_name(dst.name + ".part").exists()
     good = hashlib.sha256(src.read_bytes()).hexdigest()
     dst = tmp_path / "cache" / "data" / good[:2] / good
-    assert ds._copy_pack(src, dst, good, lambda _n: None) is True
+    assert fs.copy_checked(src, dst, good, lambda _n: None) == ("ok", None)
     assert dst.read_bytes() == src.read_bytes()
 
 
@@ -94,15 +97,17 @@ def test_a_pack_that_cannot_be_copied_is_tried_once(
         f.write(b"\0")
 
     tries: collections.Counter[str] = collections.Counter()
-    real_copy = ds._copy_pack
+    real_copy = ds._DiscFs._copy
 
-    def copy(src: Path, dst: Path, pack_id: str, tick: object) -> bool:
+    def copy(
+        fs: ds._DiscFs, src: Path, dst: Path, pack_id: str, tick: object,
+    ) -> bool:
         tries[pack_id] += 1
         if pack_id == unreadable:
             raise OSError(errno.EIO, "Input/output error")
-        return real_copy(src, dst, pack_id, tick)  # type: ignore[arg-type]
+        return real_copy(fs, src, dst, pack_id, tick)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(ds, "_copy_pack", copy)
+    monkeypatch.setattr(ds._DiscFs, "_copy", copy)
     cache = tmp_path / "cache"
     restorer = fb.PurePythonRestorer(
         repo, password=PASSWORD, pack_search_paths=[repo / "data", disc],
