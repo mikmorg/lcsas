@@ -266,7 +266,9 @@ for name in $sets; do
             ;;
         4)
             # #799: the set finished, but some items could not be
-            # restored.  Nothing to carry on: the next set goes on.
+            # restored.  The next set goes on.  (When a disc was not
+            # there, restore.sh keeps that set's resume.sh, #887: run
+            # this again with the disc in and restore_cmd carries it on.)
             printf '!!! %s finished, but some items could not be restored:\n' "$name" >&2
             printf '    they are listed in %s/RESTORE_FAILURES.txt\n' "$out" >&2
             partial=1 ;;

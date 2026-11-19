@@ -886,7 +886,9 @@ same as for restore.sh; see RECOVER.txt):
     4   the restore finished, but some items could not be restored:
         the message names the file RESTORE_FAILURES.txt in the folder
         you restored into, which lists them and why (see "ITEMS NOT
-        RESTORED" in RECOVER.txt).  Nothing is left to carry on
+        RESTORED" in RECOVER.txt).  Nothing is left to carry on,
+        unless a disc was not there ("pack not found"): then insert
+        it and carry on as the message says
     5   --check-disc only: the image has no ECC data, so there is
         nothing to repair: that disc was burned without ECC.  If it
         cannot be read, use another disc with the same label

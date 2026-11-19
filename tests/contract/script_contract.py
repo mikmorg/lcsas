@@ -155,6 +155,11 @@ _BAT_FINISHED = r"The restore finished, but 2 item\(s\) could not be restored\."
 _SH_STOPPED = r"The restore stopped before it finished \(exit code {rc}\)"
 _BAT_STOPPED = r"The restore stopped before it finished \(code {rc}\)"
 _SH_FAILED_LINE = r"stopped with exit code"
+_MISSING_DISC = (r"[\s\S]*1 of them could not be read: a data disc was not in a drive"
+                 r"[\s\S]*Insert the data disc\(s\), then\s+run the same "
+                 r"restore again, into the same folder:")
+#: restore.bat's advice to carry on (restore.sh's names resume.sh).
+_BAT_CARRY_ON = r"To carry on|run the same restore again"
 _ANOTHER = "Restore another backup set"
 
 
@@ -181,7 +186,7 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
         # No data/ folder: tier 2 (there, and able to say it ran) cannot
         # read the discs, so neither script runs it (#615, #227).
         tier="1", reader_exit=ReaderExit.FAILED, next_tier=True,
-        reader_says=("ERROR: tree restore failed",),
+        reader_says=("ERROR: tree restore failed",) + _NOT_ALL_SAID[1:],
         # Tier 1 also writes the list when it stops early; exit 1 is
         # still a failure (#872), whatever is listed.
         failures=_FINISHED,
@@ -239,15 +244,26 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
                           another_set=True),
     ),
     ScriptCase(
+        # A disc that was not in a drive, with no disc prompt (#909):
+        # the same restore, run again with it in, restores the rest, so
+        # the tools folder and the resume helper stay (owner, #887).
+        # The scripts cannot name the disc: the row holds a pack id, and
+        # only tier 1's disc prompt looks it up in the catalog.
         name="tier 1 finished, a pack not found",
         tier="1", reader_exit=ReaderExit.NOT_ALL_RESTORED,
         reader_says=_NOT_ALL_SAID, failures=_NOT_FOUND,
-        sh=ScriptOutcome(exit=ScriptExit.NOT_ALL_RESTORED, says=_SH_FINISHED,
-                         resume_advice=False, tools_kept=False,
-                         another_set=True, log="not-all-restored"),
-        bat=ScriptOutcome(exit=ScriptExit.NOT_ALL_RESTORED, says=_BAT_FINISHED,
-                          resume_advice=False, tools_kept=False,
-                          another_set=True),
+        sh=ScriptOutcome(exit=ScriptExit.NOT_ALL_RESTORED,
+                         says=_SH_FINISHED + _MISSING_DISC
+                              + r"[\s\S]*    sh \S*/tools/resume\.sh\n",
+                         not_says=rf"{_SH_FAILED_LINE}|stopped before it finished",
+                         resume_advice=True, tools_kept=True,
+                         another_set=False, log="not-all-restored"),
+        bat=ScriptOutcome(exit=ScriptExit.NOT_ALL_RESTORED,
+                          says=_BAT_FINISHED + _MISSING_DISC
+                               + r"[\s\S]*run restore\.bat again from the META disc",
+                          not_says=r"stopped before it finished",
+                          resume_advice=True, tools_kept=True,
+                          another_set=False),
     ),
     ScriptCase(
         name="tier 1 disk full",
@@ -347,6 +363,20 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
                          not_says=r"\[tier 3\] FAILED|stopped before it finished",
                          resume_advice=False, tools_kept=False,
                          another_set=True, log="not-all-restored"),
+        bat=None, bat_why="restore.bat runs no tier 3",
+    ),
+    ScriptCase(
+        # The same as tier 1's: the Python reader writes the same reason.
+        name="tier 3 finished, a pack not found",
+        tier="3", reader_exit=ReaderExit.NOT_ALL_RESTORED,
+        reader_says=_NOT_ALL_SAID[:1], failures=_NOT_FOUND,
+        sh=ScriptOutcome(exit=ScriptExit.NOT_ALL_RESTORED,
+                         says=_SH_FINISHED + _MISSING_DISC
+                              + r"[\s\S]*    sh \S*/tools/resume\.sh\n",
+                         not_says=rf"\[tier 3\] FAILED|{_SH_FAILED_LINE}|"
+                                  r"stopped before it finished",
+                         resume_advice=True, tools_kept=True,
+                         another_set=False, log="not-all-restored"),
         bat=None, bat_why="restore.bat runs no tier 3",
     ),
     ScriptCase(
@@ -803,7 +833,7 @@ def run_restore_bat(case: ScriptCase, work: Path, rig: WineRig) -> ScriptOutcome
     output = res.stdout + res.stderr
     return ScriptOutcome(
         exit=res.returncode,
-        resume_advice="To carry on" in output,
+        resume_advice=re.search(_BAT_CARRY_ON, output) is not None,
         tools_kept=tools.exists(),
         another_set=_ANOTHER in output,
         log=None,

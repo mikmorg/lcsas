@@ -1586,11 +1586,15 @@ if exist "%BIN%" (
     if !RC! equ 74 goto :tier1_stopped
     REM 4: tier 1 finished, but some items could not be restored
     REM (#872): every other item is restored, and RESTORE_FAILURES.txt
-    REM lists them (#799).  Nothing to carry on, and tier 2 would only
-    REM restore the same set again.  :count_failures counts them for the
-    REM message.
+    REM lists them (#799).  Tier 2 would only restore the same set
+    REM again.  :count_failures counts them for the message, and the
+    REM "pack not found" rows: a disc that was not in a drive (#909).
+    REM With one of those the same restore, run again with the disc in,
+    REM restores them, so the tools folder stays (#887); else nothing
+    REM is left to carry on.
     if !RC! equ 4 (
         call :count_failures
+        if !NR_M! gtr 0 goto :restore_discs_missing
         goto :restore_partial
     )
     REM Any other exit.  Tier 2, rustic-static, reads packs only from
@@ -1652,7 +1656,8 @@ REM Reached only via `goto` from tier 1 or tier 2 when they exit 0, and
 REM from tier 1 when it exits 4 (:restore_partial, #799, #872):
 REM some items could not be restored and RESTORE_FAILURES.txt lists
 REM them.  That set is done too (nothing to carry on), so the same
-REM questions follow, and the run ends with exit code 4.
+REM questions follow, and the run ends with exit code 4.  Not when a
+REM row says "pack not found": see :restore_discs_missing.
 :restore_done
 set "PARTIAL="
 del /f /q "%PWFILE%" >nul 2>nul
@@ -2402,7 +2407,8 @@ if "!DOF_LINE:~0,6!"=="LCSAS " del /f /q "%TARGET%\RESTORE_FAILURES.txt" >nul 2>
 goto :eof
 
 REM :count_failures sets NR_N to the rows of RESTORE_FAILURES.txt that are
-REM errors: not a special file Windows cannot create, nor a link (the
+REM errors, and NR_M to those of them that say "pack not found" (#887):
+REM not a special file Windows cannot create, nor a link (the
 REM rows are path TAB reason TAB blob id; the column line's reason is
 REM "reason", and the header lines have no TAB).  eol is the tab too:
 REM the default ; would skip a row whose path starts with ;.  Each
@@ -2411,6 +2417,7 @@ REM hold " < > |, which CALL would parse again.  One test per line:
 REM wine's cmd cannot parse "if ... if /i not ..." chains.
 :count_failures
 set "NR_N=0"
+set "NR_M=0"
 if not exist "%TARGET%\RESTORE_FAILURES.txt" goto :eof
 for /f "usebackq eol=	 tokens=2 delims=	" %%B in ("%TARGET%\RESTORE_FAILURES.txt") do (
     set "NR_R=%%B"
@@ -2422,8 +2429,46 @@ if "!NR_R!"=="" goto :eof
 if "!NR_R!"=="reason" goto :eof
 if /i "!NR_R:~0,12!"=="special file" goto :eof
 if /i "!NR_R:~0,40!"=="link not created: the target file system" goto :eof
+if /i "!NR_R:~0,15!"=="pack not found:" set /a NR_M+=1
 set /a NR_N+=1
 goto :eof
+
+REM Reached only via `goto` from tier 1's exit 4 when RESTORE_FAILURES.txt
+REM has a "pack not found" row (#887): a data disc was not in a drive
+REM and tier 1 could not ask for it (#909).  Everything else is restored,
+REM and the same restore, run again with that disc in, restores the
+REM rest.  So, as at :tier1_stopped, the tools folder and "Resume LCSAS
+REM restore.bat" stay and no other set is offered; the exit code is 4.
+REM At top level for the same reason as :wrong_password.
+:restore_discs_missing
+del /f /q "%PWFILE%" >nul 2>nul
+echo.
+echo ============================================================
+echo  The restore finished, but !NR_N! item^(s^) could not be restored.
+echo  Everything else was restored to: !TARGET!
+echo  The items, and why, are listed in
+echo    !TARGET!\RESTORE_FAILURES.txt
+echo  See "ITEMS NOT RESTORED" in RECOVER.txt for what to do.
+echo.
+echo  !NR_M! of them could not be read: a data disc was not in a drive
+echo  ^("pack not found" in that list^).  Insert the data disc^(s^), then
+echo  run the same restore again, into the same folder:
+if defined RESUME_CMD (
+    if defined DESK_LAUNCHER echo  double-click "Resume LCSAS restore.bat" on your Desktop,
+    if defined DESK_LAUNCHER echo  or type this command:
+    if not defined DESK_LAUNCHER echo  type this command:
+    echo    "!RESUME_CMD!"
+    echo  The META disc is not needed for that.
+) else (
+    echo  run restore.bat again from the META disc, and choose the same
+    echo  folder.
+)
+echo  It skips the files already restored.  Run by a double-click or
+echo  from a Command Prompt window, it asks for each disc it needs by
+echo  its label.
+echo ============================================================
+pause
+exit /b 4
 
 REM Reached only via `goto` from tier 1 when it stopped with exit code 75
 REM (the reader typed q at the disc prompt) or 74 (the disk is full), or

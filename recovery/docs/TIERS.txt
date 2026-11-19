@@ -537,6 +537,12 @@ with LCSAS_TIER_FALLBACK=1 (it would restore the whole set again).
 Tier 1's exit 1 (a walk that stopped early) stays a failure, with the resume
 advice, even when RESTORE_FAILURES.txt is there: tier 1 has its own
 code for "finished", so neither script has to guess from the file.
+One exception (#887): when a row says "pack not found" (a disc that
+was not in a drive, with no disc prompt; #909), running the same
+restore again with that disc in restores those items.  Then both
+scripts still exit 4, but keep the tools folder and resume.sh (or
+"Resume LCSAS restore.bat"), say to insert the disc and run the same
+restore again into the same folder, and do not offer another set.
 
 EXIT 74 -- THE DISK IS FULL: tiers 1 and 3 exit 74 when the disk they
 restore to fills up.  restore.sh and restore.bat say so, keep the

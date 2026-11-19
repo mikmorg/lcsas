@@ -353,7 +353,10 @@ Everything not listed was restored.  restore.sh and restore.bat then
 say "The restore finished, but N item(s) could not be restored", give
 the path of RESTORE_FAILURES.txt, and exit with code 4.  The restore
 is over: resume.sh would only skip the same items again, so it is not
-offered, and the tools folder is removed.  What to do:
+offered, and the tools folder is removed.  Not when a row says "pack
+not found" (below): then the tools folder and resume.sh stay, and the
+script says to insert the disc and run the same restore again.  What
+to do:
 
   * "a folder with this name is already there": the folder you
     restored into holds an earlier restore, with a folder where this
@@ -361,9 +364,12 @@ offered, and the tools folder is removed.  What to do:
     Restore into a new, empty folder instead.
   * "pack not found: <id>": the data disc that holds this part of the
     backup was not in a drive, and the restore could not ask for it
-    (it asks only on a terminal).  Insert that disc and run the
-    restore again from the meta disc, into the same folder: the files
-    already restored are skipped.
+    (it asks only on a terminal).  Insert that disc and run the same
+    restore again, into the same folder: with resume.sh (restore.sh
+    prints the command; on Windows "Resume LCSAS restore.bat"), or
+    from the meta disc.  The files already restored are skipped.  Run
+    it in a terminal window and it asks for each disc it needs by its
+    label.
   * "pack damaged: <id>" or "pack unreadable: <id>": the copy of that
     part of the backup on the disc could not be read correctly (a
     scratched or failing disc).  Run the restore again with another
@@ -755,7 +761,9 @@ EXIT CODES
     4  -- the restore finished, but some items could not be restored:
           they are listed in RESTORE_FAILURES.txt in the folder you
           restored into (see "ITEMS NOT RESTORED").  Nothing to carry
-          on; restore.bat uses the same code
+          on, unless a disc was not there ("pack not found"): then
+          insert it and carry on with resume.sh.  restore.bat uses the
+          same code
     5  -- --check-disc only: the image has no ECC data, so there is
           nothing to repair: that disc was burned without ECC.  If it
           cannot be read, use another disc with the same label

@@ -43,7 +43,9 @@
 #   3    --check-disc: no image, no recovery tree or no lcsas-ecc, or the
 #        image could not be read or repaired
 #   4    the restore finished, but some items could not be restored:
-#        they are listed in <target>/RESTORE_FAILURES.txt (#799)
+#        they are listed in <target>/RESTORE_FAILURES.txt (#799).  When
+#        a disc was not there ("pack not found" rows), the tools folder
+#        and resume.sh stay: insert it and run resume.sh (#887)
 #   5    --check-disc: the image has no ECC data, so there is nothing to
 #        repair (lcsas-ecc verify's own code for that is 2; #887)
 #   64   no recovery binary available at any tier (issue #225)
@@ -59,8 +61,9 @@
 # computer's binaries, the docs and the meta disc's metadata/ into
 # $LCSAS_TOOLS_DIR (default $HOME/lcsas-restore-tools) and runs from
 # there.  The pack cache, a copy of the catalog and resume.sh live
-# there too.  It is removed after a restore that succeeds and kept
-# after any other exit, so `sh <tools>/resume.sh` can carry on.
+# there too.  It is removed after a restore that succeeds, or that
+# finishes with items not restored (exit 4) unless a disc was not there,
+# and kept after any other exit, so `sh <tools>/resume.sh` can carry on.
 
 set -eu
 
@@ -1290,6 +1293,10 @@ _stty_saved=""
 # The copy of a tier's messages (issue #240; run_tier); set when a
 # tier runs.
 TIER_ERR=""
+# Set by not_all_restored: it said "finished" (exit 4), and a disc was
+# not there, so the tools folder stays (#887).
+NOT_ALL_SAID=0
+DISCS_MISSING=0
 # shellcheck disable=SC2317  # runs from the EXIT/INT/TERM trap below
 _restore_exit_handler() {
     rc=$?
@@ -1321,6 +1328,10 @@ _restore_exit_handler() {
         if [ "$rc" -eq 0 ] || [ "${RESTORE_DONE:-0}" = 1 ]; then
             cd / 2>/dev/null
             tools_dir_remove "$TOOLS"
+        elif [ "${DISCS_MISSING:-0}" = 1 ]; then
+            # Finished without the data of a disc that was not there
+            # (#887): kept, and not_all_restored said how to carry on.
+            :
         elif [ -f "$TOOLS/resume.sh" ] && [ -z "${NO_METHOD:-}" ]; then
             cat >&2 <<EOF
 
@@ -1343,7 +1354,7 @@ EOF
     # #806: a failure was logged to a file under /tmp that no run
     # removed (#259); the exit code is said here instead.
     # Exit 4 (#799) is a restore that finished, and said so.
-    if [ "$rc" -ne 0 ] && { [ "$rc" -ne 4 ] || [ "${RESTORE_DONE:-0}" != 1 ]; }; then
+    if [ "$rc" -ne 0 ] && { [ "$rc" -ne 4 ] || [ "${NOT_ALL_SAID:-0}" != 1 ]; }; then
         printf '[restore.sh] stopped with exit code %d\n' "$rc" >&2
     fi
     # Return 0 so the trap does not clobber the script's exit status
@@ -3617,15 +3628,31 @@ say_wrong_password() {
     printf '        Check the password (and any share cards).\n'               >&2
 }
 
+# failures_missing: how many rows of RESTORE_FAILURES.txt say "pack not
+# found": data on a disc that was not in a drive while the reader could
+# not ask for it (no terminal, #909).
+failures_missing() {
+    awk -F "$TAB" '
+        { sub(/\r$/, "") }
+        body && $2 ~ /^pack not found: / { n++ }
+        $0 == "path" FS "reason" FS "blob_id" { body = 1 }
+        END { print n + 0 }' "$FAILURES_FILE" 2>/dev/null || echo 0
+}
+
 # not_all_restored TIER: the restore finished, but some items could not
-# be restored; they are listed in RESTORE_FAILURES.txt (#799).  Nothing
-# is left to carry on: running resume.sh would only skip the same items
-# again.  So it is the end of this set: log it, offer another set, and
-# exit 4.
+# be restored; they are listed in RESTORE_FAILURES.txt (#799).  Exit 4.
+# When none of them is "pack not found", nothing is left to carry on:
+# running resume.sh would only skip the same items again.  So it is the
+# end of this set: log it, offer another set, and exit 4.
+# A "pack not found" row is a disc that was not there (#887): the same
+# restore, run again with that disc in, restores it.  Then resume.sh and
+# the tools folder stay (no restore_done), and no other set is offered:
+# its run would write over this set's resume.sh.
 not_all_restored() {
     _nr_n="$(sed -n 's/.*ERROR: \([0-9][0-9]*\) item(s) were NOT restored.*/\1/p' \
                  "${TIER_ERR:-/dev/null}" 2>/dev/null | tail -n 1)"
     [ -n "$_nr_n" ] || _nr_n="$(failures_errors)"
+    _nr_missing="$(failures_missing)"
     write_session_log "$1" not-all-restored
     {
         printf '\n[restore.sh] The restore finished, but %s item(s) could not be restored.\n' "$_nr_n"
@@ -3634,6 +3661,25 @@ not_all_restored() {
         printf '                 %s\n' "$FAILURES_FILE"
         printf '[restore.sh] See "ITEMS NOT RESTORED" in RECOVER.txt for what to do.\n'
     } >&2
+    NOT_ALL_SAID=1
+    if [ "$_nr_missing" -gt 0 ] 2>/dev/null; then
+        DISCS_MISSING=1
+        {
+            printf '\n%s of them could not be read: a data disc was not in a drive\n' "$_nr_missing"
+            printf '("pack not found" in that list).  Insert the data disc(s), then\n'
+            printf 'run the same restore again, into the same folder:\n'
+            if [ -n "$TOOLS" ] && [ -f "$TOOLS/resume.sh" ]; then
+                printf '    sh %s\n' "$(sh_word "$TOOLS/resume.sh")"
+                printf 'The META disc is not needed for that.  '
+            else
+                printf '    restore.sh from the META disc, into %s\n' "$TARGET_DIR"
+            fi
+            printf 'It skips the files already restored.\n'
+            printf 'Run in a terminal window, it asks for each disc it needs by\n'
+            printf 'its label.\n'
+        } >&2
+        exit "$EXIT_NOT_ALL_RESTORED"
+    fi
     restore_done
     offer_another_set
     exit "$EXIT_NOT_ALL_RESTORED"
@@ -3673,9 +3719,11 @@ tier_ended() {
             fi
             # The tier finished, but some items were not restored: tier
             # 1 (#872) and tier 3 (#875) exit 4 for that, as this script
-            # does, and list them in RESTORE_FAILURES.txt.  Tier 1's
-            # exit 1 is a failure (a damaged disc, say), which needs a
-            # resume.
+            # does, and list them in RESTORE_FAILURES.txt.  Since #909
+            # that includes data they could not read: a damaged pack, or
+            # a disc that was not there ("pack not found", for which
+            # not_all_restored keeps resume.sh).  Exit 1 is a walk that
+            # stopped early, which needs a resume.
             if [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]; then
                 not_all_restored "$1"
             fi

@@ -1138,3 +1138,20 @@ def test_restore_bat_check_disc_no_ecc_exits_from_top_level():
     label = code.index(":check_disc_no_ecc")
     assert label > code.index(":wrong_password"), "top level"
     assert _label_body(content, ":check_disc_no_ecc")[-1] == "exit /b 5"
+
+
+def test_restore_bat_missing_disc_stop_exits_from_top_level():
+    """#887: tier 1's exit 4 with a "pack not found" row keeps the tools
+    folder and exits 4 from :restore_discs_missing (run under wine in
+    tests/contract/script_contract.py, "tier 1 finished, a pack not
+    found").  Static, because only real cmd.exe drops an exit code
+    given inside a ( ) block (#384), and the "Resume LCSAS restore.bat"
+    command is written only by a relocated run, which wine cannot make."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert "if !NR_M! gtr 0 goto :restore_discs_missing" in code
+    assert code.index(":restore_discs_missing") > code.index(":wrong_password")
+    body = _label_body(content, ":restore_discs_missing")
+    assert body[-1] == "exit /b 4", body
+    assert 'echo    "!RESUME_CMD!"' in body, body
+    assert not any(":all_done" in ln or ".done" in ln for ln in body), body
