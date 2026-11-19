@@ -148,10 +148,17 @@ class VolumeMerger:
         :meth:`mark_sources_consolidating` *before* starting the burn so
         that a crash leaves volumes in a recognisable interrupted state rather
         than silently ACTIVE.
+
+        All or nothing: when one volume is refused (``ValueError``, its
+        one-line reason), none is deprecated (#905).
         """
         lifecycle = VolumeLifecycle(self._conn)
-        for vid in source_volume_ids:
-            lifecycle.consolidation_finished(vid)
+        try:
+            for vid in source_volume_ids:
+                lifecycle.consolidation_finished(vid)
+        except ValueError:
+            self._conn.rollback()
+            raise
         self._conn.commit()
 
     def mark_sources_consolidating(

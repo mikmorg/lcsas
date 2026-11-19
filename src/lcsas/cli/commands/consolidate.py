@@ -107,8 +107,14 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             if args.execute:
                 logger.error("--deprecate and --execute are mutually exclusive.")
                 return 1
-            # Mark source volumes as DEPRECATED after consolidation succeeds
-            merger.deprecate_sources(args.volume_ids)
+            # Mark source volumes as DEPRECATED after consolidation succeeds.
+            # A refusal (a status that is never deprecated, or packs on no
+            # other volume) is one line, and no volume changes (#905).
+            try:
+                merger.deprecate_sources(args.volume_ids)
+            except ValueError as e:
+                logger.error("%s Nothing was deprecated.", e)
+                return 1
             logger.info("Marked %d source volume(s) as DEPRECATED", len(args.volume_ids))
             return 0
 

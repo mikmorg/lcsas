@@ -200,7 +200,7 @@ class TestDeprecationSafety:
                           repo_id="_test")
         bulk_link_packs(memory_db, v1.volume_id, [p.pack_id])
 
-        with pytest.raises(ValueError, match="unreplicated"):
+        with pytest.raises(ValueError, match="on no other in-service volume"):
             update_status(memory_db, v1.volume_id, "DEPRECATED")
 
     def test_force_overrides_safety_check(self, memory_db):

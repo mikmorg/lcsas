@@ -267,9 +267,11 @@ two-phase consolidation.
   least one other `BURNED`/`VERIFIED` volume — otherwise the
   deprecation safety check raises `ValueError`
   (`check_deprecation_safe` in `src/lcsas/db/volumes.py`).
-- Sources are in `VERIFIED` or `CONSOLIDATING` — both are legal
+- Sources are in `VERIFIED` or `CONSOLIDATING` — the only legal
   predecessors of `DEPRECATED`
-  (`_TRANSITIONS` in `src/lcsas/db/lifecycle.py`).
+  (`_TRANSITIONS` in `src/lcsas/db/lifecycle.py`).  A never-burned
+  (`STAGING`) volume is deleted (`lcsas session abort --volume <label>`)
+  or staged again, never deprecated (#905).
 
 **Steps:**
 1. Parse args; resolve the catalog path; build a `VolumeMerger`
@@ -282,14 +284,17 @@ two-phase consolidation.
    lifecycle event `VolumeLifecycle.consolidation_finished(vid)`
    (`src/lcsas/db/lifecycle.py`), which:
    1. Validates the transition (`VERIFIED` or `CONSOLIDATING` →
-      `DEPRECATED` are both legal — `_TRANSITIONS`).
+      `DEPRECATED` are the only legal ones — `_TRANSITIONS`); any other
+      status raises `ValueError` with a one-line reason for the owner
+      (#905).
    2. Runs `check_deprecation_safe` (`src/lcsas/db/volumes.py`) inside
       a SAVEPOINT to find packs that would become unreplicated; if any
       exist, ROLLBACK and raise.
    3. Writes the status change.
    4. Inserts a `NOTE` event into `volume_events` with detail
       `"Status changed: <prev> → DEPRECATED"`.
-5. After the loop, commit (`src/lcsas/consolidate/merger.py`).
+5. After the loop, commit (`src/lcsas/consolidate/merger.py`).  If any
+   source was refused, roll back instead: no source changes.
 6. Log the deprecated count and return 0 (`cmd_consolidate`).
 
 **Expected outcome:**
@@ -312,8 +317,9 @@ two-phase consolidation.
 - Restore planners now de-prefer these volumes
   (`v.status NOT IN ('DEPRECATED', 'DESTROYED')` —
   `src/lcsas/db/queries.py`).
-- Exit code 0 on success.  Non-zero (`ValueError` propagated) if the
-  safety check refuses one of the sources.
+- Exit code 0 on success.  Exit 1 with a one-line reason ending
+  "Nothing was deprecated." if the status check or the safety check
+  refuses one of the sources (#905); no source changes.
 
 **Variant axes that apply:**
 - **Media type** — irrelevant.
@@ -775,7 +781,7 @@ status only by sending a `VolumeLifecycle` event
 `_TRANSITIONS`, and the event table below against the event list:
 
 ```text
-STAGING       → BURNING, DEPRECATED, DESTROYED
+STAGING       → BURNING, DESTROYED
 BURNING       → BURNED, VERIFIED, STAGING, DESTROYED
 BURNED        → VERIFIED, DESTROYED
 VERIFIED      → DEPRECATED, DESTROYED, CONSOLIDATING
@@ -801,7 +807,7 @@ each event does from every start state is pinned by
 | Event (`VolumeLifecycle.`)    | Sent by                                            | Status change                                   |
 | ----------------------------- | -------------------------------------------------- | ----------------------------------------------- |
 | `stage_failed`                | `lcsas stage`, when mastering, ECC or re-mastering a volume fails | the volume is deleted (nothing checked: the stage made it) |
-| `burn_started`                | `lcsas burn --session`                             | `STAGING → BURNING`, committed; a `VERIFIED`, lost or `BURNED` volume keeps its status (#726, #810) |
+| `burn_started`                | `lcsas burn --session`                             | `STAGING → BURNING`, committed; a `VERIFIED`, lost or `BURNED` volume keeps its status (#726, #810); a `CONSOLIDATING`, `DEPRECATED` or `DESTROYED` one is refused before the first disc prompt (`may_burn`, #905) |
 | `burn_succeeded`              | `lcsas burn`, the disc reads back right            | `BURNING`/`BURNED → VERIFIED`, disc recorded; a re-burn keeps its status (a lost volume comes back through `disc_back_in_service`) |
 | `burn_failed`                 | `lcsas burn`, the read-back fails                  | `BURNING → STAGING` (#483); a re-burn keeps its status and gets `VERIFY_FAIL_REBURN`; `BURNED` stays |
 | `burn_stopped`                | `lcsas burn`, stopped by an error or Ctrl-C        | `BURNING → STAGING` (#668)                      |
@@ -815,7 +821,7 @@ each event does from every start state is pinned by
 | `last_disc_lost`              | `lcsas copy deprecate`/`destroy [--lost]` of the last in-service disc | `→ DEPRECATED` plus an `auto-deprecated:` note, outside the graph (ADR 0003) |
 | `disc_back_in_service`        | a disc of a lost volume recorded or read again     | `DEPRECATED → VERIFIED`/`BURNED`, outside the graph (#726, #752) |
 | `consolidation_started`       | `lcsas consolidate --execute`, just after staging succeeds | `VERIFIED → CONSOLIDATING`               |
-| `consolidation_finished`      | `lcsas consolidate --deprecate`                    | `VERIFIED`/`CONSOLIDATING → DEPRECATED` (the graph also allows `STAGING`, #905) |
+| `consolidation_finished`      | `lcsas consolidate --deprecate`                    | `VERIFIED`/`CONSOLIDATING → DEPRECATED`; any other status is refused with a one-line reason, and no volume of the command changes (#905) |
 | `consolidation_abandoned`     | `lcsas session abort` or `stage --clean --force` of the consolidation's burn session (#817); `VolumeMerger.abort_consolidation` (no command, #907) | `CONSOLIDATING → VERIFIED` |
 | `never_burned_deleted`        | `lcsas session abort [--volume]`, `stage --clean --force`, `catalog reconcile --fix` | the volume is deleted when `may_delete` allows it |
 | `disc_catalog_status_adopted` | `lcsas catalog rebuild`                            | the freshest disc catalog's status (FMA-06), outside the graph, no note |
