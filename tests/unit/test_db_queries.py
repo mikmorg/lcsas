@@ -17,8 +17,9 @@ from lcsas.db.queries import (
     get_volumes_for_pack,
 )
 from lcsas.db.repos import register_repo
-from lcsas.db.volumes import create_volume, get_volume_by_id, update_status, update_used_bytes
+from lcsas.db.volumes import create_volume, get_volume_by_id, update_used_bytes
 from lcsas.utils.labels import generate_uuid
+from tests.unit.volume_status import update_status
 
 
 class TestUnarchived:

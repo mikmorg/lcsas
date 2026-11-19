@@ -6,18 +6,18 @@ import sqlite3
 
 import pytest
 
+from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.volumes import (
     check_deprecation_safe,
     create_volume,
-    delete_volume,
     get_volume_by_id,
     get_volume_by_label,
     list_volumes,
     mark_closed,
-    update_status,
     update_used_bytes,
 )
 from lcsas.utils.labels import generate_uuid
+from tests.unit.volume_status import update_status
 
 
 class TestVolumesCRUD:
@@ -121,7 +121,7 @@ class TestVolumesCRUD:
             memory_db, label="DEL_ME", uuid=generate_uuid(),
             media_type="BD25", capacity_bytes=25_000_000_000,
         )
-        delete_volume(memory_db, vol.volume_id)
+        VolumeLifecycle(memory_db).stage_failed(vol.volume_id)
         assert get_volume_by_label(memory_db, "DEL_ME") is None
 
     def test_get_by_id_not_found(self, memory_db):

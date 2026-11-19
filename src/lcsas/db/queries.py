@@ -62,9 +62,9 @@ _HELD_AT_LOCATION = f"""(p.is_pruned = 0 AND EXISTS (
 # it is never lost; nor is a DESTROYED or never-burned STAGING/BURNING one.
 #
 # Deprecated by loss = the newest NOTE that deprecated the volume is the
-# auto-deprecation note written by lcsas.db.volume_copies when its last
-# in-service disc went.  A volume deprecated by consolidation gets a
-# "Status changed: ... → DEPRECATED" note from update_status() instead,
+# auto-deprecation note written by lcsas.db.lifecycle (last_disc_lost)
+# when its last in-service disc went.  A volume deprecated by
+# consolidation gets a "Status changed: ... → DEPRECATED" note instead,
 # so it stays DEPRECATED even after its discs are later recorded
 # deprecated or destroyed.  The NEWEST one decides (#726): a lost volume
 # that got a disc back is VERIFIED or BURNED again, and if it is later

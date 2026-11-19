@@ -205,13 +205,13 @@ def test_recording_the_disc_ends_the_refusal(two_sessions, caplog):
         conn.close()
     assert _verify_disc(env["db"], env["y"], "--location", "Home") == 0, \
         caplog.text
-    from lcsas.db.volume_events import rebuild_burn_unknown
+    from lcsas.db.lifecycle import VolumeLifecycle
 
     conn = get_connection(env["db"])
     try:
         vol = get_volume_by_label(conn, env["y"])
         assert vol.status == "VERIFIED"
-        assert not rebuild_burn_unknown(conn, vol.volume_id)
+        assert not VolumeLifecycle(conn).burn_unknown(vol.volume_id)
     finally:
         conn.close()
     # Abort now finds nothing to delete: Y has its disc.

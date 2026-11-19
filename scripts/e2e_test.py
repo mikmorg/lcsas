@@ -666,9 +666,14 @@ def create_redundant_copies(
     banner("Phase 10: Create Redundant Volumes")
 
     from lcsas.config.media import MediaType
+
+    # The duplicate below walks the status graph to VERIFIED with no disc
+    # burned, which no VolumeLifecycle event models; it uses the graph's
+    # private writer, as it used update_status before #892.
+    from lcsas.db.lifecycle import _update_status as update_status
     from lcsas.db.queries import get_packs_for_volume
     from lcsas.db.volume_packs import bulk_link_packs
-    from lcsas.db.volumes import create_volume, list_volumes, update_status
+    from lcsas.db.volumes import create_volume, list_volumes
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.staging.builder import StagingBuilder
     from lcsas.utils.labels import generate_uuid

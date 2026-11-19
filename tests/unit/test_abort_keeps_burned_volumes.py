@@ -28,12 +28,13 @@ from lcsas.cli.main import main
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.connection import get_connection
+from lcsas.db.lifecycle import VolumeLifecycle
 from lcsas.db.packs import register_pack
 from lcsas.db.queries import get_unarchived_packs
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.sessions import get_session
-from lcsas.db.volume_events import add_event, burn_evidence
+from lcsas.db.volume_events import add_event
 from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import get_volume_by_label
 
@@ -329,7 +330,7 @@ def test_burned_before_its_burn_is_never_deleted(staged, status, notes):
     orch, conn, result, manifest = staged
     _rc7_history(conn, manifest.volume_id, status, notes)
 
-    assert burn_evidence(conn, manifest.volume_id) == _WAS_BURNED
+    assert VolumeLifecycle(conn).burn_evidence(manifest.volume_id) == _WAS_BURNED
     for call in (
         lambda: orch.abort_session(result.session_id),
         lambda: orch.abort_session(result.session_id, never_burned=True),
@@ -362,7 +363,7 @@ def test_burning_from_staging_is_still_deleted(staged, notes):
     orch, conn, result, manifest = staged
     _rc7_history(conn, manifest.volume_id, "BURNING", notes)
 
-    assert burn_evidence(conn, manifest.volume_id) is None
+    assert VolumeLifecycle(conn).burn_evidence(manifest.volume_id) is None
     summary = orch.abort_session(result.session_id)
     assert summary.labels == [manifest.volume_label]
     assert get_volume_by_label(conn, manifest.volume_label) is None

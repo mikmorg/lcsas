@@ -39,13 +39,9 @@ from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_copies import add_volume_copy, destroy_copy
 from lcsas.db.volume_events import get_events_for_volume
-from lcsas.db.volumes import (
-    create_volume,
-    get_volume_by_id,
-    get_volume_by_label,
-    update_status,
-)
+from lcsas.db.volumes import create_volume, get_volume_by_id, get_volume_by_label
 from lcsas.utils.labels import generate_uuid
+from tests.unit.volume_status import update_status
 
 
 def _config(tmp_path: Path) -> LCSASConfig:

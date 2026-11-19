@@ -1920,7 +1920,7 @@ class TestFirstDiscStates:
         """#810: an older LCSAS moved a BURNED volume to BURNING for its
         burn; the NOTE update_status wrote says so, and a failed receipt
         puts it back to BURNED, not STAGING."""
-        from lcsas.db.volumes import update_status
+        from tests.unit.volume_status import update_status
 
         cfg = _write_config_receipts(tmp_path)
         db = _make_catalog(tmp_path, {"VOL_NEW": "BURNED"}, staged_for="Bank_Box")

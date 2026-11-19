@@ -2,40 +2,10 @@
 
 from __future__ import annotations
 
-import contextlib
-import logging
 import sqlite3
 
-from lcsas.constants import (
-    STATUS_BURNED,
-    STATUS_BURNING,
-    STATUS_CONSOLIDATING,
-    STATUS_DEPRECATED,
-    STATUS_DESTROYED,
-    STATUS_STAGING,
-    STATUS_VERIFIED,
-)
 from lcsas.db.models import Volume
 from lcsas.utils.timestamps import utc_now
-
-logger = logging.getLogger(__name__)
-
-# Valid status transitions. Each key maps to the set of statuses
-# that a volume is allowed to transition *to* from that state.
-VALID_TRANSITIONS: dict[str, set[str]] = {
-    STATUS_STAGING:         {STATUS_BURNING, STATUS_DEPRECATED, STATUS_DESTROYED},
-    STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
-    # A BURNED volume never goes back to BURNING or STAGING (#810): a
-    # disc of it exists (a catalog rebuilt from discs records the newest
-    # ones as BURNED with no disc row), and STAGING would let 'session
-    # abort' or 'reconcile --fix' delete it.  'burn --session' burns a
-    # BURNED volume without leaving BURNED, then makes it VERIFIED.
-    STATUS_BURNED:          {STATUS_VERIFIED, STATUS_DESTROYED},
-    STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_DESTROYED, STATUS_CONSOLIDATING},
-    STATUS_CONSOLIDATING:   {STATUS_DEPRECATED, STATUS_VERIFIED},
-    STATUS_DEPRECATED:      {STATUS_DESTROYED},
-    STATUS_DESTROYED:       set(),
-}
 
 
 def _row_to_volume(row: sqlite3.Row) -> Volume:
@@ -102,112 +72,6 @@ def get_volume_by_label(conn: sqlite3.Connection, label: str) -> Volume | None:
     return _row_to_volume(row) if row else None
 
 
-def update_status(
-    conn: sqlite3.Connection,
-    volume_id: int,
-    status: str,
-    *,
-    commit: bool = True,
-    force: bool = False,
-) -> None:
-    """Update the status of a volume.
-
-    Enforces valid state transitions unless *force* is ``True``.
-    Automatically sets ``verified_at`` when status transitions to VERIFIED.
-    """
-    volume = get_volume_by_id(conn, volume_id)
-    current = volume.status
-
-    if not force:
-        allowed = VALID_TRANSITIONS.get(current, set())
-        if status not in allowed:
-            raise ValueError(
-                f"Invalid status transition for volume {volume_id}: "
-                f"{current} → {status} (allowed: {sorted(allowed)})"
-            )
-        # Safety check: refuse DEPRECATED if packs would become unreplicated.
-        # Use a savepoint for write-lock protection (nests safely in outer transactions).
-        if status == "DEPRECATED":
-            conn.execute("SAVEPOINT deprecate_check")
-            try:
-                at_risk = check_deprecation_safe(conn, volume_id)
-                if at_risk:
-                    conn.execute("ROLLBACK TO deprecate_check")
-                    raise ValueError(
-                        f"Cannot deprecate volume {volume_id}: "
-                        f"{len(at_risk)} pack(s) would become unreplicated. "
-                        f"Use force=True to override."
-                    )
-                conn.execute(
-                    "UPDATE volumes SET status = ? WHERE volume_id = ?",
-                    (status, volume_id),
-                )
-                conn.execute("RELEASE deprecate_check")
-                from lcsas.db.volume_events import add_event
-                add_event(
-                    conn, volume_id, "NOTE",
-                    detail=f"Status changed: {current} → {status}",
-                    commit=False,
-                )
-                if commit:
-                    conn.commit()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    conn.execute("ROLLBACK TO deprecate_check")
-                raise
-            return
-    else:
-        logger.warning(
-            "Forced status change for volume %d → %s (bypassing transition rules)",
-            volume_id, status,
-        )
-
-    if status == "VERIFIED":
-        now = utc_now()
-        conn.execute(
-            "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",
-            (status, now, volume_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE volumes SET status = ? WHERE volume_id = ?",
-            (status, volume_id),
-        )
-
-    from lcsas.db.volume_events import add_event
-    add_event(
-        conn, volume_id, "NOTE",
-        detail=f"Status changed: {current} → {status}",
-        commit=False,
-    )
-
-    if commit:
-        conn.commit()
-
-
-def status_before_burning(conn: sqlite3.Connection, volume_id: int) -> str:
-    """The status a BURNING volume had before its burn started (#810).
-
-    A burn killed outright (power loss, ``kill -9``) leaves its volume
-    BURNING; the status it came from is only in the NOTE that
-    :func:`update_status` wrote ("Status changed: X → BURNING").
-    Returns ``BURNED`` when the newest such note says it was BURNED (an
-    older LCSAS moved a BURNED volume to BURNING for its burn), else
-    ``STAGING``, also when there is no note.
-    """
-    row = conn.execute(
-        """SELECT detail FROM volume_events
-           WHERE volume_id = ? AND event_type = 'NOTE'
-             AND detail LIKE 'Status changed: % → BURNING'
-           ORDER BY event_id DESC LIMIT 1""",
-        (volume_id,),
-    ).fetchone()
-    if row is not None and str(row[0]).startswith(
-            f"Status changed: {STATUS_BURNED} →"):
-        return STATUS_BURNED
-    return STATUS_STAGING
-
-
 def mark_closed(
     conn: sqlite3.Connection, volume_id: int, *, commit: bool = True,
 ) -> None:
@@ -252,19 +116,6 @@ def list_volumes(
             "SELECT * FROM volumes ORDER BY julianday(created_at), volume_id"
         ).fetchall()
     return [_row_to_volume(r) for r in rows]
-
-
-def delete_volume(conn: sqlite3.Connection, volume_id: int) -> None:
-    """Delete a volume (and cascade via FK if enabled). Use with caution.
-
-    session_volumes has a FK to volumes WITHOUT ON DELETE CASCADE, so its
-    rows must be removed explicitly or the volume delete fails under
-    PRAGMA foreign_keys=ON.
-    """
-    conn.execute("DELETE FROM session_volumes WHERE volume_id = ?", (volume_id,))
-    conn.execute("DELETE FROM volume_packs WHERE volume_id = ?", (volume_id,))
-    conn.execute("DELETE FROM volumes WHERE volume_id = ?", (volume_id,))
-    conn.commit()
 
 
 def check_deprecation_safe(

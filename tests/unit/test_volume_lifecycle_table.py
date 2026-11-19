@@ -1,13 +1,14 @@
 """What happens to a volume today, for every event and start state (#891).
 
-"What may happen to a volume in status X?" has no one answer in the code:
+"What may happen to a volume in status X?" had no one answer in the code:
 the ``VALID_TRANSITIONS`` graph (``db/volumes.py``), 20 ``update_status``
-calls that step through it, 5 raw ``UPDATE volumes SET status`` writes that
-skip it, and 5 ``delete_volume`` calls, each behind its own guard.  This
-file writes the present behaviour down as one table, so the later
-lifecycle module (#892) can be shown to keep it, and so the owner can read
-the whole list.  It pins behaviour; it does not judge it.  Rows whose
-behaviour looks wrong carry a ``suspect`` note; they are not fixed here.
+calls that stepped through it, 5 raw ``UPDATE volumes SET status`` writes
+that skipped it, and 5 ``delete_volume`` calls, each behind its own guard.
+This file wrote the behaviour down as one table, so the lifecycle module
+(#892, ``db/lifecycle.py``, which now holds all of it) could be shown to
+keep it, and so the owner can read the whole list.  It pins behaviour;
+it does not judge it.  Rows whose behaviour looks wrong carry a
+``suspect`` note; they are not fixed here.
 
 One row per (event, start state): every event crossed with every start,
 except the three staging events, which make the volume and so start from
@@ -17,8 +18,9 @@ orchestrator method, with only xorriso, the drive and the ISO checker
 faked; never by calling ``update_status``.  The start state is forced by
 one helper, :func:`seed`, the only place this file writes the catalog
 directly.  ``test_every_status_write_is_reached_by_a_row`` checks that the
-events reach all 30 status writes (``--sites`` lists which rows reach
-each).
+events reach every status write: since #892 the calls of the
+``VolumeLifecycle`` events and the writes inside ``db/lifecycle.py``
+(``--sites`` lists which rows reach each).
 
 Columns of a row (all observed on the volume the event acts on):
 
@@ -2588,7 +2590,7 @@ def _pairs() -> list[tuple[str, str]]:
 
 @dataclass(frozen=True)
 class Site:
-    kind: str  # "update_status", "raw UPDATE", "delete_volume"
+    kind: str  # "lifecycle event", "status write"
     path: str  # relative to src/lcsas
     line: int  # the line the call starts on
     text: str
@@ -2618,16 +2620,13 @@ def lifecycle_events() -> frozenset[str]:
 
 def status_write_sites() -> list[Site]:
     """Every place that changes or deletes a volume's status: calls of the
-    ``VolumeLifecycle`` event methods outside ``db/lifecycle.py``; calls of
-    ``update_status`` and ``delete_volume`` outside it; and ``execute``
-    calls whose SQL is an ``UPDATE volumes SET status`` outside
-    ``update_status`` itself (``db/volumes.py``) and the lifecycle
-    module."""
+    ``VolumeLifecycle`` event methods outside ``db/lifecycle.py``, and,
+    inside it, every ``execute`` whose SQL writes ``volumes.status`` or
+    deletes a volume.  Nothing else writes them
+    (``test_volume_status_writers.py``)."""
     sites = []
     for path in sorted(SRC.rglob("*.py")):
         rel = path.relative_to(SRC).as_posix()
-        if rel == _LIFECYCLE:
-            continue
         source = path.read_text(encoding="utf-8")
         lines = source.splitlines()
         for node in ast.walk(ast.parse(source)):
@@ -2637,16 +2636,16 @@ def status_write_sites() -> list[Site]:
             name = (func.id if isinstance(func, ast.Name)
                     else func.attr if isinstance(func, ast.Attribute) else "")
             kind = ""
-            if name in ("update_status", "delete_volume"):
-                kind = name
-            elif isinstance(func, ast.Attribute) and name in lifecycle_events():
-                kind = "lifecycle event"
-            elif name == "execute" and rel != "db/volumes.py" and any(
+            if rel != _LIFECYCLE:
+                if isinstance(func, ast.Attribute) and name in lifecycle_events():
+                    kind = "lifecycle event"
+            elif name == "execute" and any(
                 isinstance(a, ast.Constant) and isinstance(a.value, str)
-                and "UPDATE volumes SET status" in " ".join(a.value.split())
+                and re.search(r"UPDATE volumes SET status|DELETE FROM volumes ",
+                              " ".join(a.value.split()))
                 for a in node.args
             ):
-                kind = "raw UPDATE"
+                kind = "status write"
             if kind:
                 sites.append(Site(kind, rel, node.lineno,
                                   lines[node.lineno - 1].strip()))
@@ -2779,13 +2778,12 @@ def test_row(table, row):
 
 
 def test_status_write_sites_are_the_ones_the_table_was_written_for():
-    """20 ``update_status`` calls, 5 raw status writes, 5 deletions (#891),
-    moving to ``VolumeLifecycle`` events one file at a time (#892):
-    ``cli/commands/verify.py``, ``catalog.py``, ``burn/orchestrator.py``,
-    ``consolidate/merger.py``, ``db/rebuild.py`` and ``db/volume_copies.py``
-    done.  A new one needs rows that reach it."""
+    """The 20 ``update_status`` calls, 5 raw status writes and 5 deletions
+    the table was written for (#891) are now 28 calls of ``VolumeLifecycle``
+    events and the 9 status writes inside it (#892).  A new one needs rows
+    that reach it."""
     counts = Counter(site.kind for site in status_write_sites())
-    assert counts == {"lifecycle event": 28}
+    assert counts == {"lifecycle event": 28, "status write": 9}
 
 
 def test_every_status_write_is_reached_by_a_row(table):

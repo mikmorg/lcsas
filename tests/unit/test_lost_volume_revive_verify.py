@@ -19,11 +19,12 @@ import pytest
 from lcsas.cli.main import main
 from lcsas.db.locations import create_location
 from lcsas.db.queries import get_lost_volume_ids
-from lcsas.db.volumes import get_volume_by_id, update_status
+from lcsas.db.volumes import get_volume_by_id
 from tests.unit.test_lost_volume_reburn import (
     _assert_in_service,
     burned,  # noqa: F401  (fixture)
 )
+from tests.unit.volume_status import update_status
 
 
 def _pre_726_disc(conn, volume_id: int, location: str) -> None:

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 
-from lcsas.constants import STATUS_BURNED, STATUS_VERIFIED
 from lcsas.db.models import VolumeEvent
 from lcsas.utils.timestamps import utc_now
 
@@ -143,103 +141,9 @@ def get_latest_event(
     return _row_to_event(row) if row else None
 
 
-def burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
-    """Why the volume's events say a good disc of it was burned, or None.
-
-    The one check that ``session abort``, ``stage --clean`` (#737) and
-    ``catalog reconcile --fix`` (#746) use before deleting a volume with
-    no disc record: a volume it names was burned, and is never deleted.
-
-    Only events that a never-burned volume, or one whose only disc
-    failed verification (#483), cannot carry count:
-
-    - ``VERIFY_PASS`` at a location: a disc was read back at that
-      location.  An ISO verify records no location, so it does not
-      count.  ``lcsas verify <label> --disc`` without ``--location``
-      records none either; its default detail "Disc verify" counts.
-    - ``BURN_RECEIPT_IMPORTED``, unless its receipt says the disc
-      failed verification (``verify_passed`` false).
-    - ``LOCATION_MOVE``: a recorded disc was moved.
-    - ``VERIFY_FAIL_REBURN``: written only when an earlier disc of
-      the volume was recorded.
-    - A status note saying the volume was BURNED or VERIFIED when a
-      burn of it started (#904,
-      :func:`lcsas.db.volumes.status_before_burning`).  An LCSAS from
-      before #810 (rc1 to rc9, the rc7 install among them) moved a
-      BURNED volume to BURNING for its burn, writing the note "Status
-      changed: BURNED → BURNING"; a burn killed then leaves the volume
-      BURNING, and that note is its only record of the disc.
-
-    ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
-    to STAGING and is re-staged or aborted (BURN-05, #483).
-    """
-    rows = conn.execute(
-        """SELECT event_type, location, detail FROM volume_events
-           WHERE volume_id = ?
-             AND event_type IN ('VERIFY_PASS', 'BURN_RECEIPT_IMPORTED',
-                                'LOCATION_MOVE', 'VERIFY_FAIL_REBURN')
-           ORDER BY julianday(event_date), event_id""",
-        (volume_id,),
-    ).fetchall()
-    for event_type, location, detail in rows:
-        where = f" at {location}" if location else ""
-        if event_type == "VERIFY_PASS":
-            if location or detail == "Disc verify":
-                return f"a disc of it passed verification{where}"
-        elif event_type == "BURN_RECEIPT_IMPORTED":
-            try:
-                receipt = json.loads(detail or "{}")
-            except ValueError:
-                receipt = {}
-            if not (isinstance(receipt, dict)
-                    and receipt.get("verify_passed") is False):
-                return f"a burn receipt of it was imported{where}"
-        elif event_type == "LOCATION_MOVE":
-            return f"a disc of it was moved{where}"
-        else:
-            return f"a disc of it was burned again{where}"
-    from lcsas.db.volumes import status_before_burning
-
-    before = status_before_burning(conn, volume_id)
-    if before in (STATUS_BURNED, STATUS_VERIFIED):
-        return f"it was {before} when a burn of it started"
-    return None
-
-
 # #758: the NOTE a catalog rebuild writes on a volume it brought in as
 # STAGING/BURNING with no disc record and no burn evidence.  The prefix
-# is what rebuild_burn_unknown() looks for; keep the two together.
+# is what lcsas.db.lifecycle.VolumeLifecycle.burn_unknown() looks for.
 REBUILD_UNKNOWN_NOTE_PREFIX = "Catalog rebuild: burn state unknown"
 
 
-def rebuild_burn_unknown(conn: sqlite3.Connection, volume_id: int) -> bool:
-    """True when nobody knows whether a disc of the volume was burned.
-
-    A catalog rebuilt from discs knows a volume of a newer burn session
-    only from the disc catalogs of discs staged after it, all copied
-    before that volume was burned.  Unless its own disc was read
-    (``db/rebuild.py`` then marks it BURNED), it comes back STAGING with
-    no disc record and no events, which is how a never-burned volume
-    looks.  The rebuild writes a ``NOTE`` starting with
-    :data:`REBUILD_UNKNOWN_NOTE_PREFIX` on each such volume.
-
-    True while that holds: the volume is STAGING or BURNING, has the
-    note, no ``volume_copies`` row and no :func:`burn_evidence`.
-    Recording its disc ends it.  ``session abort``, ``stage --clean``
-    and ``catalog reconcile --fix`` never delete such a volume unless
-    the owner confirms it was never burned (``--never-burned``).
-    """
-    row = conn.execute(
-        """SELECT 1 FROM volumes v
-           WHERE v.volume_id = ?
-             AND v.status IN ('STAGING', 'BURNING')
-             AND NOT EXISTS (SELECT 1 FROM volume_copies vc
-                             WHERE vc.volume_id = v.volume_id)
-             AND EXISTS (SELECT 1 FROM volume_events e
-                         WHERE e.volume_id = v.volume_id
-                           AND e.event_type = 'NOTE'
-                           AND substr(e.detail, 1, ?) = ?)""",
-        (volume_id, len(REBUILD_UNKNOWN_NOTE_PREFIX),
-         REBUILD_UNKNOWN_NOTE_PREFIX),
-    ).fetchone()
-    return row is not None and burn_evidence(conn, volume_id) is None

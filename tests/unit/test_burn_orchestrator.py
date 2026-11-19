@@ -21,7 +21,7 @@ from lcsas.db.queries import get_unarchived_packs
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import get_pack_ids_for_volume
-from lcsas.db.volumes import get_volume_by_id, list_volumes, update_status
+from lcsas.db.volumes import get_volume_by_id, list_volumes
 from lcsas.iso.xorriso import MediaStatus
 from lcsas.staging.builder import (
     CorruptPacksError,
@@ -30,6 +30,7 @@ from lcsas.staging.builder import (
     StagingBuilder,
 )
 from tests.unit.test_session_pipeline import _wire_drive_identity
+from tests.unit.volume_status import update_status
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -715,7 +716,7 @@ class TestBurnSession:
 
     def test_burn_session_reburn_skips_status_transitions(self, orch_env):
         """Re-burn case: when volume is VERIFIED, skip status→BURNING transition."""
-        from lcsas.db.volumes import update_status
+        from tests.unit.volume_status import update_status
 
         session_id = self._create_staged_session(orch_env)
         orch = orch_env["orch"]
@@ -749,7 +750,7 @@ class TestBurnSession:
     def test_burn_session_verify_fail_on_reburn_records_event(self, orch_env):
         """Re-burn with verify failure records VERIFY_FAIL_REBURN event."""
         from lcsas.db.volume_events import get_events_for_volume
-        from lcsas.db.volumes import update_status
+        from tests.unit.volume_status import update_status
 
         session_id = self._create_staged_session(orch_env)
         orch = orch_env["orch"]

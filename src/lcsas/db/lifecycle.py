@@ -18,6 +18,8 @@ LOST status (ADR 0003).
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -28,25 +30,250 @@ from lcsas.constants import (
     STATUS_BURNING,
     STATUS_CONSOLIDATING,
     STATUS_DEPRECATED,
+    STATUS_DESTROYED,
     STATUS_STAGING,
     STATUS_VERIFIED,
 )
 from lcsas.db.models import Volume
-from lcsas.db.volume_events import (
-    add_event,
-    burn_evidence,
-    rebuild_burn_unknown,
-)
+from lcsas.db.volume_events import REBUILD_UNKNOWN_NOTE_PREFIX, add_event
 from lcsas.db.volumes import (
-    delete_volume,
+    check_deprecation_safe,
     get_volume_by_id,
     mark_closed,
-    status_before_burning,
-    update_status,
 )
 from lcsas.utils.timestamps import utc_now
 
 _logger = logging.getLogger(__name__)
+
+
+# The status graph: each key maps to the set of statuses a volume may
+# move to from that one.  Private: callers send events, and the events
+# below are the only writers of volumes.status (#892).
+_TRANSITIONS: dict[str, set[str]] = {
+    STATUS_STAGING:         {STATUS_BURNING, STATUS_DEPRECATED, STATUS_DESTROYED},
+    STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
+    # A BURNED volume never goes back to BURNING or STAGING (#810): a
+    # disc of it exists (a catalog rebuilt from discs records the newest
+    # ones as BURNED with no disc row), and STAGING would let 'session
+    # abort' or 'reconcile --fix' delete it.  'burn --session' burns a
+    # BURNED volume without leaving BURNED, then makes it VERIFIED.
+    STATUS_BURNED:          {STATUS_VERIFIED, STATUS_DESTROYED},
+    STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_DESTROYED, STATUS_CONSOLIDATING},
+    STATUS_CONSOLIDATING:   {STATUS_DEPRECATED, STATUS_VERIFIED},
+    STATUS_DEPRECATED:      {STATUS_DESTROYED},
+    STATUS_DESTROYED:       set(),
+}
+
+
+def _update_status(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    status: str,
+    *,
+    commit: bool = True,
+    force: bool = False,
+) -> None:
+    """Update the status of a volume.
+
+    Enforces valid state transitions unless *force* is ``True``.
+    Automatically sets ``verified_at`` when status transitions to VERIFIED.
+    """
+    volume = get_volume_by_id(conn, volume_id)
+    current = volume.status
+
+    if not force:
+        allowed = _TRANSITIONS.get(current, set())
+        if status not in allowed:
+            raise ValueError(
+                f"Invalid status transition for volume {volume_id}: "
+                f"{current} → {status} (allowed: {sorted(allowed)})"
+            )
+        # Safety check: refuse DEPRECATED if packs would become unreplicated.
+        # Use a savepoint for write-lock protection (nests safely in outer transactions).
+        if status == "DEPRECATED":
+            conn.execute("SAVEPOINT deprecate_check")
+            try:
+                at_risk = check_deprecation_safe(conn, volume_id)
+                if at_risk:
+                    conn.execute("ROLLBACK TO deprecate_check")
+                    raise ValueError(
+                        f"Cannot deprecate volume {volume_id}: "
+                        f"{len(at_risk)} pack(s) would become unreplicated. "
+                        f"Use force=True to override."
+                    )
+                conn.execute(
+                    "UPDATE volumes SET status = ? WHERE volume_id = ?",
+                    (status, volume_id),
+                )
+                conn.execute("RELEASE deprecate_check")
+                add_event(
+                    conn, volume_id, "NOTE",
+                    detail=f"Status changed: {current} → {status}",
+                    commit=False,
+                )
+                if commit:
+                    conn.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    conn.execute("ROLLBACK TO deprecate_check")
+                raise
+            return
+    else:
+        _logger.warning(
+            "Forced status change for volume %d → %s (bypassing transition rules)",
+            volume_id, status,
+        )
+
+    if status == "VERIFIED":
+        now = utc_now()
+        conn.execute(
+            "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",
+            (status, now, volume_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE volumes SET status = ? WHERE volume_id = ?",
+            (status, volume_id),
+        )
+
+    add_event(
+        conn, volume_id, "NOTE",
+        detail=f"Status changed: {current} → {status}",
+        commit=False,
+    )
+
+    if commit:
+        conn.commit()
+
+
+def _status_before_burning(conn: sqlite3.Connection, volume_id: int) -> str:
+    """The status a BURNING volume had before its burn started (#810).
+
+    A burn killed outright (power loss, ``kill -9``) leaves its volume
+    BURNING; the status it came from is only in the NOTE that
+    :func:`_update_status` wrote ("Status changed: X → BURNING").
+    Returns ``BURNED`` when the newest such note says it was BURNED (an
+    older LCSAS moved a BURNED volume to BURNING for its burn), else
+    ``STAGING``, also when there is no note.
+    """
+    row = conn.execute(
+        """SELECT detail FROM volume_events
+           WHERE volume_id = ? AND event_type = 'NOTE'
+             AND detail LIKE 'Status changed: % → BURNING'
+           ORDER BY event_id DESC LIMIT 1""",
+        (volume_id,),
+    ).fetchone()
+    if row is not None and str(row[0]).startswith(
+            f"Status changed: {STATUS_BURNED} →"):
+        return STATUS_BURNED
+    return STATUS_STAGING
+
+
+def _delete_volume(conn: sqlite3.Connection, volume_id: int) -> None:
+    """Delete a volume (and cascade via FK if enabled). Use with caution.
+
+    session_volumes has a FK to volumes WITHOUT ON DELETE CASCADE, so its
+    rows must be removed explicitly or the volume delete fails under
+    PRAGMA foreign_keys=ON.
+    """
+    conn.execute("DELETE FROM session_volumes WHERE volume_id = ?", (volume_id,))
+    conn.execute("DELETE FROM volume_packs WHERE volume_id = ?", (volume_id,))
+    conn.execute("DELETE FROM volumes WHERE volume_id = ?", (volume_id,))
+    conn.commit()
+
+
+def _burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
+    """Why the volume's events say a good disc of it was burned, or None.
+
+    The one check that ``session abort``, ``stage --clean`` (#737) and
+    ``catalog reconcile --fix`` (#746) use before deleting a volume with
+    no disc record: a volume it names was burned, and is never deleted.
+
+    Only events that a never-burned volume, or one whose only disc
+    failed verification (#483), cannot carry count:
+
+    - ``VERIFY_PASS`` at a location: a disc was read back at that
+      location.  An ISO verify records no location, so it does not
+      count.  ``lcsas verify <label> --disc`` without ``--location``
+      records none either; its default detail "Disc verify" counts.
+    - ``BURN_RECEIPT_IMPORTED``, unless its receipt says the disc
+      failed verification (``verify_passed`` false).
+    - ``LOCATION_MOVE``: a recorded disc was moved.
+    - ``VERIFY_FAIL_REBURN``: written only when an earlier disc of
+      the volume was recorded.
+    - A status note saying the volume was BURNED or VERIFIED when a
+      burn of it started (#904,
+      :func:`_status_before_burning`).  An LCSAS from
+      before #810 (rc1 to rc9, the rc7 install among them) moved a
+      BURNED volume to BURNING for its burn, writing the note "Status
+      changed: BURNED → BURNING"; a burn killed then leaves the volume
+      BURNING, and that note is its only record of the disc.
+
+    ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
+    to STAGING and is re-staged or aborted (BURN-05, #483).
+    """
+    rows = conn.execute(
+        """SELECT event_type, location, detail FROM volume_events
+           WHERE volume_id = ?
+             AND event_type IN ('VERIFY_PASS', 'BURN_RECEIPT_IMPORTED',
+                                'LOCATION_MOVE', 'VERIFY_FAIL_REBURN')
+           ORDER BY julianday(event_date), event_id""",
+        (volume_id,),
+    ).fetchall()
+    for event_type, location, detail in rows:
+        where = f" at {location}" if location else ""
+        if event_type == "VERIFY_PASS":
+            if location or detail == "Disc verify":
+                return f"a disc of it passed verification{where}"
+        elif event_type == "BURN_RECEIPT_IMPORTED":
+            try:
+                receipt = json.loads(detail or "{}")
+            except ValueError:
+                receipt = {}
+            if not (isinstance(receipt, dict)
+                    and receipt.get("verify_passed") is False):
+                return f"a burn receipt of it was imported{where}"
+        elif event_type == "LOCATION_MOVE":
+            return f"a disc of it was moved{where}"
+        else:
+            return f"a disc of it was burned again{where}"
+    before = _status_before_burning(conn, volume_id)
+    if before in (STATUS_BURNED, STATUS_VERIFIED):
+        return f"it was {before} when a burn of it started"
+    return None
+
+
+def _rebuild_burn_unknown(conn: sqlite3.Connection, volume_id: int) -> bool:
+    """True when nobody knows whether a disc of the volume was burned.
+
+    A catalog rebuilt from discs knows a volume of a newer burn session
+    only from the disc catalogs of discs staged after it, all copied
+    before that volume was burned.  Unless its own disc was read
+    (``db/rebuild.py`` then marks it BURNED), it comes back STAGING with
+    no disc record and no events, which is how a never-burned volume
+    looks.  The rebuild writes a ``NOTE`` starting with
+    :data:`REBUILD_UNKNOWN_NOTE_PREFIX` on each such volume.
+
+    True while that holds: the volume is STAGING or BURNING, has the
+    note, no ``volume_copies`` row and no :func:`_burn_evidence`.
+    Recording its disc ends it.  ``session abort``, ``stage --clean``
+    and ``catalog reconcile --fix`` never delete such a volume unless
+    the owner confirms it was never burned (``--never-burned``).
+    """
+    row = conn.execute(
+        """SELECT 1 FROM volumes v
+           WHERE v.volume_id = ?
+             AND v.status IN ('STAGING', 'BURNING')
+             AND NOT EXISTS (SELECT 1 FROM volume_copies vc
+                             WHERE vc.volume_id = v.volume_id)
+             AND EXISTS (SELECT 1 FROM volume_events e
+                         WHERE e.volume_id = v.volume_id
+                           AND e.event_type = 'NOTE'
+                           AND substr(e.detail, 1, ?) = ?)""",
+        (volume_id, len(REBUILD_UNKNOWN_NOTE_PREFIX),
+         REBUILD_UNKNOWN_NOTE_PREFIX),
+    ).fetchone()
+    return row is not None and _burn_evidence(conn, volume_id) is None
 
 
 @dataclass(frozen=True)
@@ -92,7 +319,7 @@ class VolumeLifecycle:
         ECC or re-mastering failed): delete it, so its packs go back to the
         unarchived pool.  Nothing is checked: the stage made the volume and
         nothing else has seen it.  Commits."""
-        delete_volume(self._conn, volume_id)
+        _delete_volume(self._conn, volume_id)
 
     # -----------------------------------------------------------------
     # Burning
@@ -115,7 +342,7 @@ class VolumeLifecycle:
         )
         marked_burning = not reburn and vol.status != STATUS_BURNED
         if marked_burning:
-            update_status(self._conn, volume_id, STATUS_BURNING, commit=False)
+            _update_status(self._conn, volume_id, STATUS_BURNING, commit=False)
             self._conn.commit()
         return Burn(volume_id, reburn, marked_burning)
 
@@ -135,7 +362,7 @@ class VolumeLifecycle:
         from lcsas.db.volume_copies import add_volume_copy
 
         if not burn.reburn:
-            update_status(self._conn, burn.volume_id, STATUS_VERIFIED,
+            _update_status(self._conn, burn.volume_id, STATUS_VERIFIED,
                           commit=False)
             mark_closed(self._conn, burn.volume_id, commit=False)
         add_volume_copy(
@@ -159,7 +386,7 @@ class VolumeLifecycle:
         re-burned one keeps its status and gets a ``VERIFY_FAIL_REBURN``
         event; a BURNED one stays BURNED (#810)."""
         if burn.marked_burning:
-            update_status(self._conn, burn.volume_id, STATUS_STAGING,
+            _update_status(self._conn, burn.volume_id, STATUS_STAGING,
                           commit=False)
         elif burn.reburn:
             add_event(
@@ -179,7 +406,7 @@ class VolumeLifecycle:
         catalog may be what failed)."""
         if not burn.marked_burning:
             return None
-        update_status(self._conn, burn.volume_id, STATUS_STAGING)
+        _update_status(self._conn, burn.volume_id, STATUS_STAGING)
         return get_volume_by_id(self._conn, burn.volume_id)
 
     def burn_interrupted_recovered(self, volume_id: int) -> Volume:
@@ -187,8 +414,8 @@ class VolumeLifecycle:
         outright, goes back to the status it had before that burn:
         STAGING, or BURNED when an older LCSAS moved a BURNED volume to
         BURNING (#668, #810).  Commits."""
-        update_status(self._conn, volume_id,
-                      status_before_burning(self._conn, volume_id))
+        _update_status(self._conn, volume_id,
+                      _status_before_burning(self._conn, volume_id))
         return get_volume_by_id(self._conn, volume_id)
 
     # -----------------------------------------------------------------
@@ -215,8 +442,8 @@ class VolumeLifecycle:
 
         vol = get_volume_by_id(self._conn, volume_id)
         if vol.status == STATUS_STAGING:
-            update_status(self._conn, volume_id, STATUS_BURNING, commit=False)
-        update_status(self._conn, volume_id, STATUS_VERIFIED, commit=False)
+            _update_status(self._conn, volume_id, STATUS_BURNING, commit=False)
+        _update_status(self._conn, volume_id, STATUS_VERIFIED, commit=False)
         if record_disc and location:
             ensure_location(self._conn, location, commit=False)
             staged = get_staged_iso(self._conn, volume_id)
@@ -242,7 +469,7 @@ class VolumeLifecycle:
         Returns the volume when its status changed, else None."""
         if get_volume_by_id(self._conn, volume_id).status != STATUS_BURNED:
             return None
-        update_status(self._conn, volume_id, STATUS_VERIFIED)
+        _update_status(self._conn, volume_id, STATUS_VERIFIED)
         return get_volume_by_id(self._conn, volume_id)
 
     def disc_check_passed(
@@ -256,9 +483,9 @@ class VolumeLifecycle:
         else None."""
         status = get_volume_by_id(self._conn, volume_id).status
         if status == STATUS_BURNED:
-            update_status(self._conn, volume_id, STATUS_VERIFIED)
+            _update_status(self._conn, volume_id, STATUS_VERIFIED)
         elif disc_recorded and status in (STATUS_STAGING, STATUS_BURNING):
-            update_status(self._conn, volume_id, STATUS_VERIFIED, force=True)
+            _update_status(self._conn, volume_id, STATUS_VERIFIED, force=True)
         else:
             return None
         return get_volume_by_id(self._conn, volume_id)
@@ -286,9 +513,9 @@ class VolumeLifecycle:
 
         if first_disc:
             if get_volume_by_id(self._conn, volume_id).status == STATUS_STAGING:
-                update_status(self._conn, volume_id, STATUS_BURNING,
+                _update_status(self._conn, volume_id, STATUS_BURNING,
                               commit=False)
-            update_status(self._conn, volume_id, STATUS_VERIFIED,
+            _update_status(self._conn, volume_id, STATUS_VERIFIED,
                           commit=False)
             mark_closed(self._conn, volume_id, commit=False)
         # One VERIFY_PASS per passing disc, as the direct burn writes:
@@ -325,9 +552,9 @@ class VolumeLifecycle:
 
         status = get_volume_by_id(self._conn, volume_id).status
         if status == STATUS_STAGING:
-            update_status(self._conn, volume_id, STATUS_BURNING, commit=False)
+            _update_status(self._conn, volume_id, STATUS_BURNING, commit=False)
         if status in (STATUS_STAGING, STATUS_BURNING):
-            update_status(self._conn, volume_id, STATUS_BURNED, commit=False)
+            _update_status(self._conn, volume_id, STATUS_BURNED, commit=False)
         add_volume_copy(
             self._conn,
             volume_id=volume_id,
@@ -358,9 +585,9 @@ class VolumeLifecycle:
 
         if first_disc and not get_copies_for_volume(self._conn, volume_id):
             if get_volume_by_id(self._conn, volume_id).status == STATUS_BURNING:
-                update_status(
+                _update_status(
                     self._conn, volume_id,
-                    status_before_burning(self._conn, volume_id),
+                    _status_before_burning(self._conn, volume_id),
                     commit=False,
                 )
             add_event(self._conn, volume_id, "VERIFY_FAIL",
@@ -487,7 +714,7 @@ class VolumeLifecycle:
         becomes CONSOLIDATING.  *note*, when given, is written as a NOTE
         event after the status change (the burn session it ties the
         volume to, #677)."""
-        update_status(self._conn, volume_id, STATUS_CONSOLIDATING,
+        _update_status(self._conn, volume_id, STATUS_CONSOLIDATING,
                       commit=False)
         if note is not None:
             add_event(self._conn, volume_id, "NOTE", detail=note,
@@ -498,13 +725,13 @@ class VolumeLifecycle:
         """The volume's packs are on another volume: it becomes
         DEPRECATED.  Refused (``ValueError``) when a pack would be on no
         other live volume, or the status graph forbids it."""
-        update_status(self._conn, volume_id, STATUS_DEPRECATED, commit=False)
+        _update_status(self._conn, volume_id, STATUS_DEPRECATED, commit=False)
         return get_volume_by_id(self._conn, volume_id)
 
     def consolidation_abandoned(self, volume_id: int) -> Volume:
         """The consolidation of the volume will not finish (its session was
         aborted): it goes back to VERIFIED."""
-        update_status(self._conn, volume_id, STATUS_VERIFIED, commit=False)
+        _update_status(self._conn, volume_id, STATUS_VERIFIED, commit=False)
         return get_volume_by_id(self._conn, volume_id)
 
     # -----------------------------------------------------------------
@@ -530,10 +757,10 @@ class VolumeLifecycle:
             (volume_id,),
         ).fetchone() is not None:
             return Refusal("disc", vol.status)
-        evidence = burn_evidence(self._conn, volume_id)
+        evidence = _burn_evidence(self._conn, volume_id)
         if evidence is not None:
             return Refusal("burned", vol.status, evidence)
-        if not never_burned and rebuild_burn_unknown(self._conn, volume_id):
+        if not never_burned and _rebuild_burn_unknown(self._conn, volume_id):
             return Refusal("burn unknown", vol.status)
         return None
 
@@ -549,7 +776,7 @@ class VolumeLifecycle:
                 f"Volume {volume_id} may not be deleted ({refusal.kind}: "
                 f"{refusal.status})"
             )
-        delete_volume(self._conn, volume_id)
+        _delete_volume(self._conn, volume_id)
 
     # -----------------------------------------------------------------
     # Catalog rebuild
@@ -581,9 +808,9 @@ class VolumeLifecycle:
     def burn_evidence(self, volume_id: int) -> str | None:
         """Why the volume's events say a good disc of it was burned, or
         None (the check before deleting a volume with no disc record)."""
-        return burn_evidence(self._conn, volume_id)
+        return _burn_evidence(self._conn, volume_id)
 
     def burn_unknown(self, volume_id: int) -> bool:
         """True when a catalog rebuild left the volume with no record of
         whether a disc of it was burned (#758)."""
-        return rebuild_burn_unknown(self._conn, volume_id)
+        return _rebuild_burn_unknown(self._conn, volume_id)
