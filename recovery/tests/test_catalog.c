@@ -105,17 +105,18 @@ int main(void)
         fails++;
     }
 
-    /* Pack 2 lives in vols 1 and 2 (vol-003 is DESTROYED, filtered out). */
+    /* Pack 2 lives in vols 1 and 2 (vol-003 is DESTROYED, filtered out),
+     * newest volume first (#896: the heir starts from the newest disc). */
     n = lcsas_catalog_volumes_for_pack(c, 2, vols, 8);
     if (n != 2) {
         fprintf(stderr, "FAIL: volumes_for_pack(2) returned %d (want 2)\n", n);
         fails++;
     }
-    if (n >= 1 && strcmp(vols[0].label, "vol-001") != 0) {
+    if (n >= 1 && strcmp(vols[0].label, "vol-002") != 0) {
         fprintf(stderr, "FAIL: first volume label %s\n", vols[0].label);
         fails++;
     }
-    if (n >= 2 && strcmp(vols[1].label, "vol-002") != 0) {
+    if (n >= 2 && strcmp(vols[1].label, "vol-001") != 0) {
         fprintf(stderr, "FAIL: second volume label %s\n", vols[1].label);
         fails++;
     }
@@ -154,6 +155,12 @@ int main(void)
     n = lcsas_catalog_volumes_for_pack(c, 2, vols, 1);
     if (n != 1) {
         fprintf(stderr, "FAIL: volumes_for_pack(2, max=1) returned %d (want 1)\n", n);
+        fails++;
+    }
+    /* The cap keeps the newest. */
+    if (n == 1 && strcmp(vols[0].label, "vol-002") != 0) {
+        fprintf(stderr, "FAIL: volumes_for_pack(2, max=1) kept %s (want "
+                        "vol-002)\n", vols[0].label);
         fails++;
     }
 

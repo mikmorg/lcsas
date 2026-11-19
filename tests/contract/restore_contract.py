@@ -45,6 +45,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from tests.contract.disc_catalog import (
+    NO_RECORD,
+    NONE_LISTED,
+    Vol,
+    named_discs,
+    write_catalog,
+)
 from tests.contract.exit_codes import ReaderExit
 from tests.recovery_hardening import test_name_escaping_differential as _esc
 from tests.recovery_hardening._diff_helpers import (
@@ -155,6 +162,11 @@ class Faults:
     #: Repository files (relative paths) emptied before the judged run:
     #: a folder loses what is in it, a file is removed.
     damage: tuple[str, ...] = ()
+    #: A disc catalog passed with ``--catalog``: the volumes (volume_id
+    #: 1, 2, ... in order) that hold every missing pack (#896).
+    catalog: tuple[Vol, ...] | None = None
+    #: False: the catalog has those volumes but no record of the packs.
+    catalog_knows_pack: bool = True
 
 
 @dataclass(frozen=True)
@@ -168,6 +180,9 @@ class Outcome:
     the restored root, reason).  An expected reason is a prefix.
     ``summary``: a regex searched in the last lines the reader printed.
     ``wrote_outside``: something outside the target changed.
+    ``discs``: what the first disc prompt names (``named_discs``): the
+    labels in order, or ``NONE_LISTED`` / ``NO_RECORD`` / ``NO_PROMPT``;
+    ``None`` = not compared.
     """
 
     exit: int
@@ -175,6 +190,7 @@ class Outcome:
     failures: tuple[tuple[str, str], ...] = ()
     summary: str = ""
     wrote_outside: bool = False
+    discs: tuple[str, ...] | str | None = None
     #: Only on an outcome a driver returns: the reader's output.
     output: str = field(default="", compare=False, repr=False)
 
@@ -230,6 +246,33 @@ _MISSING_PACK_BEFORE: dict[bytes, Entry] = {b"a": File(b"alpha\n")}
 _MISSING_PACK_TREE: dict[bytes, Entry] = {
     b"a": File(b"alpha\n"), b"b": File(b"beta: its pack is missing\n"),
 }
+
+# #896: which discs the prompt names, by tier 1's rule (TIERS.txt,
+# "WHICH DISCS THE PROMPT NAMES"): every volume holding the pack that
+# is not DESTROYED, newest volume (highest volume number) first.  Here
+# that is neither label order nor oldest-first (a BD25 volume
+# consolidated onto a later BD50 one), so a reader that sorts by label,
+# or oldest first, disagrees.
+_V1 = "LCSAS_BD25_2026_0001"
+_V2 = "LCSAS_BD50_2026_0002"
+
+
+def _disc_prompt(name: str, vols: tuple[Vol, ...],
+                 named: tuple[str, ...] | str, knows: bool = True) -> Case:
+    """The pack of ``b`` is on no disc; the catalog puts it on *vols*.
+    The restored tree is not compared: tier 1 leaves an empty ``b``
+    (see "disc missing, q at the prompt"), and a ``differs`` for it
+    would make the agreement on the discs named an expected failure."""
+    return Case(
+        name=f"disc prompt: {name}",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(missing=(b"b",), answers=b"q\n", catalog=vols,
+                      catalog_knows_pack=knows),
+        expect=Outcome(exit=ReaderExit.READER_QUIT, restored=ANY,
+                       discs=named),
+        replaces="new (#896)",
+    )
 
 
 def _builder_special_tree() -> BuilderTree:
@@ -612,6 +655,21 @@ CASES: list[Case] = [
             "name with no cause, lists nothing and stops, exit 1; tier 3 "
             "lists the file as a MAC failure, restores the rest and exits 4.",
     ),
+    _disc_prompt("one volume", (Vol(_V1),), (_V1,)),
+    _disc_prompt("two volumes, newest first", (Vol(_V1), Vol(_V2)),
+                 (_V2, _V1)),
+    _disc_prompt("one of two DESTROYED",
+                 (Vol(_V1), Vol(_V2, "DESTROYED", "DESTROYED")), (_V1,)),
+    _disc_prompt("one of two DEPRECATED",
+                 (Vol(_V1, "DEPRECATED"), Vol(_V2)), (_V2, _V1)),
+    _disc_prompt("one of two lost", (Vol(_V1, lost=True), Vol(_V2)),
+                 (_V2, _V1)),
+    _disc_prompt("a volume with no disc recorded", (Vol(_V1, disc=None),),
+                 (_V1,)),
+    _disc_prompt("its only volume DESTROYED",
+                 (Vol(_V1, "DESTROYED", "DESTROYED"),), NONE_LISTED),
+    _disc_prompt("pack unknown to the catalog", (Vol(_V1), Vol(_V2)),
+                 NO_RECORD, knows=False),
     Case(
         name="usage error",
         tree={b"f": File(b"f\n")},
@@ -895,6 +953,8 @@ def _command(reader: str, repo: Path, target: Path, pwfile: Path,
         cmd = [sys.executable, "-I", str(tier3_script(work.parent)),
                "--repo", str(repo), "--password-file", str(pwfile),
                "--interactive", "on" if faults.answers is not None else "off"]
+    if faults.catalog is not None:
+        cmd += ["--catalog", str(work / "catalog.db")]
     if snapshot:
         cmd += ["--snapshot", snapshot]
     if not faults.usage_error:
@@ -935,6 +995,10 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
         good_pw.write_bytes(PASSWORD + b"\n")
     empty = work / "no-discs"
     empty.mkdir()
+    if case.faults.catalog is not None:
+        write_catalog(work / "catalog.db", built.missing_packs,
+                      case.faults.catalog,
+                      knows_pack=case.faults.catalog_knows_pack)
     _reset_outside(built.outside)
     outside_before = walk(built.outside)
 
@@ -990,6 +1054,7 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
         failures=failures,
         summary="\n".join(output.rstrip("\n").splitlines()[-8:]),
         wrote_outside=wrote_outside,
+        discs=named_discs(output),
         output=output,
     )
 
@@ -1131,13 +1196,16 @@ def mismatches(case: Case, reader: str, got: Outcome, built: Built) -> list[str]
         out.append(f"last lines do not match /{want.summary}/:\n{got.summary}")
     if got.wrote_outside != want.wrote_outside:
         out.append(f"wrote outside the target: {got.wrote_outside}")
+    if want.discs is not None and got.discs != want.discs:
+        out.append(f"the disc prompt names {got.discs!r}, want {want.discs!r}")
     return out
 
 
 def disagreements(case: Case, outcomes: Mapping[str, Outcome]) -> list[str]:
     """How the readers' outcomes differ: exit code, restored tree (unless
     the case leaves it open), the rows of RESTORE_FAILURES.txt (whole
-    reasons) and writing outside the target.  The words printed differ
+    reasons), writing outside the target and, when the case has a disc
+    catalog, the discs the prompt names.  The other words printed differ
     by design and are not compared."""
     (r1, o1), (r2, o2) = outcomes.items()
     out: list[str] = []
@@ -1153,6 +1221,8 @@ def disagreements(case: Case, outcomes: Mapping[str, Outcome]) -> list[str]:
     if o1.wrote_outside != o2.wrote_outside:
         out.append(f"wrote outside: {r1} {o1.wrote_outside}, "
                    f"{r2} {o2.wrote_outside}")
+    if case.faults.catalog is not None and o1.discs != o2.discs:
+        out.append(f"discs named: {r1} {o1.discs!r}, {r2} {o2.discs!r}")
     return out
 
 

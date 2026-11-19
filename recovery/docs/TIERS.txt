@@ -398,6 +398,39 @@ is the one that disc was burned with; an older one skipped absolute
 links and links pointing out of the restore folder.  Restore from the
 newest meta disc to get these rules.
 
+WHICH DISCS THE PROMPT NAMES (TIERS 1 AND 3)
+
+When a pack is on no disc in the drive, the disc prompt looks the pack
+up in the disc catalog and names, under "It is on any disc labelled:",
+the discs of the volumes that hold it.  Both tiers use one rule (#896,
+owner decision 2026-11-19):
+
+  * Every volume holding the pack is named unless its status is
+    DESTROYED.  A DEPRECATED volume IS named: one deprecated after a
+    consolidation may still be on the shelf.  A lost volume (recorded
+    as DEPRECATED, ADR 0003) is named too, and so is a volume with no
+    disc recorded: the prompt does not read the disc records.
+  * Newest volume first (the highest volume number: volumes are
+    numbered in the order they were made), since the heir starts from
+    the newest disc.  At most 8 discs: the 8 newest.
+  * The pack is in the catalog but every volume holding it is
+    DESTROYED (or none holds it): "(catalog has the pack, but lists no
+    disc for it)".  Tier 3 then also names the newest disc in the
+    catalog that is not DESTROYED and says the pack is on a newer one;
+    it never names a DESTROYED disc there.
+  * The pack is not in the catalog at all: "(catalog has no record of
+    this pack ID)", and how to pick an older snapshot.
+
+Tier 1 reads one catalog (lcsas_catalog_volumes_for_pack in
+recovery/src/lcsas-restore/catalog.c).  Tier 3 reads every catalog it
+has seen in the run (#635) and names the volumes any of them lists by
+the same rule; a volume that any of them records as DESTROYED is not
+named, since a destroyed volume never comes back.
+
+NOTE for ALREADY-BURNED discs: before rc11, tier 1 listed the discs
+oldest volume first; tier 3 also named DESTROYED volumes and listed the
+discs in label order.  Use the tools on the newest meta disc.
+
 TIER 3: ZSTD DECOMPRESSION (rustic v2 default)
 
 rustic v2 repositories are zstd-compressed by default, so tier 3 MUST

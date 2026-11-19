@@ -73,14 +73,16 @@ class Archive:
 
 
 def _catalog(path: Path, packs: list[str]) -> bytes:
-    """A disc catalog listing every pack on the one disc."""
+    """A disc catalog listing every pack on the one disc.  The prompt
+    offers a volume by its status (#896), so the volume has one."""
     db = sqlite3.connect(path)
     db.executescript(
-        "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT);"
+        "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT,"
+        " status TEXT);"
         "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT);"
         "CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);"
     )
-    db.execute("INSERT INTO volumes VALUES (1, ?)", (LABEL,))
+    db.execute("INSERT INTO volumes VALUES (1, ?, 'VERIFIED')", (LABEL,))
     for i, p in enumerate(packs, 1):
         db.execute("INSERT INTO packs VALUES (?, ?)", (i, p))
         db.execute("INSERT INTO volume_packs VALUES (1, ?)", (i,))

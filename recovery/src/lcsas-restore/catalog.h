@@ -76,7 +76,7 @@ int lcsas_catalog_find_pack(lcsas_catalog *c, const char *sha256_hex,
                             lcsas_catalog_pack *out);
 
 /*
- * Given a pack_id, list volumes that contain it.  Writes up to
+ * Given a pack_id, list volumes that contain it, newest first.  Writes up to
  * max_vols entries into `out`; returns the number written (>= 0), or -1
  * on query error (as for lcsas_catalog_find_pack).
  */
