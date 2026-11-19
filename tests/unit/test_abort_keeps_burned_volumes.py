@@ -351,8 +351,10 @@ def test_burned_before_its_burn_is_never_deleted(staged, status, notes):
 @pytest.mark.parametrize("notes", [
     # A staged volume whose burn was killed (#668).
     ("Status changed: STAGING → BURNING",),
-    # Only the newest "→ BURNING" note counts (status_before_burning):
-    # this burn started from STAGING.
+    # Only the newest "→ BURNING" note counts (status_before_burning),
+    # and this burn started from STAGING.  A known limit, outside #904:
+    # the older BURNED → BURNING note above no longer protects it, though
+    # a disc of it may exist.  Pinned so a change to that is deliberate.
     (*_RC7_NOTES_BURNED_THEN_BURNING, "Status changed: BURNING → STAGING",
      "Status changed: STAGING → BURNING"),
 ])

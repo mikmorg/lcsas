@@ -765,9 +765,9 @@ A volume that was burned but has no disc recorded is never deleted, even with
 `--force`. A catalog rebuilt from discs records the newest discs like this
 (`BURNED`, no disc). A `STAGING` volume counts too when its events record a
 good disc (a passed disc check at a location, a passed burn receipt, a disc
-move), and so does a `BURNING` volume that an LCSAS older than rc10 moved
-there from `BURNED`, whose status note "Status changed: BURNED → BURNING" is
-its only record of the disc (#904). Then `stage --clean` and `session abort`
+move), and so does a `STAGING` or `BURNING` volume whose last burn, by an
+LCSAS older than rc10, started from `BURNED`: its status note "Status
+changed: BURNED → BURNING" is its only record of the disc (#904). Then `stage --clean` and `session abort`
 refuse the whole burn session, name the volume, and delete nothing. Record
 each disc first with `lcsas verify <label> --disc --location <where it is
 kept>` (or import its burn receipt), then run the command again.

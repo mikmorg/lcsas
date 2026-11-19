@@ -38,10 +38,11 @@ EVIDENCE = {
 }
 
 
-def _catalog(tmp_path: Path, evidence: str, *, isos: bool) -> Path:
+def _catalog(tmp_path: Path, evidence: str | None, *, isos: bool) -> Path:
     """GHOST (never burned) and BURNED_NO_DISC (an event shows a good
     disc, no disc record), both STAGING, 48 h old, one pack each.  With
-    *isos* both staged ISOs still exist (waiting to be burned)."""
+    *isos* both staged ISOs still exist (waiting to be burned).  With
+    *evidence* None, BURNED_NO_DISC gets no event; the caller adds it."""
     db = tmp_path / "archive.db"
     conn = get_connection(db)
     try:
@@ -70,7 +71,7 @@ def _catalog(tmp_path: Path, evidence: str, *, isos: bool) -> Path:
                 iso.write_bytes(b"\x00" * 64)
             add_session_volume(conn, "sess", vol.volume_id, str(iso),
                                iso_sha256="c" * 64, iso_size_bytes=64)
-            if label == "BURNED_NO_DISC":
+            if label == "BURNED_NO_DISC" and evidence is not None:
                 event_type, location, detail, _why = EVIDENCE[evidence]
                 add_event(conn, vol.volume_id, event_type,
                           location=location, detail=detail)
@@ -124,3 +125,42 @@ def test_report_lists_burned_volume_apart_from_ghosts(tmp_path, caplog):
     out = caplog.text
     assert "1 ghost volume(s)" in out
     assert "BURNED_NO_DISC  (status=STAGING, but a disc of it passed" in out
+
+
+@pytest.mark.parametrize("include_waiting", [False, True])
+def test_fix_keeps_volume_an_older_lcsas_moved_from_burned_to_burning(
+    tmp_path, caplog, include_waiting,
+):
+    """#904: rc1 to rc9 moved a BURNED volume to BURNING for its burn; a
+    burn killed then leaves it BURNING, and the status note that LCSAS
+    wrote (its literal text here) is its only record of the disc."""
+    db = _catalog(tmp_path, None, isos=include_waiting)
+    conn = get_connection(db)
+    try:
+        vid = get_volume_by_label(conn, "BURNED_NO_DISC").volume_id
+        conn.execute("UPDATE volumes SET status = 'BURNING' "
+                     "WHERE volume_id = ?", (vid,))
+        for detail in ("Status changed: STAGING → BURNING",
+                       "Status changed: BURNING → BURNED",
+                       "Status changed: BURNED → BURNING"):
+            add_event(conn, vid, "NOTE", detail=detail)
+    finally:
+        conn.close()
+    args = ["--db", str(db), "catalog", "reconcile", "--fix", "--yes"]
+    if include_waiting:
+        args.append("--include-waiting")
+    caplog.clear()
+    assert main(args) == 0, caplog.text
+    out = caplog.text
+
+    assert ("BURNED_NO_DISC  (status=BURNING, but it was BURNED when a "
+            "burn of it started)") in out
+    assert "Deleting ghost volume GHOST" in out
+    assert "Deleting ghost volume BURNED_NO_DISC" not in out
+    conn = get_connection(db)
+    try:
+        assert get_volume_by_label(conn, "GHOST") is None
+        kept = get_volume_by_label(conn, "BURNED_NO_DISC")
+        assert kept is not None and kept.status == "BURNING"
+    finally:
+        conn.close()
