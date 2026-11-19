@@ -118,6 +118,15 @@ class FakeDiscFs(_DiscFs):
         assert method == ANY or method in METHODS, method
         self.faults.append(Fault(method, self.key(path), err, below))
 
+    def shut(self, path: Path | str, err: int = errno.EACCES) -> None:
+        """Folder *path* cannot be entered (mode 000 for this user): it
+        can be seen, but not listed, and nothing below it can be
+        touched."""
+        k = self.key(path)
+        self.fail("listdir", k, err)
+        # A fault path ending in "/" matches only what is below it.
+        self.faults.append(Fault(ANY, k.rstrip("/") + "/", err, True))
+
     # ── Faults ───────────────────────────────────────────────────
 
     @staticmethod

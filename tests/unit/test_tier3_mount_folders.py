@@ -12,6 +12,8 @@ mounted, nothing on it is used (tier 1: meta_disc_is_live, path_under).
 
 from __future__ import annotations
 
+import errno
+import functools
 import json
 import os
 import shutil
@@ -25,6 +27,7 @@ from lcsas.restore import restic_fallback as fb
 from lcsas.restore._disc_search import DiscSearch, RestoreAbortedError
 from lcsas.restore.standalone_builder import build_standalone
 
+from .disc_fs_fake import FakeDiscFs
 from .tier3_repo_builder import PASSWORD, build_repo
 
 _TREE = {"a.txt": b"alpha\n", "d": {"b.txt": b"bravo\n"}}
@@ -46,6 +49,19 @@ def _repo_and_disc(tmp_path: Path, mount_dir: Path, label: str) -> Path:
 def _check(target: Path) -> None:
     assert (target / "a.txt").read_bytes() == b"alpha\n"
     assert (target / "d" / "b.txt").read_bytes() == b"bravo\n"
+
+
+def _on_fake_fs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeDiscFs:
+    """From here on the restorer's disc search sees *tmp_path* (as it
+    is now) through an in-memory tree, where a test can make a path
+    fail without chmod, and so without depending on not being root
+    (#885).  The rest of the restorer still reads the real files."""
+    sqlite_dir = tmp_path / "fake-sqlite"
+    sqlite_dir.mkdir()
+    fake = FakeDiscFs(sqlite_dir)
+    fake.mirror(tmp_path)
+    monkeypatch.setattr(fb, "DiscSearch", functools.partial(DiscSearch, fs=fake))
+    return fake
 
 
 def _search(repo: Path, roots: list[Path], **kw: object) -> DiscSearch:
@@ -209,32 +225,33 @@ def test_the_script_finds_a_disc_under_a_mount_folder(tmp_path: Path) -> None:
     _check(tmp_path / "out")
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
-def test_an_unreadable_copy_is_passed_over(tmp_path: Path) -> None:
-    """rc10 sweep, tier1-missing: a folder below the mount folder that
-    only root may read held the packs too.  Tier 3 took that copy, could
-    not open it, and failed every file.  A copy this user cannot read is
-    now not a copy: the readable disc is used, as tier 1 does."""
+def test_an_unreadable_copy_is_passed_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rc10 sweep, tier1-missing (#877): a folder below the mount folder
+    that only root may read held the packs too.  Tier 3 took that copy,
+    could not open it, and failed every file.  A copy this user cannot
+    read is now not a copy: the readable disc is used, as tier 1 does.
+    (Was chmod 0 on each copy; now the in-memory tree, #885.)"""
     mounts = tmp_path / "media" / "user"
     repo = _repo_and_disc(tmp_path, mounts, "LCSAS-0001")
     # An unreadable copy of every pack, listed first ("A" < "L").
     blocked = mounts / "A-root-only"
     shutil.copytree(mounts / "LCSAS-0001" / "data", blocked / "data")
-    for p in (blocked / "data").rglob("*"):
-        if p.is_file():
-            p.chmod(0)
-    try:
-        restorer = fb.PurePythonRestorer(
-            repo, password=PASSWORD,
-            pack_search_paths=[repo / "data", mounts], interactive=False,
-        )
-        restorer.restore(tmp_path / "out")
-        assert restorer.failures == 0
-        _check(tmp_path / "out")
-    finally:
-        for p in (blocked / "data").rglob("*"):
-            if p.is_file():
-                p.chmod(0o600)
+    fake = _on_fake_fs(tmp_path, monkeypatch)
+    copies = [p for p in (blocked / "data").rglob("*") if p.is_file()]
+    for p in copies:
+        # Mode 000: it can be seen, not read.
+        for method in ("readable", "read_range", "copy_checked"):
+            fake.fail(method, p, errno.EACCES)
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD,
+        pack_search_paths=[repo / "data", mounts], interactive=False,
+    )
+    restorer.restore(tmp_path / "out")
+    assert restorer.failures == 0
+    _check(tmp_path / "out")
+    assert any(m == "readable" for m, _p in fake.hits), fake.hits
 
 
 def test_a_hidden_folder_below_a_mount_folder_is_not_searched(
@@ -279,40 +296,76 @@ def test_a_copy_that_fails_to_open_is_set_aside(
     _check(tmp_path / "out")
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root enters any folder")
-def test_a_folder_that_cannot_be_entered_is_passed_over(tmp_path: Path) -> None:
-    """rc10 sweep, third run of tier1-missing: a folder below the mount
-    folder could not be entered (mode 000 for this user).  pathlib's
-    is_file() raised PermissionError instead of saying False, so the
-    search itself stopped and every file failed.  Such a folder is now
-    passed over and the readable disc is used."""
+def test_a_folder_that_cannot_be_entered_is_passed_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rc10 sweep, third run of tier1-missing (#881): a folder below the
+    mount folder could not be entered (mode 000 for this user).
+    pathlib's is_file() raised PermissionError instead of saying False,
+    so the search itself stopped and every file failed.  Such a folder
+    is now passed over and the readable disc is used.  (Was chmod 0 on
+    the folder; now the in-memory tree, #885.)"""
     mounts = tmp_path / "media" / "user"
     repo = _repo_and_disc(tmp_path, mounts, "LCSAS-0001")
     blocked = mounts / "A-shut"
     shutil.copytree(mounts / "LCSAS-0001" / "data", blocked / "data")
-    blocked.chmod(0)
-    try:
-        restorer = fb.PurePythonRestorer(
-            repo, password=PASSWORD,
-            pack_search_paths=[repo / "data", mounts], interactive=False,
-        )
-        restorer.restore(tmp_path / "out")
-        assert restorer.failures == 0
-        _check(tmp_path / "out")
-    finally:
-        blocked.chmod(0o700)
+    fake = _on_fake_fs(tmp_path, monkeypatch)
+    fake.shut(blocked)
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD,
+        pack_search_paths=[repo / "data", mounts], interactive=False,
+    )
+    restorer.restore(tmp_path / "out")
+    assert restorer.failures == 0
+    _check(tmp_path / "out")
+    assert any(m == "is_file" for m, _p in fake.hits), fake.hits
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root enters any folder")
 def test_the_disc_prompt_passes_over_a_folder_that_cannot_be_entered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """rc10 sweep, fourth run of tier1-missing: at the disc prompt tier 3
-    looks for disc catalogs below the mount folder, and an unenterable
-    folder there (holding a catalog.db) raised PermissionError, so every
-    file failed.  The real prompt runs here (it is not patched out), and
-    the disc mounted at it is used."""
+    """rc10 sweep, fourth run of tier1-missing (#882): at the disc
+    prompt tier 3 looks for disc catalogs below the mount folder, and an
+    unenterable folder there (holding a catalog.db) raised
+    PermissionError, so every file failed.  The real prompt runs here
+    (it is not patched out), and the disc mounted at it is used.  (Was
+    chmod 0 on the folder; now the in-memory tree, #885.  The test below
+    still does it on the real filesystem.)"""
+    mounts = tmp_path / "media" / "user"
+    repo = _repo_and_disc(tmp_path, tmp_path / "shelf", "LCSAS-0002")
+    mounts.mkdir(parents=True)
+    blocked = mounts / "A-shut"
+    (blocked / "data").mkdir(parents=True)
+    (blocked / "catalog.db").write_bytes(b"not a catalog")
+    fake = _on_fake_fs(tmp_path, monkeypatch)
+    fake.shut(blocked)
+
+    def enter() -> str:
+        shelf = tmp_path / "shelf" / "LCSAS-0002"
+        if fake.key(shelf) in fake.dirs:
+            fake.move(shelf, mounts / "LCSAS-0002")
+        return "\n"
+
+    restorer = fb.PurePythonRestorer(
+        repo, password=PASSWORD, pack_search_paths=[repo / "data", mounts],
+        interactive=True, prompt_in=enter,
+    )
+    restorer.restore(tmp_path / "out")
+    assert restorer.failures == 0, capsys.readouterr().err
+    _check(tmp_path / "out")
+    assert ("is_file", fake.key(blocked / "catalog.db")) in fake.hits
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root enters any folder")
+def test_a_folder_that_cannot_be_entered_on_the_real_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The real-filesystem smoke test of the cases above (#885): a real
+    mode-000 folder below the mount folder, holding a catalog.db, met by
+    the pack search and by the real disc prompt, with the disc mounted
+    at the prompt.  (The rc10 test of #882, kept on chmod.)"""
     mounts = tmp_path / "media" / "user"
     repo = _repo_and_disc(tmp_path, tmp_path / "shelf", "LCSAS-0002")
     mounts.mkdir(parents=True)
