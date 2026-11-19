@@ -1395,16 +1395,21 @@ class TestRegenerateRecoveryManifest:
         dst.write_bytes(content)
         return dst
 
-    def test_no_manifest_is_silent_skip(self, tmp_path):
-        """If recovery/MANIFEST.sha256 doesn't exist, the step is a no-op
-        rather than erroring."""
+    def test_no_manifest_gets_one_computed(self, tmp_path):
+        """#894: with no recovery/MANIFEST.sha256 in the tree, the step
+        computes one from the files there (it used to skip)."""
+        import hashlib
+
         from lcsas.meta.builder import MetaVolumeBuilder
 
         out, recovery_dst = self._seed_meta_recovery(tmp_path, with_manifest=False)
+        (recovery_dst / "VERSION").write_text("1.0.0\n")
         b = MetaVolumeBuilder(out)
-        # Must not raise; must not create a manifest out of thin air.
         b._regenerate_recovery_manifest(recovery_dst)
-        assert not (recovery_dst / "MANIFEST.sha256").exists()
+        sha = hashlib.sha256(b"1.0.0\n").hexdigest()
+        assert (recovery_dst / "MANIFEST.sha256").read_text() == (
+            f"{sha}  ./VERSION\n"
+        )
 
     def test_existing_entries_preserved(self, tmp_path):
         """Source-tree entries (./VERSION) survive even when there are
@@ -2130,7 +2135,7 @@ class TestRecoveryBundleTrackedOnly:
         with caplog.at_level(logging.WARNING, logger="lcsas.meta.builder"):
             b._bundle_recovery_toolchain_artifacts()
         assert "cannot list the tracked files" in caplog.text
-        assert "meta verify --strict" in caplog.text
+        assert "Any other file there goes on the disc" in caplog.text
 
         bundled = out / "recovery"
         for rel in _JUNK:
@@ -2138,9 +2143,11 @@ class TestRecoveryBundleTrackedOnly:
         for rel in _CURATED:
             assert (bundled / rel).is_file(), f"curated {rel} dropped"
         # Without git, a stray file that is not known debris still goes on
-        # the disc; the build-time check names it.
+        # the disc, and the manifests computed from the tree list it
+        # (#894); the warning above is all that names it.
         assert (bundled / "notes.txt").is_file()
-        assert b.unlisted_recovery_files() == ["notes.txt"]
+        assert "./notes.txt" in (bundled / "MANIFEST.sha256").read_text()
+        assert b.unlisted_recovery_files() == []
 
     def test_unlisted_recovery_files_empty_without_manifest(
         self, tmp_path: Path,
@@ -2220,27 +2227,62 @@ def test_meta_build_warns_about_files_the_manifest_omits(
     assert "stowaway.txt" in caplog.text
 
 
-class TestRegenerateRecoveryManifestComments:
-    def test_preserves_comments_drops_stale_bin_rows(self, tmp_path: Path):
-        # A MANIFEST with a comment, a kept source row, and a stale ./bin/
-        # row: comment is preserved (builder.py:2318-2319), the bin row is
-        # dropped and regenerated from the actual bin/ tree.
+class TestRegenerateRecoveryManifestFromTree:
+    def test_old_rows_and_comments_give_way_to_the_tree(self, tmp_path: Path):
+        # #894: the manifest is computed from the files in the tree, so a
+        # comment, a row for a file not there and a stale ./bin/ row are
+        # all gone, and every file there has its row.
         out = tmp_path / "out"
         recovery_dst = out / "recovery"
         (recovery_dst / "bin" / "x86_64").mkdir(parents=True)
         (recovery_dst / "bin" / "x86_64" / "lcsas-restore").write_bytes(b"ELF")
+        (recovery_dst / "scripts").mkdir()
+        (recovery_dst / "scripts" / "restore.sh").write_bytes(b"#!/bin/sh\n")
         (recovery_dst / "MANIFEST.sha256").write_text(
             "# recovery manifest\n"
-            "abc123  ./scripts/restore.sh\n"
+            "abc123  ./scripts/gone.sh\n"
             "stale99  ./bin/x86_64/old-binary\n"
         )
         b = MetaVolumeBuilder(out, project_root=tmp_path)
         b._regenerate_recovery_manifest(recovery_dst)
-        text = (recovery_dst / "MANIFEST.sha256").read_text()
-        assert "# recovery manifest" in text            # comment preserved
-        assert "./scripts/restore.sh" in text           # source row kept
-        assert "old-binary" not in text                 # stale bin dropped
-        assert "./bin/x86_64/lcsas-restore" in text      # regenerated
+        script_sha = _sha256(b"#!/bin/sh\n")
+        assert (recovery_dst / "MANIFEST.sha256").read_text() == (
+            f"{script_sha}  ./scripts/restore.sh\n"
+            f"{_sha256(b'ELF')}  ./bin/x86_64/lcsas-restore\n"
+        )
+
+    def test_docs_manifest_lists_docs_relative_paths(self, tmp_path: Path):
+        out = tmp_path / "out"
+        docs = out / "recovery" / "docs"
+        (docs / "sub").mkdir(parents=True)
+        (docs / "RECOVER.txt").write_bytes(b"read me\n")
+        (docs / "sub" / "b.txt").write_bytes(b"b\n")
+        (docs / "MANIFEST.sha256").write_text("stale  ./gone.txt\n")
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b._regenerate_recovery_manifest(out / "recovery")
+        recover_sha, b_sha = _sha256(b"read me\n"), _sha256(b"b\n")
+        assert (docs / "MANIFEST.sha256").read_text() == (
+            f"{recover_sha}  ./RECOVER.txt\n"
+            f"{b_sha}  ./sub/b.txt\n"
+        )
+        top = (out / "recovery" / "MANIFEST.sha256").read_text()
+        assert "./docs/RECOVER.txt" in top
+        assert "MANIFEST.sha256" not in top
+
+    def test_rows_sort_as_c_locale_sort_does(self, tmp_path: Path):
+        # Source rows sort by whole path ("a-b/x" before "a/x", as
+        # LC_ALL=C sort does); bin/ rows come after them, folder by folder.
+        out = tmp_path / "out"
+        rec = out / "recovery"
+        for rel in ("a/x", "a-b/x", "Z", "bin/t-1/f", "bin/t/f"):
+            (rec / rel).parent.mkdir(parents=True, exist_ok=True)
+            (rec / rel).write_bytes(rel.encode())
+        MetaVolumeBuilder(out, project_root=tmp_path)._regenerate_recovery_manifest(rec)
+        listed = [
+            ln.split("  ", 1)[1]
+            for ln in (rec / "MANIFEST.sha256").read_text().splitlines()
+        ]
+        assert listed == ["./Z", "./a-b/x", "./a/x", "./bin/t/f", "./bin/t-1/f"]
 
 
 class TestBundleMetadata:

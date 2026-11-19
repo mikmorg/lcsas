@@ -70,9 +70,9 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         logger.warning(
             "The meta disc's recovery/ holds %d file(s) that "
             "recovery/MANIFEST.sha256 does not list, so `lcsas meta verify "
-            "--strict` will fail: %s. Build from a git checkout, which "
-            "bundles only tracked files; if these files are tracked, "
-            "regenerate the manifest with `make -C recovery manifest`.",
+            "--strict` will fail: %s. The manifest is computed from the "
+            "files in recovery/, so a build step wrote these after it; "
+            "please report this as a bug.",
             len(unlisted), shown,
         )
 
