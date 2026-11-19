@@ -97,8 +97,8 @@ any data discs one at a time as the recovery process asks for them.
     It is a bounded loop (cap at 40 swaps).  A disc box already on the
     screen, waiting for ENTER, is its first swap.  After that, each time
     round it waits up to 120 s for `Insert the right disc` or
-    `restore complete`.  On a disc box it unmounts /media, inserts the
-    next data disc of ~/disc-labels.txt (LCSAS_META skipped, in label
+    `restore complete`.  On a disc box it unmounts /media, ejects, inserts
+    the next data disc of ~/disc-labels.txt (LCSAS_META skipped, in label
     order), mounts /dev/sr0 at /media and sends ENTER.
     (`restore-shell swap-loop /mnt` mounts at /mnt instead.)  On
     `restore complete` it prints RESTORE COMPLETE, answers "Restore

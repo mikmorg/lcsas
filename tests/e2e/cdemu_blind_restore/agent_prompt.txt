@@ -64,10 +64,10 @@ QUICK REFERENCE — complete command sequence (do exactly this)
 
     It is a bounded loop (cap at 40 swaps).  Each time round it waits
     up to 120 s for `Insert the right disc` or `restore complete`.
-    On a disc box it runs `sudo umount /media`, `disc-loader insert`
-    with the next data disc of ~/disc-labels.txt (LCSAS_META skipped,
-    in label order), `sudo mount /dev/sr0 /media`, then
-    `restore-shell send ""` (ENTER).  On `restore complete` it prints
+    On a disc box it runs `sudo umount /media`, `disc-loader eject`,
+    `disc-loader insert` with the next data disc of ~/disc-labels.txt
+    (LCSAS_META skipped, in label order), `sudo mount /dev/sr0 /media`,
+    then `restore-shell send ""` (ENTER).  On `restore complete` it prints
     RESTORE COMPLETE, answers "Restore another backup set?" with n,
     and exits 0.  If the session ends it stops at once (exit 2); if
     nothing new comes for 120 s it stops (exit 1).  Then look with

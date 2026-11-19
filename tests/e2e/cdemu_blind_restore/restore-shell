@@ -51,7 +51,8 @@
 #       'Insert the right disc|restore complete' (120 s); on a disc box,
 #       `sudo umount MOUNT_DIR`, `disc-loader insert` the next data disc
 #       of ~/disc-labels.txt (LCSAS_META skipped; label order, starting
-#       over after the last), `sudo mount /dev/sr0 MOUNT_DIR`, then
+#       over after the last) after `disc-loader eject`,
+#       `sudo mount /dev/sr0 MOUNT_DIR`, then
 #       `send ""` (ENTER).  MOUNT_DIR defaults to /media.
 #       A disc box already on the screen and waiting for its answer
 #       (the agent looked at it before starting the loop) is the first
@@ -265,6 +266,13 @@ case "${1:-}" in
             swaps=$((swaps + 1))
             echo "[restore-shell] swap-loop: disc swap $swaps: $label at $mnt"
             sudo umount "$mnt" 2>/dev/null
+            # The disc in the drive may be mounted somewhere else: the
+            # agent often mounts data discs at /mnt by hand and then runs
+            # a bare swap-loop.  `disc-loader eject` unmounts /dev/sr0
+            # wherever it is, as the agents' own working swaps did, so the
+            # next disc is not mounted beside a stale mount of the last
+            # one (#917).
+            disc-loader eject >/dev/null
             disc-loader insert "$label"
             sudo mount /dev/sr0 "$mnt"
             sh "$0" send ""

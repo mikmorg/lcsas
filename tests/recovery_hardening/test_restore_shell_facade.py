@@ -345,11 +345,13 @@ def test_swap_loop_cycles_the_data_discs_until_complete(
     done = _rs(swap_env, "swap-loop")
     assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
     assert "RESTORE COMPLETE" in done.stdout
-    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader")]
+    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader insert")]
     # Label order, LCSAS_META skipped, starting over after the last.
     assert inserts == [f"disc-loader insert LCSAS_D{n}" for n in (1, 2, 3, 1)]
     actions = _actions(swap_env)
-    assert actions[:3] == ["sudo umount /media", "disc-loader insert LCSAS_D1",
+    # eject first: it unmounts /dev/sr0 wherever the agent mounted it.
+    assert actions[:4] == ["sudo umount /media", "disc-loader eject",
+                           "disc-loader insert LCSAS_D1",
                            "sudo mount /dev/sr0 /media"]
     _wait_on_screen(swap_env, "answer=n")
 
@@ -404,7 +406,7 @@ def test_swap_loop_swaps_for_a_box_already_seen(swap_env: dict[str, str]) -> Non
     done = _swap_loop_within(swap_env, 60)
     assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
     assert "RESTORE COMPLETE" in done.stdout
-    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader")]
+    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader insert")]
     # One swap per box: the box taken from the screen is not swapped
     # for a second time when the loop's own expect runs.
     assert inserts == ["disc-loader insert LCSAS_D1", "disc-loader insert LCSAS_D2"]
@@ -445,22 +447,28 @@ def test_swap_loop_swaps_for_a_framed_box_already_seen(
     time.sleep(0.3)  # the "> " after the box
     done = _swap_loop_within(swap_env, 60)
     assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
-    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader")]
+    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader insert")]
     assert inserts == ["disc-loader insert LCSAS_D1"]
 
 
 def test_swap_loop_swaps_for_a_box_seen_only_on_screen(
     swap_env: dict[str, str],
 ) -> None:
-    """The agent looked with ``screen`` (which marks nothing), not
-    ``expect``: the waiting box is swapped for once, not twice."""
-    _start(swap_env, "sh", "-c", _fake_restore(2))
+    """The agent looked with ``screen``, which marks nothing, so the box
+    is still new output to ``expect``.  Taking it from the screen marks
+    it seen: the restore, busy for 2 s after ENTER, is not swapped for a
+    second time on the same box."""
+    _start(swap_env, "sh", "-c",
+           f'echo "{_SWAP}"; printf "> "; read x; sleep 2; '
+           'echo "[lcsas-restore] restore complete"; '
+           "printf 'Restore another backup set from these discs? [y/N] '; "
+           'read a; echo "answer=$a"')
     _wait_on_screen(swap_env, _SWAP)
     time.sleep(0.3)  # the "> " after the box
     done = _swap_loop_within(swap_env, 60)
     assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
-    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader")]
-    assert inserts == ["disc-loader insert LCSAS_D1", "disc-loader insert LCSAS_D2"]
+    inserts = [a for a in _actions(swap_env) if a.startswith("disc-loader insert")]
+    assert inserts == ["disc-loader insert LCSAS_D1"]
 
 
 def test_swap_loop_needs_a_data_disc(swap_env: dict[str, str], tmp_path: Path) -> None:
