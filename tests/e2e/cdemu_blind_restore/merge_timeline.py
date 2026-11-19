@@ -21,6 +21,14 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+# Import transcript.py from this folder, leaving no __pycache__ behind
+# when run as a script (an importer, such as a test, keeps its own setting).
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import transcript  # noqa: E402
+
 Event = tuple[datetime | None, str]
 
 # Stream-json bookkeeping events that say nothing about what happened.
@@ -43,29 +51,29 @@ def _parse_ts(ts: object) -> datetime | None:
     return parsed
 
 
+def _cannot_read(path: Path, exc: OSError) -> None:
+    print(f"merge_timeline.py: cannot read {path}: {exc.strerror}",
+          file=sys.stderr)
+
+
 def _read_lines(path: Path) -> list[str]:
     """The file's lines; [] (with a message) when it cannot be read.  The
     disc-loader log is root-owned 0640, so run.sh reads it with sudo."""
     try:
         return path.read_text(errors="replace").splitlines()
     except OSError as exc:
-        print(f"merge_timeline.py: cannot read {path}: {exc.strerror}",
-              file=sys.stderr)
+        _cannot_read(path, exc)
         return []
 
 
 def _load_transcript(path: Path) -> list[Event]:
+    try:
+        events = transcript.load(path).events
+    except OSError as exc:
+        _cannot_read(path, exc)
+        return []
     out: list[Event] = []
-    for line in _read_lines(path):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(event, dict):
-            continue
+    for event in events:
         if event.get("subtype") in _NOISE_SUBTYPES:
             continue
         ts = _parse_ts(event.get("timestamp"))
@@ -161,13 +169,13 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 64
     transcript_path, disc_path = Path(args[0]), Path(args[1])
-    transcript = _load_transcript(transcript_path)
+    events = _load_transcript(transcript_path)
     disc_log = _load_disc_log(disc_path)
-    if not transcript and not disc_log:
+    if not events and not disc_log:
         print("merge_timeline.py: nothing to merge (both inputs empty or "
               "unreadable)", file=sys.stderr)
         return 1
-    sys.stdout.write(render(merge(transcript, disc_log)))
+    sys.stdout.write(render(merge(events, disc_log)))
     return 0
 
 

@@ -32,12 +32,19 @@ each path they would flag.
 
 from __future__ import annotations
 
-import json
 import re
-import shlex
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
+
+# Import transcript.py from this folder.  verify.sh's checks import this
+# as root and turn bytecode writes off first, so no root-owned __pycache__
+# is left in the checkout; run as a script, it turns them off itself.
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import transcript  # noqa: E402
 
 # The one file restore.sh writes that a reader may come across: resume.sh
 # in its tools folder (default ~/lcsas-restore-tools; restore.sh #609).
@@ -62,37 +69,6 @@ _LOOP_SHELL_ACTIONS = frozenset({"expect", "send", "screen"})
 # What the loop types: ENTER after a swap, n to "Restore another backup
 # set?" (agent_prompt.txt's loop).
 _LOOP_SENDS = frozenset({"", "n", "N"})
-# Shell words that open a command or a block; the next word is the
-# command.  `for` and `case` headers name no command and are skipped.
-_LEADING_KEYWORDS = frozenset({
-    "if", "then", "else", "elif", "do", "while", "until", "!", "{", "}",
-    "time",
-})
-_IGNORED_KEYWORDS = frozenset({"fi", "done", "esac", "in"})
-_HEADER_KEYWORDS = frozenset({"for", "case", "select"})
-_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=")
-
-
-def agent_commands(transcript: Path) -> Iterator[str]:
-    """The Bash commands the agent ran, in order."""
-    with open(transcript, errors="replace") as fh:
-        for line in fh:
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            msg = event.get("message")
-            content = (msg if isinstance(msg, dict) else {}).get("content", [])
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    command = (block.get("input") or {}).get("command", "")
-                    if isinstance(command, str):
-                        yield command
-
 
 def heredoc_writes(command: str) -> Iterator[tuple[str, str]]:
     """(path, text) for each heredoc *command* writes into a file."""
@@ -110,74 +86,15 @@ def heredoc_writes(command: str) -> Iterator[tuple[str, str]]:
         yield m.group("path"), "\n".join(body)
 
 
-_QUOTED = re.compile(r"'(?P<s>[^']*)'" + r'|"(?P<d>(?:[^"\\]|\\.)*)"')
-
-
-def _blank_quotes(text: str) -> str:
-    """Each quoted string becomes "Q" (or "" when empty), so the shell
-    operators inside it do not split it.  A double-quoted string that
-    holds a command substitution is opened up instead: the command in
-    `"$(...)"` or in backticks runs, so it must be seen."""
-    def one(m: re.Match[str]) -> str:
-        if m.group("s") is not None:
-            return '""' if m.group("s") == "" else '"Q"'
-        inner = m.group("d")
-        if "$(" in inner or "`" in inner:
-            return " " + _blank_quotes(inner) + " "
-        return '""' if inner == "" else '"Q"'
-    return _QUOTED.sub(one, text)
-
-
-def _blank(text: str) -> str:
-    """*text* with quoted strings, ${...} and $((...)) replaced by
-    placeholders, so the shell operators inside them do not split it.
-    An empty string stays "" so a send of ENTER can be told apart."""
-    text = _blank_quotes(text)
-    text = re.sub(r"\$\{[^}]*\}", "V", text)
-    text = re.sub(r"\$\(\((?:[^()]|\([^()]*\))*\)\)", "A", text)
-    # An array written out: NAME=(word word ...).
-    text = re.sub(r"\b([A-Za-z_]\w*)=\([^()$`]*\)", r"\1=A", text)
-    return text
-
-
-def _clauses(text: str) -> Iterator[str]:
-    for line in _blank(text).split("\n"):
-        line = re.sub(r"(?:^|\s)#.*$", "", line)          # comment, shebang
-        line = re.sub(r"^\s*[^\s()]+\)", "", line)        # case pattern)
-        yield from re.split(r";;|&&|\|\||\$\(|[;|&()`]", line)
-
-
-def _command_words(clause: str) -> list[str]:
-    """The command and its arguments in one clause, or [] if none."""
-    try:
-        words = shlex.split(clause, posix=True)
-    except ValueError:
-        words = clause.split()
-    while words and (words[0] in _LEADING_KEYWORDS or _ASSIGNMENT.match(words[0])):
-        words.pop(0)
-    if not words or words[0] in _IGNORED_KEYWORDS:
-        return []
-    if words[0] in _HEADER_KEYWORDS:
-        return []
-    if words[0] == "sudo":
-        words.pop(0)
-        while words and words[0].startswith("-"):
-            words.pop(0)
-    return words
-
-
 def is_swap_loop(text: str) -> bool:
     """True when *text* only does what the prompt's disc-swap loop does."""
-    blanked = _blank(text)
+    blanked = transcript.blank(text)
     # It writes no file: only redirections to /dev/null or another fd.
     for target in re.findall(r">>?\s*(\S+)", blanked):
         if target != "/dev/null" and not re.fullmatch(r"&\d", target):
             return False
     waits = swaps = False
-    for clause in _clauses(text):
-        words = _command_words(clause)
-        if not words:
-            continue
+    for words in transcript.split_clauses(text):
         name = words[0]
         if name not in _LOOP_COMMANDS:
             return False
@@ -201,12 +118,12 @@ def _normal(path: str) -> str:
     return path
 
 
-def harness_file(transcript: Path) -> Callable[[str], bool]:
+def harness_file(transcript_path: Path | str) -> Callable[[str], bool]:
     """A predicate: is this path a file the prompt or restore.sh made?"""
     loops: set[str] = set()
     others: set[str] = set()
-    for command in agent_commands(transcript):
-        for path, text in heredoc_writes(command):
+    for call in transcript.load(transcript_path).bash():
+        for path, text in heredoc_writes(call.command):
             (loops if is_swap_loop(text) else others).add(_normal(path))
     prompt_files = loops - others
 

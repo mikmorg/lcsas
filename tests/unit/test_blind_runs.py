@@ -86,6 +86,21 @@ def test_run_stats_reads_the_result_event_not_quoted_text(tmp_path: Path) -> Non
     assert stats["agent_result"] == "success"
 
 
+def test_run_stats_turns_is_the_most_of_any_result_event(tmp_path: Path) -> None:
+    """The CLI counts num_turns afresh each time it wakes for a background
+    task, so an rc10 run that made 43 turns ended on a result event that
+    said 1 (#889).  total_cost_usd is a running total: the last one is the
+    run's cost."""
+    wake = {**_RESULT_EVENT, "num_turns": 1, "total_cost_usd": 0.29,
+            "subtype": "error_max_turns"}
+    t = tmp_path / "transcript.jsonl"
+    t.write_text("\n".join([*_transcript_lines(), json.dumps(wake)]) + "\n")
+    stats = blind_runs.run_stats(t)
+    assert stats["turns"] == 31
+    assert stats["cost_usd"] == 0.29
+    assert stats["agent_result"] == "error_max_turns"
+
+
 # --- run_variant.sh end to end, with stubs -------------------------------------
 
 _STUB_RUN = """#!/usr/bin/env bash
@@ -122,6 +137,7 @@ def harness(tmp_path: Path) -> dict[str, Path]:
     here.mkdir()
     shutil.copy2(HARNESS / "run_variant.sh", here / "run_variant.sh")
     shutil.copy2(HARNESS / "blind_runs.py", here / "blind_runs.py")
+    shutil.copy2(HARNESS / "transcript.py", here / "transcript.py")  # blind_runs reads with it
     (here / "XFAIL.list").write_text("# ledger\nno-catalog issue=#1 expires=2099-01-01\n")
     for name, body in (
         ("setup.py", "#!/bin/sh\nexit 0\n"),
