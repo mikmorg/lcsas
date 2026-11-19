@@ -1335,8 +1335,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("BURNING, was BURNED", "BURNING",
           rc="1",
           says=("Cannot mark volume <L> VERIFIED: status is BURNING (only BURNED or STAGING "
-                "allowed)"),
-          deleted_by="reconcile-waiting abort-volume abort"),
+                "allowed)")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           rc="1",
           says=("Cannot mark volume <L> VERIFIED: status is BURNING (only BURNED or STAGING "
@@ -1477,8 +1476,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
           events="VERIFY_PASS",
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
-          events="VERIFY_PASS",
-          deleted_by="reconcile-waiting abort-volume abort"),
+          events="VERIFY_PASS"),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           events="VERIFY_PASS"),
         R("BURNED, rebuilt", "VERIFIED",
@@ -1515,8 +1513,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "BURNING",
           deleted_by="reconcile-waiting abort-volume abort"),
-        R("BURNING, was BURNED", "BURNING",
-          deleted_by="reconcile-waiting abort-volume abort"),
+        R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "VERIFIED",
           events="VERIFY_PASS, NOTE BURNED → VERIFIED",
@@ -1545,8 +1542,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "BURNING",
           deleted_by="reconcile-waiting abort-volume abort"),
-        R("BURNING, was BURNED", "BURNING",
-          deleted_by="reconcile-waiting abort-volume abort"),
+        R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED"),
         R("BURNED + disc", "VERIFIED", "Home ACTIVE",
@@ -1706,8 +1702,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
           rc="1",
-          says="No in-service disc of volume 1 at 'Home'",
-          deleted_by="reconcile-waiting abort-volume abort"),
+          says="No in-service disc of volume 1 at 'Home'"),
         R("BURNING + disc", "DEPRECATED", "Home DEPRECATED",
           events=("NOTE disc at Home recorded as deprecated (out of service), NOTE "
                   "auto-deprecated: last in-service disc deprecated at Home")),
@@ -1763,8 +1758,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
           rc="1",
-          says="No disc of volume 1 recorded at 'Home'",
-          deleted_by="reconcile-waiting abort-volume abort"),
+          says="No disc of volume 1 recorded at 'Home'"),
         R("BURNING + disc", "DEPRECATED", "Home DESTROYED",
           events=("NOTE disc at Home recorded as destroyed, NOTE auto-deprecated: last "
                   "in-service disc destroyed at Home")),
@@ -1819,8 +1813,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
           rc="1",
-          says="No disc of volume 1 recorded at 'Home'",
-          deleted_by="reconcile-waiting abort-volume abort"),
+          says="No disc of volume 1 recorded at 'Home'"),
         R("BURNING + disc", "DEPRECATED", "Home DESTROYED",
           events=("NOTE disc at Home recorded as lost (whereabouts unknown), NOTE "
                   "auto-deprecated: last in-service disc lost at Home")),
@@ -1875,8 +1868,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
           rc="1",
-          says="Volume <L> is BURNING: only VERIFIED volumes can be consolidated.",
-          deleted_by="reconcile-waiting abort-volume abort"),
+          says="Volume <L> is BURNING: only VERIFIED volumes can be consolidated."),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           rc="1",
           says="Volume <L> is BURNING: only VERIFIED volumes can be consolidated."),
@@ -1944,7 +1936,6 @@ TABLE: dict[str, list[dict[str, str]]] = {
           rc="1",
           says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
                 "(allowed: ['BURNED',…"),
-          deleted_by="reconcile-waiting abort-volume abort",
           suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
                    "does not check the status first or catch the ValueError")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
@@ -2041,7 +2032,6 @@ TABLE: dict[str, list[dict[str, str]]] = {
           rc="1",
           says=("Unexpected error: Invalid status transition for volume 1: BURNING → DEPRECATED "
                 "(allowed: ['BURNED',…"),
-          deleted_by="reconcile-waiting abort-volume abort",
           suspect=("the refusal reaches the owner as 'Unexpected error': consolidate --deprecate "
                    "does not check the status first or catch the ValueError")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
@@ -2125,8 +2115,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "BURNING",
           deleted_by="reconcile-waiting abort-volume abort"),
-        R("BURNING, was BURNED", "BURNING",
-          deleted_by="reconcile-waiting abort-volume abort"),
+        R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED"),
         R("BURNED + disc", "BURNED", "Home ACTIVE"),
@@ -2225,10 +2214,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
                 "verification at Hom…")),
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "deleted"),
-        R("BURNING, was BURNED", "deleted",
-          suspect=("deleted although status_before_burning says it was BURNED (a disc of it "
-                   "exists, #810): the delete guards do not read the BURNING note the burn "
-                   "preflight reads")),
+        R("BURNING, was BURNED", "BURNING",
+          rc="1",
+          says=("Refusing to clean or abort session <S>: <L> is BURNING, but it was BURNED when "
+                "a burn of it started…")),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED",
           rc="1",
@@ -2254,10 +2243,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
                 "verification at Hom…")),
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "deleted"),
-        R("BURNING, was BURNED", "deleted",
-          suspect=("deleted although status_before_burning says it was BURNED (a disc of it "
-                   "exists, #810): the delete guards do not read the BURNING note the burn "
-                   "preflight reads")),
+        R("BURNING, was BURNED", "BURNING",
+          rc="1",
+          says=("Refusing to clean or abort session <S>: <L> is BURNING, but it was BURNED when "
+                "a burn of it started…")),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED",
           rc="1",
@@ -2288,10 +2277,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
           rc="1",
           says="Volume <L> has a recorded disc — a burned disc exists, refusing to abort it."),
         R("BURNING", "deleted"),
-        R("BURNING, was BURNED", "deleted",
-          suspect=("deleted although status_before_burning says it was BURNED (a disc of it "
-                   "exists, #810): the delete guards do not read the BURNING note the burn "
-                   "preflight reads")),
+        R("BURNING, was BURNED", "BURNING",
+          rc="1",
+          says=("Refusing to clean or abort volume <L>: <L> is BURNING, but it was BURNED when a "
+                "burn of it started.…")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           rc="1",
           says="Volume <L> has a recorded disc — a burned disc exists, refusing to abort it."),
@@ -2351,10 +2340,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
           rc="1",
           says="Volume <L> has a recorded disc — a burned disc exists, refusing to abort it."),
         R("BURNING", "deleted"),
-        R("BURNING, was BURNED", "deleted",
-          suspect=("deleted although status_before_burning says it was BURNED (a disc of it "
-                   "exists, #810): the delete guards do not read the BURNING note the burn "
-                   "preflight reads")),
+        R("BURNING, was BURNED", "BURNING",
+          rc="1",
+          says=("Refusing to clean or abort volume <L>: <L> is BURNING, but it was BURNED when a "
+                "burn of it started.…")),
         R("BURNING + disc", "BURNING", "Home ACTIVE",
           rc="1",
           says="Volume <L> has a recorded disc — a burned disc exists, refusing to abort it."),
@@ -2425,9 +2414,8 @@ TABLE: dict[str, list[dict[str, str]]] = {
           deleted_by="reconcile-waiting abort-volume abort"),
         R("BURNING, was BURNED", "BURNING",
           rc="1",
-          says=("Session <S> has 1 volume(s) with no verified disc (<L>) — never burned, or "
-                "burned but post-burn ver…"),
-          deleted_by="reconcile-waiting abort-volume abort"),
+          says=("Refusing to clean or abort session <S>: <L> is BURNING, but it was BURNED when "
+                "a burn of it started…")),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED",
           rc="1",
@@ -2456,10 +2444,10 @@ TABLE: dict[str, list[dict[str, str]]] = {
                 "verification at Hom…")),
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "deleted"),
-        R("BURNING, was BURNED", "deleted",
-          suspect=("deleted although status_before_burning says it was BURNED (a disc of it "
-                   "exists, #810): the delete guards do not read the BURNING note the burn "
-                   "preflight reads")),
+        R("BURNING, was BURNED", "BURNING",
+          rc="1",
+          says=("Refusing to clean or abort session <S>: <L> is BURNING, but it was BURNED when "
+                "a burn of it started…")),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED",
           rc="1",
@@ -2484,8 +2472,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "BURNING",
           deleted_by="reconcile-waiting abort-volume abort"),
-        R("BURNING, was BURNED", "BURNING",
-          deleted_by="reconcile-waiting abort-volume abort"),
+        R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED"),
         R("BURNED + disc", "BURNED", "Home ACTIVE"),
@@ -2505,10 +2492,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("STAGING, burn evidence", "STAGING"),
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "deleted"),
-        R("BURNING, was BURNED", "deleted",
-          suspect=("deleted although status_before_burning says it was BURNED (a disc of it "
-                   "exists, #810): the delete guards do not read the BURNING note the burn "
-                   "preflight reads")),
+        R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED"),
         R("BURNED + disc", "BURNED", "Home ACTIVE"),
@@ -2550,8 +2534,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "BURNING",
           events="NOTE Catalog rebuild: burn state unknown"),
-        R("BURNING, was BURNED", "BURNING",
-          events="NOTE Catalog rebuild: burn state unknown"),
+        R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED"),
         R("BURNED + disc", "BURNED", "Home ACTIVE"),
@@ -2573,8 +2556,7 @@ TABLE: dict[str, list[dict[str, str]]] = {
         R("STAGING + disc", "STAGING", "Home ACTIVE"),
         R("BURNING", "BURNING",
           deleted_by="abort-volume abort"),
-        R("BURNING, was BURNED", "BURNING",
-          deleted_by="abort-volume abort"),
+        R("BURNING, was BURNED", "BURNING"),
         R("BURNING + disc", "BURNING", "Home ACTIVE"),
         R("BURNED, rebuilt", "BURNED"),
         R("BURNED + disc", "BURNED", "Home ACTIVE"),
