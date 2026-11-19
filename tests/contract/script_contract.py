@@ -138,9 +138,13 @@ def _rows(*rows: tuple[str, str]) -> tuple[tuple[str, str], ...]:
     return rows
 
 
+# Two errors: a special file and a link the file system cannot hold
+# are listed, and not counted (failures_errors, :count_failures).
 _FINISHED = _rows(("a/bad1", "name refused: test"),
                   ("a/bad2", "link refused: test"),
-                  ("a/fifo", "special file not created: test"))
+                  ("a/fifo", "special file not created: test"),
+                  ("a/link", "link not created: the target file system "
+                             "does not support symlinks"))
 _DAMAGED = _rows(("a/one", f"pack damaged: {PACK_A}"),
                  ("a/two", f"pack unreadable: {PACK_B}"))
 _NOT_FOUND = _rows(("a/one", f"pack not found: {PACK_A}"),
@@ -356,9 +360,11 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
         bat=None, bat_why="restore.bat runs no tier 3",
     ),
     ScriptCase(
+        # No "N item(s) were NOT restored" line: N comes from the list.
         name="tier 3 finished, some items not restored",
         tier="3", reader_exit=ReaderExit.NOT_ALL_RESTORED,
-        reader_says=_NOT_ALL_SAID[:1], failures=_FINISHED,
+        reader_says=("[lcsas-restore] some item(s) could NOT be restored.",),
+        failures=_FINISHED,
         sh=ScriptOutcome(exit=ScriptExit.NOT_ALL_RESTORED, says=_SH_FINISHED,
                          not_says=r"\[tier 3\] FAILED|stopped before it finished",
                          resume_advice=False, tools_kept=False,

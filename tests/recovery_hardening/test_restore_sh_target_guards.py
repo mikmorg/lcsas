@@ -30,6 +30,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests.contract.exit_codes import ScriptExit
+
 from .conftest import _scaled_timeout
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,7 +43,6 @@ NONEMPTY_WARNING = "do not look like a previous"
 TMPFS_WARNING = "WILL BE LOST when this computer powers off"
 TMPFS_PROMPT = "Continue restoring into RAM anyway?"
 ALLOW_CONTINUE = "continuing into RAM"
-EXIT_USER_ABORT = 65
 
 
 # ── fixtures ──────────────────────────────────────────────────────────
@@ -198,8 +199,8 @@ def test_nonempty_foreign_target_noninteractive_refuses(tmp_path: Path) -> None:
 
     res = _run_pipe(recovery, target, _base_env())
 
-    assert res.returncode == EXIT_USER_ABORT, (
-        f"expected exit {EXIT_USER_ABORT}; got {res.returncode}\n"
+    assert res.returncode == ScriptExit.USER_ABORT, (
+        f"expected exit {ScriptExit.USER_ABORT}; got {res.returncode}\n"
         f"{res.stderr[:600]}"
     )
     combined = res.stdout + res.stderr
@@ -259,7 +260,8 @@ def test_nonempty_foreign_target_interactive_not_yes_aborts(
 
     rc, out = _run_pty(recovery, target, _base_env(), "no\n")
 
-    assert rc == EXIT_USER_ABORT, f"expected exit {EXIT_USER_ABORT}; rc={rc}\n{out[:600]}"
+    assert rc == ScriptExit.USER_ABORT, (
+        f"expected exit {ScriptExit.USER_ABORT}; rc={rc}\n{out[:600]}")
     assert NONEMPTY_WARNING in out, f"warning not shown:\n{out[:600]}"
     assert "STUB-TIER1-RAN" not in out, "tier 1 ran despite abort"
     assert not (target / MARKER_NAME).exists(), "marker written despite abort"
