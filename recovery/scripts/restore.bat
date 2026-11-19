@@ -2476,9 +2476,12 @@ REM with any exit code but 0, 4 or 77 when the backup set has no data\
 REM folder, so tier 2 cannot run (#615).  At top level for the same
 REM reason as :wrong_password.  Tier 1 never removes a file it has
 REM restored, and a new run skips every file that is already complete
-REM (#92).  The tools folder stays (#609).
+REM (#92).  The tools folder stays (#609).  Tier 1's own 2 is its usage
+REM error; restore.bat's 2 means restore.bat was called wrongly, so it
+REM ends with 1, as for any other failure (#887).
 :tier1_stopped
 del /f /q "%PWFILE%" >nul 2>nul
+if "%RC%"=="2" set "RC=1"
 echo.
 echo ============================================================
 echo  The restore stopped before it finished ^(code %RC%^).

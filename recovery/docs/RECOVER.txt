@@ -753,8 +753,8 @@ EXIT CODES
     1  -- a failure the message above it names: no backup set found,
           an unsupported computer, not enough free space (see
           PREREQUISITES), "no recovery method available", or the tier
-          that ran failed
-    2  -- usage error
+          that ran failed (also when that tier reported a usage error)
+    2  -- usage error: restore.sh was called wrongly
     3  -- --check-disc only: no image, no recovery folder or no
           lcsas-ecc for this computer, or the image could not be read
           or repaired (see "REPAIRING A DAMAGED DISC")
@@ -784,7 +784,8 @@ EXIT CODES
           on with resume.sh, if the stop came after the backup set
           and the folder were chosen (see "STOPPING AND CARRYING ON
           LATER")
-  Any other code is the one the tier that ran stopped with.
+  Any other code is the one the tier that ran stopped with (its 2,
+  a usage error, is reported as 1).
   On every exit but 0 and 4 the tools folder stays (see "THE TOOLS
   FOLDER"), except Ctrl-C at "Restore another backup set?" or the
   folder question after it: that set is restored, nothing is left to

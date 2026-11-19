@@ -38,8 +38,9 @@
 # Documented exit codes (recovery/docs/RECOVER.txt, "EXIT CODES"):
 #   0    success
 #   1    generic failure (no repository, unsupported OS/arch, not enough
-#        free space, no recovery method available, etc.)
-#   2    usage error
+#        free space, no recovery method available, a tier that failed,
+#        etc.)
+#   2    usage error: this script was called wrongly
 #   3    --check-disc: no image, no recovery tree or no lcsas-ecc, or the
 #        image could not be read or repaired
 #   4    the restore finished, but some items could not be restored:
@@ -55,7 +56,8 @@
 #   77   a repository key rejected the password (any tier, #805), or the
 #        reader stopped at the password or share card prompt
 #   129, 130, 143  the terminal closed, Ctrl-C, killed with TERM
-# Any other code is the one the tier that ran stopped with.
+# Any other code is the one the tier that ran stopped with; a tier's own
+# 2 (its usage error) is reported as 1 (#887).
 #
 # Tools folder (#609): run off a disc, the script copies itself, this
 # computer's binaries, the docs and the meta disc's metadata/ into
@@ -699,6 +701,15 @@ SNAP_POS=""
 # No password, no repository discovery, no restore.  [FMT-01]
 CHECK_DISC_IMG=""
 
+# flag_value FLAG WHAT VALUE: VALUE, the argument after FLAG, must not be
+# empty; else say so and exit 2 (#887).  ${2:?} exited 2 in dash but 1
+# in bash.
+flag_value() {
+    [ -n "$3" ] && return 0
+    printf 'restore.sh: %s requires %s argument\n' "$1" "$2" >&2
+    exit 2
+}
+
 # Flag parsing: strip named flags before positional-arg parsing so
 # heirs can write `sh restore.sh --repo alpha RECOVERY TARGET` or
 # `sh restore.sh --help` without knowing about LCSAS_* env vars.
@@ -862,16 +873,20 @@ docs/TROUBLESHOOTING.md when something goes wrong.
 EOF
             exit 0 ;;
         --repo)
-            LCSAS_REPO="${2:?--repo requires a NAME argument}"
+            flag_value --repo 'a NAME' "${2-}"
+            LCSAS_REPO="$2"
             shift 2 ;;
         --target)
-            TARGET_FLAG="${2:?--target requires a DIR argument}"
+            flag_value --target 'a DIR' "${2-}"
+            TARGET_FLAG="$2"
             shift 2 ;;
         --snapshot)
-            SNAP_FLAG="${2:?--snapshot requires an ID argument}"
+            flag_value --snapshot 'an ID' "${2-}"
+            SNAP_FLAG="$2"
             shift 2 ;;
         --key)
-            LCSAS_PWFILE="${2:?--key requires a FILE argument}"
+            flag_value --key 'a FILE' "${2-}"
+            LCSAS_PWFILE="$2"
             # Validate NOW -- before any password/disc prompts -- so a
             # typo'd path fails in one obvious line, not mid-restore.
             if [ ! -f "$LCSAS_PWFILE" ] || [ ! -r "$LCSAS_PWFILE" ]; then
@@ -886,7 +901,8 @@ EOF
                 "$LCSAS_RESTORE_BUILD_SHA" "$LCSAS_RESTORE_BUILD_DATE"
             exit 0 ;;
         --check-disc)
-            CHECK_DISC_IMG="${2:?--check-disc requires an IMAGE argument}"
+            flag_value --check-disc 'an IMAGE' "${2-}"
+            CHECK_DISC_IMG="$2"
             shift 2 ;;
         --) shift; break ;;
         -*)
@@ -3754,9 +3770,12 @@ tier_ended() {
 }
 
 # tier_exit: end the run after a failed last tier, with its exit code,
-# unless that code means something else here (4: not all restored).
+# unless that code means something else here: 4 (not all restored) and
+# 2 (this script's usage error; a tier's 2 is its own usage error, owner
+# decision on #887) end it with 1, a failure that can be carried on.
 tier_exit() {
     [ "$TIER_RC" -ne "$EXIT_NOT_ALL_RESTORED" ] || exit 1
+    [ "$TIER_RC" -ne 2 ] || exit 1
     exit "$TIER_RC"
 }
 

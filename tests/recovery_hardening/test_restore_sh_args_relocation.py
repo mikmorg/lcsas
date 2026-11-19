@@ -20,6 +20,7 @@ LCSAS_META_DISC, so restore.sh relocates exactly as it does off a disc.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import textwrap
 from collections.abc import Callable, Iterator
@@ -310,8 +311,26 @@ def test_target_flag_with_a_positional_snapshot_points_at_snapshot_flag(
 def test_snapshot_flag_needs_a_value() -> None:
     res = subprocess.run(["sh", str(RESTORE_SH), "--snapshot"],
                          capture_output=True, text=True, timeout=10)
-    assert res.returncode != 0
+    assert res.returncode == 2, res.stderr
     assert "--snapshot requires an ID" in res.stderr
+
+
+@pytest.mark.parametrize("shell", ["dash", "bash"])
+@pytest.mark.parametrize("args", [
+    ["--repo"], ["--target"], ["--snapshot", ""], ["--key"],
+    ["--check-disc"], ["--key", "/nonexistent/lcsas-key"],
+])
+def test_a_flag_without_its_value_is_a_usage_error(shell: str,
+                                                   args: list[str]) -> None:
+    """#887: restore.sh's 2 means it was called wrongly, in every shell.
+    ${2:?} exited 2 in dash but 1 in bash."""
+    if not shutil.which(shell):
+        pytest.skip(f"no {shell}")
+    res = subprocess.run([shell, str(RESTORE_SH), *args],
+                         stdin=subprocess.DEVNULL, capture_output=True,
+                         text=True, timeout=10)
+    assert res.returncode == 2, (res.returncode, res.stderr)
+    assert "restore.sh: --" in res.stderr, res.stderr
 
 
 # ── #802: --repo with one backup set ─────────────────────────────────

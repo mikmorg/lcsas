@@ -904,8 +904,9 @@ same as for restore.sh; see RECOVER.txt):
         restore.bat" (see "STOPPING AND CARRYING ON")
     77  the password was wrong, or you typed Q at the password or a
         share card
-  Any other code is the one lcsas-restore.exe stopped with; the
-  message above says how to carry on.  After any exit but 0 the
+  Any other code is the one lcsas-restore.exe stopped with (its 2,
+  a usage error, is reported as 1); the message above says how to
+  carry on.  After any exit but 0 the
   tools folder stays, so the restore can carry on.  Once a backup
   set is restored, Q at the menu or the folder question for the next
   set ends the run with 0, and the tools folder goes.

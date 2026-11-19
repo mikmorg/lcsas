@@ -287,7 +287,9 @@ def test_tier3_count_from_the_list_when_not_said(
 
 
 def test_tier3_usage_error_is_still_a_failure(tmp_path: Path) -> None:
-    """Exit 2 without a list (argparse's usage error) stays a failure."""
+    """Exit 2 without a list (argparse's usage error) stays a failure,
+    reported as restore.sh's 1: its own 2 means restore.sh was called
+    wrongly (#887)."""
     recovery = _fixture(tmp_path)
     _python(tmp_path / "stubbin", """\
         echo 'usage: standalone_restorer.py [-h]' >&2
@@ -296,7 +298,7 @@ def test_tier3_usage_error_is_still_a_failure(tmp_path: Path) -> None:
 
     res = _run(recovery, tmp_path)
 
-    assert res.returncode == 2, res.stderr
+    assert res.returncode == 1, res.stderr
     assert "[tier 3] FAILED (rc=2)" in res.stderr, res.stderr
     assert "could not be restored" not in res.stderr, res.stderr
 

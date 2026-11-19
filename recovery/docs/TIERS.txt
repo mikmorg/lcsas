@@ -475,7 +475,9 @@ TIER FALLBACK ON RUNTIME FAILURES
 
 The default cascade runs the first available tier as a subprocess (not
 ``exec``, so restore.sh's EXIT trap can still shred the temporary
-password file -- issue #363) and exits with that tier's own status.
+password file -- issue #363) and exits with that tier's own status,
+except a tier's 2 (its usage error), which restore.sh and restore.bat
+report as 1: their own 2 means the script was called wrongly (#887).
 A tier-1 crash mid-restore therefore aborts the run with no automatic
 fall-through.  This matches the bare-minimum restore story: tier 1 IS
 the restore, and it has to work.

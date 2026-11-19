@@ -206,13 +206,15 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
                           another_set=False),
     ),
     ScriptCase(
+        # A reader's own 2 is its usage error; the scripts' 2 means the
+        # script was called wrongly, so they end with 1 (owner, #887).
         name="tier 1 usage error",
         tier="1", reader_exit=ReaderExit.USAGE,
         reader_says=("usage: lcsas-restore --repo DIR ...",),
-        sh=ScriptOutcome(exit=ReaderExit.USAGE, says=_stopped(2, sh=True),
+        sh=ScriptOutcome(exit=ScriptExit.FAILED, says=_stopped(1, sh=True),
                          resume_advice=True, tools_kept=True,
                          another_set=False, log="failed-2"),
-        bat=ScriptOutcome(exit=ReaderExit.USAGE, says=_stopped(2, sh=False),
+        bat=ScriptOutcome(exit=ScriptExit.FAILED, says=_stopped(1, sh=False),
                           resume_advice=True, tools_kept=True,
                           another_set=False),
     ),
@@ -337,7 +339,7 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
         name="tier 3 usage error",
         tier="3", reader_exit=ReaderExit.USAGE,
         reader_says=("usage: standalone_restorer.py [-h]",),
-        sh=ScriptOutcome(exit=ReaderExit.USAGE,
+        sh=ScriptOutcome(exit=ScriptExit.FAILED,
                          says=r"\[tier 3\] FAILED \(rc=2\)",
                          not_says=r"could not be restored",
                          resume_advice=True, tools_kept=True,
