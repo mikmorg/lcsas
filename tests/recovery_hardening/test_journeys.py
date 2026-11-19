@@ -1,5 +1,7 @@
-"""The same restore journeys run through restore.sh and restore.bat, so the
-two cannot drift apart where the person at the keyboard would notice (#895).
+"""One list of restore journeys runs through restore.sh and restore.bat alike (#895).
+
+The scripts must not drift apart where the person at the keyboard would
+notice.
 
 Each journey of ``tests/contract/journeys.py`` runs through
 ``restore.sh`` (under a pseudoterminal) and ``restore.bat`` (under wine),
