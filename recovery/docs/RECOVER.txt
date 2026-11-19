@@ -1057,7 +1057,10 @@ warning naming the volume:
 If you hold a disc with the label named in such a warning, it may
 still be readable despite what the catalog says — check it with:
 
-    lcsas verify <label> --disc
+    lcsas verify <label> --disc --location <where it is kept>
+
+(--location is needed when the catalog records no disc of that
+volume; a passing check then records the disc there.)
 
 A restore plan generated from the rebuilt catalog will list packs
 that exist only on volumes recorded as DEPRECATED or DESTROYED
