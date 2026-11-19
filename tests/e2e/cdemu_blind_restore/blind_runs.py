@@ -135,22 +135,25 @@ def prune(
 
 
 def run_stats(transcript_path: Path) -> dict[str, object]:
-    """Cost and turns of a run, from the LAST ``result`` event of its own
+    """Cost and turns of a run, from the ``result`` events of its own
     transcript (not a grep over the run folder, which also matches the
     same keys quoted inside tool output).  ``turns`` is the CLI's
-    ``num_turns``, the counter ``--max-turns`` limits; ``tool_calls``
-    counts the agent's tool_use blocks."""
+    ``num_turns``, the counter ``--max-turns`` limits: the most of any
+    result event, because the CLI counts afresh each time it wakes for a
+    background task and the last event can say 1 after 30 calls (#889).
+    ``cost_usd`` is the last ``total_cost_usd``, a running total;
+    ``agent_result`` is the last event's subtype; ``tool_calls`` counts
+    the agent's tool_use blocks."""
     stats: dict[str, object] = {"cost_usd": None, "turns": None,
                                 "tool_calls": 0, "agent_result": None}
     try:
         t = transcript.load(transcript_path)
     except OSError:
         return stats
+    stats["cost_usd"] = t.cost_usd()
+    stats["turns"] = t.turns()
     if t.results:
-        last = t.results[-1]
-        stats["cost_usd"] = last.get("total_cost_usd")
-        stats["turns"] = last.get("num_turns")
-        stats["agent_result"] = last.get("subtype")
+        stats["agent_result"] = t.results[-1].get("subtype")
     stats["tool_calls"] = len(t.calls)
     return stats
 
