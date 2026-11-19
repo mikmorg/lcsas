@@ -393,13 +393,17 @@ layout) or several.
     lines show only while the META disc is still in its drive. On
     Windows the box always waits for ENTER. Exit codes:
     - 0: `:restore_done`.
+    - 4 (finished, some items not restored): `:restore_partial`, then
+      the questions of a finished set and exit 4; with a "pack not
+      found" row, `:restore_discs_missing`, and the tools folder stays.
     - 77 (wrong password): the "could not decrypt the repository" box,
       then exit 77 from top level (`:wrong_password`; an `exit /b`
       inside a bracketed block does not reach `cmd /c`, #384).
-    - 75 (`q` at the disc box) and any other exit for a set with no
-      `data\`: `:tier1_stopped` prints `The restore stopped before it
-      finished (code N).`, where the files are, and how to carry on,
-      then exits with that code. The tools folder stays.
+    - 75 (`q` at the disc box), 74 (the disk is full) and any other
+      exit for a set with no `data\`: `:tier1_stopped` prints `The
+      restore stopped before it finished (code N).`, where the files
+      are, and how to carry on, then exits with that code (tier 1's 2
+      as 1). The tools folder stays.
     - any other exit for a set with its own `data\`: tier 2.
 15. **Another set** (section "The restore has finished"). After
     `Restore complete.  Files restored to: <folder>`, an archive with
