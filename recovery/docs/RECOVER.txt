@@ -359,8 +359,18 @@ offered, and the tools folder is removed.  What to do:
     restored into holds an earlier restore, with a folder where this
     backup has a file or a link.  The restore never deletes a folder.
     Restore into a new, empty folder instead.
-  * A file whose data could not be read (tier 3): re-run from the
-    newest meta disc, or with another disc that has the same label.
+  * "pack not found: <id>": the data disc that holds this part of the
+    backup was not in a drive, and the restore could not ask for it
+    (it asks only on a terminal).  Insert that disc and run the
+    restore again from the meta disc, into the same folder: the files
+    already restored are skipped.
+  * "pack damaged: <id>" or "pack unreadable: <id>": the copy of that
+    part of the backup on the disc could not be read correctly (a
+    scratched or failing disc).  Run the restore again with another
+    disc that has the same label.  Nothing is left at the item's path;
+    a copy an earlier restore put there is kept as it was.
+  * "blob not in index: <id>": the backup's index does not list this
+    data.  Re-run from the newest meta disc.
   * "name refused" or "link refused": the backup holds a name or a
     link this computer cannot use.  Try another computer (for example
     Linux instead of Windows), or restore with rustic (tier 2).
@@ -391,11 +401,13 @@ btrfs / APFS / NTFS target instead.
 RETRY SAFETY (RE-RUNNING A FAILED RESTORE)
 
 A failed or interrupted restore is safe to re-run from the same
-target directory.  When tier 1 aborts mid-file (transient disc
-read failure, ENOSPC, etc.), it leaves the partially-written file
-at its ACTUAL written length -- NOT padded to the expected size.
-On the next run, the idempotent-resume check sees the short file,
-treats it as incomplete, and re-restores from scratch.
+target directory.  Tier 1 writes each file under a name ending
+.lcsas-partial and renames it only when the file is complete, so a
+file that fails (a disc that cannot be read, a full disk, q at the
+disc prompt) leaves nothing at its name, and a copy an earlier
+restore left there is kept as it was.  On the next run, the
+idempotent-resume check sees that file missing (or with another size
+or time) and restores it from scratch.
 
 This means you can re-run `sh /mnt/restore.sh ...` against the same
 target directory without worrying about partial files being
@@ -403,10 +415,10 @@ silently treated as complete.  Files that finished cleanly on the
 first pass (size matches manifest) are skipped; files that failed
 are retried.  There is no need to delete the target folder first.
 
-The Python reader (tier 3) carries on the same way.  It writes each
-file under a name ending .lcsas-partial and renames it only when the
-file is complete.  On the next run it keeps every file that already
-has the size and time the backup gives it, and restores the rest.
+The Python reader (tier 3) carries on the same way, with the same
+.lcsas-partial names.  On the next run it keeps every file that
+already has the size and time the backup gives it, and restores the
+rest.
 
 The first restore into a folder drops a hidden marker
 (.lcsas-restore-marker) in it, naming the backup set restored there.
@@ -713,12 +725,14 @@ EXIT CODES
     0  -- success (restored, or listed); special files or links this
           computer cannot hold may be listed in RESTORE_FAILURES.txt
           (see "ITEMS NOT RESTORED")
-    1  -- failed (missing file, integrity failure, a pack on no disc
-          it can see)
+    1  -- failed (missing file, a file it cannot write, a tree it
+          cannot parse)
     2  -- usage error
     4  -- finished with errors: some items were not restored (listed
-          in RESTORE_FAILURES.txt); everything else was.  restore.sh
-          and restore.bat use the same code
+          in RESTORE_FAILURES.txt); everything else was.  This
+          includes data it cannot read: a pack on no disc it can see
+          (with no disc prompt), a damaged or unreadable pack.
+          restore.sh and restore.bat use the same code
     74 -- the disk you restore to is full; free some space, or pick a
           bigger disk, then run the same command again (files already
           restored are kept)

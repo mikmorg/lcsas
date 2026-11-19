@@ -325,6 +325,18 @@ def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
     )
 
 
+#: The attribute a blob-read error carries its RESTORE_FAILURES.txt
+#: reason in (#909).  The error itself, its class and its message are
+#: unchanged, so every ``except`` and every printed line stay as they were.
+_REASON_ATTR = "lcsas_reason"
+
+
+def _with_reason(exc: BaseException, reason: str) -> BaseException:
+    """*exc*, carrying *reason* (the row text tier 1 writes too, #909)."""
+    setattr(exc, _REASON_ATTR, reason)
+    return exc
+
+
 class _NodeFailed(Exception):  # noqa: N818 — internal control-flow sentinel, not a public error
     """Internal: a single file node could not be restored.
 
@@ -1465,7 +1477,10 @@ class PurePythonRestorer:
             return cached  # a tree the count pass read and checked (#602)
         assert self._blob_index is not None
         if blob_id not in self._blob_index:
-            raise KeyError(f"Blob not found in index: {blob_id}")
+            raise _with_reason(
+                KeyError(f"Blob not found in index: {blob_id}"),
+                f"blob not in index: {blob_id}",
+            )
 
         loc = self._blob_index[blob_id]
         if not self._index_packs_set:
@@ -1474,10 +1489,34 @@ class PurePythonRestorer:
                 b.pack_id for b in self._blob_index.values()
             )
             self._index_packs_set = True
-        encrypted = self._search.read_pack_range(
-            loc.pack_id, loc.offset, loc.length,
-        )
+        try:
+            encrypted = self._search.read_pack_range(
+                loc.pack_id, loc.offset, loc.length,
+            )
+        except FileNotFoundError as exc:
+            # A copy that was found but could not be read is set aside
+            # and the search ends here too: it is unreadable, not missing.
+            why = ("pack unreadable"
+                   if self._search.pack_was_unreadable(loc.pack_id)
+                   else "pack not found")
+            _with_reason(exc, f"{why}: {loc.pack_id}")
+            raise
+        except OSError as exc:
+            _with_reason(exc, f"pack unreadable: {loc.pack_id}")
+            raise
+        try:
+            return self._decrypt_and_decode(blob_id, loc, encrypted)
+        except IntegrityError as exc:
+            # A short pack, a MAC that fails, a bad zstd frame and a
+            # wrong content hash all say the same: the stored bytes are
+            # not what was written.
+            _with_reason(exc, f"pack damaged: {loc.pack_id}")
+            raise
 
+    def _decrypt_and_decode(
+        self, blob_id: str, loc: BlobLocation, encrypted: bytes,
+    ) -> bytes:
+        """Decrypt, decompress and hash-check the bytes of one blob."""
         plaintext = self._decrypt(encrypted)
         try:
             return self._decode_blob(blob_id, loc, plaintext)
@@ -1863,8 +1902,16 @@ class PurePythonRestorer:
     def _record_failure(
         self, path: Path, blob_id: str, exc: BaseException
     ) -> None:
-        """Record one per-node failure for the manifest + summary."""
-        row = (str(path), blob_id, f"{type(exc).__name__}: {exc}")
+        """Record one per-node failure for the manifest + summary.
+
+        A blob that cannot be read gets the reason tier 1 gives it
+        (#909: ``pack not found``, ``pack damaged``, ``pack unreadable``
+        or ``blob not in index``, then the id); any other error its
+        class and message."""
+        reason = getattr(exc, _REASON_ATTR, None)
+        if not isinstance(reason, str):
+            reason = f"{type(exc).__name__}: {exc}"
+        row = (str(path), blob_id, reason)
         self._failures.append(row)
         self._rows.append(row)
         _log(f"FAILED (continuing): {path} — {exc}")

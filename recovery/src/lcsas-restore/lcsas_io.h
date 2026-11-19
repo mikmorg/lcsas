@@ -47,6 +47,17 @@ int lcsas_write_exact(int fd, const void *buf, size_t len);
 int lcsas_create_file(const char *path, unsigned int mode);
 
 /*
+ * Issue #909 -- move the finished file `from` (a "<name>.lcsas-partial"
+ * file) onto `to`, replacing a file an earlier restore left there in one
+ * step, so the older copy is never lost if the move fails.  On Windows
+ * the partial file is created writable (so a failed one can be
+ * removed), and the file is made read-only here when `mode` has no
+ * owner-write bit; POSIX ignores `mode` (the caller has set it).
+ * Returns 0, or -1 with errno set.
+ */
+int lcsas_replace_file(const char *from, const char *to, unsigned int mode);
+
+/*
  * Issue #784 -- what is at `path` now, without following a symlink in
  * its last component: LCSAS_ENTRY_NONE (nothing, or it cannot be
  * looked at), _DIR (a real folder), _LINK (a symlink; on Windows any

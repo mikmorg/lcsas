@@ -1134,7 +1134,7 @@ lcsas_repo_read_blob(const char *repo_path,
 
     if (!found) {
         fprintf(stderr, "pack not found: %s\n", hex);
-        return -1;
+        return LCSAS_REPO_ERR_NOT_FOUND;
     }
 
     fd = open(path, O_RDONLY | O_BINARY);
@@ -1155,7 +1155,7 @@ lcsas_repo_read_blob(const char *repo_path,
                     "(pack=%s, path=%s, errno=%d)\n",
                     hex, path, saved_errno);
         }
-        return -1;
+        return LCSAS_REPO_ERR_UNREADABLE;
     }
     /* Issue #220 — surface a clear diagnostic when the on-disc pack
      * is shorter than what the index says we need.  Without this the
@@ -1167,7 +1167,7 @@ lcsas_repo_read_blob(const char *repo_path,
     /* Defensive: parse_blob_entry range-checks length, but read_blob is
      * also reachable with caller-supplied locs.  A non-positive length
      * would make the casts to size_t below wrap into a wild malloc. */
-    if (loc->length <= 0) { close(fd); return -1; }
+    if (loc->length <= 0) { close(fd); return LCSAS_REPO_ERR_DAMAGED; }
     {
         struct stat fst;
         long long need_end = (long long)loc->offset + (long long)loc->length;
@@ -1177,7 +1177,7 @@ lcsas_repo_read_blob(const char *repo_path,
                     "(size=%lld, need offset+length=%lld)\n",
                     path, (long long)fst.st_size, need_end);
             close(fd);
-            return -1;
+            return LCSAS_REPO_ERR_DAMAGED;
         }
     }
     enc = (unsigned char *)malloc((size_t)loc->length);
@@ -1205,14 +1205,14 @@ lcsas_repo_read_blob(const char *repo_path,
                     "at offset %lld length %lld\n",
                     path, (long long)loc->offset, (long long)loc->length);
         }
-        close(fd); free(enc); return -1;
+        close(fd); free(enc); return LCSAS_REPO_ERR_UNREADABLE;
     }
     close(fd);
 
     pt = (unsigned char *)malloc((size_t)loc->length);
     if (!pt) { free(enc); return -1; }
     if (lcsas_repo_decrypt(mk, enc, (size_t)loc->length, pt, &pt_len) != 0) {
-        free(enc); free(pt); return -1;
+        free(enc); free(pt); return LCSAS_REPO_ERR_DAMAGED;
     }
     free(enc);
 
@@ -1254,7 +1254,9 @@ lcsas_repo_read_blob(const char *repo_path,
         if (dsz <= 0 || dsz > (long)(256 * 1024 * 1024)) {
             fprintf(stderr, "ERROR: bad zstd blob size %ld\n", dsz);
             free(pt);
-            return -1;
+            /* A frame with no size is damage; a blob over 256 MiB is
+             * more than tier 1 holds in memory (tier 2 can read it). */
+            return dsz <= 0 ? LCSAS_REPO_ERR_DAMAGED : -1;
         }
         dec = (unsigned char *)malloc((size_t)dsz);
         if (!dec) { free(pt); return -1; }
@@ -1262,7 +1264,7 @@ lcsas_repo_read_blob(const char *repo_path,
         if (got < 0) {
             fprintf(stderr, "ERROR: zstd blob decompression failed\n");
             free(dec); free(pt);
-            return -1;
+            return LCSAS_REPO_ERR_DAMAGED;
         }
         free(pt);
         pt = dec;
@@ -1273,7 +1275,7 @@ lcsas_repo_read_blob(const char *repo_path,
     if (lcsas_ct_memcmp(digest, loc->id, 32) != 0) {
         fprintf(stderr, "blob hash mismatch\n");
         free(pt);
-        return -1;
+        return LCSAS_REPO_ERR_DAMAGED;
     }
 
     *out = pt;

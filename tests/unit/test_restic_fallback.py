@@ -23,6 +23,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -3092,7 +3093,8 @@ class TestTolerantTraversal:
         assert r.failures == 1
         manifest = (target / "RESTORE_FAILURES.txt").read_text()
         assert "b.txt" in manifest
-        assert "IntegrityError" in manifest
+        # #909: the reason tier 1 gives too, with the pack's id.
+        assert re.search(r"b\.txt\tpack damaged: [0-9a-f]{64}\t", manifest)
 
     def test_restore_continues_past_missing_index_blob(
         self, tmp_path, password_file
@@ -3115,7 +3117,38 @@ class TestTolerantTraversal:
         assert r.failures == 1
         manifest = (target / "RESTORE_FAILURES.txt").read_text()
         assert "b.txt" in manifest
-        assert "KeyError" in manifest
+        # #909: the reason tier 1 gives too, with the blob's id.
+        assert re.search(r"b\.txt\tblob not in index: [0-9a-f]{64}\t",
+                         manifest)
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                        reason="needs a non-root POSIX user (DAC)")
+    def test_pack_found_but_unreadable_is_listed_as_unreadable(
+        self, tmp_path, password_file, capsys
+    ):
+        # #909: a copy of the pack is there but cannot be read (mode
+        # 000).  The search sets it aside and ends "not found", but the
+        # row says "pack unreadable", as tier 1's does; the on-screen
+        # message is still "Pack file not found".
+        files = {"a.txt": b"alpha\n"}
+        repo = _build_multifile_repo(tmp_path, files=files)
+        packs = [p for p in (repo / "data").rglob("*") if p.is_file()]
+        assert packs
+        for p in packs:
+            p.chmod(0)
+        target = tmp_path / "out"
+        try:
+            r = PurePythonRestorer(repo, password_file=password_file,
+                                   interactive=False)
+            r.restore(target=target)
+        finally:
+            for p in packs:
+                p.chmod(0o600)
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        assert re.search(r"\tpack unreadable: [0-9a-f]{64}\t", manifest), (
+            manifest)
+        assert "pack not found" not in manifest
+        assert "Pack file not found" in capsys.readouterr().err
 
     def test_partial_file_not_left_behind(self, tmp_path, password_file):
         # A 2-chunk file whose SECOND chunk is corrupt: the first chunk

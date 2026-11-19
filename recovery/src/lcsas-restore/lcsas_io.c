@@ -757,3 +757,39 @@ lcsas_w_utf8_argv(int *argc, char ***argv)
     return 0;
 }
 #endif  /* _WIN32 */
+
+#include <stdio.h>    /* rename (POSIX; Windows has it from posix_compat.h) */
+
+/* Issue #909 -- see lcsas_io.h. */
+int
+lcsas_replace_file(const char *from, const char *to, unsigned int mode)
+{
+#ifdef _WIN32
+    /* rename() will not replace a file that is there on Windows, and
+     * removing it first would lose the older copy if the move then
+     * failed.  MoveFileExW replaces it in one step. */
+    BOOL ok;
+    wchar_t *wf = lcsas_w_path(from);
+    wchar_t *wt;
+    if (!wf) return -1;
+    wt = lcsas_w_path(to);
+    if (!wt) { free(wf); return -1; }
+    ok = MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING);
+    if (ok && !(mode & 0200)) {
+        DWORD a = GetFileAttributesW(wt);
+        if (a != INVALID_FILE_ATTRIBUTES) {
+            (void)SetFileAttributesW(wt, a | FILE_ATTRIBUTE_READONLY);
+        }
+    }
+    free(wf);
+    free(wt);
+    if (!ok) {
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
+#else
+    (void)mode;
+    return rename(from, to);
+#endif
+}

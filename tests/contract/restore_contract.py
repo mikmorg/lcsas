@@ -153,6 +153,9 @@ class Faults:
     #: Paths (likewise) whose pack has one byte flipped in the middle of
     #: that blob, so its MAC fails, for the judged run.
     corrupted: tuple[bytes, ...] = ()
+    #: Paths (likewise) whose pack is there but mode 000 (cannot be
+    #: opened by a user who is not root) for the judged run.
+    unreadable: tuple[bytes, ...] = ()
     #: Run with the disc prompt on, and this on stdin.
     answers: bytes | None = None
     #: The target is a 1 MiB tmpfs (needs passwordless ``sudo mount``).
@@ -229,10 +232,11 @@ class Case:
 
 _DONE = r"restore complete|Restore complete"
 _NOT_ALL = r"finished with errors|could NOT be restored"
-#: RESTORE_FAILURES.txt reasons of tier 3 (prefixes: a pack id and the
-#: repository's path follow the first).
-_PACK_NOT_FOUND = "FileNotFoundError: Pack file not found: "
-_MAC_FAILED = "IntegrityError: MAC verification failed"
+#: RESTORE_FAILURES.txt reasons (#909: the same text from both readers;
+#: the 64-hex pack id follows).
+_PACK_NOT_FOUND = "pack not found: "
+_PACK_DAMAGED = "pack damaged: "
+_PACK_UNREADABLE = "pack unreadable: "
 
 # #781: one name of each class rustic stores escaped (quote, backslash,
 # control characters, bytes that are not UTF-8), and a folder and a
@@ -472,7 +476,9 @@ CASES: list[Case] = [
         # Bytes zstd cannot shrink below the 1 MiB tmpfs.
         tree={b"big.bin": File(random.Random(886).randbytes(4 << 20))},
         faults=Faults(target_full=True),
-        expect=Outcome(exit=ReaderExit.DISK_FULL, restored=ANY,
+        # #909: neither reader leaves the part-written file (or its
+        # .lcsas-partial) behind: removing it gives the space back.
+        expect=Outcome(exit=ReaderExit.DISK_FULL, restored={},
                        summary=r"is full"),
         replaces="new (tier 1 alone: test_tier1_target_full.py)",
     ),
@@ -481,19 +487,13 @@ CASES: list[Case] = [
         before=_MISSING_PACK_BEFORE,
         tree=_MISSING_PACK_TREE,
         faults=Faults(missing=(b"b",), answers=b"q\n"),
+        # #909: neither reader leaves the file it was writing (tier 1 left
+        # it empty, mode 0600, before).  Both restore it on the next run.
         expect=Outcome(
             exit=ReaderExit.READER_QUIT,
             restored={b"a": File(b"alpha\n")},
             summary=r"(?i)run the same command again|stopped",
         ),
-        differs={"tier1": Outcome(
-            exit=ReaderExit.READER_QUIT,
-            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o600)},
-            summary=r"run the same command again",
-        )},
-        why="tier 1 leaves the file it was writing when 'q' was typed as "
-            "an empty file (mode 0600); tier 3 leaves nothing there.  Both "
-            "restore it on the next run (its size is wrong).",
         replaces="new (#658; test_restore_sh_driver.py::"
                  "test_tier1_done_and_quit_code_are_real, the 75)",
     ),
@@ -502,91 +502,62 @@ CASES: list[Case] = [
         before=_MISSING_PACK_BEFORE,
         tree=_MISSING_PACK_TREE,
         faults=Faults(missing=(b"b",)),
+        # #909: tier 1 stopped at the first pack it could not find
+        # (exit 1, nothing listed, an empty file left).  Now both list
+        # the file, restore the rest and exit 4.
         expect=Outcome(
-            exit=ReaderExit.FAILED,
-            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o600)},
-            summary=r"tree restore failed",
-        ),
-        differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
             restored={b"a": File(b"alpha\n")},
-            failures=(("b", "FileNotFoundError: Pack file not found"),),
+            failures=(("b", _PACK_NOT_FOUND),),
             summary=_NOT_ALL,
-        )},
-        why="with no disc prompt, tier 1 stops at the first pack it cannot "
-            "find (exit 1, nothing listed, an empty file left); tier 3 "
-            "lists the file in RESTORE_FAILURES.txt, restores the rest and "
-            "exits 4.",
+        ),
         replaces="new",
     ),
-    # #909: what each reader does TODAY when data it needs is missing or
-    # unreadable and there is no disc prompt.  Pinned before the tier-1
-    # change, so the change can be shown to move exactly these rows.
+    # #909: data a reader needs is missing or unreadable and there is no
+    # disc prompt.  These rows were pinned with each reader's outcome
+    # before the tier-1 change (tier 1 stopped with exit 1); since it,
+    # both readers list the item with the same reason, leave nothing at
+    # its path, keep an older copy, restore the rest and exit 4.
     Case(
         name="file in several packs, a later one missing",
         repo="builder", pack_per_blob=True,
         tree=_builder_spread_file_tree(),
         faults=Faults(missing=(b"big#1",)),       # "part two" only
+        # Nothing of big is left (tier 1 left part one, mode 0600).
         expect=Outcome(
-            exit=ReaderExit.FAILED,
-            restored={b"a": File(b"alpha\n"),
-                      b"big": File(b"big, part one\n", 0o600)},
-            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*file restore "
-                    r"failed: \S+/big\b.*tree restore failed",
-        ),
-        differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
             restored={b"a": File(b"alpha\n"), b"z": File(b"zed\n")},
             failures=(("big", _PACK_NOT_FOUND),),
             summary=_NOT_ALL,
-        )},
-        why="tier 1 stops at the missing pack: it leaves the part of the "
-            "file it wrote before it (mode 0600), lists nothing and does not "
-            "restore what comes after (z), exit 1; tier 3 lists the file, "
-            "leaves nothing at its path, restores the rest and exits 4.",
+        ),
     ),
     Case(
         name="the tree pack of a folder missing",
         repo="builder", pack_per_blob=True,
         tree=_builder_subfolder_tree(),
         faults=Faults(missing=(b"sub",)),         # sub's tree blob
+        # The folder is made empty and listed (one row, none for what is
+        # in it); z after it is restored.
         expect=Outcome(
-            exit=ReaderExit.FAILED,
-            restored={b"a": File(b"alpha\n"), b"sub": Dir()},
-            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*"
-                    r"tree restore failed",
-        ),
-        differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
             restored={b"a": File(b"alpha\n"), b"sub": Dir(),
                       b"z": File(b"zed\n")},
             failures=(("sub", _PACK_NOT_FOUND),),
             summary=_NOT_ALL,
-        )},
-        why="both leave the folder empty; tier 1 stops there (exit 1, "
-            "nothing listed, z not restored); tier 3 lists the folder (one "
-            "row, none for what is in it), restores the rest and exits 4.",
+        ),
     ),
     Case(
         name="every data pack missing",
         tree={b"a": File(b"alpha\n"), b"d/b": File(b"beta\n" * 50),
               b"empty": File(b"")},
         faults=Faults(missing=(b"*",)),
+        # Each file with data is listed; the folder and the empty file
+        # are restored.
         expect=Outcome(
-            exit=ReaderExit.FAILED,
-            restored={b"a": File(b"", 0o600)},
-            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*file restore "
-                    r"failed: \S+/a\b.*tree restore failed",
-        ),
-        differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
             failures=(("a", _PACK_NOT_FOUND), ("d/b", _PACK_NOT_FOUND)),
             summary=_NOT_ALL,
-        )},
-        why="tier 1 stops at the first file (left empty, mode 0600), so "
-            "not even the empty file or the folder is restored, exit 1; "
-            "tier 3 lists each file that has data, restores the folder and "
-            "the empty file and exits 4.",
+        ),
     ),
     Case(
         name="older restore there, the newer pack missing",
@@ -595,43 +566,28 @@ CASES: list[Case] = [
         tree={b"a": File(b"alpha\n"),
               b"b": File(b"b, as backed up later: its pack is missing\n")},
         faults=Faults(first_run="before", missing=(b"b",)),
+        # The earlier file is kept as it was (tier 1 emptied it).
         expect=Outcome(
-            exit=ReaderExit.FAILED,
-            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o640)},
-            summary=r"(?s)pack not found: [0-9a-f]{64}\n.*file restore "
-                    r"failed: \S+/b\b.*tree restore failed",
-        ),
-        differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
             restored={b"a": File(b"alpha\n"),
                       b"b": File(b"b, as first backed up\n", 0o640)},
             failures=(("b", _PACK_NOT_FOUND),),
             summary=_NOT_ALL,
-        )},
-        why="tier 1 empties the file the earlier restore left (same file, "
-            "its old mode kept: the old content is lost) and stops, exit 1; "
-            "tier 3 leaves the earlier file as it was, lists it and exits 4.",
+        ),
     ),
     Case(
         name="pack cut short",
         before=_MISSING_PACK_BEFORE,
         tree=_MISSING_PACK_TREE,
         faults=Faults(truncated=(b"b",)),
+        # "pack damaged": tier 3 cannot tell a short pack from a corrupt
+        # one, so the row does not either (tier 1's own line still says
+        # "pack truncated").
         expect=Outcome(
-            exit=ReaderExit.FAILED,
-            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o600)},
-            summary=r"(?s)pack truncated: .*file restore failed: \S+/b\b"
-                    r".*tree restore failed",
-        ),
-        differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
-            failures=(("b", _MAC_FAILED),),
+            failures=(("b", _PACK_DAMAGED),),
             summary=_NOT_ALL,
-        )},
-        why="tier 1 names the short pack, leaves an empty file (mode 0600), "
-            "lists nothing and stops, exit 1; tier 3 reads the short blob, "
-            "lists the file as a MAC failure (it does not say the pack is "
-            "short), restores the rest and exits 4.",
+        ),
     ),
     Case(
         name="blob fails its MAC",
@@ -639,21 +595,25 @@ CASES: list[Case] = [
         tree=_MISSING_PACK_TREE,
         faults=Faults(corrupted=(b"b",)),
         expect=Outcome(
-            exit=ReaderExit.FAILED,
-            restored={b"a": File(b"alpha\n"), b"b": File(b"", 0o600)},
-            # The file is named with no cause: no pack, no "MAC".
-            summary=r"(?is)\A(?!.*(?:pack (?:truncated|not found)|"
-                    r"MAC (?:fail|verif|mismatch))).*"
-                    r"file restore failed: \S+/b\b.*tree restore failed",
-        ),
-        differs={"tier3": Outcome(
             exit=ReaderExit.NOT_ALL_RESTORED,
-            failures=(("b", _MAC_FAILED),),
+            failures=(("b", _PACK_DAMAGED),),
             summary=_NOT_ALL,
-        )},
-        why="tier 1 leaves an empty file (mode 0600), prints the file's "
-            "name with no cause, lists nothing and stops, exit 1; tier 3 "
-            "lists the file as a MAC failure, restores the rest and exits 4.",
+        ),
+    ),
+    Case(
+        name="pack there but unreadable",
+        needs="user",              # root reads a mode-000 file
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(unreadable=(b"b",)),
+        # Tier 1 finds the copy and cannot open it; tier 3 sets it aside
+        # and finds no other: both say "pack unreadable", not "not found".
+        expect=Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            failures=(("b", _PACK_UNREADABLE),),
+            summary=_NOT_ALL,
+        ),
+        replaces="new (#909)",
     ),
     _disc_prompt("one volume", (Vol(_V1),), (_V1,)),
     _disc_prompt("two volumes, newest first", (Vol(_V1), Vol(_V2)),
@@ -710,8 +670,9 @@ class Built:
     snapshot_before: str | None
     missing_packs: list[str]  # pack ids the judged run must not find
     expected_tree: dict[bytes, Entry] | None   # what was backed up
-    #: (pack id, byte offset, "truncated" | "corrupted"): the pack is cut
-    #: at the offset, or has the byte there flipped, for the judged run.
+    #: (pack id, byte offset, "truncated" | "corrupted" | "unreadable"):
+    #: the pack is cut at the offset, has the byte there flipped, or is
+    #: made mode 000, for the judged run.
     damaged_packs: list[tuple[str, int, str]] = field(default_factory=list)
 
 
@@ -819,7 +780,8 @@ def build(case: Case, work: Path) -> Built:
             path, _, nth = os.fsdecode(spec).partition("#")
             packs = layout[path]
             gone += [packs[int(nth)]] if nth else packs
-        assert not (case.faults.truncated or case.faults.corrupted), \
+        assert not (case.faults.truncated or case.faults.corrupted
+                    or case.faults.unreadable), \
             "pack damage is for rustic repositories"
         return Built(repo, None, outside, None, gone, None)
 
@@ -845,7 +807,7 @@ def build(case: Case, work: Path) -> Built:
     faults = case.faults
     index = (_index(repo, pwfile)
              if faults.missing or faults.truncated or faults.corrupted
-             else {})
+             or faults.unreadable else {})
     missing: list[str] = []
     if faults.missing:
         if faults.missing == (b"*",):
@@ -862,7 +824,8 @@ def build(case: Case, work: Path) -> Built:
         assert missing, f"{case.name}: no pack to take away"
     damaged: list[tuple[str, int, str]] = []
     for how, paths in (("truncated", faults.truncated),
-                       ("corrupted", faults.corrupted)):
+                       ("corrupted", faults.corrupted),
+                       ("unreadable", faults.unreadable)):
         for path in paths:
             want_id = blob_id(path)
             hits = [(p, off, length) for p, blobs in index.items()
@@ -1021,6 +984,9 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
         for pack in built.missing_packs:
             (repo / "data" / pack[:2] / pack).unlink()
         for pack, at, how in built.damaged_packs:
+            if how == "unreadable":
+                os.chmod(repo / "data" / pack[:2] / pack, 0)
+                continue
             with open(repo / "data" / pack[:2] / pack, "r+b") as f:
                 if how == "truncated":
                     f.truncate(at)

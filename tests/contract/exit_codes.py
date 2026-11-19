@@ -17,7 +17,7 @@ class ReaderExit(enum.IntEnum):
     """
 
     OK = 0
-    FAILED = 1               # a damaged disc, a missing pack: run again
+    FAILED = 1               # the walk stopped early: run again
     USAGE = 2                # a usage error (argparse's 2 in tier 3)
     NOT_ALL_RESTORED = 4     # finished; items listed in RESTORE_FAILURES.txt
     DISK_FULL = 74           # the target file system is full

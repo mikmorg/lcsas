@@ -68,8 +68,18 @@ void lcsas_progress_finish(const lcsas_progress *p);
  * LCSAS_TREE_INCOMPLETE when the walk finished but one or
  * more nodes were not restored because of an error (issues #781,
  * #783): a name that cannot be decoded or that this system cannot
- * hold, a link target that cannot be used, an unknown node type, or a
- * folder where the snapshot has another kind of item (#784).
+ * hold, a link target that cannot be used, an unknown node type, a
+ * folder where the snapshot has another kind of item (#784), or data
+ * that cannot be read (#909): a file whose blob is not in the index or
+ * whose pack is not found, damaged or unreadable ("pack not found:
+ * <pack id>" and so on, the reasons tier 3 gives), or a folder whose
+ * listing cannot be read (the folder is left empty; for the root tree,
+ * the target itself is listed).  'q' at the disc prompt (the locator's
+ * reader_quit) still stops the walk with -1, and main exits 75.
+ *
+ * Each file is written to "<name>.lcsas-partial" and moved onto its
+ * name once complete, so a file that fails leaves nothing behind and an
+ * older copy from an earlier restore is kept (#909).
  *
  * A special file (FIFO, socket, device) this system will not create,
  * and a symlink the target file system cannot hold, are not errors:

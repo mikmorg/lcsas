@@ -27,10 +27,32 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static int fails = 0;
+
+/* #909: does dir/name hold `text`?  open/read, not stdio, so it adds no
+ * allocation to the fault sweep's count. */
+static int
+file_has(const char *dir, const char *name, const char *text)
+{
+    static char buf[8192];
+    char path[1024];
+    int fd;
+    long n, got = 0;
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    while (got < (long)sizeof buf - 1
+            && (n = (long)read(fd, buf + got, sizeof buf - 1 - got)) > 0) {
+        got += n;
+    }
+    close(fd);
+    buf[got] = '\0';
+    return strstr(buf, text) != NULL;
+}
 
 /* Fixture-pinned values (regenerate gen_fixture.py changes these). */
 #define FIXTURE_PASSWORD       "test"
@@ -890,9 +912,12 @@ main(void)
                     repo, &mk, &ix, FIXTURE_BAD_HEX_TREE_HEX, tdir, tdir,
                     NULL, NULL
                 );
-                if (rc2 == 0) {
+                /* #909: listed as not in the index; the walk ends
+                 * INCOMPLETE (exit 4). */
+                if (rc2 != LCSAS_TREE_INCOMPLETE) {
                     fprintf(stderr,
-                            "FAIL: bad-hex tree should fail but rc=0\n");
+                            "FAIL: bad-hex tree rc=%d, want INCOMPLETE\n",
+                            rc2);
                     fails++;
                 }
                 {
@@ -905,8 +930,8 @@ main(void)
 
         /* Tree blob whose content references a blob in a pack that
          * does NOT exist on disk.  restore_file_node calls
-         * lcsas_repo_read_blob which can't find the pack and returns
-         * -1 → tree.c:157 (rc = -1; break). */
+         * lcsas_repo_read_blob which can't find the pack (#909: the
+         * file is listed as "pack not found", the walk ends INCOMPLETE). */
         {
             char tdir[] = "/tmp/lcsas_test_miss_content_XXXXXX";
             if (mkdtemp(tdir)) {
@@ -914,9 +939,14 @@ main(void)
                     repo, &mk, &ix, FIXTURE_MISSING_CONTENT_TREE_HEX,
                     tdir, tdir, NULL, NULL
                 );
-                if (rc2 == 0) {
+                if (rc2 != LCSAS_TREE_INCOMPLETE
+                        || !file_has(tdir, "RESTORE_FAILURES.txt",
+                                     "/needs_missing_blob.txt\tpack not "
+                                     "found: ffffffffffffffffffffffffffffffff"
+                                     "ffffffffffffffffffffffffffffffff\t")) {
                     fprintf(stderr,
-                            "FAIL: missing-content tree should fail rc=0\n");
+                            "FAIL: missing-content tree rc=%d, want "
+                            "INCOMPLETE and a 'pack not found' row\n", rc2);
                     fails++;
                 }
                 {
@@ -928,8 +958,9 @@ main(void)
         }
 
         /* Tree blob whose own pack does NOT exist on disk.  The
-         * lcsas_repo_read_blob for the tree blob itself fails →
-         * tree.c:201 (return -1) and repo.c:833-834 ("pack not found"). */
+         * lcsas_repo_read_blob for the tree blob itself fails ("pack
+         * not found"): #909, the target is listed, the walk ends
+         * INCOMPLETE. */
         {
             char tdir[] = "/tmp/lcsas_test_miss_tree_XXXXXX";
             if (mkdtemp(tdir)) {
@@ -937,9 +968,12 @@ main(void)
                     repo, &mk, &ix, FIXTURE_MISSING_TREE_HEX,
                     tdir, tdir, NULL, NULL
                 );
-                if (rc2 == 0) {
+                if (rc2 != LCSAS_TREE_INCOMPLETE
+                        || !file_has(tdir, "RESTORE_FAILURES.txt",
+                                     "\tpack not found: ffffffffffffffff")) {
                     fprintf(stderr,
-                            "FAIL: missing-tree blob should fail rc=0\n");
+                            "FAIL: missing-tree blob rc=%d, want INCOMPLETE "
+                            "and a 'pack not found' row\n", rc2);
                     fails++;
                 }
                 {
@@ -1347,8 +1381,9 @@ main(void)
             bloc.uncompressed_length = -1;
             blob = NULL;
             if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
-                                     &blob, &blob_len) == 0) {
-                fprintf(stderr, "FAIL: 401-A garbage pack decrypted\n");
+                                     &blob, &blob_len)
+                    != LCSAS_REPO_ERR_DAMAGED) {   /* #909 */
+                fprintf(stderr, "FAIL: 401-A garbage pack not DAMAGED\n");
                 fails++; free(blob);
             }
 
@@ -1369,8 +1404,8 @@ main(void)
                         "[test_repo] 401-A expecting bad-size ERROR below:\n");
                 blob = NULL;
                 if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
-                                         &blob, &blob_len) == 0) {
-                    fprintf(stderr, "FAIL: 401-A >256MiB size accepted\n");
+                                         &blob, &blob_len) != -1) {
+                    fprintf(stderr, "FAIL: 401-A >256MiB size not -1\n");
                     fails++; free(blob);
                 }
 
@@ -1380,8 +1415,9 @@ main(void)
                         "[test_repo] 401-A expecting decode ERROR below:\n");
                 blob = NULL;
                 if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
-                                         &blob, &blob_len) == 0) {
-                    fprintf(stderr, "FAIL: 401-A non-zstd decompressed\n");
+                                         &blob, &blob_len)
+                        != LCSAS_REPO_ERR_DAMAGED) {
+                    fprintf(stderr, "FAIL: 401-A non-zstd not DAMAGED\n");
                     fails++; free(blob);
                 }
 
@@ -1391,8 +1427,9 @@ main(void)
                         "[test_repo] 401-A expecting hash mismatch below:\n");
                 blob = NULL;
                 if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
-                                         &blob, &blob_len) == 0) {
-                    fprintf(stderr, "FAIL: 401-A wrong-id blob accepted\n");
+                                         &blob, &blob_len)
+                        != LCSAS_REPO_ERR_DAMAGED) {
+                    fprintf(stderr, "FAIL: 401-A wrong-id blob not DAMAGED\n");
                     fails++; free(blob);
                 }
             }
@@ -1435,9 +1472,10 @@ main(void)
                         "[test_repo] 401-C expecting disc-read ERROR below:\n");
                 blob = NULL;
                 if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
-                                         &blob, &blob_len) == 0) {
+                                         &blob, &blob_len)
+                        != LCSAS_REPO_ERR_UNREADABLE) {   /* #909 */
                     fprintf(stderr,
-                            "FAIL: 401-C unreadable pack read anyway\n");
+                            "FAIL: 401-C unreadable pack not UNREADABLE\n");
                     fails++; free(blob);
                 }
                 chmod(path, 0600);   /* let tmp-cleanup tools remove it */
@@ -1944,6 +1982,51 @@ main(void)
             }
             snprintf(ipath, sizeof ipath, "rm -rf %s", tmp);
             (void)system(ipath);
+        }
+    }
+
+    /* ── #909: why a blob could not be read, for the per-item row ────
+     * No copy of the pack: NOT_FOUND.  A pack shorter than the index
+     * says: DAMAGED.  (MAC, zstd and hash failures are DAMAGED and an
+     * unopenable pack UNREADABLE: #401-A/C above.)  Last in main, so
+     * the fault sweep's first-100 window is unchanged. */
+    {
+        char tmp[] = "/tmp/lcsas_909_codes_XXXXXX";
+        char dir[1200], path[1400], hexname[65];
+        lcsas_master_key mk;
+        lcsas_blob_loc bloc;
+        unsigned char *blob = NULL;
+        size_t blob_len = 0;
+        int rc;
+        memset(&mk, 0, sizeof mk);
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 909 mkdtemp\n"); fails++;
+        } else {
+            FILE *f;
+            memset(hexname, 'd', 64); hexname[64] = '\0';
+            memset(&bloc, 0, sizeof bloc);
+            lcsas_hex_decode(hexname, 32, bloc.pack_id);
+            bloc.offset = 0; bloc.length = 64;
+            bloc.uncompressed_length = -1;
+            rc = lcsas_repo_read_blob(tmp, &mk, &bloc, NULL, &blob, &blob_len);
+            if (rc != LCSAS_REPO_ERR_NOT_FOUND) {
+                fprintf(stderr, "FAIL: 909 no pack: rc=%d, want NOT_FOUND\n",
+                        rc);
+                fails++;
+            }
+            snprintf(dir, sizeof dir, "%s/data", tmp);    mkdir(dir, 0700);
+            snprintf(dir, sizeof dir, "%s/data/dd", tmp); mkdir(dir, 0700);
+            snprintf(path, sizeof path, "%s/data/dd/%s", tmp, hexname);
+            f = fopen(path, "wb");
+            if (f) { fwrite("short", 1, 5, f); fclose(f); }
+            rc = lcsas_repo_read_blob(tmp, &mk, &bloc, NULL, &blob, &blob_len);
+            if (rc != LCSAS_REPO_ERR_DAMAGED) {
+                fprintf(stderr, "FAIL: 909 short pack: rc=%d, want DAMAGED\n",
+                        rc);
+                fails++;
+            }
+            snprintf(path, sizeof path, "rm -rf %s", tmp);
+            (void)system(path);
         }
     }
 

@@ -197,7 +197,12 @@ NEW CLI FLAGS
   --interactive {auto,on,off}
                             auto = use isatty(0)
                             on   = always prompt on missing pack
-                            off  = fail fast (current behaviour)
+                            off  = no prompt: the file is listed
+                                   in RESTORE_FAILURES.txt as
+                                   "pack not found: <pack id>",
+                                   the rest is restored, exit 4
+                                   (#909; it stopped with exit 1
+                                   before)
 
   --auto-mount {on,off}     Landed in #455 (default on).  While the
                             prompt waits, re-scan the search paths
@@ -432,8 +437,11 @@ E5. No catalog provided at all.
 
 E6. Restore is being run non-interactively (stdin is /dev/null or
     a closed pipe).
-    -> --interactive=auto detects this and falls back to fail-fast,
-       same as current behaviour.
+    -> --interactive=auto detects this and does not prompt.  Since
+       #909 each file whose pack is not found is listed in
+       RESTORE_FAILURES.txt, the rest is restored, and the run ends
+       with exit 4 (tier 3 does the same).  Insert the missing disc
+       and run again: finished files are skipped.
 
 E7. The disc has been re-burned with the same volume label but
     different packs.
