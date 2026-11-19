@@ -65,11 +65,17 @@ Tree = dict[str, Union[bytes, list[Blob], RawNode, "Tree"]]
 def build_repo(
     tmp_path: Path, tree: Tree, *, name: str = "repo",
     pack_per_blob: bool = False,
+    layout: dict[str, list[str]] | None = None,
 ) -> Path:
     """Write a repository holding one snapshot of *tree*; return its path.
 
     All blobs go in one pack, or with *pack_per_blob* each blob in a
     pack of its own (to spread a snapshot over several discs).
+
+    *layout*, when given, is filled with where each item's own blobs
+    went: its path ("/"-joined; "" is the root folder) -> the pack id of
+    each of its blobs, in order (a file's content blobs, a folder's tree
+    blob).
     """
     repo = tmp_path / name
     repo.mkdir()
@@ -77,15 +83,16 @@ def build_repo(
     _make_key_file(mk, PASSWORD, repo)
 
     packs: list[tuple[bytearray, list[dict[str, object]]]] = [(bytearray(), [])]
-    seen: set[str] = set()
+    seen: dict[str, int] = {}       # blob id -> index of its pack
+    item_blobs: dict[str, list[str]] = {}
 
     def add_blob(stored: bytes, blob_id: str, btype: str,
                  ulen: int | None) -> None:
         if blob_id in seen:
             return
-        seen.add(blob_id)
         if pack_per_blob and packs[-1][1]:
             packs.append((bytearray(), []))
+        seen[blob_id] = len(packs) - 1
         pack, entries = packs[-1]
         enc = _encrypt_with_master(stored)
         entry: dict[str, object] = {
@@ -97,12 +104,13 @@ def build_repo(
         entries.append(entry)
         pack.extend(enc)
 
-    def add_tree(t: Tree) -> str:
+    def add_tree(t: Tree, at: str = "") -> str:
         nodes: list[dict[str, object]] = []
         for nm, item in t.items():
+            path = f"{at}/{nm}" if at else nm
             if isinstance(item, dict):
                 nodes.append({"name": nm, "type": "dir", "mode": 0o755,
-                              "subtree": add_tree(item)})
+                              "subtree": add_tree(item, path)})
                 continue
             if isinstance(item, RawNode):
                 nodes.append({"name": nm, **item.node})
@@ -110,6 +118,7 @@ def build_repo(
             blobs = [Blob(item)] if isinstance(item, bytes) else item
             for b in blobs:
                 add_blob(b.stored, b.id(), "data", b.uncompressed_length)
+            item_blobs[path] = [b.id() for b in blobs]
             size = sum(
                 b.uncompressed_length if b.uncompressed_length is not None
                 else len(b.stored)
@@ -124,16 +133,22 @@ def build_repo(
         doc = json.dumps({"nodes": nodes}).encode()
         tid = hashlib.sha256(doc).hexdigest()
         add_blob(doc, tid, "tree", None)
+        item_blobs[at] = [tid]
         return tid
 
     root = add_tree(tree)
 
     index_packs: list[dict[str, object]] = []
+    pack_ids: list[str] = []
     for pack, entries in packs:
         pack_id = hashlib.sha256(bytes(pack)).hexdigest()
         (repo / "data" / pack_id[:2]).mkdir(parents=True, exist_ok=True)
         (repo / "data" / pack_id[:2] / pack_id).write_bytes(bytes(pack))
         index_packs.append({"id": pack_id, "blobs": entries})
+        pack_ids.append(pack_id)
+    if layout is not None:
+        for path, ids in item_blobs.items():
+            layout[path] = [pack_ids[seen[b]] for b in ids]
 
     def write_doc(sub: str, doc: dict[str, object]) -> None:
         raw = json.dumps(doc).encode()

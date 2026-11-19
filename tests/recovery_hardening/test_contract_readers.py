@@ -55,7 +55,8 @@ def _repo_key(case: Case) -> str:
     """Cases that back up the same thing share one repository."""
     return repr((case.repo, sorted(case.tree.items()),
                  sorted(case.before.items()) if case.before else None,
-                 case.faults.missing))
+                 case.pack_per_blob, case.faults.missing,
+                 case.faults.truncated, case.faults.corrupted))
 
 
 def _built(case: Case, base: Path) -> Built:
