@@ -414,3 +414,30 @@ def test_the_cache_holds_the_packs_after_a_restore(
         hashlib.sha256(fake.files[f"{CACHE}/data/{p[:2]}/{p}"]).hexdigest() == p
         for p in ids
     )
+
+
+@pytest.mark.parametrize("err", [errno.ENOSPC, errno.EROFS], ids=["ENOSPC", "EROFS"])
+def test_a_full_cache_stops_copying_each_disc_once(
+    archive: Archive, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], err: int,
+) -> None:
+    """copy_checked's "cache_full" (the matrix's errnos all read as
+    "unreadable"): the cache's drive is full or read-only, so the copy
+    of a disc stops at its first pack, is not tried again, and every
+    pack is read from the discs instead."""
+    out = _restore(
+        archive, tmp_path, monkeypatch, capsys,
+        [("copy_checked", CACHE, err, True)], cache=True,
+    )
+    assert out.failures == 0 and out.aborted is None, out.log
+    assert _restored(out.target)
+    stops = [
+        line for line in out.log.splitlines()
+        if "could not copy disc" in line
+        and "its packs are read from the disc." in line
+    ]
+    # One stop per disc copied (the sibling's folder, then the disc),
+    # each after one attempt; never a per-pack failure.
+    assert len(stops) == len(out.hits) == 2, out.log
+    assert len({line.split(" to the cache")[0] for line in stops}) == 2
+    assert "could not copy pack" not in out.log
