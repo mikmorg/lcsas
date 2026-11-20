@@ -2,7 +2,7 @@
  * main.c -- lcsas-restore CLI.
  *
  * Usage:
- *   lcsas-restore --repo <dir> --password-file <file> --target <dir>
+ *   lcsas-restore --repo <dir> --password-file <file> --restore-folder <dir>
  *                 [--snapshot <id|latest>] [--list-snapshots]
  *                 [--catalog <file>] [--list-pending-packs [--repo-id <id>]]
  *                 [--pack-search <dir>]   (repeatable)
@@ -137,7 +137,7 @@ static void
 usage(const char *argv0)
 {
     fprintf(stderr,
-        "usage: %s --repo DIR --password-file FILE --target DIR\n"
+        "usage: %s --repo DIR --password-file FILE --restore-folder DIR\n"
         "           [--snapshot ID|latest] [--list-snapshots] [--verbose]\n"
         "           [--catalog FILE]\n"
         "           [--list-pending-packs [--repo-id ID]]\n"
@@ -281,9 +281,15 @@ main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         int matched = 0;
         const char *tmp = NULL;
+        if (strcmp(argv[i], "--target") == 0) {
+            /* #934: renamed outright, no alias (ADR 0005). */
+            fprintf(stderr, "lcsas-restore: --target was renamed: "
+                            "use --restore-folder\n");
+            return 2;
+        }
         if (parse_arg("--repo",          argc, argv, &i, &repo_path) > 0) matched = 1;
         else if (parse_arg("--password-file", argc, argv, &i, &pwfile) > 0) matched = 1;
-        else if (parse_arg("--target",   argc, argv, &i, &target) > 0) matched = 1;
+        else if (parse_arg("--restore-folder", argc, argv, &i, &target) > 0) matched = 1;
         else if (parse_arg("--snapshot", argc, argv, &i, &snapshot_arg) > 0) matched = 1;
         else if (parse_arg("--catalog",  argc, argv, &i, &catalog_path) > 0) matched = 1;
         else if (parse_arg("--interactive", argc, argv, &i, &interactive_arg) > 0) matched = 1;
@@ -473,7 +479,7 @@ main(int argc, char **argv)
     }
     /* Issue #641 -- the password is the file's first line, read as
      * rustic reads it: every byte before the first LF, less one CR at
-     * its end.  Spaces are kept.  Tier 3 and `lcsas key` use the same
+     * its end.  Spaces are kept.  Tier 3 and `lcsas password` use the same
      * rule, so a file of two lines gives every reader one password. */
     {
         size_t k = 0;
