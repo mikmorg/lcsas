@@ -302,7 +302,7 @@ class TestCatalogIsSingular:
         self, tmp_path, capsys
     ):
         """``session list`` used to read config.db_path directly, so the
-        global ``--db`` was accepted and then silently ignored."""
+        global ``--catalog`` was accepted and then silently ignored."""
         configured = tmp_path / "configured.db"
         override = tmp_path / "override.db"
         cfg = _write_config(tmp_path, configured)
@@ -312,7 +312,7 @@ class TestCatalogIsSingular:
         capsys.readouterr()
 
         # Points at a config whose catalog was never created; only the
-        # --db override can make this succeed.
+        # --catalog override can make this succeed.
         assert main(["--config", cfg, "--catalog", str(override), "session", "list"]) == 0
         assert not configured.exists()
 

@@ -466,7 +466,7 @@ def restore_from_disc(
 ) -> int:
     """Restore from optical discs without a config file or mirror.
 
-    The work of ``lcsas restore standalone``.  Reads ``catalog.db`` (or
+    The work of ``lcsas restore from-disc``.  Reads ``catalog.db`` (or
     *catalog*) and repository metadata directly from the disc at
     *disc_path*, then collects the packs from *volume_dir* or by asking
     for each disc to be mounted.  Falls back to the Python reader

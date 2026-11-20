@@ -1,6 +1,6 @@
 """``--config`` placed AFTER the subcommand (issue #517, the "low" bullet).
 
-``--config`` (like ``--db``) is a flag of the top-level parser only, so the
+``--config`` (like ``--catalog``) is a flag of the top-level parser only, so the
 working form is ``lcsas --config foo.toml scan``.  Operators naturally write
 ``lcsas scan --config foo.toml``.  ``docs/workflows/init-and-config.md``
 (Notes & gaps) records what happens: argparse rejects it with a bare

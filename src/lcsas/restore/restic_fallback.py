@@ -2235,7 +2235,7 @@ def time_sort_key(ts: str) -> tuple[int, float]:
 
     A time that does not parse gives ``(0, 0.0)``, before every real
     time, so a damaged snapshot file is never chosen as "latest".
-    Shared with ``lcsas restore standalone latest`` (#821).
+    Shared with ``lcsas restore from-disc latest`` (#821).
     """
     try:
         return (1, _parse_timestamp(ts))

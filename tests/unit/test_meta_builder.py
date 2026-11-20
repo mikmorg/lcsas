@@ -411,7 +411,7 @@ class TestMetaVolumeBuilder:
         assert "restore.sh" in out
         # The new driver documents positional usage, recovery tree layout,
         # and the password env vars.
-        assert "RECOVERY_ROOT" in out or "TARGET_DIR" in out
+        assert "RECOVERY_ROOT" in out
         assert "LCSAS_PASSWORD" in out or "LCSAS_PASSWORD_FILE" in out
 
     def test_restore_script_has_cascades(self):

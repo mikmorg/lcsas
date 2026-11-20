@@ -146,7 +146,7 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
     assert len(cards) == n and all(c.is_file() for c in cards), cards
     texts = [c.read_text(encoding="utf-8") for c in cards]
     for i, text in enumerate(texts, 1):
-        assert f"Repository : {work['name']}" in text
+        assert f"Backup set : {work['name']}" in text
         assert f"Share      : {i} of {n}" in text
         assert f"Split ID   : {work['split_id']}" in text
     # Card 1 and card 3, the two the leg types, rebuild the password.

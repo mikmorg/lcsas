@@ -151,12 +151,12 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
     Typical usage::
 
-        lcsas restore standalone /mnt/disc1 ~/restored/ \\
+        lcsas restore from-disc /mnt/disc1 ~/restored/ \\
             --password-file ~/secret.key
 
     For scripted restores with pre-extracted discs::
 
-        lcsas restore standalone /tmp/disc1 ~/restored/ \\
+        lcsas restore from-disc /tmp/disc1 ~/restored/ \\
             --password-file ~/secret.key \\
             --volume-dir /tmp/extracted_discs/
     """

@@ -13,7 +13,7 @@ class TestCmdInit:
         assert result == 0
 
     def test_init_creates_nested_parent_dirs(self, tmp_path, capsys):
-        """`lcsas init --db-path` creates missing intermediate directories.
+        """`lcsas init --catalog-path` creates missing intermediate directories.
 
         Issue #40: ``cmd_init`` calls ``mkdir(parents=True, exist_ok=True)``
         on the DB path's parent so XDG-style or fresh-deployment paths

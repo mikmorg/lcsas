@@ -206,7 +206,7 @@ class TestCmdConsolidate:
 
         cmd_consolidate needs the LCSASConfig to construct the
         BurnOrchestrator (staging path, ECC settings, repos).  Bare
-        `--db` alone is not enough.
+        `--catalog` alone is not enough.
         """
         db = tmp_path / "test.db"
         vol_ids = _seed_db_with_volumes(db, num_volumes=1, packs_per_volume=1)

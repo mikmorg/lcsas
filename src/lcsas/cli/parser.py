@@ -662,7 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     exec_p.add_argument("--skip-verify", action="store_true", default=False,
                         help="Skip SHA-256 verification of ingested packs.")
 
-    # restore standalone — disc-only restore without config or mirror
+    # restore from-disc — disc-only restore without config or mirror
     fromdisc_p = restore_sub.add_parser(
         "from-disc",
         help="Restore directly from disc — no config file or mirror needed.",
