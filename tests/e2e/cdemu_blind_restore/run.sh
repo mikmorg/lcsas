@@ -69,7 +69,7 @@ sudo env OPERATOR_HOME="$OPERATOR_HOME" bash -c '
     rm -rf /home/lcsas-blind/restored/* /home/lcsas-blind/mnt/* 2>/dev/null || true
     # The restore.sh tools folder (#609) is kept after a run that does
     # not succeed; a stale one would hand this run its pack cache.
-    rm -rf /home/lcsas-blind/lcsas-restore-tools 2>/dev/null || true
+    rm -rf /home/lcsas-blind/lcsas-tools /home/lcsas-blind/lcsas-restore-tools 2>/dev/null || true
     rm -rf /tmp/lcsas-meta /tmp/lcsas-work /tmp/disc /tmp/disc1 \
            /tmp/lcsas-restore-* /tmp/catalog.db /tmp/lcsas_cache \
            /tmp/alpha_packs* 2>/dev/null || true

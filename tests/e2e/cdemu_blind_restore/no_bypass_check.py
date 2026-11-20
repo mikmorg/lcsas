@@ -12,8 +12,8 @@ Bypass shapes flagged:
     lcsas-restore ...
     restic ...
     standalone_restorer.py ...
-    python3 .../standalone_restorer.py ...
-    python -m standalone_restorer ...
+    python3 .../standalone_restorer.py ...   (now python_reader.py)
+    python -m standalone_restorer ...        (now python_reader)
 
 Each command is split into clauses by transcript.split_clauses, the
 harness's one clause splitter: on newlines and shell operators outside
@@ -55,13 +55,16 @@ import transcript  # noqa: E402
 # Binary names (without path) that are considered recovery drivers.
 # argv[0] (after stripping wrappers) is matched against this set
 # both as-given and with a trailing `.py` stripped, so
-# `standalone_restorer` and `standalone_restorer.py` both hit.
+# `standalone_restorer` and `standalone_restorer.py` both hit.  The Python
+# reader was renamed python_reader.py (#934); both names stay on the list.
 BINARIES = {
     'rustic',
     'rustic-static',
     'lcsas-restore',
     'standalone_restorer.py',
     'standalone_restorer',
+    'python_reader.py',
+    'python_reader',
     'restic',
 }
 

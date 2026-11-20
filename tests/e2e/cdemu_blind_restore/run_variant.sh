@@ -10,7 +10,7 @@
 #   tier1-missing        — meta disc lacks lcsas-restore.  Agent must
 #                          ride the LCSAS_TIER_FALLBACK=1 path to tier 2.
 #   tier1-tier2-missing  — meta disc lacks BOTH tier-1 and tier-2.  Forces
-#                          tier 3 (CPython + standalone_restorer.py).
+#                          tier 3 (CPython + python_reader.py).
 #   single-tenant        — only the alpha repo exists; exercises the
 #                          no-prompt fast path (issue #216).
 #   5-tenant             — alpha + bravo + charlie + delta + echo;
