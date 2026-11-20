@@ -545,7 +545,10 @@ DESTINATION FOLDER NOTES
 
     The size is an estimate, so the set may need less.  (On some
     older discs it is the size of every backup set on the discs;
-    restore.bat then says so.)  restore.bat asks
+    restore.bat then says so.)  A set of 100 TB or more is too
+    big for restore.bat to compare with the free space: it says it
+    cannot check, and asks you to make sure there is room.  Either
+    way, restore.bat asks
         Carry on anyway? [y/N]
     Type y and press ENTER to go on (if the drive fills up, the
     restore stops part-way).  Any other answer stops it.
