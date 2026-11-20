@@ -244,6 +244,14 @@ DIFFERENCES: dict[str, Difference] = {
              "the choosing are documented per script)"),
         deliberate=True,
     ),
+    "too big to count": Difference(
+        what=("restore.bat cannot compare a size of 100 TB or more with the "
+              "free space (set /a counts to 2147483647 MB); it says it "
+              "cannot check and asks the same question.  restore.sh "
+              "compares any size and asks only when a drive is short"),
+        why="cmd's set /a is 32-bit (#927)",
+        deliberate=True,
+    ),
     "folder question": Difference(
         what=("restore.bat asks 'Restore to which folder?' before the "
               "password; restore.sh takes the folder on its command line "
@@ -379,9 +387,10 @@ class Altered:
     - "damaged pack": a byte in the middle of the largest pack (a data
       pack) flipped, as a scratch the ECC could not repair leaves it;
     - "huge packs": every pack in each disc's catalog said to be 10 TB, so
-      no disk has room for what the catalog says the set needs.  Not
-      100 TB or more: restore.bat's set /a cannot count that many MB, and
-      it then skips the check (see :space_check)."""
+      no disk has room for what the catalog says the set needs.  Under
+      100 TB, so restore.bat's set /a can count it and compares;
+    - "petabyte packs": every pack said to be 1 PB, more than set /a can
+      count: restore.bat says it cannot check, and asks (#927)."""
 
     base: str
     how: str
@@ -390,6 +399,7 @@ class Altered:
 ALTERED: dict[str, Altered] = {
     "one set, a pack damaged": Altered("one set", "damaged pack"),
     "one set, catalog sizes huge": Altered("one set", "huge packs"),
+    "one set, catalog sizes in petabytes": Altered("one set", "petabyte packs"),
 }
 
 
@@ -453,10 +463,11 @@ def alter_archive(base: Archive, how: str, workdir: Path) -> Archive:
         data = bytearray(pack.read_bytes())
         data[len(data) // 2] ^= 0xFF
         pack.write_bytes(bytes(data))
-    elif how == "huge packs":
+    elif how in ("huge packs", "petabyte packs"):
+        size = 10**13 if how == "huge packs" else 10**15
         for d in discs.values():
             with contextlib.closing(sqlite3.connect(d / "catalog.db")) as conn:
-                conn.execute("UPDATE packs SET size_bytes = ?", (10**13,))
+                conn.execute("UPDATE packs SET size_bytes = ?", (size,))
                 conn.commit()
     else:
         raise ValueError(f"no such alteration: {how!r}")
@@ -955,6 +966,17 @@ JOURNEYS: tuple[Journey, ...] = (
         differs={"bat": Differs(because=("folder question",),
                                 asked=("newest data disc", "folder", "space",
                                        "password"))},
+    ),
+    Journey(
+        name="a set too big to count: the space question, answered no",
+        archive="one set, catalog sizes in petabytes",
+        typed=(NEWEST, "n"),
+        expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc", "space"),
+                      says=(r"nothing was restored",)),
+        differs={"bat": Differs(because=("folder question", "too big to count"),
+                                asked=("newest data disc", "folder", "space"),
+                                says=(r"nothing was restored",
+                                      r"cannot check the free space"))},
     ),
     Journey(
         name="some items not restored: exit 4, the failures file named",

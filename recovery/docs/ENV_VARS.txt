@@ -667,7 +667,9 @@ LCSAS_SKIP_SPACE_CHECK
             `dir`; "the same filesystem" means the same drive letter.
             A short drive always asks "Carry on anyway? [y/N]" (cmd
             cannot tell a terminal from a pipe); the end of the input
-            stops.  Set it in a Command Prompt (set
+            stops.  A size of 100 TB or more is past what set /a can
+            count: restore.bat says it cannot check, and asks the same
+            question (#927).  Set it in a Command Prompt (set
             LCSAS_SKIP_SPACE_CHECK=1) and run restore.bat from there.
   Why:      Opt-OUT.  Forgetting the check means discovering a
             too-small disk via ENOSPC after hours of disc swapping —

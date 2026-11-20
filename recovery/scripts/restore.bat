@@ -1194,6 +1194,7 @@ if "%LCSAS_SKIP_SPACE_CHECK%"=="1" goto :space_done
 call :space_check
 if not defined SPACE_SHORT goto :space_done
 echo.
+if defined SP_HUGE goto :space_huge
 if defined SP_WHOLE goto :space_whole
 echo  That size is an estimate from the catalog, and the restore
 echo  may need less.
@@ -1201,6 +1202,10 @@ goto :space_ask
 :space_whole
 echo  That size counts every backup set on these discs, not only
 echo  !SET_NAME!, so the set you chose may need less.
+goto :space_ask
+:space_huge
+echo  Make sure the drive of that folder has room for it, and for the
+echo  pack cache in the tools folder, before you carry on.
 :space_ask
 echo  You can carry on, but if the drive fills up the restore stops
 echo  part-way.
@@ -1864,6 +1869,7 @@ REM less free space than the restore needs.  Sizes are in MB of 1000000
 REM bytes: set /a counts only to 2147483647.
 set "SPACE_SHORT="
 set "SP_WHOLE="
+set "SP_HUGE="
 if not defined CATALOG_ARG goto :eof
 set "SP_BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if not exist "%SP_BIN%" goto :eof
@@ -1882,7 +1888,7 @@ if not defined SP_MIB goto :eof
 REM 9 digits or more (100 TB) would not fit set /a below.  Padded
 REM first: wine gives the whole value for !V:~8! of a shorter one.
 set "SP_P=000000000!SP_MIB!"
-if not "!SP_P:~-9,1!"=="0" goto :eof
+if not "!SP_P:~-9,1!"=="0" goto :sp_huge
 REM MB of 1048576 bytes to MB of 1000000, rounded up.
 set /a "SP_REQ=SP_MIB + SP_MIB / 20 + 1"
 REM What each still needs.
@@ -1914,6 +1920,27 @@ goto :eof
 :sp_apart
 call :sp_short "%TARGET%" !SP_TNEED!
 if defined SP_CDIR call :sp_short "%SP_CDIR%" !SP_CNEED!
+goto :eof
+:sp_huge
+REM Too big to count (#927): up to rc10 the check was skipped without a
+REM word, where restore.sh asks.  Say so, and ask as for a short drive
+REM (SPACE_SHORT); SP_HUGE changes what is said around the question.
+REM The size in TB, from the MB with their last 6 digits dropped (MB of
+REM 1048576 bytes: 5 per cent more), when that fits set /a.
+set "SP_TB_TXT=100 TB or more"
+set "SP_T=!SP_MIB:~0,-6!"
+set "SP_P=000000000!SP_T!"
+if not "!SP_P:~-10,1!"=="0" goto :sp_huge_say
+set /a "SP_T=SP_T + SP_T / 20"
+set "SP_TB_TXT=about !SP_T! TB"
+:sp_huge_say
+REM !SP_DIR!, not %TARGET%: a folder name may hold an ampersand.
+set "SP_DIR=%TARGET%"
+echo restore.bat: The catalog says this restore needs !SP_TB_TXT!.
+echo restore.bat cannot check the free space at !SP_DIR! for a size
+echo this large.
+set "SPACE_SHORT=1"
+set "SP_HUGE=1"
 goto :eof
 
 :sp_pending
@@ -2395,9 +2422,15 @@ REM `cmd /c`, as for :wrong_password.
 :space_short
 echo.
 echo ============================================================
+if defined SP_HUGE goto :space_short_huge
 echo  Not enough free space for this restore; nothing was restored.
 echo  Free some space, or choose a folder on another drive, then
 echo  run restore.bat again.
+goto :space_short_how
+:space_short_huge
+echo  Stopped before the restore; nothing was restored.  Run
+echo  restore.bat again once a drive has room for it.
+:space_short_how
 echo.
 echo  The size is an estimate from the catalog.  To restore anyway,
 echo  open a Command Prompt, type
