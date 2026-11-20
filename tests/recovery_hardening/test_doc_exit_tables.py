@@ -1,5 +1,4 @@
-"""The exit-code tables in the recovery docs list the codes the
-programs exit with, each under its own meaning (#888).
+"""The recovery docs' exit-code tables list each program's codes under their own words (#888).
 
 The tables an heir reads were the least protected copy of the exit
 codes: a wrong number in RECOVER.txt passed every gate.  Each table in
