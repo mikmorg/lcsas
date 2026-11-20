@@ -768,7 +768,13 @@ A volume that was burned but has no disc recorded is never deleted, even with
 good disc (a passed disc check at a location, a passed burn receipt, a disc
 move), and so does a `STAGING` or `BURNING` volume whose last burn, by an
 LCSAS older than rc10, started from `BURNED`: its status note "Status
-changed: BURNED → BURNING" is its only record of the disc (#904). Then `stage --clean` and `session abort`
+changed: BURNED → BURNING" is its only record of the disc (#904). Any
+other status note out of `BURNED` or `VERIFIED`, however old, counts too
+(#912): rc1 to rc9 set a `BURNED` volume back to `STAGING` when its burn
+failed, and rc8 and rc9 did so when they imported a failing burn receipt
+for it. Such a volume is kept even if its only disc failed verification;
+if no good disc of it exists, burn it again (`lcsas burn` makes a new disc
+of a `STAGING` volume, and resets a `BURNING` one first). Then `stage --clean` and `session abort`
 refuse the whole burn session, name the volume, and delete nothing. Record
 each disc first with `lcsas verify <label> --disc --location <where it is
 kept>` (or import its burn receipt), then run the command again.

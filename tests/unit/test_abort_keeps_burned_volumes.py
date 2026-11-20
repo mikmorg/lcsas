@@ -352,14 +352,9 @@ def test_burned_before_its_burn_is_never_deleted(staged, status, notes):
 @pytest.mark.parametrize("notes", [
     # A staged volume whose burn was killed (#668).
     ("Status changed: STAGING → BURNING",),
-    # Only the newest "→ BURNING" note counts (status_before_burning),
-    # and this burn started from STAGING.  A known limit, outside #904:
-    # the older BURNED → BURNING note above no longer protects it, though
-    # a disc of it may exist.  Pinned so a change to that is deliberate.
-    (*_RC7_NOTES_BURNED_THEN_BURNING, "Status changed: BURNING → STAGING",
-     "Status changed: STAGING → BURNING"),
 ])
 def test_burning_from_staging_is_still_deleted(staged, notes):
+    """Case 4 of #912: a volume that was never BURNED or VERIFIED."""
     orch, conn, result, manifest = staged
     _rc7_history(conn, manifest.volume_id, "BURNING", notes)
 
@@ -367,6 +362,150 @@ def test_burning_from_staging_is_still_deleted(staged, notes):
     summary = orch.abort_session(result.session_id)
     assert summary.labels == [manifest.volume_label]
     assert get_volume_by_label(conn, manifest.volume_label) is None
+
+
+# ---------------------------------------------------------------------
+# #912: any status note out of BURNED or VERIFIED, ever, except the one a
+# failing burn receipt wrote
+# ---------------------------------------------------------------------
+
+# rc1 to rc9 demoted a BURNED volume whose burn failed or was stopped:
+# BURNED → BURNING → STAGING (#810).  A later burn from STAGING then
+# makes the newest "→ BURNING" note say STAGING, so the #904 check no
+# longer sees that the volume was BURNED.
+_EARLIER_BURN_UNDONE = (*_RC7_NOTES_BURNED_THEN_BURNING,
+                        "Status changed: BURNING → STAGING")
+_WAS_BURNED_EARLIER = "it was BURNED when an earlier burn of it started"
+_WAS_BURNED_THEN_STAGING = "it was BURNED before it was set to STAGING"
+
+
+def _rc9_failing_receipt(name: str = "TEST-0001.receipt.json",
+                         location: str = "Home",
+                         ) -> tuple[tuple[str, str | None, str], ...]:
+    """The events ``catalog import-receipts`` wrote for a receipt with
+    ``verify_passed`` false for a BURNED volume with no disc recorded,
+    from c5b3338 (rc8, rc9) until #810 (7935657, rc10), in this order, in
+    one transaction: the status note (update_status), VERIFY_FAIL, then
+    BURN_RECEIPT_IMPORTED with the receipt's provenance.  Each add_event
+    stamped its own datetime.now(), so no two share a date."""
+    return (
+        ("NOTE", None, "Status changed: BURNED → STAGING"),
+        ("VERIFY_FAIL", location, f"Offline burn receipt: {name}"),
+        ("BURN_RECEIPT_IMPORTED", location, json.dumps({
+            "iso_sha256": "c" * 64,
+            "burn_date": "2026-11-12T09:30:00+00:00",
+            "session_id": "",
+            "device": "/dev/sr0",
+            "pack_ids": [],
+            "receipt_file": name,
+            "verify_passed": False,
+        })),
+    )
+
+
+def _note(detail: str) -> tuple[str, str | None, str]:
+    return ("NOTE", None, detail)
+
+
+def _old_history(conn, volume_id: int, status: str,
+                 events: tuple[tuple[str, str | None, str], ...]) -> None:
+    """Give the volume *status* and *events* (oldest first, each through
+    add_event with its own timestamp), as an older LCSAS left it."""
+    force_status(conn, volume_id, status)
+    for event_type, location, detail in events:
+        add_event(conn, volume_id, event_type, location=location,
+                  detail=detail)
+
+
+_KEPT = {
+    # Case 1: the earlier burn from BURNED was undone, then a burn from
+    # STAGING was killed (BURNING) or failed again (STAGING).
+    "earlier-burn-undone, killed": (
+        "BURNING",
+        tuple(map(_note, (*_EARLIER_BURN_UNDONE,
+                          "Status changed: STAGING → BURNING"))),
+        _WAS_BURNED_EARLIER),
+    "earlier-burn-undone, failed again": (
+        "STAGING",
+        tuple(map(_note, (*_EARLIER_BURN_UNDONE,
+                          "Status changed: STAGING → BURNING",
+                          "Status changed: BURNING → STAGING"))),
+        _WAS_BURNED_EARLIER),
+    # Case 2: "BURNED → STAGING".  Its only writer in rc1 to rc9 was
+    # the receipt import above (c5b3338 to 7935657), with the failing
+    # receipt beside it; the bare note counts as well.
+    "burned-to-staging": (
+        "STAGING", (_note("Status changed: BURNED → STAGING"),),
+        _WAS_BURNED_THEN_STAGING),
+    "burned-to-staging, killed": (
+        "BURNING", (_note("Status changed: BURNED → STAGING"),
+                    _note("Status changed: STAGING → BURNING")),
+        _WAS_BURNED_THEN_STAGING),
+    # Case 3, #483: the volume's only disc may have failed verification.
+    # A catalog rebuild that read a disc of it marked it BURNED with raw
+    # SQL and no note (rc8 db/rebuild.py _promote_read_discs); importing
+    # a failing receipt then set it STAGING.  The receipt does not say
+    # the BURNED status was wrong, so the volume is kept until removed
+    # by hand (owner decision on #912), also after a later killed burn.
+    "failing-receipt": (
+        "STAGING", _rc9_failing_receipt(), _WAS_BURNED_THEN_STAGING),
+    "failing-receipt, killed": (
+        "BURNING", (*_rc9_failing_receipt(),
+                    _note("Status changed: STAGING → BURNING")),
+        _WAS_BURNED_THEN_STAGING),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_KEPT))
+def test_burned_earlier_is_never_deleted(staged, case):
+    orch, conn, result, manifest = staged
+    status, events, why = _KEPT[case]
+    _old_history(conn, manifest.volume_id, status, events)
+
+    for call in (
+        lambda: orch.abort_session(result.session_id),
+        lambda: orch.abort_session(result.session_id, never_burned=True),
+        lambda: orch.clean_session(result.session_id),
+        lambda: orch.clean_session(result.session_id, force=True),
+        lambda: orch.abort_volume(manifest.volume_label),
+        lambda: orch.abort_volume(manifest.volume_label, never_burned=True),
+    ):
+        with pytest.raises(ValueError, match=f"is {status}, but {why}"):
+            call()
+    assert VolumeLifecycle(conn).burn_evidence(manifest.volume_id) == why
+    vol = get_volume_by_label(conn, manifest.volume_label)
+    assert vol is not None and vol.status == status
+    assert get_pack_ids_for_volume(conn, manifest.volume_id)
+    assert manifest.iso_path is not None and manifest.iso_path.exists()
+    assert get_session(conn, result.session_id).status == "STAGED"
+
+
+@pytest.mark.parametrize("events, why", [
+    # A failing receipt excepts no note: the newest note out of BURNED
+    # gives the reason, here the receipt import's own.
+    ((*map(_note, _EARLIER_BURN_UNDONE),
+      _note("Status changed: STAGING → BURNING"),
+      _note("Status changed: BURNING → BURNED"),
+      *_rc9_failing_receipt()),
+     _WAS_BURNED_THEN_STAGING),
+    # A passing receipt is evidence by itself, and is read first.
+    ((*_rc9_failing_receipt()[:2],
+      ("BURN_RECEIPT_IMPORTED", "Home",
+       json.dumps({"receipt_file": "TEST-0001.receipt.json",
+                   "verify_passed": True}))),
+     "a burn receipt of it was imported at Home"),
+    # Out of VERIFIED counts too.
+    ((_note("Status changed: VERIFIED → CONSOLIDATING"),),
+     "it was VERIFIED before it was set to CONSOLIDATING"),
+    # Notes that never leave BURNED or VERIFIED are no evidence.
+    ((_note("Status changed: STAGING → BURNING"),
+      _note("Status changed: BURNING → STAGING")),
+     None),
+])
+def test_burn_evidence_from_status_notes(staged, events, why):
+    _orch, conn, _result, manifest = staged
+    _old_history(conn, manifest.volume_id, "STAGING", events)
+    assert VolumeLifecycle(conn).burn_evidence(manifest.volume_id) == why
 
 
 def test_mixed_session_deletes_nothing(tmp_path):

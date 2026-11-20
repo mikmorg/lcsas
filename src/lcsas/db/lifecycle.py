@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 
@@ -224,6 +225,13 @@ def _burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
       BURNED volume to BURNING for its burn, writing the note "Status
       changed: BURNED → BURNING"; a burn killed then leaves the volume
       BURNING, and that note is its only record of the disc.
+    - Any other status note out of BURNED or VERIFIED, at any point in
+      the volume's history (#912, :func:`_left_burned_or_verified`):
+      rc1 to rc9 also demoted a BURNED volume whose burn failed
+      (BURNED → BURNING → STAGING), so a later burn from STAGING hides
+      the note above, and rc8 and rc9 set a BURNED volume STAGING when
+      a failing receipt was imported.  No such note is excepted, not
+      even one a failing receipt import wrote (owner decision on #912).
 
     ``VERIFY_FAIL`` alone is not evidence: such a volume goes back
     to STAGING and is re-staged or aborted (BURN-05, #483).
@@ -242,12 +250,7 @@ def _burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
             if location or detail == "Disc verify":
                 return f"a disc of it passed verification{where}"
         elif event_type == "BURN_RECEIPT_IMPORTED":
-            try:
-                receipt = json.loads(detail or "{}")
-            except ValueError:
-                receipt = {}
-            if not (isinstance(receipt, dict)
-                    and receipt.get("verify_passed") is False):
+            if _receipt(detail).get("verify_passed") is not False:
                 return f"a burn receipt of it was imported{where}"
         elif event_type == "LOCATION_MOVE":
             return f"a disc of it was moved{where}"
@@ -256,7 +259,82 @@ def _burn_evidence(conn: sqlite3.Connection, volume_id: int) -> str | None:
     before = _status_before_burning(conn, volume_id)
     if before in (STATUS_BURNED, STATUS_VERIFIED):
         return f"it was {before} when a burn of it started"
-    return None
+    return _left_burned_or_verified(conn, volume_id)
+
+
+def _receipt(detail: str | None) -> dict[str, object]:
+    """The receipt provenance a ``BURN_RECEIPT_IMPORTED`` event holds,
+    or ``{}`` when its detail is not a JSON object."""
+    try:
+        receipt = json.loads(detail or "{}")
+    except ValueError:
+        return {}
+    return receipt if isinstance(receipt, dict) else {}
+
+
+# "Status changed: BURNED → X" or "Status changed: VERIFIED → X", as
+# _update_status has written it since before rc1 (d24dcbf).
+_LEFT_DURABLE_NOTE = re.compile(
+    rf"Status changed: ({STATUS_BURNED}|{STATUS_VERIFIED}) → ([A-Z]+)")
+
+
+def _left_burned_or_verified(
+    conn: sqlite3.Connection, volume_id: int,
+) -> str | None:
+    """Why a status note says the volume was BURNED or VERIFIED, or None
+    (#912).  Every such note counts, however old; the newest gives the
+    reason.
+
+    The notes older LCSAS versions left that only this rule sees:
+
+    - "Status changed: BURNED → BURNING" followed, after the burn failed
+      or was stopped, by "BURNING → STAGING" (rc1 to rc9, until #810):
+      a later burn from STAGING then writes a newer "→ BURNING" note,
+      which hides the first from :func:`_status_before_burning`.
+    - "Status changed: BURNED → STAGING".  Its only writer in rc1 to rc9
+      was ``catalog import-receipts`` from c5b3338 (rc8, rc9) until #810
+      (7935657, rc10), for a receipt with ``verify_passed`` false for a
+      BURNED volume with no disc recorded.  It wrote, in one transaction
+      under the catalog lock: the note (``update_status``), then
+      ``VERIFY_FAIL`` at the receipt's location ("Offline burn receipt:
+      <file name>"), then ``BURN_RECEIPT_IMPORTED`` at that location
+      (``"receipt_file": "<file name>"``, ``"verify_passed": false``),
+      each event with its own ``datetime.now()``.  rc2 to rc7 changed no
+      status for a failing receipt, rc1 recorded its disc, and every
+      burn went BURNED → BURNING first.
+
+    That failing receipt does not except its note (owner decision on
+    #912).  The note was first meant to be excepted, so that a volume
+    whose only disc failed verification stays deletable (#483).  But the
+    receipt says only that its own disc failed, not why the volume was
+    BURNED before it: a catalog rebuild that read a disc of it, with no
+    note, looks the same.  The exception would have let every real
+    "BURNED → STAGING" note be deleted, which is the gap #912 closes.
+    The residual: a volume whose only disc failed and that carries such
+    a note (an rc8/rc9 failing receipt, or an rc1 burn that left it
+    BURNED after a failed verify and was then burned again) is never
+    deleted by ``session abort``, ``stage --clean`` or ``catalog
+    reconcile --fix``; the remedy is to burn it again, which makes a new
+    disc of it.
+    """
+    reason = None
+    for (detail,) in conn.execute(
+        """SELECT detail FROM volume_events
+           WHERE volume_id = ? AND event_type = 'NOTE'
+           ORDER BY julianday(event_date), event_id""",
+        (volume_id,),
+    ):
+        match = _LEFT_DURABLE_NOTE.match(str(detail or ""))
+        if match is None:
+            continue
+        status, new_status = match.groups()
+        if new_status == STATUS_BURNING:
+            # Not the newest "→ BURNING" note: _burn_evidence reads that
+            # one first.
+            reason = f"it was {status} when an earlier burn of it started"
+        else:
+            reason = f"it was {status} before it was set to {new_status}"
+    return reason
 
 
 def _rebuild_burn_unknown(conn: sqlite3.Connection, volume_id: int) -> bool:
