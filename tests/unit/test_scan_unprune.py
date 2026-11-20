@@ -38,16 +38,16 @@ def _setup(tmp_path: Path, on_disk: list[str]) -> tuple[Path, Path, Path]:
     for sha in on_disk:
         _put_pack(mirror, sha)
     (tmp_path / "staging").mkdir()
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     config = tmp_path / "config.toml"
     config.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\n'
-        f'database = "{db_path}"\n'
+        f'catalog = "{db_path}"\n'
         '\n[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
         f'\n[repos.family]\nmirror_path = "{mirror}"\n'
     )
-    main(["init", "--db-path", str(db_path)])
+    main(["init", "--catalog-path", str(db_path)])
     conn = get_connection(db_path)
     create_all(conn)
     register_repo(conn, "family-id", "family", str(mirror), "")
@@ -56,7 +56,7 @@ def _setup(tmp_path: Path, on_disk: list[str]) -> tuple[Path, Path, Path]:
 
 
 def _scan(config: Path, db_path: Path) -> int:
-    return main(["--config", str(config), "--db", str(db_path),
+    return main(["--config", str(config), "--catalog", str(db_path),
                  "scan", "--no-snapshots"])
 
 

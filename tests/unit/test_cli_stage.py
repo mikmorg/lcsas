@@ -16,13 +16,13 @@ def _write_config(tmp_path: Path, extra: str = "") -> Path:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -41,7 +41,7 @@ class TestCmdStage:
 
     def test_stage_unknown_media(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -54,7 +54,7 @@ class TestCmdStage:
     def test_stage_dry_run(self, tmp_path, capsys):
         """Dry-run produces plan output but no DB/FS changes."""
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         register_repo(conn, "fam", "fam", str(tmp_path / "mirror"), "")

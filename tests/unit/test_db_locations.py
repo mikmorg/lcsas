@@ -130,7 +130,7 @@ def test_cli_location_rename_remove_and_unknown_status(tmp_path, capsys):
     cfg.write_text(
         "[paths]\n"
         f'mirror_base = "{tmp_path}"\nstaging = "{tmp_path}"\n'
-        f'database = "{tmp_path / "archive.db"}"\n'
+        f'catalog = "{tmp_path / "catalog.db"}"\n'
     )
     c = ["--config", str(cfg)]
     assert main([*c, "init"]) == 0

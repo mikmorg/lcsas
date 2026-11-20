@@ -1,4 +1,4 @@
-"""``lcsas key``: split, unsplit, combine, verify, card.
+"""``lcsas password``: split, unsplit, combine, verify, card.
 
 The card text itself is in :mod:`lcsas.cli.main`.
 """
@@ -306,7 +306,7 @@ def _check_split_repo_registered(
 ) -> None:
     """Refuse a split whose repository is not in the catalog (#571).
 
-    ``key split`` records the split under the catalog repo_id that
+    ``password split`` records the split under the catalog repo_id that
     ``repo add`` assigned, because that is the ID the burn pipeline looks
     it up by.  Raises ValueError (the message to print) when there is no
     catalog or the repository is not registered in it, so the caller can
@@ -385,7 +385,7 @@ def _record_split_by_name(
 
 
 def _existing_share_files(out_dir: Path, repo: str) -> list[Path]:
-    """Files in *out_dir* named like ``key split``'s output for *repo* (#683)."""
+    """Files in *out_dir* named like ``password split``'s output for *repo* (#683)."""
     import glob
 
     if not out_dir.is_dir():
@@ -432,7 +432,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     # smaller N would leave the old higher-numbered cards beside the new
     # ones, and they cannot combine with them.  Checked before the password
     # is read, so nothing is written.
-    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
+    out_dir: Path = args.out if args.out is not None else Path(f"./shares-{args.repo}")
     old_cards = _existing_share_files(out_dir, args.repo)
     if old_cards:
         logger.error(
@@ -513,7 +513,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     elif config is None:
         logger.warning(
             "No --config given: the password was NOT verified against any "
-            "repository. Run `lcsas --config ... key verify --repo %s "
+            "repository. Run `lcsas --config ... password verify --repo %s "
             "--password-file %s` once the mirror is reachable.",
             args.repo, repo_pw_file,
         )
@@ -599,7 +599,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
             logger.warning(
                 "Split succeeded but recording it in the catalog failed: %s. "
                 "Once the catalog is reachable, re-run 'lcsas --config ... "
-                "key split --repo %s' so burn drift-checking works.",
+                "password split --repo %s' so burn drift-checking works.",
                 e, args.repo,
             )
     else:
@@ -618,8 +618,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         f"  Give the {shares} shares to separate share holders."
     )
     print(
-        f"NEXT STEP: set key_split = true (and key_threshold = {threshold}, "
-        f"key_shares = {shares}) under [repos.{args.repo}] in lcsas.toml, or "
+        f"NEXT STEP: set split = true (and split_threshold = {threshold}, "
+        f"split_shares = {shares}) under [repos.{args.repo}] in lcsas.toml, or "
         "under [defaults] if every repository is split, so burned discs "
         "print share instructions."
     )
@@ -702,7 +702,7 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
 
     from datetime import UTC, datetime
     logger.warning(
-        "AUDIT %s key unsplit: cleared the recorded %d-of-%d split of "
+        "AUDIT %s password unsplit: cleared the recorded %d-of-%d split of "
         "repository '%s' (id %s, split ID %05d, split on %s).",
         datetime.now(UTC).isoformat(timespec="seconds"), record.threshold,
         record.shares, repo.name, repo.repo_id, record.slip39_id,
@@ -714,7 +714,7 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
         else f"the repository's [repos.<name>] table ('{repo.name}' in the catalog)"
     )
     print(
-        f"NEXT STEP: make sure key_split is false for this repository in "
+        f"NEXT STEP: make sure split is false for this repository in "
         f"lcsas.toml ({table}, else [defaults]), so the config and the "
         f"catalog agree."
     )
@@ -725,7 +725,7 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
     """Reconstruct a repository password from K SLIP-0039 share mnemonics.
 
     stdout carries the rebuilt password and nothing else: a script runs
-    ``lcsas key combine > pw``, so every message, log line included, goes
+    ``lcsas password combine > pw``, so every message, log line included, goes
     to stderr.  On failure stdout stays empty.
     """
     with log_to_stderr():
@@ -785,7 +785,7 @@ def _key_combine(args: argparse.Namespace) -> int:
     # named verdict, so a single mistyped card is pinpointed (file + word
     # position + token) instead of collapsing into one generic failure.
     # Verdicts go to stderr so stdout stays password-only (the combiner's
-    # raw-bytes contract); mirrors the C lcsas-keyshare pre-pass.
+    # raw-bytes contract); mirrors the C lcsas-shares pre-pass.
     any_bad = False
     for label, mnemonic in zip(labels, mnemonics, strict=True):
         reason = check_share(mnemonic)
@@ -843,7 +843,7 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for key verify.")
+        logger.error("--config is required for password verify.")
         return 1
     if bool(args.share_files) == bool(args.password_file):
         logger.error(

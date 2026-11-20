@@ -3,7 +3,7 @@
 - ``--for-location`` must name a registered location (#738), as
   ``--collection``'s location must (#701).
 - A dry run refuses on password split drift like the real run, unless
-  ``--allow-escrow-drift`` (#739).
+  ``--allow-split-drift`` (#739).
 """
 
 from __future__ import annotations
@@ -34,15 +34,15 @@ def _setup(tmp_path: Path, *, key_split: bool = False) -> tuple[Path, Path]:
         (mirror / sub / "dummy").write_text("{}")
     (mirror / "config").write_text("{}")
     data.mkdir()
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
-    split = ("key_split = true\nkey_threshold = 2\nkey_shares = 3\n"
+    split = ("split = true\nsplit_threshold = 2\nsplit_shares = 3\n"
              if key_split else "")
     cfg.write_text(f"""
 [paths]
 mirror_base = "{tmp_path / 'mirror'}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -145,7 +145,7 @@ def test_dry_run_refuses_on_escrow_drift_like_the_real_run(tmp_path, caplog):
         rc = main(["--config", str(cfg), "stage", "--dry-run"])
     assert rc == 1
     assert "password split drift for repository 'fam'" in caplog.text
-    assert "Pass --allow-escrow-drift to override" in caplog.text
+    assert "Pass --allow-split-drift to override" in caplog.text
     assert "volume(s) planned" not in caplog.text
     assert _counts(db) == (0, 0)
 
@@ -162,10 +162,10 @@ def test_dry_run_with_allow_escrow_drift_warns_and_plans(tmp_path, caplog):
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="lcsas"):
         rc = main(["--config", str(cfg), "stage", "--dry-run",
-                   "--allow-escrow-drift"])
+                   "--allow-split-drift"])
     assert rc == 0, caplog.text
     assert "password split drift for repository 'fam'" in caplog.text
-    assert "proceeding: --allow-escrow-drift" in caplog.text
+    assert "proceeding: --allow-split-drift" in caplog.text
     assert "[DRY RUN] 1 volume(s) planned" in caplog.text
     assert _counts(db) == (0, 0)
 

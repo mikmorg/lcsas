@@ -6,8 +6,8 @@ in the test) to every combiner, in every input mode, with the words typed
 as full words, as 4-letter prefixes, and as a mix, and asserts every run
 gives the same answer:
 
-- tools: the committed C ``lcsas-keyshare`` (skipped when it cannot run
-  here), the meta disc's ``keyshare_combine.py``, and ``lcsas key combine``;
+- tools: the committed C ``lcsas-shares`` (skipped when it cannot run
+  here), the meta disc's ``combine_shares.py``, and ``lcsas password combine``;
 - modes: ``file`` (share card files given by name; the card's title, tip
   line and other text must be ignored), ``prompt`` (shares typed at a
   terminal, one per line, ended with Ctrl-D; skipped without a pty) and
@@ -35,8 +35,8 @@ from lcsas.keyshare import encode_master_secret, split_secret
 from lcsas.keyshare.wordlist import WORDLIST
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_KEYSHARE_BIN = _REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-keyshare"
-_COMBINER = _REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py"
+_KEYSHARE_BIN = _REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-shares"
+_COMBINER = _REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py"
 
 # `make test-integration` selects with `-m integration` (#426).
 pytestmark = pytest.mark.integration
@@ -64,13 +64,13 @@ _C_OK = _c_runnable()
 _TOOLS: dict[str, list[str]] = {
     "c": [str(_KEYSHARE_BIN)],
     "meta": [sys.executable, str(_COMBINER)],
-    "cli": [sys.executable, "-m", "lcsas.cli.main", "key", "combine"],
+    "cli": [sys.executable, "-m", "lcsas.cli.main", "password", "combine"],
 }
 _TOOL_PARAMS = [
     pytest.param(
         "c",
         marks=pytest.mark.skipif(
-            not _C_OK, reason="committed lcsas-keyshare cannot run here"
+            not _C_OK, reason="committed lcsas-shares cannot run here"
         ),
     ),
     "meta",
@@ -136,7 +136,7 @@ def _env() -> dict[str, str]:
     env = dict(os.environ)
     src = str(_REPO_ROOT / "src")
     env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
-    env.pop("LCSAS_KEYSHARE_PASSPHRASE", None)
+    env.pop("LCSAS_SHARE_PASSPHRASE", None)
     return env
 
 
@@ -262,5 +262,5 @@ def test_mistyped_word_is_named_everywhere(
     assert proc.returncode == (1 if tool == "cli" else 3), err
     assert f"word 7 '{bad}' is not a share word" in err
     assert _PASSWORD not in proc.stdout
-    if tool != "cli":  # `lcsas key combine` logs its summary to stdout
+    if tool != "cli":  # `lcsas password combine` logs its summary to stdout
         assert proc.stdout == b""

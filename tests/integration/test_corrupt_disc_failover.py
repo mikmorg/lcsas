@@ -139,7 +139,7 @@ def _extract_iso(iso_path: Path, dest: Path) -> Path:
              "-extract", subpath, str(target)],
             capture_output=True, text=True,
         )
-        # Some subpaths may not exist on all ISOs (e.g. standalone_restorer.py)
+        # Some subpaths may not exist on all ISOs (e.g. python_reader.py)
         # — that's fine, just skip.
     # Fix read-only permissions from ISO
     for root, dirs, files in os.walk(dest):

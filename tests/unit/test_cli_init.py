@@ -8,12 +8,12 @@ from lcsas.cli.main import main
 class TestCmdInit:
     def test_reinit_on_existing_db(self, tmp_path, capsys):
         db = tmp_path / "existing.db"
-        main(["init", "--db-path", str(db)])
-        result = main(["init", "--db-path", str(db)])
+        main(["init", "--catalog-path", str(db)])
+        result = main(["init", "--catalog-path", str(db)])
         assert result == 0
 
     def test_init_creates_nested_parent_dirs(self, tmp_path, capsys):
-        """`lcsas init --db-path` creates missing intermediate directories.
+        """`lcsas init --catalog-path` creates missing intermediate directories.
 
         Issue #40: ``cmd_init`` calls ``mkdir(parents=True, exist_ok=True)``
         on the DB path's parent so XDG-style or fresh-deployment paths
@@ -21,11 +21,11 @@ class TestCmdInit:
         operator having to ``mkdir -p`` by hand. This test exercises the
         ``parents=True`` branch.
         """
-        db_path = tmp_path / "new" / "nested" / "dir" / "archive.db"
+        db_path = tmp_path / "new" / "nested" / "dir" / "catalog.db"
         # Sanity: the parent chain is genuinely missing up front.
         assert not db_path.parent.exists()
 
-        result = main(["init", "--db-path", str(db_path)])
+        result = main(["init", "--catalog-path", str(db_path)])
         assert result == 0
 
         # Every intermediate directory must now exist.
@@ -39,17 +39,17 @@ class TestCmdInit:
 class TestCLIInit:
     def test_init_creates_db(self, tmp_path):
         db_path = tmp_path / "test.db"
-        result = main(["init", "--db-path", str(db_path)])
+        result = main(["init", "--catalog-path", str(db_path)])
         assert result == 0
         assert db_path.exists()
 
     def test_init_honors_config_flag(self, tmp_path, monkeypatch):
         """`lcsas --config <path> init` must create the catalog DB at the
-        path declared in the TOML config, not the default ``archive.db``.
+        path declared in the TOML config, not the default ``catalog.db``.
 
         Regression test for issue #17.
         """
-        # Run in an isolated cwd so any default `./archive.db` would be
+        # Run in an isolated cwd so any default `./catalog.db` would be
         # easy to detect (and must NOT appear).
         workdir = tmp_path / "cwd"
         workdir.mkdir()
@@ -68,7 +68,7 @@ class TestCLIInit:
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{custom_db}"
+catalog = "{custom_db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -85,7 +85,7 @@ metadata_reserve_mb = 0
         )
 
         # And the default location must NOT have been written.
-        assert not (workdir / "archive.db").exists(), (
-            "init silently fell back to default archive.db in cwd; "
+        assert not (workdir / "catalog.db").exists(), (
+            "init silently fell back to default catalog.db in cwd; "
             "--config was ignored"
         )

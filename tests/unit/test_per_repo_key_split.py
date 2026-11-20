@@ -59,7 +59,7 @@ def _mixed_config(tmp_path: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=tmp_path / "mirror",
         staging_path=tmp_path / "staging",
-        db_path=tmp_path / "archive.db",
+        db_path=tmp_path / "catalog.db",
         key_split=False,
         key_threshold=2,
         key_shares=5,
@@ -91,7 +91,7 @@ def _write_toml(tmp_path: Path, body: str) -> Path:
         "[paths]\n"
         f'mirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\n'
-        f'database = "{tmp_path / "archive.db"}"\n' + body
+        f'catalog = "{tmp_path / "catalog.db"}"\n' + body
     )
     return cfg
 
@@ -103,9 +103,9 @@ def _write_toml(tmp_path: Path, body: str) -> Path:
 
 def test_repo_table_overrides_defaults(tmp_path: Path) -> None:
     cfg = _write_toml(tmp_path, (
-        "[defaults]\nkey_split = false\nkey_threshold = 2\nkey_shares = 5\n"
+        "[defaults]\nsplit = false\nsplit_threshold = 2\nsplit_shares = 5\n"
         '[repos.photos]\nmirror_path = "p"\n'
-        "key_split = true\nkey_threshold = 2\nkey_shares = 3\n"
+        "split = true\nsplit_threshold = 2\nsplit_shares = 3\n"
         '[repos.documents]\nmirror_path = "d"\n'
     ))
     config = load_config(cfg)
@@ -118,9 +118,9 @@ def test_repo_table_overrides_defaults(tmp_path: Path) -> None:
 
 def test_repo_table_can_turn_an_archive_wide_split_off(tmp_path: Path) -> None:
     cfg = _write_toml(tmp_path, (
-        "[defaults]\nkey_split = true\nkey_threshold = 3\nkey_shares = 5\n"
+        "[defaults]\nsplit = true\nsplit_threshold = 3\nsplit_shares = 5\n"
         '[repos.photos]\nmirror_path = "p"\n'
-        '[repos.documents]\nmirror_path = "d"\nkey_split = false\n'
+        '[repos.documents]\nmirror_path = "d"\nsplit = false\n'
     ))
     config = load_config(cfg)
     assert config.repo_split("photos") == (True, 3, 5)
@@ -186,7 +186,7 @@ def test_unsplit_repo_with_a_record_is_still_drift(tmp_path: Path) -> None:
         conn, repo_ids, config_split=False, config_threshold=2,
         config_shares=5, split_for=config.repo_split,
     )
-    assert msg is not None and "'documents'" in msg and "key_split=false" in msg
+    assert msg is not None and "'documents'" in msg and "split=false" in msg
 
 
 def test_recorded_splits_by_name() -> None:
@@ -236,12 +236,12 @@ def test_mixed_archive_disc_text_names_each_repository(tmp_path: Path) -> None:
         assert "Every other repository (documents) has an ordinary password." in text
         assert "This archive's password" not in text
         assert "any 2 of 5" not in text
-        assert "lcsas-keyshare" in text
+        assert "lcsas-shares" in text
     assert "Password: SPLIT into 3 share cards (any 2 rebuild it)" in info
     assert "Password: an ordinary password (not split)" in info
     # Each repository's line sits in its own entry.
-    photos = info.index("Repository: photos")
-    documents = info.index("Repository: documents")
+    photos = info.index("Backup set: photos")
+    documents = info.index("Backup set: documents")
     split_line = info.index("Password: SPLIT")
     plain_line = info.index("Password: an ordinary")
     assert photos < split_line and documents < plain_line < photos
@@ -276,7 +276,7 @@ def test_unrecorded_set_never_borrows_another_sets_record(
     for text in texts.values():
         assert "photos : any 3 of 4 share cards" in text
         assert "videos : any 3 of 5 share cards" in text
-    videos = info[info.index("Repository: videos"):]
+    videos = info[info.index("Backup set: videos"):]
     assert "Password: SPLIT into 5 share cards (any 3 rebuild it)" in videos
 
 
@@ -333,7 +333,7 @@ def test_no_split_anywhere_shows_no_share_text(tmp_path: Path) -> None:
     assert split_view(config) is None
     for text in _render(tmp_path, config, "none").values():
         assert "SHARE CARD" not in text
-        assert "lcsas-keyshare" not in text
+        assert "lcsas-shares" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -399,21 +399,21 @@ def test_estate_card_lists_each_repository() -> None:
     assert "photos: any 2 of 3 share cards rebuild its password" in card
     assert "documents: an ordinary password (not split)" in card
     assert "THE PASSWORD IS SPLIT" not in card
-    assert "lcsas-keyshare" in card
+    assert "lcsas-shares" in card
 
 
 def test_estate_card_cli_mixed_archive_uses_the_record(tmp_path: Path) -> None:
     (tmp_path / "p").mkdir()
     (tmp_path / "d").mkdir()
     cfg = _write_toml(tmp_path, (
-        "[defaults]\nkey_split = false\n"
+        "[defaults]\nsplit = false\n"
         "[repos.photos]\n"
         f'mirror_path = "{tmp_path / "p"}"\n'
-        "key_split = true\nkey_threshold = 3\nkey_shares = 4\n"
+        "split = true\nsplit_threshold = 3\nsplit_shares = 4\n"
         "[repos.documents]\n"
         f'mirror_path = "{tmp_path / "d"}"\n'
     ))
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     conn = get_connection(db)
     ensure_schema(conn)
     register_repo(conn, "uuid-photos", "photos", str(tmp_path / "p"))
@@ -433,11 +433,11 @@ def test_estate_card_cli_uniform_archive_prints_recorded_kn(
     """#573: the card prints the split actually performed, not the config."""
     (tmp_path / "p").mkdir()
     cfg = _write_toml(tmp_path, (
-        "[defaults]\nkey_split = true\nkey_threshold = 2\nkey_shares = 5\n"
+        "[defaults]\nsplit = true\nsplit_threshold = 2\nsplit_shares = 5\n"
         "[repos.photos]\n"
         f'mirror_path = "{tmp_path / "p"}"\n'
     ))
-    conn = get_connection(tmp_path / "archive.db")
+    conn = get_connection(tmp_path / "catalog.db")
     ensure_schema(conn)
     register_repo(conn, "uuid-photos", "photos", str(tmp_path / "p"))
     record_split(conn, "uuid-photos", 3, 5, 1)

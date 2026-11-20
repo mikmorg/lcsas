@@ -197,7 +197,7 @@ def _orch_env(tmp_path, *, version, password_file, bad_compression=False,
         repo_dir, version=version, bad_compression=bad_compression,
     )
 
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # Real on-disk DB so holographic injection (if reached) can copy it.
     from lcsas.db.connection import get_connection

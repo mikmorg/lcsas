@@ -4,13 +4,13 @@ Builds the real fixture (rustic + the burn pipeline + xorriso) exactly as
 windows-e2e's fixture job does (two backup sets, the backup set metadata
 on the meta disc too, the workflow's size) and checks what is on the
 discs: every ``metadata/`` folder is named by a UUID id, never by a name;
-its ``LCSAS_REPO.txt`` marker gives the name and the name restore.bat
+its ``LCSAS_BACKUP_SET.txt`` marker gives the name and the name restore.bat
 shows (``name_cmd``); ``sets.json``, which the windows and macOS legs
 read, says the same; and the restored set's own packs lie on two discs or
 more, which windows-e2e's multi-disc step relies on.
 
 The second set's password is split 2-of-3 as an owner splits it (#607):
-``lcsas key split`` records the split, so every disc's marker for that
+``lcsas password split`` records the split, so every disc's marker for that
 set says ``split=2-of-3`` with the cards' split id, the first set's says
 ``split=none``, and two of the printed cards rebuild the password.
 windows-e2e types two of those cards into restore.bat on real Windows.
@@ -146,7 +146,7 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
     assert len(cards) == n and all(c.is_file() for c in cards), cards
     texts = [c.read_text(encoding="utf-8") for c in cards]
     for i, text in enumerate(texts, 1):
-        assert f"Repository : {work['name']}" in text
+        assert f"Backup set : {work['name']}" in text
         assert f"Share      : {i} of {n}" in text
         assert f"Split ID   : {work['split_id']}" in text
     # Card 1 and card 3, the two the leg types, rebuild the password.

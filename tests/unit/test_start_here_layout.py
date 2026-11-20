@@ -70,7 +70,7 @@ def test_margin_and_width(tmp_path, split):
                     "WHAT TO DO NEXT", "DISC CARE"):
         assert heading in lines
     # The inserts sit at the indent of their section.
-    assert "  Repositories on these discs: family, work" in lines
+    assert "  Backup sets on these discs: family, work" in lines
     assert any(line.startswith("  Contents: Family photos") for line in lines)
     hint_lines = [line for line in lines if "fire safe" in line
                   or "family lawyer" in line or "combination" in line]

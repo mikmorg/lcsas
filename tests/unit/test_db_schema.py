@@ -619,12 +619,12 @@ class TestMigrateV4ToV5:
         """The CLI prints the refusal and exits 1, not 'Unexpected error'."""
         from lcsas.cli.main import main
 
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = sqlite3.connect(db)
         conn.executescript(V4_HISTORICAL_DDL)
         conn.close()
 
-        assert main(["--db", str(db), "init"]) == 1
+        assert main(["--catalog", str(db), "init"]) == 1
         out = capsys.readouterr().out
         assert "Unexpected error" not in out
         assert "schema is v4" in out
@@ -923,12 +923,12 @@ class TestEnsureSchema:
         """
         from lcsas.cli.main import main
 
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = sqlite3.connect(db)
         seed_v5_catalog(conn)
         conn.close()
 
-        assert main(["--db", str(db), "init"]) == 0
+        assert main(["--catalog", str(db), "init"]) == 0
 
         conn = sqlite3.connect(db)
         assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
@@ -949,7 +949,7 @@ class TestEnsureSchema:
         """#822: the oldest supported catalog, with a row in every table
         that has a foreign key, migrates to the current schema with every
         key resolving and every referenced table present."""
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = sqlite3.connect(db)
         seed_v5_catalog(conn)
         seed_v5_rows(conn)
@@ -1068,7 +1068,7 @@ class TestMigrationCrashAtomicity:
         """Ported (#822): the v4→v5 step and its crash window are gone.
         A v4 catalog is refused before any statement runs (no RENAME),
         and reopening the file shows the intact v4 catalog."""
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         self._seed_v4_file(db)
 
         conn = sqlite3.connect(db, factory=_InstrumentedConnection)
@@ -1089,7 +1089,7 @@ class TestMigrationCrashAtomicity:
 
     def test_migration_crash_window_is_atomic_v5_to_v6(self, tmp_path):
         """Same crash drill for the v5→v6 volume_events recreate."""
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = sqlite3.connect(db)
         conn.executescript(V5_HISTORICAL_DDL)
         conn.execute(
@@ -1128,7 +1128,7 @@ class TestMigrationCrashAtomicity:
         an open transaction (legacy isolation autocommitted it — the
         exact crash window this plan closes).  Ported to a v5 seed: the
         v4→v5 rename is gone (#822)."""
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = sqlite3.connect(db)
         seed_v5_catalog(conn)
         conn.close()
@@ -1171,14 +1171,14 @@ class TestMigrationCrashAtomicity:
         """No CLI command may present the empty-catalog illusion."""
         from lcsas.cli.main import main
 
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = sqlite3.connect(db)
         conn.executescript(V4_HISTORICAL_DDL)
         conn.execute("ALTER TABLE volumes RENAME TO volumes_old")
         conn.commit()
         conn.close()
 
-        assert main(["--db", str(db), "status"]) == 1
+        assert main(["--catalog", str(db), "status"]) == 1
 
         conn = sqlite3.connect(db)
         assert "volumes" not in self._tables(conn)

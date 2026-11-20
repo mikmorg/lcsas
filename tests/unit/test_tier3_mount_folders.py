@@ -209,13 +209,13 @@ def test_the_script_finds_a_disc_under_a_mount_folder(tmp_path: Path) -> None:
     repo = _repo_and_disc(tmp_path, mounts, "LCSAS-0001")
     pw = tmp_path / "pw"
     pw.write_bytes(PASSWORD + b"\n")
-    script = tmp_path / "standalone_restorer.py"
+    script = tmp_path / "python_reader.py"
     script.write_text(build_standalone())
     env = {k: v for k, v in os.environ.items()
            if k not in ("LCSAS_PACK_CACHE_DIR", "LCSAS_META_DISC")}
     proc = subprocess.run(
         [sys.executable, "-I", str(script), "--repo", str(repo),
-         "--password-file", str(pw), "--target", str(tmp_path / "out"),
+         "--password-file", str(pw), "--restore-folder", str(tmp_path / "out"),
          "--mount-point", str(mounts), "--interactive", "off",
          "--meta-disc", str(mounts / "LCSAS-META")],
         capture_output=True, text=True, timeout=120, env=env,

@@ -46,7 +46,7 @@ def _config(tmp_path: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=mirror,
         staging_path=staging,
-        db_path=tmp_path / "db" / "archive.db",
+        db_path=tmp_path / "db" / "catalog.db",
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=100,
@@ -98,7 +98,7 @@ def env(tmp_path):
     cfg.write_text(
         f'[paths]\nmirror_base = "{config.mirror_base_path}"\n'
         f'staging = "{config.staging_path}"\n'
-        f'database = "{config.db_path}"\n'
+        f'catalog = "{config.db_path}"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
     )
     yield {"config": config, "cfg": cfg, "conn": conn,
@@ -195,7 +195,7 @@ def test_receipt_already_on_a_later_disc_catalog(env, caplog, tmp_path):
     later = _orchestrator(env["config"], env["conn"]).stage()
     later_tree = later.staging_dir / later.manifests[0].volume_label
 
-    rebuilt = tmp_path / "rebuilt" / "archive.db"
+    rebuilt = tmp_path / "rebuilt" / "catalog.db"
     rebuilt.parent.mkdir()
     assert main(["catalog", "rebuild", str(later_tree),
                  "--output", str(rebuilt)]) == 0
@@ -223,7 +223,7 @@ def test_receipt_still_imports_on_rebuilt_catalog(env, caplog, tmp_path):
     """The disc catalog was copied before the burn, so a catalog rebuilt
     from the disc has no disc record: the receipt imports there."""
     receipt = _burn(env, skip_burn=False)
-    rebuilt = tmp_path / "rebuilt" / "archive.db"
+    rebuilt = tmp_path / "rebuilt" / "catalog.db"
     rebuilt.parent.mkdir()
     assert main(["catalog", "rebuild", str(env["tree"]),
                  "--output", str(rebuilt)]) == 0

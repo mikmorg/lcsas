@@ -179,7 +179,7 @@ def _make_config_with_repos(conn, tmp_path=None, add_fallback_repo=True):
     return LCSASConfig(
         mirror_base_path=str(tmp_path),
         staging_path=str(tmp_path / "staging"),
-        db_path=str(tmp_path / "archive.db"),
+        db_path=str(tmp_path / "catalog.db"),
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=1000,

@@ -61,7 +61,7 @@ def test_no_disc_and_no_location_is_refused(tmp_path, capsys, status):
     db = tmp_path / "c.db"
     _catalog(db, status)
 
-    assert main(["--db", str(db), "verify", "VOL_MV", "--mark-verified"]) == 1
+    assert main(["--catalog", str(db), "verify", "VOL_MV", "--mark-verified"]) == 1
 
     assert "--location" in capsys.readouterr().out
     vol, copies, passes = _state(db)
@@ -74,7 +74,7 @@ def test_with_location_the_disc_is_recorded(tmp_path, status):
     db = tmp_path / "c.db"
     _catalog(db, status)
 
-    assert main(["--db", str(db), "verify", "VOL_MV", "--mark-verified",
+    assert main(["--catalog", str(db), "verify", "VOL_MV", "--mark-verified",
                  "--location", "Offsite_Safe",
                  "--detail", "remote burn, receipt lost"]) == 0
 
@@ -107,7 +107,7 @@ def test_burned_volume_with_a_disc_needs_no_location(tmp_path):
     db = tmp_path / "c.db"
     _catalog(db, "BURNED", copy_at="Home")
 
-    assert main(["--db", str(db), "verify", "VOL_MV", "--mark-verified"]) == 0
+    assert main(["--catalog", str(db), "verify", "VOL_MV", "--mark-verified"]) == 0
 
     vol, copies, passes = _state(db)
     assert vol.status == "VERIFIED"
@@ -121,7 +121,7 @@ def test_location_without_a_disc_there_is_refused(tmp_path, capsys):
     db = tmp_path / "c.db"
     _catalog(db, "BURNED", copy_at="Home")
 
-    assert main(["--db", str(db), "verify", "VOL_MV", "--mark-verified",
+    assert main(["--catalog", str(db), "verify", "VOL_MV", "--mark-verified",
                  "--location", "Offsite_Safe"]) == 1
 
     assert "not at Offsite_Safe" in capsys.readouterr().out

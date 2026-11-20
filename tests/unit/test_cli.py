@@ -21,7 +21,7 @@ class TestCLIParsing:
             self.parser.parse_args(["--version"])
 
     def test_init_command(self):
-        args = self.parser.parse_args(["init", "--db-path", "/tmp/test.db"])
+        args = self.parser.parse_args(["init", "--catalog-path", "/tmp/test.db"])
         assert args.command == "init"
 
     def test_repo_add(self):
@@ -73,7 +73,7 @@ class TestCLIParsing:
 
     def test_consolidate(self):
         args = self.parser.parse_args([
-            "consolidate", "1", "2", "3", "--target-media", "MDISC100"
+            "consolidate", "1", "2", "3", "--media-type", "MDISC100"
         ])
         assert args.command == "consolidate"
         assert args.volume_ids == [1, 2, 3]
@@ -92,7 +92,7 @@ class TestDispatchRouting:
         """Verify parser accepts all known commands without errors."""
         parser = build_parser()
         commands = [
-            ["init", "--db-path", "/tmp/x.db"],
+            ["init", "--catalog-path", "/tmp/x.db"],
             ["repo", "add", "fam", "/mnt"],
             ["repo", "list"],
             ["scan"],

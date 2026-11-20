@@ -1,4 +1,4 @@
-"""Build tier 3, the Python reader (``standalone_restorer.py``), from source modules.
+"""Build tier 3, the Python reader (``python_reader.py``), from source modules.
 
 Concatenates ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py``,
 ``_disc_search.py`` and ``restic_fallback.py`` into a single file that can be placed on every
@@ -11,12 +11,12 @@ Usage::
     from lcsas.restore.standalone_builder import build_standalone
 
     text = build_standalone()
-    Path("standalone_restorer.py").write_text(text)
+    Path("python_reader.py").write_text(text)
 
 The generated script supports CLI usage::
 
-    python3 standalone_restorer.py --repo /path/to/cache \\
-        --password-file password.txt --target /output
+    python3 python_reader.py --repo /path/to/cache \\
+        --password-file password.txt --restore-folder /output
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ _SRC_DIR = Path(__file__).resolve().parent
 
 
 def build_standalone() -> str:
-    """Return the text of a self-contained standalone_restorer.py.
+    """Return the text of a self-contained python_reader.py.
 
     Reads ``_aes_pure.py``, ``_aes_fast.py``, ``_zstd_pure.py``,
     ``_disc_search.py`` and ``restic_fallback.py`` from the same directory, strips
@@ -198,8 +198,8 @@ _HEADER = textwrap.dedent("""\
     #  (~100x faster).
     #
     #  Usage:
-    #    python3 standalone_restorer.py --repo /path/to/cache \\\\
-    #        --password-file password.txt --target /path/to/output
+    #    python3 python_reader.py --repo /path/to/cache \\\\
+    #        --password-file password.txt --restore-folder /path/to/output
     #
     #  NO pip packages, NO native binaries, NO internet REQUIRED.
     #
@@ -215,7 +215,7 @@ _HEADER = textwrap.dedent("""\
     #  an exec audit log keeps it in that log.  On such a computer run
     #  with LCSAS_TIER3_AES=pure (slow) to keep the key off the command
     #  line:
-    #    LCSAS_TIER3_AES=pure python3 standalone_restorer.py ...
+    #    LCSAS_TIER3_AES=pure python3 python_reader.py ...
     #
     #  Requires Python 3.10 or newer (stdlib only).
     # ═══════════════════════════════════════════════════════════════════
@@ -256,8 +256,8 @@ _CLI_BLOCK = textwrap.dedent("""\
             help="Path to the password file",
         )
         parser.add_argument(
-            "--target", required=True,
-            help="Directory to restore files into",
+            "--restore-folder", required=True,
+            help="The restore folder: the directory to restore files into",
         )
         parser.add_argument(
             "--snapshot", default=None,
@@ -323,6 +323,15 @@ _CLI_BLOCK = textwrap.dedent("""\
             "disc into once it is found, so no disc has to go back in "
             "later (unset or empty: no copy)."
         )
+
+        for tok in sys.argv[1:]:
+            if tok == "--target" or tok.startswith("--target="):
+                print(
+                    "python_reader.py: --target was renamed: "
+                    "use --restore-folder",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
 
         args = parser.parse_args()
 
@@ -400,7 +409,7 @@ _CLI_BLOCK = textwrap.dedent("""\
                 )
             return
 
-        target = Path(args.target)
+        target = Path(args.restore_folder)
         # Tolerant by default (tier 3 is the last resort: one bad blob
         # must NOT abort the whole restore).  A per-file failure is
         # recorded, the rest of the data is restored, and the count is

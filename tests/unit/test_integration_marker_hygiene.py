@@ -16,7 +16,7 @@ collect it, and that is not a gate.
 The failure is silent in the worst way: every gate run prints "N deselected"
 and exits 0, which reads as "covered".  Seven tests sat outside every gate
 this way (issue #426), including the pair that proves the committed
-``lcsas-keyshare`` binary accepts real SLIP-0039 recovery cards and that the C
+``lcsas-shares`` binary accepts real SLIP-0039 recovery cards and that the C
 and Python share-recovery paths agree -- tier-1 recovery behaviour.
 
 WHAT THIS GATE ASSERTS

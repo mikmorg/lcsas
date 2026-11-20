@@ -23,7 +23,7 @@ def _write_config(tmp_path: Path, mirror: Path, db: Path) -> Path:
         [paths]
         mirror_base = "{mirror}"
         staging = "{staging}"
-        database = "{db}"
+        catalog = "{db}"
 
         [defaults]
         media_type = "TEST_TINY"
@@ -40,20 +40,20 @@ class TestInitRepoScanPipeline:
 
     def test_pipeline_init_to_scan(self, tmp_path, capsys):
         """Full pipeline produces correct DB state, observable via CLI commands."""
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         mirror = tmp_path / "mirror"
         mirror.mkdir()
 
         # 1. init creates the database
-        assert main(["init", "--db-path", str(db)]) == 0
+        assert main(["init", "--catalog-path", str(db)]) == 0
         assert db.exists()
 
         # 2. repo add registers the repository
-        assert main(["--db", str(db), "repo", "add", "test_repo", str(mirror)]) == 0
+        assert main(["--catalog", str(db), "repo", "add", "test_repo", str(mirror)]) == 0
 
         # 3. repo list shows the new repo
         capsys.readouterr()
-        assert main(["--db", str(db), "repo", "list"]) == 0
+        assert main(["--catalog", str(db), "repo", "list"]) == 0
         assert "test_repo" in capsys.readouterr().out
 
         # 4. Place a fake pack file in the mirror (two-level layout)
@@ -65,14 +65,14 @@ class TestInitRepoScanPipeline:
         # 5. Write a config TOML and scan (no snapshot listing needed)
         cfg = _write_config(tmp_path, mirror, db)
         capsys.readouterr()
-        assert main(["--config", str(cfg), "--db", str(db), "scan", "--no-snapshots"]) == 0
+        assert main(["--config", str(cfg), "--catalog", str(db), "scan", "--no-snapshots"]) == 0
         scan_out = capsys.readouterr().out
         assert "Total scanned: 1" in scan_out
         assert "New packs registered: 1" in scan_out
 
         # 6. status reflects the registered pack
         capsys.readouterr()
-        assert main(["--db", str(db), "status"]) == 0
+        assert main(["--catalog", str(db), "status"]) == 0
         status_out = capsys.readouterr().out
         assert "Packs: 1 total" in status_out
         assert "1 unarchived" in status_out
@@ -80,12 +80,12 @@ class TestInitRepoScanPipeline:
 
     def test_second_scan_discovers_no_new_packs(self, tmp_path, capsys):
         """Re-scanning the same mirror does not re-register already-known packs."""
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         mirror = tmp_path / "mirror"
         mirror.mkdir()
 
-        assert main(["init", "--db-path", str(db)]) == 0
-        assert main(["--db", str(db), "repo", "add", "test_repo", str(mirror)]) == 0
+        assert main(["init", "--catalog-path", str(db)]) == 0
+        assert main(["--catalog", str(db), "repo", "add", "test_repo", str(mirror)]) == 0
 
         data_dir = mirror / "data" / "cc"
         data_dir.mkdir(parents=True)
@@ -96,23 +96,23 @@ class TestInitRepoScanPipeline:
 
         # First scan registers the pack
         capsys.readouterr()
-        assert main(["--config", str(cfg), "--db", str(db), "scan", "--no-snapshots"]) == 0
+        assert main(["--config", str(cfg), "--catalog", str(db), "scan", "--no-snapshots"]) == 0
         first_out = capsys.readouterr().out
         assert "New packs registered: 1" in first_out
 
         # Second scan finds no new packs
         capsys.readouterr()
-        assert main(["--config", str(cfg), "--db", str(db), "scan", "--no-snapshots"]) == 0
+        assert main(["--config", str(cfg), "--catalog", str(db), "scan", "--no-snapshots"]) == 0
         second_out = capsys.readouterr().out
         assert "New packs registered: 0" in second_out
 
     def test_status_empty_db(self, tmp_path, capsys):
         """Status on a freshly initialised DB reports zero packs and volumes."""
         db = tmp_path / "empty.db"
-        assert main(["init", "--db-path", str(db)]) == 0
+        assert main(["init", "--catalog-path", str(db)]) == 0
 
         capsys.readouterr()
-        assert main(["--db", str(db), "status"]) == 0
+        assert main(["--catalog", str(db), "status"]) == 0
         out = capsys.readouterr().out
         assert "Packs: 0 total" in out
         assert "Volumes: 0 total" in out
@@ -123,12 +123,12 @@ class TestRepoRemovePipeline:
 
     def test_remove_empty_repo_via_cli(self, tmp_path, capsys):
         """An empty repo (no packs) can be removed via CLI using its ID."""
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         mirror = tmp_path / "mirror"
         mirror.mkdir()
 
-        assert main(["init", "--db-path", str(db)]) == 0
-        assert main(["--db", str(db), "repo", "add", "temp_repo", str(mirror)]) == 0
+        assert main(["init", "--catalog-path", str(db)]) == 0
+        assert main(["--catalog", str(db), "repo", "add", "temp_repo", str(mirror)]) == 0
 
         # Extract repo_id directly from the catalog
         conn = get_connection(db)
@@ -140,7 +140,7 @@ class TestRepoRemovePipeline:
         repo_id = repos[0].repo_id
 
         # Remove the repo
-        assert main(["--db", str(db), "repo", "remove", repo_id]) == 0
+        assert main(["--catalog", str(db), "repo", "remove", repo_id]) == 0
 
         # repo list should now be empty
         conn = get_connection(db)

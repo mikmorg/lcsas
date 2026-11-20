@@ -16,7 +16,7 @@ from lcsas.cli.parser import build_parser
          "lcsas catalog rebuild"),
         (["location", "move", "V", "--from", "A", "--to", "B"],
          "lcsas location move"),
-        (["key", "split", "--repo", "r"], "lcsas key split"),
+        (["password", "split", "--repo", "r"], "lcsas password split"),
         (["status"], "lcsas status"),
     ],
 )

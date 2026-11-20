@@ -1,6 +1,6 @@
 """``--config`` placed AFTER the subcommand (issue #517, the "low" bullet).
 
-``--config`` (like ``--db``) is a flag of the top-level parser only, so the
+``--config`` (like ``--catalog``) is a flag of the top-level parser only, so the
 working form is ``lcsas --config foo.toml scan``.  Operators naturally write
 ``lcsas scan --config foo.toml``.  ``docs/workflows/init-and-config.md``
 (Notes & gaps) records what happens: argparse rejects it with a bare
@@ -47,7 +47,7 @@ def test_config_after_subcommand_is_an_argparse_usage_error(
     assert code == 2  # argparse usage error, not a handler's return value
     assert "unrecognized arguments:" in err
     assert "--config" in err.split("unrecognized arguments:", 1)[1]
-    # Nothing ran: no archive.db was created in the cwd by a handler that
+    # Nothing ran: no catalog.db was created in the cwd by a handler that
     # silently fell back to the default catalog, and the (nonexistent)
     # x.toml was never opened.
     assert list(tmp_path.iterdir()) == []
@@ -83,10 +83,10 @@ def test_error_tells_the_operator_config_goes_before_the_subcommand(
 def test_misplaced_db_gets_the_same_hint(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    code, err = _run_expecting_exit(["status", "--db", "x.db"], capsys)
+    code, err = _run_expecting_exit(["status", "--catalog", "x.db"], capsys)
 
     assert code == 2
-    assert "--db: top-level option(s); put them before the subcommand" in err
+    assert "--catalog: top-level option(s); put them before the subcommand" in err
     assert list(tmp_path.iterdir()) == []
 
 

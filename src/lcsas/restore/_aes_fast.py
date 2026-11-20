@@ -61,7 +61,7 @@ The environment variable ``LCSAS_TIER3_AES`` overrides the choice:
 caller did not allow the command) or ``pure``.
 
 Standard library only.  This module is concatenated into the generated
-``standalone_restorer.py``; every module-level name it defines carries
+``python_reader.py``; every module-level name it defines carries
 an ``_aesf_`` prefix (or is one of the two public classes) so it cannot
 collide with names in the other concatenated modules.
 """

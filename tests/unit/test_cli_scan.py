@@ -53,7 +53,7 @@ def _write_config(tmp_path: Path, db_path: Path, repos: dict[str, Path]) -> Path
     config_path.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\n'
-        f'database = "{db_path}"\n'
+        f'catalog = "{db_path}"\n'
         f"\n[defaults]\n"
         f'media_type = "TEST_TINY"\n'
         f'ecc_redundancy_pct = 0\n'
@@ -94,19 +94,19 @@ class TestScanParser:
 class TestCmdScan:
     def test_scan_discovers_new_packs(self, tmp_path, capsys):
         """Scan finds packs on disk and registers them in the catalog."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         hashes = ["aa" * 32, "bb" * 32, "cc" * 32]
         mirror = _make_mirror(tmp_path, "family", hashes)
         config_path = _write_config(tmp_path, db_path, {"family": mirror})
 
         # Init DB + register repo
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "family", "family", str(mirror), "")
         conn.close()
 
-        result = main(["--config", str(config_path), "--db", str(db_path), "scan"])
+        result = main(["--config", str(config_path), "--catalog", str(db_path), "scan"])
         assert result == 0
 
         out = capsys.readouterr().out
@@ -123,37 +123,37 @@ class TestCmdScan:
 
     def test_scan_idempotent(self, tmp_path, capsys):
         """Running scan twice registers packs only once."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         hashes = ["dd" * 32, "ee" * 32]
         mirror = _make_mirror(tmp_path, "work", hashes)
         config_path = _write_config(tmp_path, db_path, {"work": mirror})
 
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "work", "work", str(mirror), "")
         conn.close()
 
         # First scan
-        main(["--config", str(config_path), "--db", str(db_path), "scan"])
+        main(["--config", str(config_path), "--catalog", str(db_path), "scan"])
         capsys.readouterr()
 
         # Second scan — should register 0 new
-        result = main(["--config", str(config_path), "--db", str(db_path), "scan"])
+        result = main(["--config", str(config_path), "--catalog", str(db_path), "scan"])
         assert result == 0
         out = capsys.readouterr().out
         assert "Newly registered: 0" in out
 
     def test_scan_repo_filter(self, tmp_path, capsys):
         """--repo filters to specific repositories."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         mirror_a = _make_mirror(tmp_path, "alpha", ["a1" * 32])
         mirror_b = _make_mirror(tmp_path, "beta", ["b1" * 32])
         config_path = _write_config(
             tmp_path, db_path, {"alpha": mirror_a, "beta": mirror_b}
         )
 
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "alpha", "alpha", str(mirror_a), "")
@@ -161,7 +161,7 @@ class TestCmdScan:
         conn.close()
 
         result = main([
-            "--config", str(config_path), "--db", str(db_path),
+            "--config", str(config_path), "--catalog", str(db_path),
             "scan", "--repo", "alpha",
         ])
         assert result == 0
@@ -181,19 +181,19 @@ class TestCmdScan:
     def test_scan_footer_names_unregistered_repos(self, tmp_path, capsys):
         """#516: a configured but unregistered repo is skipped; the footer
         says so instead of counting it as scanned."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         mirror_a = _make_mirror(tmp_path, "alpha", ["a2" * 32])
         mirror_b = _make_mirror(tmp_path, "beta", ["b2" * 32])
         config_path = _write_config(
             tmp_path, db_path, {"alpha": mirror_a, "beta": mirror_b}
         )
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "alpha", "alpha", str(mirror_a), "")
         conn.close()
 
-        result = main(["--config", str(config_path), "--db", str(db_path),
+        result = main(["--config", str(config_path), "--catalog", str(db_path),
                        "scan", "--no-snapshots"])
         assert result == 0
         out = capsys.readouterr().out
@@ -201,7 +201,7 @@ class TestCmdScan:
 
     def test_scan_empty_mirror(self, tmp_path, capsys):
         """Scanning a mirror with no packs reports zero."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         mirror = tmp_path / "mirror" / "empty"
         mirror.mkdir(parents=True)
         (mirror / "data").mkdir()
@@ -211,13 +211,13 @@ class TestCmdScan:
         (mirror / "snapshots").mkdir()
         config_path = _write_config(tmp_path, db_path, {"empty": mirror})
 
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "empty", "empty", str(mirror), "")
         conn.close()
 
-        result = main(["--config", str(config_path), "--db", str(db_path), "scan"])
+        result = main(["--config", str(config_path), "--catalog", str(db_path), "scan"])
         assert result == 0
         out = capsys.readouterr().out
         assert "Packs on disk:  0" in out
@@ -225,17 +225,17 @@ class TestCmdScan:
 
     def test_scan_prints_total_summary(self, tmp_path, capsys):
         """Scan prints a total summary line across all repos."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         mirror = _make_mirror(tmp_path, "repo1", ["ff" * 32])
         config_path = _write_config(tmp_path, db_path, {"repo1": mirror})
 
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "repo1", "repo1", str(mirror), "")
         conn.close()
 
-        result = main(["--config", str(config_path), "--db", str(db_path), "scan"])
+        result = main(["--config", str(config_path), "--catalog", str(db_path), "scan"])
         assert result == 0
         out = capsys.readouterr().out
         assert "Total scanned:" in out
@@ -253,19 +253,19 @@ class TestPruneSyncGuards:
         is missing whole hash-prefix ranges — those packs must NOT be
         marked pruned.
         """
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         hashes = ["aa" * 32, "bb" * 32]
         mirror = _make_mirror(tmp_path, "family", hashes)
         config_path = _write_config(tmp_path, db_path, {"family": mirror})
 
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "family", "family", str(mirror), "")
         conn.close()
 
         # First (complete) scan registers both packs.
-        assert main(["--config", str(config_path), "--db", str(db_path),
+        assert main(["--config", str(config_path), "--catalog", str(db_path),
                      "scan", "--no-snapshots"]) == 0
         capsys.readouterr()
 
@@ -279,7 +279,7 @@ class TestPruneSyncGuards:
             return real_scandir(path)
 
         monkeypatch.setattr(scanner_mod.os, "scandir", fake_scandir)
-        assert main(["--config", str(config_path), "--db", str(db_path),
+        assert main(["--config", str(config_path), "--catalog", str(db_path),
                      "scan", "--no-snapshots"]) == 0
         monkeypatch.undo()
 
@@ -294,13 +294,13 @@ class TestPruneSyncGuards:
 
     def test_mass_prune_requires_confirmation(self, tmp_path, capsys):
         """BURN-09: pruning >max(10, 20% of active) needs --yes-prune."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         shas = [f"{i:064x}" for i in range(100)]
         # Mirror holds only 1 of the 100 known packs.
         mirror = _make_mirror(tmp_path, "family", [shas[0]])
         config_path = _write_config(tmp_path, db_path, {"family": mirror})
 
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "family", "family", str(mirror), "")
@@ -309,7 +309,7 @@ class TestPruneSyncGuards:
         conn.close()
 
         # Without --yes-prune: refused, nothing pruned.
-        assert main(["--config", str(config_path), "--db", str(db_path),
+        assert main(["--config", str(config_path), "--catalog", str(db_path),
                      "scan", "--no-snapshots"]) == 0
         out = capsys.readouterr().out
         assert "Refusing to mark 99/100" in out
@@ -320,7 +320,7 @@ class TestPruneSyncGuards:
         conn.close()
 
         # With --yes-prune: the mass-prune is confirmed and applied.
-        assert main(["--config", str(config_path), "--db", str(db_path),
+        assert main(["--config", str(config_path), "--catalog", str(db_path),
                      "scan", "--no-snapshots", "--yes-prune"]) == 0
         out = capsys.readouterr().out
         assert "Pruned packs:   99" in out
@@ -332,13 +332,13 @@ class TestPruneSyncGuards:
 
     def test_small_prune_still_automatic(self, tmp_path, capsys):
         """BURN-09: a small prune (≤ threshold) needs no confirmation."""
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         shas = [f"{i:064x}" for i in range(100)]
         # Mirror holds 98 of the 100 known packs (2 genuinely pruned).
         mirror = _make_mirror(tmp_path, "family", shas[:98])
         config_path = _write_config(tmp_path, db_path, {"family": mirror})
 
-        main(["init", "--db-path", str(db_path)])
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "family", "family", str(mirror), "")
@@ -346,7 +346,7 @@ class TestPruneSyncGuards:
             register_pack(conn, sha256=sha, size_bytes=1024, repo_id="family")
         conn.close()
 
-        assert main(["--config", str(config_path), "--db", str(db_path),
+        assert main(["--config", str(config_path), "--catalog", str(db_path),
                      "scan", "--no-snapshots"]) == 0
         out = capsys.readouterr().out
         assert "Pruned packs:   2" in out
@@ -361,8 +361,8 @@ class TestPackUnprune:
     """BURN-09: 'lcsas pack unprune' — the recovery tool for mis-prunes."""
 
     def _db_with_pruned_packs(self, tmp_path, shas: list[str]):
-        db_path = tmp_path / "archive.db"
-        main(["init", "--db-path", str(db_path)])
+        db_path = tmp_path / "catalog.db"
+        main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "family", "family", "/mirror/family", "")
@@ -376,7 +376,7 @@ class TestPackUnprune:
         sha = "ab" * 32
         db_path = self._db_with_pruned_packs(tmp_path, [sha])
 
-        rc = main(["--db", str(db_path), "pack", "unprune", sha[:12]])
+        rc = main(["--catalog", str(db_path), "pack", "unprune", sha[:12]])
         assert rc == 0
         out = capsys.readouterr().out
         assert "restored to the active pool" in out
@@ -391,7 +391,7 @@ class TestPackUnprune:
         sha_b = "ab" + "22" * 31
         db_path = self._db_with_pruned_packs(tmp_path, [sha_a, sha_b])
 
-        rc = main(["--db", str(db_path), "pack", "unprune", "ab"])
+        rc = main(["--catalog", str(db_path), "pack", "unprune", "ab"])
         assert rc == 1
         out = capsys.readouterr().out
         assert "ambiguous" in out
@@ -404,7 +404,7 @@ class TestPackUnprune:
     def test_unprune_no_match(self, tmp_path, capsys):
         db_path = self._db_with_pruned_packs(tmp_path, ["cd" * 32])
 
-        rc = main(["--db", str(db_path), "pack", "unprune", "ff" * 32])
+        rc = main(["--catalog", str(db_path), "pack", "unprune", "ff" * 32])
         assert rc == 1
         out = capsys.readouterr().out
         assert "No pack matches" in out
@@ -415,13 +415,13 @@ def _write_config_comp(tmp_path: Path, extra: str = "") -> Path:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -435,7 +435,7 @@ class TestCmdScanFromConfig:
     def test_scan_registers_new_packs(self, tmp_path, capsys):
         """Scan with mock filesystem registers packs."""
         cfg = _write_config_comp(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
 
         # Pre-init DB + register a repo
         conn = get_connection(db)
@@ -458,7 +458,7 @@ class TestCmdScanFromConfig:
         """Scanning an unknown repo name is an error, not a crash (#516: it
         used to exit 0 after scanning nothing)."""
         cfg = _write_config_comp(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -525,7 +525,7 @@ def _write_config_scan(tmp_path: Path, db_path: Path, repos: dict[str, Path],
     config_path.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\n'
-        f'database = "{db_path}"\n'
+        f'catalog = "{db_path}"\n'
         "\n[defaults]\n"
         'media_type = "TEST_TINY"\n'
         "ecc_redundancy_pct = 0\n"
@@ -543,7 +543,7 @@ class _Env:
 
     def __init__(self, tmp_path: Path, on_disk: list[str],
                  known_in_db: list[str] | None = None, *, with_password: bool = False) -> None:
-        self.db_path = tmp_path / "archive.db"
+        self.db_path = tmp_path / "catalog.db"
         self.mirror = _make_mirror_scan(tmp_path, "family", on_disk)
         self.password_file: Path | None = None
         if with_password:
@@ -553,7 +553,7 @@ class _Env:
             tmp_path, self.db_path, {"family": self.mirror},
             {"family": self.password_file} if self.password_file else None,
         )
-        main(["init", "--db-path", str(self.db_path)])
+        main(["init", "--catalog-path", str(self.db_path)])
         conn = get_connection(self.db_path)
         create_all(conn)
         register_repo(conn, "family", "family", str(self.mirror), "")
@@ -562,7 +562,7 @@ class _Env:
         conn.close()
 
     def scan(self, *flags: str) -> int:
-        return main(["--config", str(self.config), "--db", str(self.db_path),
+        return main(["--config", str(self.config), "--catalog", str(self.db_path),
                      "scan", *flags])
 
     def active_packs(self) -> list:

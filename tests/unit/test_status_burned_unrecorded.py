@@ -35,10 +35,10 @@ from tests.unit.test_rebuild_newest_session import (
 
 def _status(db: Path, caplog, capsys) -> tuple[str, dict]:
     caplog.clear()
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     text = caplog.text
     capsys.readouterr()
-    assert main(["--db", str(db), "status", "--json"]) == 0
+    assert main(["--catalog", str(db), "status", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     return text, doc
 

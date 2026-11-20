@@ -133,8 +133,8 @@ mkdir -p /media/lcsas-meta /media/lcsas-data /restored
 mount_by_label LCSAS_META /media/lcsas-meta
 mount_by_label "@DATA_LABEL@" /media/lcsas-data
 export LCSAS_PASSWORD='@PASSWORD@'
-export LCSAS_REPO='@TENANT@'
-export LCSAS_ALLOW_TMPFS_TARGET=1
+export LCSAS_BACKUP_SET='@TENANT@'
+export LCSAS_ALLOW_TMPFS_RESTORE_FOLDER=1
 m=LCSAS_LIVE_USB
 if sh /media/lcsas-meta/recovery/scripts/restore.sh /restored latest \\
       </dev/null >/run/lcsas-restore.log 2>&1; then
@@ -295,7 +295,7 @@ def _build_archive(work: Path) -> _Archive:
     create_all(conn)
     conn.commit()
     # As an owner does (#617): the set's id is a UUID, its name TENANT.
-    # The guest's LCSAS_REPO='alpha' names it by its name.
+    # The guest's LCSAS_BACKUP_SET='alpha' names it by its name.
     repo_id = add_repo(db_path, TENANT, mirror)
     delta = DeltaAnalyzer(conn, scan_mirror_packs(mirror).packs, repo_id=repo_id)
     delta.register_new_packs()

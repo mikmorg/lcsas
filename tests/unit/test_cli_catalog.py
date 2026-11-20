@@ -403,19 +403,19 @@ def test_catalog_reconcile_reports_and_fixes_ghosts(tmp_path, capsys):
     from lcsas.db.queries import get_unarchived_packs
 
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     capsys.readouterr()
 
     # Report-only: ghost listed, nonzero exit (needs attention), no change.
-    rc = main(["--db", str(db), "catalog", "reconcile"])
+    rc = main(["--catalog", str(db), "catalog", "reconcile"])
     assert rc == 1
     out = capsys.readouterr().out
     assert "GHOST_VOL" in out
     assert "--fix" in out
 
     # Fix: ghost volume deleted, packs reclaimed.
-    rc = main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes"])
+    rc = main(["--catalog", str(db), "catalog", "reconcile", "--fix", "--yes"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "2 pack(s) returned to the unarchived pool" in out
@@ -431,7 +431,7 @@ def test_catalog_reconcile_reports_and_fixes_ghosts(tmp_path, capsys):
         conn.close()
 
     # A second run reports clean.
-    rc = main(["--db", str(db), "catalog", "reconcile"])
+    rc = main(["--catalog", str(db), "catalog", "reconcile"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "no ghost volumes" in out
@@ -446,7 +446,7 @@ def test_catalog_reconcile_spares_fresh_and_burned_volumes(tmp_path, capsys):
     from lcsas.db.volumes import create_volume
 
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db), label="FRESH_STAGING", age_hours=0)
     conn = get_connection(str(db))
     try:
@@ -467,7 +467,7 @@ def test_catalog_reconcile_spares_fresh_and_burned_volumes(tmp_path, capsys):
         conn.close()
     capsys.readouterr()
 
-    rc = main(["--db", str(db), "catalog", "reconcile"])
+    rc = main(["--catalog", str(db), "catalog", "reconcile"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "no ghost volumes" in out
@@ -505,18 +505,18 @@ def test_catalog_reconcile_fix_spares_an_old_volume_whose_iso_exists(
     from lcsas.db.connection import get_connection
 
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     _give_staged_iso(str(db), tmp_path)
     capsys.readouterr()
 
-    rc = main(["--db", str(db), "catalog", "reconcile"])
+    rc = main(["--catalog", str(db), "catalog", "reconcile"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "waiting to be burned" in out and "GHOST_VOL" in out
     assert "no ghost volumes" in out
 
-    assert main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes"]) == 0
+    assert main(["--catalog", str(db), "catalog", "reconcile", "--fix", "--yes"]) == 0
     conn = get_connection(str(db))
     try:
         assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 1
@@ -524,7 +524,7 @@ def test_catalog_reconcile_fix_spares_an_old_volume_whose_iso_exists(
         conn.close()
     capsys.readouterr()
 
-    rc = main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes",
+    rc = main(["--catalog", str(db), "catalog", "reconcile", "--fix", "--yes",
                "--include-waiting"])
     assert rc == 0
     assert "Deleting ghost volume GHOST_VOL" in capsys.readouterr().out
@@ -538,7 +538,7 @@ def test_catalog_reconcile_fix_spares_an_old_volume_whose_iso_exists(
 def test_catalog_reconcile_confirmation_mentions_receipts(tmp_path, capsys,
                                                           monkeypatch):
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     capsys.readouterr()
     prompts: list[str] = []
@@ -548,7 +548,7 @@ def test_catalog_reconcile_confirmation_mentions_receipts(tmp_path, capsys,
         return "no"
 
     monkeypatch.setattr("builtins.input", fake_input)
-    assert main(["--db", str(db), "catalog", "reconcile", "--fix"]) == 1
+    assert main(["--catalog", str(db), "catalog", "reconcile", "--fix"]) == 1
     assert len(prompts) == 1
     assert "receipt" in prompts[0] and "can no longer be imported" in prompts[0]
 
@@ -558,13 +558,13 @@ def _write_config(tmp_path: Path, extra: str = "") -> Path:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -584,7 +584,7 @@ def _import_locations(conn) -> None:
 class TestCmdCatalogImport:
     def test_import_receipts_from_json(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_001", "uuid1", "TEST_TINY", 1000, "Home", "VERIFIED")
@@ -608,7 +608,7 @@ class TestCmdCatalogImport:
     def test_import_transitions_staging_to_verified(self, tmp_path, capsys):
         """Receipt with verify_passed=true promotes STAGING → VERIFIED and closes."""
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_100", "u1", "TEST_TINY", 1000, "Home", "STAGING")
@@ -647,7 +647,7 @@ class TestCmdCatalogImport:
         """Receipt with verify_passed=false leaves the volume STAGING (#483,
         as burn_session does) and records the VERIFY_FAIL event."""
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_101", "u2", "TEST_TINY", 1000, "Home", "STAGING")
@@ -678,7 +678,7 @@ class TestCmdCatalogImport:
     @staticmethod
     def _import(tmp_path, status, receipt):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_514", "u514", "TEST_TINY", 1000, "Home", status)
@@ -731,7 +731,7 @@ class TestCmdCatalogImport:
     def test_import_reburn_only_adds_copy(self, tmp_path):
         """Already-VERIFIED volume: no status change, just a new copy."""
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_102", "u3", "TEST_TINY", 1000, "Home", "VERIFIED")
@@ -763,7 +763,7 @@ class TestCmdCatalogImport:
         device, and pack_ids — currently silently dropped.
         """
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_PROV", "uuid-prov", "TEST_TINY", 1000,
@@ -820,7 +820,7 @@ class TestCmdCatalogImport:
         be rejected and must not write a spurious event row.
         """
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_HASH", "uuid-hash", "TEST_TINY", 1000,
@@ -957,7 +957,7 @@ def test_import_receipts_from_durable_dir(tmp_path):
         "[paths]\n"
         f'mirror_base = "{config.mirror_base_path}"\n'
         f'staging = "{config.staging_path}"\n'
-        f'database = "{config.db_path}"\n'
+        f'catalog = "{config.db_path}"\n'
         "\n"
         "[defaults]\n"
         'media_type = "TEST_TINY"\n'
@@ -1022,7 +1022,7 @@ def _write_config_receipts(tmp_path: Path) -> Path:
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{tmp_path / "archive.db"}"
+catalog = "{tmp_path / "catalog.db"}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -1040,7 +1040,7 @@ def _make_catalog(tmp_path: Path, labels: dict[str, str],
                   staged_for: str = "Home") -> Path:
     from lcsas.db.locations import ensure_location
 
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     conn = get_connection(db)
     create_all(conn)
     for name in _LOCATIONS:

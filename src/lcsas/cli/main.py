@@ -25,7 +25,7 @@ from lcsas.cli.common import (  # noqa: F401 - re-exported
     _resolve_device,
     _resolve_repo_names_to_ids,
 )
-from lcsas.cli.parser import build_parser
+from lcsas.cli.parser import build_parser, renamed_message
 from lcsas.log import get_logger, setup_logging
 
 if TYPE_CHECKING:
@@ -77,23 +77,23 @@ def _share_card_text(
     """
     return (
         "=============== LCSAS SHARE CARD ===============\n"
-        f"Repository : {repo}\n"
+        f"Backup set : {repo}\n"
         f"Share      : {index} of {count}\n"
         f"Split on   : {split_date}\n"
         f"Split ID   : {split_id:05d}\n"
         "\n"
         "WHAT THIS IS\n"
         "  This card holds ONE share of the password that unlocks the\n"
-        f"  repository '{repo}'.  The password was split into {count}\n"
+        f"  backup set '{repo}'.  The password was split into {count}\n"
         "  shares using Shamir Secret Sharing (SLIP-0039).\n"
         "\n"
         "HOW TO USE IT\n"
         f"  You need ANY {threshold} of the {count} shares to rebuild the\n"
         "  password.  Fewer than that reveal NOTHING about it.  Gather at\n"
         f"  least {threshold} share cards and, on the META disc, run:\n"
-        "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2> ...\n"
+        "      recovery/bin/<machine>/lcsas-shares <card1> <card2> ...\n"
         "  If that program will not run, the fallback is:\n"
-        "      python3 keyshare_combine.py <card1> <card2> ...\n"
+        "      python3 combine_shares.py <card1> <card2> ...\n"
         "  (or follow the META disc's instructions).\n"
         "\n"
         "  Other people each hold one of the remaining shares.  Losing more\n"
@@ -135,19 +135,19 @@ def _recovery_card_text(
     Mirrors the visual style of ``_share_card_text``.  The password itself
     is NEVER rendered — the owner writes it by hand into the PASSWORD box.
     When *check_code* is given, an heir can confirm a correct transcription
-    with ``lcsas key card --check <typed-file> --code <code>``.
+    with ``lcsas password card --check <typed-file> --code <code>``.
     """
     hints = storage_hints if storage_hints else "(fill in where copies are kept)"
     lines = [
         "=============== LCSAS PASSWORD CARD ===============",
-        f"Repository    : {repo}",
+        f"Backup set    : {repo}",
         f"Password file : {key_file_name}",
         f"Made on       : {card_date}",
         f"Discs         : labeled {label_prefix}_*",
         "",
         "WHAT THIS IS",
         "  This card records the password that unlocks the",
-        f"  repository '{repo}'.  WITHOUT it the discs cannot",
+        f"  backup set '{repo}'.  WITHOUT it the discs cannot",
         "  be decrypted — nobody can restore the files.  Store",
         "  this card physically SEPARATE from the discs.",
         "",
@@ -163,7 +163,7 @@ def _recovery_card_text(
         "",
         "HOW TO USE IT",
         "  Mount any archive disc and follow START_HERE.txt; supply",
-        f"  the password above for repository '{repo}'.",
+        f"  the password above for backup set '{repo}'.",
     ]
     if check_code is not None:
         lines += [
@@ -171,7 +171,7 @@ def _recovery_card_text(
             "TRANSCRIPTION CHECK CODE",
             f"  {check_code}",
             "  After writing the password, save it to a file and run:",
-            "      lcsas key card --check <file> --code "
+            "      lcsas password card --check <file> --code "
             f"{check_code}",
             "  MATCH means you copied it correctly; MISMATCH means a typo.",
             "  (The code is the first 4 hex of SHA-256(password). It leaks",
@@ -201,9 +201,9 @@ def _estate_card_text(
 
     ``key_split``/``key_threshold``/``key_shares`` describe an archive split
     alike throughout.  A mixed archive (#587) passes ``split_repos`` (name ->
-    K/N) and ``unsplit_repos`` instead, and the card lists each repository.
+    K/N) and ``unsplit_repos`` instead, and the card lists each backup set.
 
-    Unlike the per-repo password card (``key card``, which records ONE
+    Unlike the per-repo password card (``password card``, which records ONE
     password), this is the heir's starting sheet for the entire estate: who
     owns it, what is on the discs, how many discs there are, how the password
     is stored, and the literal first command to run.  No secret is ever
@@ -234,8 +234,8 @@ def _estate_card_text(
         "  be decrypted — nobody can restore the files.",
         "",
         "WHAT IS ON THE DISCS",
-        f"  Repositories : {repos_line}",
-        f"  Discs        : {disc_line}",
+        f"  Backup sets : {repos_line}",
+        f"  Discs       : {disc_line}",
         "",
         "WHERE THE PASSWORD IS KEPT",
         f"  {or_blank(key_storage_hints)}",
@@ -252,14 +252,14 @@ def _estate_card_text(
                 f"  {name}: an ordinary password (not split)"
                 for name in unsplit_repos
             ],
-            "  Fewer cards reveal nothing.  Share holders (and repository):",
+            "  Fewer cards reveal nothing.  Share holders (and backup set):",
             "    1. ______________________   2. ______________________",
             "    3. ______________________   4. ______________________",
             "    5. ______________________",
-            "  Gather one repository's cards and, on the LCSAS_META disc, run:",
-            "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
+            "  Gather one backup set's cards and, on the LCSAS_META disc, run:",
+            "      recovery/bin/<machine>/lcsas-shares <card1> <card2>",
             "  If that program will not run, the fallback is:",
-            "      python3 keyshare_combine.py <card1> <card2>",
+            "      python3 combine_shares.py <card1> <card2>",
             "  It prints the password; enter it at the restore prompt.",
         ]
     elif key_split:
@@ -272,9 +272,9 @@ def _estate_card_text(
             "    3. ______________________   4. ______________________",
             "    5. ______________________",
             "  Gather any K share cards and, on the LCSAS_META disc, run:",
-            "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
+            "      recovery/bin/<machine>/lcsas-shares <card1> <card2>",
             "  If that program will not run, the fallback is:",
-            "      python3 keyshare_combine.py <card1> <card2>",
+            "      python3 combine_shares.py <card1> <card2>",
             "  It prints the password; enter it at the restore prompt.",
         ]
     lines += [
@@ -284,9 +284,9 @@ def _estate_card_text(
         "    Windows : open the LCSAS_META disc and double-click",
         "              restore.bat",
         "    macOS   : open Terminal and run",
-        "              sh /Volumes/LCSAS_META/restore.sh ~/restored",
+        "              sh /Volumes/LCSAS_META/restore.sh --restore-folder ~/restored",
         "    Linux   : open a terminal and run",
-        "              sh /media/$USER/LCSAS_META/restore.sh ~/restored",
+        "              sh /media/$USER/LCSAS_META/restore.sh --restore-folder ~/restored",
         "  Then follow the on-screen prompts (START_HERE.txt on any",
         "  disc has the full walkthrough).",
         "",
@@ -303,6 +303,10 @@ def _estate_card_text(
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
+    renamed = renamed_message(sys.argv[1:] if argv is None else list(argv))
+    if renamed is not None:
+        print(renamed, file=sys.stderr)
+        return 2
     parser = build_parser()
     args = parser.parse_args(argv)
 

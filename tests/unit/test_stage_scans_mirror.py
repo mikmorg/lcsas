@@ -42,13 +42,13 @@ def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
         (mirror / sub).mkdir(parents=True)
         (mirror / sub / "dummy").write_text("{}")
     (mirror / "config").write_text("{}")
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{tmp_path / 'mirror'}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"

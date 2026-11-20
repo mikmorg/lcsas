@@ -32,14 +32,14 @@ def _write_config(tmp_path: Path) -> tuple[Path, Path]:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(
         f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"

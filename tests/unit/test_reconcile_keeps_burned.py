@@ -45,7 +45,7 @@ def _catalog(tmp_path: Path, evidence: str | None, *, isos: bool) -> Path:
     disc, no disc record), both STAGING, 48 h old, one pack each.  With
     *isos* both staged ISOs still exist (waiting to be burned).  With
     *evidence* None, BURNED_NO_DISC gets no event; the caller adds it."""
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     conn = get_connection(db)
     try:
         create_all(conn)
@@ -89,7 +89,7 @@ def test_fix_keeps_burned_volume_and_deletes_ghost(
     tmp_path, caplog, evidence, include_waiting,
 ):
     db = _catalog(tmp_path, evidence, isos=include_waiting)
-    args = ["--db", str(db), "catalog", "reconcile", "--fix", "--yes"]
+    args = ["--catalog", str(db), "catalog", "reconcile", "--fix", "--yes"]
     if include_waiting:
         args.append("--include-waiting")
     caplog.clear()
@@ -123,7 +123,7 @@ def test_fix_keeps_burned_volume_and_deletes_ghost(
 def test_report_lists_burned_volume_apart_from_ghosts(tmp_path, caplog):
     db = _catalog(tmp_path, "verify_pass", isos=False)
     caplog.clear()
-    assert main(["--db", str(db), "catalog", "reconcile"]) == 1
+    assert main(["--catalog", str(db), "catalog", "reconcile"]) == 1
     out = caplog.text
     assert "1 ghost volume(s)" in out
     assert "BURNED_NO_DISC  (status=STAGING, but a disc of it passed" in out
@@ -147,7 +147,7 @@ def test_fix_keeps_volume_an_older_lcsas_moved_from_burned_to_burning(
             add_event(conn, vid, "NOTE", detail=detail)
     finally:
         conn.close()
-    args = ["--db", str(db), "catalog", "reconcile", "--fix", "--yes"]
+    args = ["--catalog", str(db), "catalog", "reconcile", "--fix", "--yes"]
     if include_waiting:
         args.append("--include-waiting")
     caplog.clear()
@@ -184,7 +184,7 @@ def test_fix_keeps_volume_that_was_burned_earlier(
         _old_history(conn, vid, status, events)
     finally:
         conn.close()
-    args = ["--db", str(db), "catalog", "reconcile", "--fix", "--yes"]
+    args = ["--catalog", str(db), "catalog", "reconcile", "--fix", "--yes"]
     if include_waiting:
         args.append("--include-waiting")
     caplog.clear()

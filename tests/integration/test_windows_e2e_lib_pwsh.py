@@ -18,7 +18,7 @@ pwsh runs on Linux too (GitHub's ubuntu runners ship it), so this:
   (each pack whole: its SHA-256 is its name), reading a printed share
   card and finding
   three of its words in a row in a folder, and finding the PowerShell
-  lines of RECOVER_WINDOWS.txt "THE PASSWORD" (failing loudly when they
+  lines of RESTORE_WINDOWS.txt "THE PASSWORD" (failing loudly when they
   are gone) and making them into a script that runs with no keyboard.
   That script is run here under pwsh 7; windows-e2e runs it under
   Windows PowerShell 5.1, which only Windows has.
@@ -48,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LIB = REPO_ROOT / "tests" / "e2e" / "windows_e2e_lib.ps1"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "windows-e2e.yml"
 BAT = REPO_ROOT / "recovery" / "scripts" / "restore.bat"
-DOC = REPO_ROOT / "recovery" / "docs" / "RECOVER_WINDOWS.txt"
+DOC = REPO_ROOT / "recovery" / "docs" / "RESTORE_WINDOWS.txt"
 
 sys.path.insert(0, str(REPO_ROOT / "tests" / "e2e"))
 import fixture_lib  # noqa: E402
@@ -326,7 +326,7 @@ $partDir = Join-Path (Join-Path $c 'data') $one.Substring(0, 2)
 $r.cache_part = Get-Cache $c @{ $isos[0] = @($one) }
 $r.cache_empty = Get-Cache (New-Cache 'cache-empty') @{ $isos[0] = @($one) }
 
-# #608: the PowerShell lines of RECOVER_WINDOWS.txt, and the script made
+# #608: the PowerShell lines of RESTORE_WINDOWS.txt, and the script made
 # of them; a doc without them fails loudly.
 $lines = Get-DocPasswordLines -DocPath $DocFile
 $r.doc_lines = @($lines.Lines)
@@ -362,7 +362,7 @@ def helpers(tmp_path_factory: pytest.TempPathFactory) -> dict:
         RESTORE_ID, fixture_lib.WINDOWS_E2E_SET_NAME,
         cmd_name(fixture_lib.WINDOWS_E2E_SET_NAME, RESTORE_ID),
     )
-    # The other set split 2-of-3, with its printed cards as `lcsas key
+    # The other set split 2-of-3, with its printed cards as `lcsas password
     # split` writes them (#607).
     other_name = fixture_lib.WINDOWS_E2E_OTHER_SET_NAMES[0]
     shares = split_secret(encode_master_secret(OTHER_PASSWORD), 2, 3)
@@ -552,7 +552,7 @@ def test_pack_cache_whole(helpers: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# #608: RECOVER_WINDOWS.txt's PowerShell lines
+# #608: RESTORE_WINDOWS.txt's PowerShell lines
 # ---------------------------------------------------------------------------
 
 def test_get_doc_password_lines_finds_the_docs_lines(helpers: dict) -> None:
@@ -565,7 +565,7 @@ def test_get_doc_password_lines_finds_the_docs_lines(helpers: dict) -> None:
     assert "\n".join("    " + ln for ln in lines) in doc
     read_host, pwfile, restore = helpers["doc_at"]
     assert lines[read_host].startswith("$s = Read-Host")
-    assert lines[pwfile] == "$env:LCSAS_PWFILE = $f"
+    assert lines[pwfile] == "$env:LCSAS_PASSWORD_FILE = $f"
     assert re.fullmatch(r"[A-Z]:\\restore\.bat", lines[restore])
 
 
@@ -588,7 +588,7 @@ def test_the_doc_password_script_writes_the_password_exactly(
 ) -> None:
     """The script made of the doc's lines, run with no keyboard: only the
     Read-Host source differs from the doc, and it writes the password
-    with no BOM and no line break and sets LCSAS_PWFILE to the file.
+    with no BOM and no line break and sets LCSAS_PASSWORD_FILE to the file.
     Here under pwsh 7; windows-e2e runs it under Windows PowerShell 5.1."""
     script = Path(helpers["work"]) / "doc-password.ps1"
     text = script.read_text(encoding="ascii")
