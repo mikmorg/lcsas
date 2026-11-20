@@ -13,6 +13,13 @@ disc, the blind rig won't either.
 
 Run as:  sudo python3 scripts/smoke_single_drive.py  (root: mount, cdemu)
 
+The meta disc build reads the pinned upstream files from the recovery
+cache, which under sudo is root's (~root/.cache/lcsas/...).  Point it
+at a filled one (``sh recovery/scripts/fetch_upstream.sh`` fills it):
+
+    sudo env "PATH=$PATH" LCSAS_RECOVERY_CACHE=/path/to/cache \
+        python3 scripts/smoke_single_drive.py
+
 A drill aid run by hand on the lab VM (CDEmu is shared: take a broker
 window), not a CI gate.  CI runs the same restore.sh loop and driver
 without root or cdemu in tests/integration/test_interactive_restore.py.
@@ -342,8 +349,10 @@ def run_restore(iso_files: list[Path]) -> int:
 
 def verify_restore(manifest: dict[str, str]) -> bool:
     """Compare every source file's SHA-256 against the restored copy."""
-    restored_root = RESTORE_TARGET / REPO_NAME
-    # rustic restores absolute-ish paths; find the source dir inside.
+    # restore.sh --target DIR restores into DIR itself (the retired
+    # driver used DIR/<set>, #756); the snapshot's absolute source path
+    # is kept below it, so find the source folder inside.
+    restored_root = RESTORE_TARGET
     matches = list(restored_root.rglob("file_00.bin"))
     if not matches:
         print(f"  no restored files found under {restored_root}")

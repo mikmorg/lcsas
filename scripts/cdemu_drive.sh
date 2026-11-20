@@ -16,7 +16,7 @@
 #   stop         Stop cdemu-daemon user service
 #   status       Show device + loaded image
 #   load <iso>   Insert an ISO image into the virtual drive
-#   unload       Eject the virtual drive
+#   unload       Eject the virtual drive (waits until it is empty, #756)
 #   swap <iso>   unload then load (the typical restore inner loop)
 #   device       Print device 0's kernel node (e.g. /dev/sr0)
 #
@@ -34,6 +34,7 @@ PROG="$(basename "$0")"
 DEVICE="/dev/sr0"   # the usual node; `start` and `device` read the real one
 VHBA_CTL="${VHBA_CTL:-/dev/vhba_ctl}"
 MAP_TRIES="${CDEMU_MAP_TRIES:-25}"   # polls of 0.2 s for device 0's node
+UNLOAD_TRIES="${CDEMU_UNLOAD_TRIES:-50}"   # polls of 0.2 s for an unload
 
 err()  { printf '\033[0;31m[ERR]\033[0m %s\n' "$*" >&2; }
 info() { printf '\033[0;32m[+]\033[0m %s\n' "$*"; }
@@ -59,6 +60,34 @@ wait_device0() {
     fi
     sleep 0.2
   done
+  return 1
+}
+
+# Whether device 0 holds an image: its row of `cdemu status` ("0  True
+# FILE") says True.  A daemon that does not answer holds none.
+device0_loaded() {
+  cdemu status 2>/dev/null | awk '$1 == "0" { print $2; exit }' \
+    | grep -qx True
+}
+
+# `cdemu unload 0` returns at once, and exits 0, while the image can stay
+# in for about 2 s more after the disc was unmounted; a `load` then fails
+# with "Device is already loaded" (#756, the root smoke run).  So ask,
+# then wait up to UNLOAD_TRIES x 0.2 s (10 s) for device 0 to be empty,
+# asking again each second.  Returns 1, naming the image, if it stays in.
+unload_device0() {
+  local i
+  cdemu unload 0 >/dev/null 2>&1 || true
+  for i in $(seq "$UNLOAD_TRIES"); do
+    device0_loaded || return 0
+    if (( i % 5 == 0 )); then
+      cdemu unload 0 >/dev/null 2>&1 || true
+    fi
+    sleep 0.2
+  done
+  device0_loaded || return 0
+  err "device 0 still holds an image after the unload: is it mounted?"
+  cdemu status 2>/dev/null | sed 's/^/    /' >&2 || true
   return 1
 }
 
@@ -195,14 +224,14 @@ cmd_load() {
 
 cmd_unload() {
   need_user
-  cdemu unload 0 || true
+  unload_device0
   info "ejected $DEVICE"
 }
 
 cmd_swap() {
   need_user
   local iso="${1:?usage: $PROG swap <iso>}"
-  cdemu unload 0 || true
+  unload_device0
   cmd_load "$iso"
 }
 
