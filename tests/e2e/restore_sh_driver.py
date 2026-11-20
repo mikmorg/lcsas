@@ -230,6 +230,7 @@ def drive_restore(
     *,
     timeout: float = 300.0,
     echo: Callable[[bytes], None] | None = None,
+    scanner: PromptScanner | None = None,
 ) -> tuple[int, str]:
     """Run *cmd* under a pseudoterminal and answer each prompt.
 
@@ -237,6 +238,11 @@ def drive_restore(
     from 1) after the prompt is printed; it swaps discs as needed and
     returns what to type, or None for :func:`default_answer`.  Returns
     ``(exit code, output)``; the exit code is -1 on a timeout.
+
+    *scanner* finds the prompts (default: a :class:`PromptScanner`,
+    which knows the questions above).  Anything with the same ``feed``
+    will do: the restore journeys (``tests/contract/journeys.py``) pass
+    one that knows the set menu, the password and the share cards too.
     """
     pid, fd = pty.fork()
     if pid == 0:  # pragma: no cover - the child
@@ -244,7 +250,8 @@ def drive_restore(
             os.execvpe(cmd[0], cmd, env)
         finally:
             os._exit(127)
-    scanner = PromptScanner()
+    if scanner is None:
+        scanner = PromptScanner()
     chunks: list[bytes] = []
     n = 0
     deadline = time.monotonic() + timeout
