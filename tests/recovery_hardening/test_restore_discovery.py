@@ -338,7 +338,7 @@ def test_one_tenant_on_several_mounted_discs_needs_no_picker(tmp_path: Path) -> 
     res = _run_restore(recovery, target,
                        env={"LCSAS_MOUNT_DIRS": str(mount_parent)})
     assert res.returncode == 0, res.stderr
-    assert "Multiple repositories" not in res.stderr, res.stderr
+    assert "Several backup sets" not in res.stderr, res.stderr
     # A mounted data disc's copy is used, not the meta disc's own (#605):
     # the meta copy is only the fallback for a set no mounted data disc
     # carries.  (This used to assert the meta copy won.)
@@ -451,7 +451,7 @@ def test_one_tenant_on_data_discs_only_needs_no_picker(tmp_path: Path) -> None:
     res = _run_restore(recovery, target,
                        env={"LCSAS_MOUNT_DIRS": str(mount_parent)})
     assert res.returncode == 0, res.stderr
-    assert "Multiple repositories" not in res.stderr, res.stderr
+    assert "Several backup sets" not in res.stderr, res.stderr
     assert _arg_value(_stub_args(res.stdout), "--repo") == str(
         discs[0] / "metadata" / "win"
     )

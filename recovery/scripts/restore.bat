@@ -1604,7 +1604,7 @@ goto :pw_next
 del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
-if defined PW_WRONG echo  ERROR: could not decrypt the repository with that password.
+if defined PW_WRONG echo  ERROR: could not decrypt the backup set with that password.
 if not defined PW_WRONG echo  No password was given, so nothing was restored.
 if defined RESUME_CMD echo  To try again, run "!RESUME_CMD!"
 if not defined RESUME_CMD echo  To try again, run restore.bat again.
@@ -1643,7 +1643,7 @@ if exist "%BIN%" (
         del /f /q "%PWFILE%" >nul 2>nul
         echo.
         echo ============================================================
-        echo  ERROR: could not decrypt the repository with that password.
+        echo  ERROR: could not decrypt the backup set with that password.
         echo  Check the password ^(and any share cards^) and re-run.
         if defined RESUME_CMD echo  To try again, run "!RESUME_CMD!"
         echo ============================================================
@@ -1695,7 +1695,7 @@ if exist "%BIN%" (
     if defined T2_WRONG (
         echo.
         echo ============================================================
-        echo  ERROR: could not decrypt the repository with that password.
+        echo  ERROR: could not decrypt the backup set with that password.
         echo  Check the password ^(and any share cards^) and re-run.
         if defined RESUME_CMD echo  To try again, run "!RESUME_CMD!"
         echo ============================================================

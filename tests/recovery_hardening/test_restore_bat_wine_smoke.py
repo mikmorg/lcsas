@@ -325,7 +325,7 @@ def test_wrong_password_is_terminal_no_tier2_fallthrough(
         "restore.bat must propagate tier-1's wrong-password exit 77; "
         f"rc={res.returncode}\n--- output ---\n{out}"
     )
-    assert "could not decrypt the repository" in out.lower(), (
+    assert "could not decrypt the backup set" in out.lower(), (
         f"operator-facing wrong-password banner missing:\n{out}"
     )
     assert "trying tier 2" not in out and "[tier 2] running" not in out, (

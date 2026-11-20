@@ -415,7 +415,7 @@ function Invoke-RelocationLeg {
         }
         $t1runs = ([regex]::Matches($out, '\[tier 1\] running')).Count
         if ($t1runs -ne 1) { $problems.Add("tier 1 ran $t1runs times (want once, with the right password)") }
-        if ($out -match 'could not decrypt the repository') {
+        if ($out -match 'could not decrypt the backup set') {
             $problems.Add('the run gave up after the wrong password instead of asking again')
         }
     }
@@ -524,7 +524,7 @@ function Invoke-RelocatedWrongPasswordLeg {
         $problems.Add("no 'copied recovery files to' message: the relocation did not happen")
     }
     if ($rc -ne 77) { $problems.Add("exit code $rc through the relocation (want 77, as without it)") }
-    if ($out -notmatch 'could not decrypt the repository') { $problems.Add('wrong-password banner missing') }
+    if ($out -notmatch 'could not decrypt the backup set') { $problems.Add('wrong-password banner missing') }
     if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2 on a wrong password') }
     $restored = @(Get-ChildItem -Path $target -Recurse -File -Force -ErrorAction SilentlyContinue |
                   Where-Object { $_.Name -ne '.lcsas-restore-marker' })

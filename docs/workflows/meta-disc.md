@@ -415,7 +415,7 @@ software step on a running OS — the disc is not bootable.)
    label, mount it if it does not open by itself, and press Enter. That
    disc's snapshots and index replace the meta disc's copies in the
    tools folder, and its `catalog.db` is copied there too.
-4. It asks for the backup set (`Choose a repository (number or name):`)
+4. It asks for the backup set (`Choose a backup set (number or name):`)
    and its password (or the set's share cards).
 5. Tier 1 runs. At each disc box, eject, insert the named data disc and
    press Enter (a disc that mounts by itself is found without Enter).

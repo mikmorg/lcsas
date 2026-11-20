@@ -294,8 +294,8 @@ for name in $sets; do
             # but say exactly which repository rejected the password.
             printf '!!! restore of %s FAILED: wrong password (exit 77).\n' \
                    "$name" >&2
-            printf '    LCSAS_PASSWORD_FILE does not decrypt this repository'"'"'s keys;\n' >&2
-            printf '    the remaining repositories are still attempted.\n' >&2
+            printf '    LCSAS_PASSWORD_FILE does not decrypt this backup set'"'"'s keys;\n' >&2
+            printf '    the remaining backup sets are still attempted.\n' >&2
             fail=1 ;;
         75)
             stop_loop "$name" 75 "you chose to stop at a disc prompt" ;;

@@ -798,7 +798,7 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           (same as LCSAS_PASSWORD_FILE=FILE).  Skips the
                           Password: prompt.
   --version               Print the build commit SHA and date, then exit.
-  LCSAS_PASSWORD          Repository password (skips the Password: prompt).
+  LCSAS_PASSWORD          The backup set's password (skips the Password: prompt).
                           Mutually exclusive with LCSAS_PASSWORD_FILE.
   LCSAS_PASSWORD_FILE
                           Path to a file whose contents are the password.
@@ -2117,7 +2117,7 @@ EOF
         if [ -n "${LCSAS_BACKUP_SET:-}" ]; then
             REPO="$(set_match "$LCSAS_BACKUP_SET")"
             if [ -z "$REPO" ]; then
-                printf 'LCSAS_BACKUP_SET=%s not among available repositories: %s\n' \
+                printf 'LCSAS_BACKUP_SET=%s not among the available backup sets: %s\n' \
                        "$LCSAS_BACKUP_SET" "$REPO_NAMES" >&2
                 exit 1
             fi
@@ -2125,7 +2125,7 @@ EOF
             REPO="$REPO_CANDIDATES"
         else
             while :; do
-                printf 'Multiple repositories on this archive:\n' >&2
+                printf 'Several backup sets on this archive:\n' >&2
                 repo_idx=0
                 for cand in $REPO_CANDIDATES; do
                     repo_idx=$((repo_idx + 1))
@@ -2134,11 +2134,11 @@ EOF
                     printf '  %d) %s%s\n' "$repo_idx" "$(set_label "$cand")" \
                            "$(set_split_text "$cand")" >&2
                 done
-                printf 'Choose a repository (number or name): ' >&2
+                printf 'Choose a backup set (number or name): ' >&2
                 if ! IFS= read -r repo_choice; then
                     # The input ended: nobody chose, as good as Q (C5).
                     IFS=$_saved_ifs
-                    printf '\nno repository chosen\n' >&2
+                    printf '\nno backup set chosen\n' >&2
                     another_pass_done
                     exit "$EXIT_USER_ABORT"
                 fi
@@ -2164,7 +2164,7 @@ EOF
                         printf 'Stopped at your request.\n' >&2
                         exit "$EXIT_USER_ABORT" ;;
                 esac
-                printf 'no repository named %s; choose from: %s\n' \
+                printf 'no backup set named %s; choose from: %s\n' \
                        "$repo_choice" "$REPO_NAMES" >&2
                 if ! is_interactive; then
                     IFS=$_saved_ifs
@@ -2187,7 +2187,7 @@ if [ "${LCSAS_RESUME:-0}" = 1 ] && [ -n "$TOOLS" ] \
    && [ -d "$TOOLS/metadata/${REPO##*/}/index" ]; then
     REPO="$TOOLS/metadata/${REPO##*/}"
 fi
-printf '[restore.sh] using repository %s\n' "$REPO" >&2
+printf '[restore.sh] using backup set folder %s\n' "$REPO" >&2
 SET_NAME="$(set_label "$REPO")"
 [ "$SET_NAME" = "${REPO##*/}" ] || printf '[restore.sh] backup set: %s\n' "$SET_NAME" >&2
 
@@ -3689,7 +3689,7 @@ tier_said() {
 
 # say_wrong_password TIER: a key rejected the password at TIER.
 say_wrong_password() {
-    printf '[tier %s] wrong password: a repository key rejected it, and the\n' "$1" >&2
+    printf '[tier %s] wrong password: the key of this backup set rejected it, and\n' "$1" >&2
     printf '        other tiers use the same keys, so not retrying.\n'         >&2
     printf '        Check the password (and any share cards).\n'               >&2
 }

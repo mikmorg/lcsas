@@ -230,9 +230,9 @@ def test_prompt_on_the_cursor_row_does_not_match_again(
 def test_timeout_leaves_the_output_unseen(tmux_env: dict[str, str]) -> None:
     """Only a match marks output as seen, so a retry with a better REGEX
     still finds a prompt that is already on screen."""
-    _start(tmux_env, "sh", "-c", 'echo "Choose a repository"; read x')
+    _start(tmux_env, "sh", "-c", 'echo "Choose a backup set"; read x')
     assert _rs(tmux_env, "expect", "Password:", "1").returncode == 1
-    retry = _rs(tmux_env, "expect", "Choose a repository", "5")
+    retry = _rs(tmux_env, "expect", "Choose a backup set", "5")
     assert retry.returncode == 0, retry.stderr
 
 

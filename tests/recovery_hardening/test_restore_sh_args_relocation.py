@@ -338,7 +338,7 @@ def test_an_unknown_repo_with_one_set_stops_and_lists_the_set(tmp_path: Path) ->
         tmp_path,
         ["--backup-set", "no-such-set", "--restore-folder", str(tmp_path / "o"), "@REC"])
     assert res.returncode == 1
-    assert "not among available repositories" in res.stderr
+    assert "not among the available backup sets" in res.stderr
     assert f"{SET_NAME} (id {SET_ID})" in res.stderr
     assert "ARG: " not in res.stdout
     assert not (tmp_path / "o").exists()
@@ -356,7 +356,7 @@ def test_an_unknown_lcsas_repo_with_one_set_stops_too(tmp_path: Path) -> None:
     res = _in_place(tmp_path, ["--restore-folder", str(tmp_path / "o"), "@REC"],
                     LCSAS_BACKUP_SET="other")
     assert res.returncode == 1
-    assert "LCSAS_BACKUP_SET=other not among available repositories" in res.stderr
+    assert "LCSAS_BACKUP_SET=other not among the available backup sets" in res.stderr
 
 
 # ── #806: no exit file under /tmp ────────────────────────────────────

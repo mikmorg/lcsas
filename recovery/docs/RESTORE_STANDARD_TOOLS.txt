@@ -17,9 +17,9 @@ WHAT YOU NEED
   * All the data discs for the archive (or one disc per distinct LABEL -- the
     repository metadata is copied onto every disc, so any single disc
     carries it).
-  * The repository password, OR (if that repository's password was split) at
+  * The backup set's password, OR (if that backup set's password was split) at
     least K of its N share cards.  PASSWORD_INFO.txt says, for each
-    repository, whether its password was split.
+    backup set, whether its password was split.
   * A computer.  A stock restic binary AND a rustic binary are bundled on this
     disc under recovery/bin/<your-machine>/ (restic, restic.exe, rustic) -- so
     you need no internet.  You may also install restic fresh (below) if you'd
@@ -57,8 +57,9 @@ If a disc reads fine, skip this step.
 --------------------------------------------------------------------------------
 STEP 2 -- reassemble one restic repository from the discs
 --------------------------------------------------------------------------------
-Mount every disc (or its .iso).  Pick the repository id you want -- the folder
-names under any disc's  metadata/  directory ARE the repository ids.  Then:
+Mount every disc (or its .iso).  Pick the backup set id you want -- the folder
+names under any disc's  metadata/  directory ARE the backup set ids (each
+backup set is one restic repository).  Then:
 
     REPO=/tmp/restore-repo
     mkdir -p "$REPO/data"
@@ -83,7 +84,7 @@ names under any disc's  metadata/  directory ARE the repository ids.  Then:
 You now have a plain restic repository at $REPO.
 
 --------------------------------------------------------------------------------
-STEP 3 -- get the repository password
+STEP 3 -- get the backup set's password
 --------------------------------------------------------------------------------
 3a. SINGLE PASSWORD (most archives): you already have it.  Skip to step 4.
 

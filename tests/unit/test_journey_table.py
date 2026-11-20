@@ -58,8 +58,8 @@ def test_find_prompt_reads_restore_sh_questions_in_order() -> None:
     text = (
         "  Press ENTER when it is in; S then ENTER to skip\r\n"
         "ENTER, S or Q: \r\n"
-        "Multiple repositories on this archive:\r\n  1) a\r\n  2) b\r\n"
-        "Choose a repository (number or name): a\r\n"
+        "Several backup sets on this archive:\r\n  1) a\r\n  2) b\r\n"
+        "Choose a backup set (number or name): a\r\n"
         "Type the password for a, then ENTER (Q then ENTER to quit).\r\n"
         "Password: \r\n"
         "Share card 2 of 2: type all the words on one line, then ENTER "

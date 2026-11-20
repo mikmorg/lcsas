@@ -150,7 +150,7 @@ jobs:
       # checks LCSAS_BACKUP_SET names it (see the header).
       - name: restore.sh with every disc attached (happy path, LCSAS_BACKUP_SET set)
         timeout-minutes: 10
-        run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo "Family photos"
+        run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --backup-set "Family photos"
 
       - name: restore.sh with every disc attached (happy path, no LCSAS_BACKUP_SET)
         # The heir's plain invocation.  Until #533 it died at a bogus
@@ -160,7 +160,7 @@ jobs:
 
       - name: Wrong password fails cleanly (exit 77, no partial tree)
         timeout-minutes: 10
-        run: python3 tests/e2e/macos_restore_smoke.py wrong-password "$PWD/fixture" --repo "Family photos"
+        run: python3 tests/e2e/macos_restore_smoke.py wrong-password "$PWD/fixture" --backup-set "Family photos"
 
       - name: Swap prompt (meta + one data disc attached, the rest hdiutil-attached on request)
         timeout-minutes: 10

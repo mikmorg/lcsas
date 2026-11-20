@@ -136,7 +136,7 @@ export LCSAS_PASSWORD='@PASSWORD@'
 export LCSAS_BACKUP_SET='@TENANT@'
 export LCSAS_ALLOW_TMPFS_RESTORE_FOLDER=1
 m=LCSAS_LIVE_USB
-if sh /media/lcsas-meta/recovery/scripts/restore.sh /restored latest \\
+if sh /media/lcsas-meta/recovery/scripts/restore.sh --restore-folder /restored \\
       </dev/null >/run/lcsas-restore.log 2>&1; then
   # Hash the restored PAYLOAD set.  restore.sh deliberately drops one
   # product-owned metadata file into the target (.lcsas-restore-marker,

@@ -95,7 +95,7 @@ sudo mount -o remount,exec /mnt
 ### "wrong password" or "unable to open key"
 
 - Double-check you're using the correct password for the repository you
-  chose at the `Choose a repository` prompt.
+  chose at the `Choose a backup set` prompt.
 - If the archive has multiple repositories, they may use different
   passwords.  Check `PASSWORD_INFO.txt` on any disc for which password
   goes with which repository.

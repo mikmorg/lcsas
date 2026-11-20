@@ -150,10 +150,10 @@ LCSAS_PACK_CACHE_DIR= sh restore.sh --restore-folder ~/restored
 ## Several repositories: typed the wrong repository name
 
 **Cause**: typed `albha` instead of `alpha` at the
-`Choose a repository (number or name):` prompt.
+`Choose a backup set (number or name):` prompt.
 
 **Fix**: on a terminal the script says
-`no repository named albha; choose from: ...` and asks again: type
+`no backup set named albha; choose from: ...` and asks again: type
 the number, the name or the id (Q then Enter quits, exit code 65).
 Without a terminal (a script, a pipe) it exits 1 with that list.
 The prompt only appears on archives with more than one repository.

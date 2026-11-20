@@ -311,7 +311,7 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
                          tools_kept=True, another_set=False,
                          log="wrong-password"),
         bat=ScriptOutcome(exit=ScriptExit.WRONG_PASSWORD,
-                          says=r"could not decrypt the repository with that password",
+                          says=r"could not decrypt the backup set with that password",
                           not_says=NEXT_TIER_RAN,
                           tools_kept=True, another_set=False),
     ),
@@ -429,7 +429,7 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
                          tools_kept=True, another_set=False,
                          log="wrong-password"),
         bat=ScriptOutcome(exit=ScriptExit.WRONG_PASSWORD,
-                          says=r"could not decrypt the repository with that password",
+                          says=r"could not decrypt the backup set with that password",
                           tools_kept=True, another_set=False),
         wine_gap=("restore.bat finds rustic's words with `... snapshots 2>&1 "
                   "<nul | findstr` inside the tier-2 ( ) block; wine's cmd does "

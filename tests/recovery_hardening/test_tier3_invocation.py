@@ -170,8 +170,8 @@ def test_tier3_passes_snapshot_when_not_latest(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery),
-         "deadbeefcafe1234"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target),
+         "--snapshot", "deadbeefcafe1234", str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -311,8 +311,7 @@ def test_tier3_is_told_the_meta_disc(tmp_path: Path) -> None:
         "LCSAS_NO_RELOCATE": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery),
-         "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

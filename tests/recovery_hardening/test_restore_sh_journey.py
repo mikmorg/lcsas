@@ -347,7 +347,7 @@ def test_lcsas_repo_matches_the_name_or_the_id(tmp_path: Path, value: str) -> No
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=value))
     assert res.returncode == 0, res.stderr
-    assert "Multiple repositories" not in res.stderr
+    assert "Several backup sets" not in res.stderr
     assert f"repo={tmp_path}/meta/metadata/{PHOTOS_ID} " in _runs(tmp_path)[0]
 
 
@@ -377,7 +377,7 @@ def test_a_hostile_name_is_printed_and_matched_never_run(tmp_path: Path) -> None
     res = _run(recovery, tmp_path / "out3",
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET="*"))
     assert res.returncode == 1
-    assert "not among available repositories" in res.stderr
+    assert "not among the available backup sets" in res.stderr
     assert not list(tmp_path.glob("pwned*"))
 
 
@@ -426,14 +426,14 @@ def test_a_wrong_answer_is_asked_again_and_q_quits(tmp_path: Path) -> None:
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_INTERACTIVE="on"),
                stdin="holidays\nq\n")
     assert res.returncode == 65, res.stderr
-    assert "no repository named holidays" in res.stderr
+    assert "no backup set named holidays" in res.stderr
     assert "Type its number, its name or its id" in res.stderr
-    assert res.stderr.count("Choose a repository") == 2
+    assert res.stderr.count("Choose a backup set") == 2
     # No answer at all: the input ended, as good as Q (C5: 65).
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW), stdin="")
     assert res.returncode == 65
-    assert "no repository chosen" in res.stderr
+    assert "no backup set chosen" in res.stderr
 
 
 # ── F5: the newest data disc's copy (#605, C2) ───────────────────────
@@ -1240,7 +1240,7 @@ def test_no_restore_folder_asks_after_the_set_enter_is_home_restored(
                 "Q then ENTER: stop): ")
     err = res.stderr
     assert err.count(question) == 1, err
-    assert err.index("Choose a repository") < err.index(question)
+    assert err.index("Choose a backup set") < err.index(question)
     want = home / folder if folder else home
     assert _runs(tmp_path) == [
         f"RUN repo={tmp_path}/meta/metadata/{DOCS_ID} target={want} pw={GOOD_PW}",

@@ -218,7 +218,8 @@ def test_tier3_snap_args_non_latest(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery), "abc123snap"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), "--snapshot", "abc123snap",
+         str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )

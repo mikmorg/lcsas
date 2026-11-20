@@ -275,7 +275,7 @@ class TestMetaVolumeRestore:
         """Run the meta disc's restore.sh, the disc's one restore driver
         (#689), against the data discs, with no questions."""
         return self._run_on_discs(
-            [str(self.meta_dir / "restore.sh"), str(self.restore_target), "latest"],
+            [str(self.meta_dir / "restore.sh"), "--restore-folder", str(self.restore_target)],
             LCSAS_BACKUP_SET="photos",
         )
 

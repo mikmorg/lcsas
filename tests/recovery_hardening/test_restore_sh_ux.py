@@ -204,7 +204,7 @@ def test_relocate_finds_recovery_bin_from_meta_toplevel(tmp_path: Path) -> None:
     }
     res = subprocess.run(
         ["sh", str(meta / "restore.sh"),
-         str(meta / "recovery"), str(target), "latest"],
+         "--restore-folder", str(target), str(meta / "recovery")],
         capture_output=True, text=True, env=env, timeout=15,
         input="stub-pw\n",
     )
@@ -304,7 +304,7 @@ def test_numbered_repo_prompt_accepts_number(tmp_path: Path) -> None:
 
 def test_interactive_bad_name_exits_1(tmp_path: Path) -> None:
     """Typing an unrecognised repo name at the interactive prompt must
-    exit 1 with a 'no repository named' message (lines 632-634)."""
+    exit 1 with a 'no backup set named' message (lines 632-634)."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
     _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
@@ -322,8 +322,8 @@ def test_interactive_bad_name_exits_1(tmp_path: Path) -> None:
         f"expected exit 1 for unknown repo name; got rc={res.returncode}\n"
         f"stderr:\n{res.stderr}"
     )
-    assert "no repository named" in res.stderr, (
-        f"expected 'no repository named' in stderr; got:\n{res.stderr}"
+    assert "no backup set named" in res.stderr, (
+        f"expected 'no backup set named' in stderr; got:\n{res.stderr}"
     )
 
 
@@ -405,14 +405,18 @@ def test_auto_recovery_from_meta_toplevel_one_arg(tmp_path: Path) -> None:
 
 def test_auto_recovery_from_meta_toplevel_no_args(tmp_path: Path) -> None:
     """From a meta-disc top-level layout, zero positional args should
-    auto-detect both RECOVERY and TARGET (lines 254-255, 349-351)."""
+    auto-detect RECOVERY; with nobody to answer, the restore folder is
+    ~/restored (#926)."""
     meta = _make_meta_top(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
 
     env = {
         **os.environ,
         "LCSAS_RELOCATED": "/fake/meta",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_MOUNT_DIRS": "",
+        "HOME": str(home),
     }
     res = subprocess.run(
         ["sh", str(meta / "restore.sh")],
@@ -427,6 +431,7 @@ def test_auto_recovery_from_meta_toplevel_no_args(tmp_path: Path) -> None:
     assert args, (
         f"stub binary did not run; stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
+    assert str(home / "restored") in args, args
 
 
 # ── add_pack_search edge cases ────────────────────────────────────────
@@ -535,8 +540,8 @@ def test_lcsas_interactive_is_passed_to_tier1(tmp_path: Path) -> None:
         if value is not None:
             env["LCSAS_INTERACTIVE"] = value
         res = subprocess.run(
-            ["sh", str(RESTORE_SH), str(recovery),
-             str(tmp_path / f"restored-{value}"), "latest"],
+            ["sh", str(RESTORE_SH), "--restore-folder",
+             str(tmp_path / f"restored-{value}"), str(recovery)],
             capture_output=True, text=True, env=env, timeout=15, input="pw\n",
         )
         args = _stub_args(res.stdout)

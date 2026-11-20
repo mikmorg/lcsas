@@ -396,7 +396,7 @@ layout) or several.
     - 4 (finished, some items not restored): `:restore_partial`, then
       the questions of a finished set and exit 4; with a "pack not
       found" row, `:restore_discs_missing`, and the tools folder stays.
-    - 77 (wrong password): the "could not decrypt the repository" box,
+    - 77 (wrong password): the "could not decrypt the backup set" box,
       then exit 77 from top level (`:wrong_password`; an `exit /b`
       inside a bracketed block does not reach `cmd /c`, #384).
     - 75 (`q` at the disc box), 74 (the disk is full) and any other
@@ -675,7 +675,7 @@ owner's #627 decisions):
 
 | Topic | restore.bat | restore.sh |
 |---|---|---|
-| Set menu | `[1] name`, a number only, ENTER means 1 | `  1) name`, "Choose a repository (number or name):", number, name, `name_cmd` or id; no default |
+| Set menu | `[1] name`, a number only, ENTER means 1 | `  1) name`, "Choose a backup set (number or name):", number, name, `name_cmd` or id; no default |
 | `LCSAS_PASSWORD` / `LCSAS_PASSWORD_FILE` / `LCSAS_SHARES_DIR` for the next set | reused (each is checked first) | dropped: the next set's password is asked |
 | `LCSAS_INTERACTIVE` | passed to tier 1 only; the script's own questions are always asked (cmd cannot test for a console) | also decides whether the script's own questions are asked |
 | Newest-disc step, end of input | five ENTERs go on with the META copies | quits 65 |
@@ -715,7 +715,7 @@ owner's #627 decisions):
     folder left, and no "Access is denied." (#611).
   - *Negative case — wrong password fails cleanly* and *Relocated wrong
     password — exit 77 survives the cleanup*: exit 77, no tier-2
-    fall-through, the "could not decrypt the repository" banner, no
+    fall-through, the "could not decrypt the backup set" banner, no
     partial tree.
   - *Eject leg — relocated restore survives a meta-disc eject*: the
     meta ISO is dismounted once the relocated copy is up; exit 0, no

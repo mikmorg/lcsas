@@ -374,7 +374,7 @@ jobs:
           if ($rc -ne 77) { throw "restore.bat must exit 77 on a wrong password; got $rc" }
           if ($out -match "trying tier 2") { throw "restore.bat fell through to tier 2 on a wrong password" }
           if ($out -match "Access is denied") { throw "restore.bat printed 'Access is denied.' (#611)" }
-          if ($out -notmatch "could not decrypt the repository") { throw "wrong-password banner missing from output" }
+          if ($out -notmatch "could not decrypt the backup set") { throw "wrong-password banner missing from output" }
           $problems = New-Object 'System.Collections.Generic.List[string]'
           Assert-SetNamed -Out $out -Sets $sets -Problems $problems
           if ($problems.Count -gt 0) { throw ($problems -join "`n") }

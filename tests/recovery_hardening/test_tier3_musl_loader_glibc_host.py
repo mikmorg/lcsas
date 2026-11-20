@@ -145,8 +145,8 @@ def test_restore_sh_picks_the_bundled_loader_on_a_glibc_host(
         command -v python3 && {{ echo HOST_HAS_PYTHON; exit 3; }}
         printf 'pw\\n' | LCSAS_PLATFORM={TARGET} LCSAS_MOUNT_DIRS= \\
             LCSAS_ALLOW_NO_PACK_SEARCH=1 HOME=/tmp \\
-            sh /meta/recovery/scripts/restore.sh /meta/recovery \\
-               /tmp/restored latest
+            sh /meta/recovery/scripts/restore.sh \\
+               --restore-folder /tmp/restored /meta/recovery
         echo "restore_rc=$?"
     """, extra_mounts=((fixture, "/ro-meta"),))
     print(res.stdout, res.stderr)

@@ -110,6 +110,6 @@ Earlier revisions of this document described a bootable meta disc
 (four-entry boot menu, bundled Linux/FreeBSD kernels, and a build
 flag that never existed in the CLI).  That boot stack was never
 built and no LCSAS disc was ever bootable; the scaffolding was
-dropped in 2026 and deleted from the LCSAS source repository later
-that year (#688).  It survives only at the repository tag
+dropped in 2026 and deleted from the LCSAS source code later
+that year (#688).  It survives only at the source code's tag
 archive/pre-1.0-history.

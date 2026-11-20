@@ -144,7 +144,7 @@ TIER1_BOX_END = r"Type 'q' then ENTER to abort\.[\s\S]*?\n\+-+\+\r?\n> "
 PROMPTS: tuple[Phrase, ...] = (
     Phrase("newest data disc", sh=r"ENTER, S or Q: ", bat=r"Newest data disc: "),
     Phrase("which set",
-           sh=r"Choose a repository \(number or name\): ",
+           sh=r"Choose a backup set \(number or name\): ",
            bat=r"Which one do you want to restore\? \[1\]: "),
     Phrase("folder",
            sh=r"Restore to which folder\? \(ENTER: [^)\r\n]*; Q then ENTER: stop\): ",

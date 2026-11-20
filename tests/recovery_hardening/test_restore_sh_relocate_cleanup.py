@@ -295,4 +295,4 @@ def test_run_from_recovery_scripts_copies_the_docs_and_root_metadata(
     assert (tools / "recovery" / "docs" / "RESTORE.txt").read_text() == "manual\n"
     assert (tools / "metadata" / "alpha" / "keys").is_dir(), res.stderr
     # With no data disc mounted, the set comes from the copy.
-    assert f"using repository {tools}/metadata/alpha" in res.stderr, res.stderr
+    assert f"using backup set folder {tools}/metadata/alpha" in res.stderr, res.stderr

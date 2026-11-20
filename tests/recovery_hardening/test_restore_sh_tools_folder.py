@@ -379,7 +379,7 @@ def test_resume_sh_finishes_after_q_with_the_meta_disc_gone(
     assert (target / "restored.txt").read_text() == "restored\n"
     assert _arg(second.stdout, "--repo") == f"{tools}/metadata/{SET_ID}"
     assert _arg(second.stdout, "--restore-folder") == str(target)
-    assert "Choose a repository" not in second.stderr
+    assert "Choose a backup set" not in second.stderr
     assert not tools.exists(), "the tools folder must go after the resumed success"
 
 
@@ -590,7 +590,7 @@ def test_a_relative_recovery_root_still_resumes_from_another_folder(tmp_path: Pa
     _meta_disc(tmp_path / "rec")
     tools = tmp_path / "tools"
     first = subprocess.run(
-        ["sh", str(RESTORE_SH), "rec/recovery", "out", "latest"], cwd=tmp_path,
+        ["sh", str(RESTORE_SH), "--restore-folder", "out", "rec/recovery"], cwd=tmp_path,
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
         env=_env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"),
     )
@@ -654,7 +654,7 @@ def test_a_tools_folder_left_by_another_archive_is_not_used(tmp_path: Path) -> N
                _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"))
     assert res.returncode == 1, res.stderr
     assert "holds the copies of another archive's backup sets; replacing it" in res.stderr
-    assert "Multiple repositories" not in res.stderr
+    assert "Several backup sets" not in res.stderr
     assert _arg(res.stdout, "--catalog") is None
     assert not other.exists()
 

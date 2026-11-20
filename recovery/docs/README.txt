@@ -48,14 +48,14 @@ SOURCE LAYOUT
   bin/<arch>/          prebuilt binaries (output of cross-compile)
 
   (The former boot/ live-boot scaffolding was dropped -- never
-  bootable, never built -- and deleted in 2026.  The source
-  repository keeps it only at the tag archive/pre-1.0-history.
+  bootable, never built -- and deleted in 2026.  The LCSAS
+  source code keeps it only at the tag archive/pre-1.0-history.
   It does not ship on discs.)
 
 DESIGN DECISIONS
 
-The full design plans were removed from the LCSAS source repository
-in 2026; they remain at the tag archive/pre-1.0-history.
+The full design plans were removed from the LCSAS source code in
+2026; they remain at the tag archive/pre-1.0-history.
 Summary:
 
   Architectures:   six approved targets: Linux x86_64 / aarch64 / armv7

@@ -1958,7 +1958,7 @@ class MetaVolumeBuilder:
             repo_line = ""
             if config.repositories:
                 repo_names = ", ".join(sorted(config.repositories.keys()))
-                repo_line = f"  Repositories in this archive: {repo_names}\n"
+                repo_line = f"  Backup sets in this archive: {repo_names}\n"
             about_block = (
                 "WHOSE FILES ARE THESE?\n"
                 "\n"
@@ -1977,7 +1977,7 @@ class MetaVolumeBuilder:
                 key_hints_block = f"    Where to find the password:\n{hints}\n"
             key_info_line = (
                 "  * PASSWORD_INFO.txt on this disc lists which password\n"
-                "    unlocks which repository.\n"
+                "    unlocks which backup set.\n"
             )
             if split_view(config, recorded=recorded) is not None:
                 # Same share-combining pre-step text as PASSWORD_INFO.txt — one
@@ -2049,7 +2049,7 @@ IF THE COMPUTER REFUSES TO RUN IT
 
 WHAT YOU NEED
 
-  * The password for the repository you want to restore (the
+  * The password for the backup set you want to restore (the
     owner should have written it down separately from the
     discs).
 {key_hints_block}{key_info_line}  * Enough free disk space on your computer for the restored

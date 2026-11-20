@@ -116,16 +116,16 @@ example `LCSAS_TEST_TINY_2026_0003` is newer than
 `S` then Enter skips this and uses the copies on the meta disc (they
 may lack the latest backups).  `Q` then Enter stops (exit code 65).
 
-### `Choose a repository (number or name):` (only on archives with several repositories)
+### `Choose a backup set (number or name):` (only on archives with several repositories)
 
 If your archive has more than one repository (e.g. `alpha` and `bravo`),
 the script lists them by name and asks you to choose:
 
 ```
-Multiple repositories on this archive:
+Several backup sets on this archive:
   1) alpha
   2) bravo (password split: any 2 of 3 share cards)
-Choose a repository (number or name):
+Choose a backup set (number or name):
 ```
 
 Type the number (`1`), the name (`alpha`) or the id (its folder name

@@ -522,7 +522,7 @@ another set, the question comes back, with that folder, a dash and
 the set's name as the default (D:\restored-<its name>).
 
 ────────────────────────────────────────────────────────────────────
-DESTINATION FOLDER NOTES
+RESTORE FOLDER NOTES
 ────────────────────────────────────────────────────────────────────
 
   * The default destination is %USERPROFILE%\Documents\restored,
@@ -755,7 +755,7 @@ TROUBLESHOOTING -- error messages
       characters CMD may change (letters outside A-Z, quotes) is
       safer through the PowerShell lines in "THE PASSWORD" above.
       Q stops the script (exit code 77) and prints "could not
-      decrypt the repository with that password".  Nothing was
+      decrypt the backup set with that password".  Nothing was
       restored, and no other recovery tier was tried -- they all
       read the same keys, so they would fail the same way.
 

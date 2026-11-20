@@ -786,7 +786,7 @@ def main(argv: list[str]) -> int:
             p.add_argument("--work", help="scratch directory (default: a fresh temp dir)")
             p.add_argument("--timeout", type=int, default=300, help="seconds for restore.sh")
             p.add_argument(
-                "--repo",
+                "--backup-set", dest="repo", metavar="NAME",
                 help="set LCSAS_BACKUP_SET (the fixture's sets.json has the set's name and id)",
             )
             p.set_defaults(func=cmd_case)

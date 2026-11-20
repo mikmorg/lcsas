@@ -57,18 +57,18 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     # restore.sh first asks you to put in your NEWEST data disc
     # (the META disc is still in the drive).  Send s to skip that
     # question: this archive's META disc copies are current.  Then a
-    # multi-tenant archive asks `Choose a repository`; a single-tenant
+    # multi-tenant archive asks `Choose a backup set`; a single-tenant
     # archive skips straight to `Password:`.  Wait on any of them,
     # branch on which one matched.
-    out=$(restore-shell expect 'NEWEST data disc|Choose a repository|Password:' 120)
+    out=$(restore-shell expect 'NEWEST data disc|Choose a backup set|Password:' 120)
     case "$out" in
         *"NEWEST data disc"*)
             restore-shell send s
-            out=$(restore-shell expect 'Choose a repository|Password:' 60)
+            out=$(restore-shell expect 'Choose a backup set|Password:' 60)
             ;;
     esac
     case "$out" in
-        *"Choose a repository"*)
+        *"Choose a backup set"*)
             restore-shell send alpha
             restore-shell expect 'Password:'
             ;;
@@ -186,13 +186,13 @@ session for you.  Typical pattern:
   # start the script
   restore-shell start sh /mnt/restore.sh --restore-folder ~/restored/
   # wait for a prompt
-  restore-shell expect 'Choose a repository'
+  restore-shell expect 'Choose a backup set'
   # respond
   restore-shell send alpha
 
 restore.sh asks up to three things via its terminal:
 
-  1. `Choose a repository (number or name):` — multi-tenant archives
+  1. `Choose a backup set (number or name):` — multi-tenant archives
      list the available tenant names.  Send `alpha` (the only tenant
      you have the key shares for).  Single-tenant archives skip this.
   2. `Password:` — send the contents of ~/alpha.pw (the password you

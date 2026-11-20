@@ -298,7 +298,7 @@ def test_shapes_the_shared_splitter_catches(check, cmd):
     [
         # rc10 tier1-missing-3679774: the old split on `|` inside the
         # quoted pattern read `lcsas-restore` as a command.
-        "restore-shell expect 'NEWEST data disc|Choose a repository|"
+        "restore-shell expect 'NEWEST data disc|Choose a backup set|"
         "Password:|lcsas-restore|Insert|ERROR|error' 120",
         'echo "next: rustic restore; then done"',
         "ls /mnt  # rustic restore would go here",
