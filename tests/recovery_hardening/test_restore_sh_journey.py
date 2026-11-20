@@ -1207,6 +1207,92 @@ def test_resume_sh_skips_the_step_and_names_the_set_by_id(tmp_path: Path) -> Non
     assert stat.S_IMODE((tmp_path / "tools" / "resume.sh").stat().st_mode) == 0o700
 
 
+# ── The restore folder question (#926) ───────────────────────────────
+
+
+def _run_asking(recovery: Path, env: dict[str, str], stdin: str = "",
+                ) -> subprocess.CompletedProcess[str]:
+    """restore.sh with no --restore-folder."""
+    return subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery)],
+        input=stdin, capture_output=True, text=True, env=env, timeout=30,
+    )
+
+
+@pytest.mark.parametrize(("answer", "folder"), [
+    ("", "restored"), ("~/elsewhere", "elsewhere"), ("~", ""),
+])
+def test_no_restore_folder_asks_after_the_set_enter_is_home_restored(
+    tmp_path: Path, answer: str, folder: str,
+) -> None:
+    """With no --restore-folder and someone to answer, the folder is
+    asked after the set is chosen and before the password, as
+    restore.bat asks it; ENTER is ~/restored (no longer /tmp/restored,
+    which is RAM on many live systems)."""
+    recovery = _two_sets(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    res = _run_asking(recovery,
+                      _env(tmp_path, LCSAS_INTERACTIVE="on", HOME=str(home)),
+                      stdin=f"1\n{answer}\n{GOOD_PW}\nn\n")
+    assert res.returncode == 0, res.stderr
+    question = (f"Restore to which folder? (ENTER: {home}/restored; "
+                "Q then ENTER: stop): ")
+    err = res.stderr
+    assert err.count(question) == 1, err
+    assert err.index("Choose a repository") < err.index(question)
+    want = home / folder if folder else home
+    assert _runs(tmp_path) == [
+        f"RUN repo={tmp_path}/meta/metadata/{DOCS_ID} target={want} pw={GOOD_PW}",
+    ]
+
+
+def test_no_restore_folder_and_nobody_to_ask_is_home_restored(tmp_path: Path) -> None:
+    """A run nobody answers (no terminal) is not asked: it restores into
+    ~/restored, so scripted runs stay unattended."""
+    recovery = _meta(tmp_path / "meta")
+    _set(tmp_path / "meta", PHOTOS_ID, PHOTOS)
+    home = tmp_path / "home"
+    home.mkdir()
+    res = _run_asking(recovery, _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, HOME=str(home)))
+    assert res.returncode == 0, res.stderr
+    assert "Restore to which folder?" not in res.stderr
+    assert f"restore folder: {home}/restored" in res.stderr
+    assert _runs(tmp_path) == [
+        f"RUN repo={tmp_path}/meta/metadata/{PHOTOS_ID} target={home}/restored pw={GOOD_PW}",
+    ]
+
+
+def test_the_folder_question_q_stops_and_a_relative_path_is_asked_again(
+    tmp_path: Path,
+) -> None:
+    """A relative answer is asked again (the run later starts in another
+    folder); Q stops with exit 65 before the password is asked."""
+    recovery = _meta(tmp_path / "meta")
+    _set(tmp_path / "meta", PHOTOS_ID, PHOTOS)
+    home = tmp_path / "home"
+    home.mkdir()
+    res = _run_asking(recovery,
+                      _env(tmp_path, LCSAS_INTERACTIVE="on", HOME=str(home)),
+                      stdin="restored\nq\n")
+    assert res.returncode == 65, res.stderr
+    assert "Type the full path of the folder, starting with / or ~/." in res.stderr
+    assert res.stderr.count("Restore to which folder?") == 2
+    assert "Stopped at your request." in res.stderr
+    assert "Password" not in res.stderr
+    assert _runs(tmp_path) == []
+
+
+def test_restore_folder_flag_skips_the_question(tmp_path: Path) -> None:
+    recovery = _meta(tmp_path / "meta")
+    _set(tmp_path / "meta", PHOTOS_ID, PHOTOS)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD=GOOD_PW))
+    assert res.returncode == 0, res.stderr
+    assert "Restore to which folder?" not in res.stderr
+    assert _runs(tmp_path)[0].endswith(f"target={tmp_path}/out pw={GOOD_PW}")
+
+
 # ── Review fixes: another set, the target marker, names, cards ───────
 
 

@@ -55,7 +55,7 @@ OPTING OUT OF TIER 3
 
 If you want a hard guarantee that the restore never touches Python:
 
-  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
+  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh --restore-folder ~/restored /mnt/recovery
 
 restore.sh will refuse to try tier 3 even if python3 and
 python_reader.py are both present.
@@ -684,14 +684,14 @@ DEPENDENCY CHAIN AT A GLANCE
 INVOCATION
 
   # Auto-discover recovery root from script location:
-  sh /restore.sh --restore-folder /tmp/restored
+  sh /restore.sh --restore-folder ~/restored
 
   # Explicit:
-  sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
+  sh /restore.sh --restore-folder ~/restored /mnt/recovery
 
   # Skip Python tier:
-  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
+  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh --restore-folder ~/restored /mnt/recovery
 
   # Non-interactive (password from env or file):
-  LCSAS_PASSWORD='secret' sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
-  LCSAS_PASSWORD_FILE=/path/pw    sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
+  LCSAS_PASSWORD='secret' sh /restore.sh --restore-folder ~/restored /mnt/recovery
+  LCSAS_PASSWORD_FILE=/path/pw    sh /restore.sh --restore-folder ~/restored /mnt/recovery

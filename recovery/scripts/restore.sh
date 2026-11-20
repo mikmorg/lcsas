@@ -237,6 +237,18 @@ rm_tree() {
     return "$_rt_rc"
 }
 
+space_probe_dir() {
+    # Print the nearest EXISTING ancestor directory of "$1" (df needs
+    # a path that exists; targets/caches often don't yet).
+    _sp_probe="$1"
+    while [ -n "$_sp_probe" ] && [ ! -d "$_sp_probe" ] \
+          && [ "$_sp_probe" != "/" ] && [ "$_sp_probe" != "." ]; do
+        _sp_probe="$(dirname "$_sp_probe")"
+    done
+    [ -d "$_sp_probe" ] && printf '%s\n' "$_sp_probe"
+    return 0
+}
+
 # path_inside A B: 0 when the folder A is the folder B or is under it
 # (both must exist; compared by their real paths).
 path_inside() {
@@ -768,15 +780,17 @@ QUICK START:
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
-  The restore folder is where to write restored files (default:
-  /tmp/restored); name it with --restore-folder.
+  The restore folder is where to write restored files.  Name it with
+  --restore-folder; without it the script asks (ENTER: ~/restored), or
+  uses ~/restored when nobody is there to answer.
 
 FLAGS AND ENVIRONMENT VARIABLES:
   --backup-set NAME       Backup set to restore, by its name or its id
                           (same as LCSAS_BACKUP_SET=NAME).  Skips the
                           backup set selection prompt.
-  --restore-folder DIR    Where to write restored files (default:
-                          /tmp/restored).
+  --restore-folder DIR    Where to write restored files.  Without it
+                          the script asks (ENTER: ~/restored), or uses
+                          ~/restored when nobody is there to answer.
   --snapshot ID           Which snapshot to restore: 'latest' (the
                           default), an ID or the start of one:
                             sh restore.sh --restore-folder ~/restored --snapshot a1b2c3d4
@@ -1124,8 +1138,8 @@ usage: $0 [--backup-set NAME] [--restore-folder DIR] [--snapshot ID] [--password
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
-  --restore-folder DIR is where to write restored files (default:
-  /tmp/restored).  --snapshot ID is 'latest' (the default) or a
+  --restore-folder DIR is where to write restored files (asked when
+  not given; ~/restored by default).  --snapshot ID is 'latest' (the default) or a
   snapshot ID.
 
   Password is read from stdin, \$LCSAS_PASSWORD env, \$LCSAS_PASSWORD_FILE,
@@ -1134,11 +1148,11 @@ EOF
     exit 2
 fi
 
-if [ -n "$TARGET_FLAG" ]; then
-    TARGET="$TARGET_FLAG"
-else
-    TARGET="/tmp/restored"
-fi
+# The restore folder (#926): --restore-folder names it.  Without the
+# flag it is left empty here and settled once the set is chosen, as
+# restore.bat does it: a person at the terminal is asked, with
+# ~/restored as the ENTER default; a run nobody answers uses ~/restored.
+TARGET="$TARGET_FLAG"
 if [ -n "$SNAP_FLAG" ]; then
     SNAP="$SNAP_FLAG"
 fi
@@ -1167,7 +1181,7 @@ abs_path() {
 # (#625): the copy that runs from the tools folder starts in /, where
 # "restored" would be /restored and a relative --password-file FILE would name
 # nothing.
-TARGET="$(abs_path "$TARGET")"
+if [ -n "$TARGET" ]; then TARGET="$(abs_path "$TARGET")"; fi
 if [ -n "${LCSAS_PASSWORD_FILE:-}" ]; then LCSAS_PASSWORD_FILE="$(abs_path "$LCSAS_PASSWORD_FILE")"; fi
 if [ -n "${LCSAS_SHARES_DIR:-}" ]; then LCSAS_SHARES_DIR="$(abs_path "$LCSAS_SHARES_DIR")"; fi
 
@@ -1175,7 +1189,8 @@ if [ -n "${LCSAS_SHARES_DIR:-}" ]; then LCSAS_SHARES_DIR="$(abs_path "$LCSAS_SHA
 # arguments as this run read them, every path in them full.
 relocate_with_args() {
     _rw_mount="$1"
-    set -- --restore-folder "$TARGET" --snapshot "$SNAP"
+    set -- --snapshot "$SNAP"
+    if [ -n "$TARGET" ]; then set -- --restore-folder "$TARGET" "$@"; fi
     if [ -n "${LCSAS_BACKUP_SET:-}" ]; then set -- --backup-set "$LCSAS_BACKUP_SET" "$@"; fi
     if [ "$RECOVERY_GIVEN" = 1 ]; then set -- "$@" -- "$RECOVERY"; fi
     relocate_to_ram "$_rw_mount" "$@"
@@ -1272,7 +1287,8 @@ else
 fi
 OS="$(uname -s 2>/dev/null || printf 'Linux\n')"
 
-# $TARGET so far is the folder to restore into; from here on it is the
+# $TARGET so far is the folder to restore into (empty until the set is
+# chosen when --restore-folder was not given); from here on it is the
 # triple that names the recovery/bin/<triple>/ folder.
 RESTORE_FOLDER="$TARGET"
 TARGET="${LCSAS_PLATFORM:-$(host_triple "$OS" "$MACHINE")}"
@@ -2534,6 +2550,63 @@ if [ -n "${LCSAS_PACK_CACHE_DIR:-}" ] && [ -n "$catalog_pick" ]; then
     fi
 fi
 
+# ── The restore folder (#926) ─────────────────────────────────────
+#
+# ask_folder QUESTION DEFAULT QUIT: ask for a folder until the answer is
+# a full path outside the tools folder.  ENTER is DEFAULT; ~ and ~/...
+# are the home folder.  Sets ASK_DIR; returns 1 on Q or the end of the
+# input (QUIT says what Q does).
+ask_folder() {
+    while :; do
+        printf '%s (ENTER: %s; Q then ENTER: %s): ' "$1" "$2" "$3" >&2
+        ASK_DIR=""
+        IFS= read -r ASK_DIR || return 1
+        # shellcheck disable=SC2088  # a typed "~/": the text, not a path
+        case "$ASK_DIR" in
+            q|Q)  return 1 ;;
+            '')   ASK_DIR="$2" ;;
+            '~')  ASK_DIR="${HOME:-}" ;;
+            '~/'*) ASK_DIR="${HOME:-}/${ASK_DIR#'~/'}" ;;
+        esac
+        case "$ASK_DIR" in
+            /?*) ;;
+            *)
+                printf 'Type the full path of the folder, starting with / or ~/.\n' >&2
+                continue ;;
+        esac
+        _af_probe="$(space_probe_dir "$ASK_DIR")"
+        if [ -n "$STATE_DIR" ] && [ -n "$_af_probe" ] \
+           && path_inside "$_af_probe" "$STATE_DIR"; then
+            printf 'That folder is inside the tools folder %s, which is\n' "$STATE_DIR" >&2
+            printf 'deleted at the end.  Choose a folder outside it.\n' >&2
+            continue
+        fi
+        return 0
+    done
+}
+
+# With no --restore-folder, the set is known now, so the folder is
+# settled before the space check and the password, where restore.bat
+# asks it.  The default is ~/restored, not /tmp/restored: /tmp is in RAM
+# on many live systems, and the files would go at the next reboot.
+if [ -z "$RESTORE_FOLDER" ]; then
+    if [ -n "${HOME:-}" ]; then
+        _rf_default="${HOME%/}/restored"
+    else
+        _rf_default="/tmp/restored"
+    fi
+    if is_interactive; then
+        if ! ask_folder 'Restore to which folder?' "$_rf_default" 'stop'; then
+            printf 'Stopped at your request.\n' >&2
+            exit "$EXIT_USER_ABORT"
+        fi
+        RESTORE_FOLDER="$ASK_DIR"
+    else
+        RESTORE_FOLDER="$_rf_default"
+    fi
+    printf '[restore.sh] restore folder: %s\n' "$RESTORE_FOLDER" >&2
+fi
+
 # ── Free-space preflight [FMA-09] ─────────────────────────────────
 #
 # The burn side checks staging-area space before writing a byte; mirror
@@ -2558,18 +2631,6 @@ fi
 # on counts what it already wrote: the packs in the cache, and the
 # files in a target that holds the marker of an earlier restore.
 # LCSAS_SKIP_SPACE_CHECK=1 bypasses the whole check.
-
-space_probe_dir() {
-    # Print the nearest EXISTING ancestor directory of "$1" (df needs
-    # a path that exists; targets/caches often don't yet).
-    _sp_probe="$1"
-    while [ -n "$_sp_probe" ] && [ ! -d "$_sp_probe" ] \
-          && [ "$_sp_probe" != "/" ] && [ "$_sp_probe" != "." ]; do
-        _sp_probe="$(dirname "$_sp_probe")"
-    done
-    [ -d "$_sp_probe" ] && printf '%s\n' "$_sp_probe"
-    return 0
-}
 
 free_kb_for() {
     # Available KB on the filesystem holding "$1"; empty if unknown.
@@ -3283,8 +3344,9 @@ mkdir -p "$RESTORE_FOLDER"
 #
 # On many mainstream distros (Fedora, Arch, openSUSE) and on nearly
 # every live-USB session, /tmp -- and a live system's home directory
-# -- is a RAM-backed tmpfs.  The documented default target is
-# /tmp/restored, so an heir who accepts it gets a "successful"
+# -- is a RAM-backed tmpfs.  The default restore folder was
+# /tmp/restored up to rc10, and is ~/restored since #926; on a live
+# system both are in RAM, so an heir who accepts it gets a "successful"
 # restore that evaporates at poweroff.  Warn loudly; when a human is
 # reachable (TTY), default to aborting.  Non-interactive automation
 # keeps working (warn-and-continue) unless LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1.
@@ -3511,35 +3573,11 @@ offer_another_set() {
     while [ -n "$(ls -A "$_os_base-$_os_n" 2>/dev/null)" ]; do
         _os_n=$((_os_n + 1))
     done
-    while :; do
-        printf 'Folder to restore it into (ENTER: %s; Q then ENTER: no other set): ' \
-               "$_os_base-$_os_n" >&2
-        _os_dir=""
-        IFS= read -r _os_dir || _os_dir=q
-        # shellcheck disable=SC2088  # a typed "~/": the text, not a path
-        case "$_os_dir" in
-            q|Q)
-                printf 'No other backup set restored; %s is done.\n' "$SET_NAME" >&2
-                return 0 ;;
-            '')   _os_dir="$_os_base-$_os_n" ;;
-            '~')  _os_dir="${HOME:-}" ;;
-            '~/'*) _os_dir="${HOME:-}/${_os_dir#'~/'}" ;;
-        esac
-        case "$_os_dir" in
-            /?*) ;;
-            *)
-                printf 'Type the full path of the folder, starting with / or ~/.\n' >&2
-                continue ;;
-        esac
-        _os_probe="$(space_probe_dir "$_os_dir")"
-        if [ -n "$STATE_DIR" ] && [ -n "$_os_probe" ] \
-           && path_inside "$_os_probe" "$STATE_DIR"; then
-            printf 'That folder is inside the tools folder %s, which is\n' "$STATE_DIR" >&2
-            printf 'deleted at the end.  Choose a folder outside it.\n' >&2
-            continue
-        fi
-        break
-    done
+    if ! ask_folder 'Folder to restore it into' "$_os_base-$_os_n" 'no other set'; then
+        printf 'No other backup set restored; %s is done.\n' "$SET_NAME" >&2
+        return 0
+    fi
+    _os_dir="$ASK_DIR"
     # This run's own files go now (exec skips the exit handler); the
     # tools folder stays for the next set.
     [ -z "${PWFILE_TMP:-}" ] || rm -f "$PWFILE_TMP"

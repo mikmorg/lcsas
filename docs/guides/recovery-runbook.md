@@ -81,7 +81,7 @@ That's it.  Two flags, both optional:
 
 | Flag | Meaning | Default |
 |---|---|---|
-| `--restore-folder DIR` | where restored files land | `/tmp/restored` |
+| `--restore-folder DIR` | where restored files land | asked; ENTER (or no terminal) gives `~/restored` |
 | `--snapshot ID` | a snapshot ID, or the word `latest` | `latest` |
 
 The script will:
