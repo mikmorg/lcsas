@@ -95,7 +95,7 @@ def _snapshot(root: Path) -> dict[bytes, tuple[str, bytes]]:
 def _tier1(bin_path: Path, repo: Path, target: Path, pwfile: Path,
            snapshot: str | None = None) -> subprocess.CompletedProcess[str]:
     target.mkdir(parents=True, exist_ok=True)
-    cmd = [str(bin_path), "--repo", str(repo), "--target", str(target),
+    cmd = [str(bin_path), "--repo", str(repo), "--restore-folder", str(target),
            "--password-file", str(pwfile)]
     if snapshot:
         cmd += ["--snapshot", snapshot]

@@ -1,7 +1,7 @@
 """The exit-code tables in the recovery docs, checked against the
 contract's codes (#888).
 
-An heir reads an exit code in a table: RECOVER.txt, RECOVER_WINDOWS.txt,
+An heir reads an exit code in a table: RESTORE.txt, RESTORE_WINDOWS.txt,
 TIERS.txt, restore.sh's header.  Those tables are written by hand for
 their reader and are not generated (a generated block in a burned doc
 needs markers and a build step, and each table words the codes for its
@@ -75,13 +75,13 @@ class Table:
 
 
 TABLES: tuple[Table, ...] = (
-    Table("recovery/docs/RECOVER.txt", "lcsas-restore exits:", TIER1),
-    Table("recovery/docs/RECOVER.txt", "restore.sh exits:", RESTORE_SH),
-    Table("recovery/docs/RECOVER_WINDOWS.txt", "EXIT CODES of restore.bat",
+    Table("recovery/docs/RESTORE.txt", "lcsas-restore exits:", TIER1),
+    Table("recovery/docs/RESTORE.txt", "restore.sh exits:", RESTORE_SH),
+    Table("recovery/docs/RESTORE_WINDOWS.txt", "EXIT CODES of restore.bat",
           RESTORE_BAT),
     Table("recovery/docs/TIERS.txt", "Tier 1 exit status, in full:", TIER1),
     Table("recovery/docs/TIERS.txt",
-          "Tier 3 (standalone_restorer.py) exit status:", TIER3),
+          "Tier 3 (python_reader.py) exit status:", TIER3),
     Table("recovery/scripts/restore.sh", "Documented exit codes", RESTORE_SH,
           style="sh"),
     Table("recovery/scripts/restore.sh", "Exit codes, from the wrapped tool's:",

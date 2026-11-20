@@ -131,7 +131,7 @@ def test_restore_sh_picks_the_bundled_loader_on_a_glibc_host(
     (repo / "keys").mkdir(parents=True)
     (repo / "index").mkdir()
     # A stand-in reader: real Python, run by the real interpreter.
-    (fixture / "standalone_restorer.py").write_text(
+    (fixture / "python_reader.py").write_text(
         "import sys, ssl, sqlite3, zlib\n"
         "print('READER_RAN', sys.version.split()[0], sys.executable)\n"
     )
@@ -143,7 +143,7 @@ def test_restore_sh_picks_the_bundled_loader_on_a_glibc_host(
         cp -R /py {bin_dir}/python
         cp /ld/{LOADER} {bin_dir}/python/lib/{LOADER}
         command -v python3 && {{ echo HOST_HAS_PYTHON; exit 3; }}
-        printf 'pw\\n' | LCSAS_TARGET={TARGET} LCSAS_MOUNT_DIRS= \\
+        printf 'pw\\n' | LCSAS_PLATFORM={TARGET} LCSAS_MOUNT_DIRS= \\
             LCSAS_ALLOW_NO_PACK_SEARCH=1 HOME=/tmp \\
             sh /meta/recovery/scripts/restore.sh /meta/recovery \\
                /tmp/restored latest

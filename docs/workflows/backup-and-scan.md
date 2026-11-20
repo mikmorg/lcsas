@@ -107,7 +107,7 @@ catalogued yet?" command.
 - A TOML config file with `[paths]` and one or more `[repos.<name>]` blocks.
   `--config` is **required** for scan (`cmd_scan` returns early if it is
   `None`).
-- A catalog. Path resolution order: `--db` flag > `config.db_path`
+- A catalog. Path resolution order: `--catalog` flag > `config.db_path`
   (the `locked_connection(...)` call in `cmd_scan`). Schema is ensured on
   demand by `ensure_schema(conn)`.
 - Each repository in the config must already exist in the catalog (run
@@ -118,7 +118,7 @@ catalogued yet?" command.
   block of `cmd_scan`).
 
 **Steps:**
-1. `lcsas --config <conf.toml> [--db <path>] scan` — argparse entry
+1. `lcsas --config <conf.toml> [--catalog <path>] scan` — argparse entry
    (`scan_p` in `build_parser()`), dispatched to `cmd_scan`
    (`src/lcsas/cli/commands/scan.py` and `src/lcsas/cli/parser.py`).
 2. For each repository in `config.repositories` (`cmd_scan`):

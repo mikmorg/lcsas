@@ -169,7 +169,7 @@ def test_no_boot_instruction_or_artifact_reappears(tmp_path: Path) -> None:
     # 1. Heir-facing docs carry no boot-the-disc instruction.
     docs = {
         f"recovery/docs/{name}": (_DOCS / name).read_text(encoding="utf-8")
-        for name in ("RECOVER.txt", "RECOVER_WINDOWS.txt", "BOOT.txt")
+        for name in ("RESTORE.txt", "RESTORE_WINDOWS.txt", "BOOT.txt")
     }
     docs.update(_generated_heir_docs(tmp_path))
     for name, text in docs.items():

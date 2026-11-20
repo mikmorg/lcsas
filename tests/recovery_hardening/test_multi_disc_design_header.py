@@ -2,7 +2,7 @@
 
 test_multi_disc_design_header.py -- static regression guard ensuring
 MULTI_DISC_DESIGN.txt is clearly marked as a design-intent document and
-cross-references the operator guide in RECOVER.txt (closes #110).
+cross-references the operator guide in RESTORE.txt (closes #110).
 
 FAILURE MODE CAUGHT
 -------------------
@@ -14,7 +14,7 @@ recover their archive.
 
 These tests guard against:
   * The design-intent banner ("DESIGN DOCUMENT") being removed.
-  * The cross-reference to RECOVER.txt being removed.
+  * The cross-reference to RESTORE.txt being removed.
   * The "WHAT HAS SHIPPED" section (shipped-feature inventory) being removed.
   * LCSAS_PACK_CACHE_DIR — the most critical shipped env var — being
     absent from the shipped-features section.
@@ -46,12 +46,12 @@ def test_design_doc_has_banner():
 
 
 def test_design_doc_cross_references_recover_txt():
-    """MULTI_DISC_DESIGN.txt must reference RECOVER.txt so operators are
+    """MULTI_DISC_DESIGN.txt must reference RESTORE.txt so operators are
     directed to the actual operator guide rather than the design doc."""
-    assert "RECOVER.txt" in _DESIGN_TEXT, (
-        "MULTI_DISC_DESIGN.txt does not reference RECOVER.txt. "
+    assert "RESTORE.txt" in _DESIGN_TEXT, (
+        "MULTI_DISC_DESIGN.txt does not reference RESTORE.txt. "
         "Operators need to be directed to the current procedure documented "
-        "in RECOVER.txt (MULTI-DISC RESTORE section)."
+        "in RESTORE.txt (MULTI-DISC RESTORE section)."
     )
 
 

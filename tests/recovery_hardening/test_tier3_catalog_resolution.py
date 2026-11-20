@@ -32,7 +32,7 @@ so this runs under ``make test-unit`` as well as the recovery-hardening
 suite.
 
 A fourth test exercises the ``--catalog`` flag on the generated
-``standalone_restorer.py`` CLI to make sure the plumbing through
+``python_reader.py`` CLI to make sure the plumbing through
 ``standalone_builder.py`` actually surfaces the flag (cheap argparse
 ``--help`` probe).
 """
@@ -322,7 +322,7 @@ def test_prompt_reports_pack_with_no_volume_mapping(
 
 
 def test_standalone_restorer_exposes_catalog_flag(tmp_path: Path) -> None:
-    """The generated ``standalone_restorer.py`` must expose ``--catalog``
+    """The generated ``python_reader.py`` must expose ``--catalog``
     so ``restore.sh`` can plumb the catalog path into tier-3.
 
     Cheap argparse probe -- builds the script, runs ``--help`` against
@@ -330,18 +330,18 @@ def test_standalone_restorer_exposes_catalog_flag(tmp_path: Path) -> None:
     looks for the flag in the help output.  No real repo or rustic
     dependency.
     """
-    script = tmp_path / "standalone_restorer.py"
+    script = tmp_path / "python_reader.py"
     script.write_text(build_standalone())
     result = subprocess.run(
         [sys.executable, str(script), "--help"],
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, (
-        f"standalone_restorer.py --help failed; "
+        f"python_reader.py --help failed; "
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     assert "--catalog" in result.stdout, (
-        f"--catalog flag missing from standalone_restorer.py --help; "
+        f"--catalog flag missing from python_reader.py --help; "
         f"stdout:\n{result.stdout}"
     )
 
@@ -368,9 +368,9 @@ def test_restore_sh_threads_catalog_arg_to_tier3(tmp_path: Path) -> None:
     repo = recovery / "metadata" / "alpha"
     (repo / "keys").mkdir(parents=True)
     (repo / "index").mkdir()
-    # Place a fake standalone_restorer.py next to recovery/ so the
+    # Place a fake python_reader.py next to recovery/ so the
     # tier-3 search finds it.
-    (recovery.parent / "standalone_restorer.py").write_text(
+    (recovery.parent / "python_reader.py").write_text(
         "# placeholder for tier-3\n"
     )
     # Drop a synthetic catalog.db at the location restore.sh's
@@ -412,7 +412,7 @@ def test_restore_sh_threads_catalog_arg_to_tier3(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     result = subprocess.run(
-        ["sh", str(restore_sh), str(recovery), str(target), "latest"],
+        ["sh", str(restore_sh), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

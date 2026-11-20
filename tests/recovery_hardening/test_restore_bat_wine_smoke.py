@@ -217,7 +217,7 @@ def _run_bat(
     """Drive restore.bat under wine with redirected stdin.
 
     LCSAS_NO_RELOCATE=1 keeps us on the direct flow (no copy-to-%TEMP%
-    re-launch).  LCSAS_TARGET pins the target triple so detection cannot
+    re-launch).  LCSAS_PLATFORM pins the target triple so detection cannot
     misfire under wine.  LCSAS_NEWEST_DISC_PROMPT=0 skips the question
     for the newest data disc (#605): the meta tree here has no label, so
     it is a META disc, and the question would take the one stdin line.
@@ -225,7 +225,7 @@ def _run_bat(
     run_env = {
         **env,
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         **(extra_env or {}),
     }
@@ -310,14 +310,14 @@ def test_wrong_password_is_terminal_no_tier2_fallthrough(
     # prompt slurps the entire remaining stdin into one variable (CRLF
     # or LF alike; a real Windows console reads per line).  So: feed
     # exactly ONE LF-terminated line (the target — a lone line reads
-    # cleanly), and deliver the password by pre-setting LCSAS_PW in the
+    # cleanly), and deliver the password by pre-setting LCSAS_PASSWORD in the
     # environment — `set /p` at EOF keeps the variable's prior value,
     # which is also genuine cmd semantics on real Windows.
     target = meta / "restored"
     res = _run_bat(
         env, "e",
         stdin_data="E:\\restored\n",
-        extra_env={"LCSAS_PW": "not-the-real-password"},
+        extra_env={"LCSAS_PASSWORD": "not-the-real-password"},
     )
 
     out = res.stdout + res.stderr
@@ -389,7 +389,7 @@ def test_target_path_with_parenthesis_restores(tmp_path: Path) -> None:
     res = _run_bat(
         env, "e",
         stdin_data="E:\\out (old)\\restored\n",
-        extra_env={"LCSAS_PW": "test"},
+        extra_env={"LCSAS_PASSWORD": "test"},
     )
     out = res.stdout + res.stderr
     assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
@@ -407,7 +407,7 @@ def test_target_path_with_parenthesis_restores(tmp_path: Path) -> None:
 def test_awkward_password_reaches_tier1_verbatim(
     tmp_path: Path, password: str,
 ) -> None:
-    """#482: "on"/"off"/"/?" made `echo !LCSAS_PW!` act on echo itself and
+    """#482: "on"/"off"/"/?" made `echo !LCSAS_PASSWORD!` act on echo itself and
     write no password; a '"' broke the empty-password `if`.  Each case
     restores a repo whose password is exactly that string."""
     import sys
@@ -427,7 +427,7 @@ def test_awkward_password_reaches_tier1_verbatim(
     res = _run_bat(
         env, "e",
         stdin_data="E:\\restored\n",
-        extra_env={"LCSAS_PW": password},
+        extra_env={"LCSAS_PASSWORD": password},
     )
     out = res.stdout + res.stderr
     assert res.returncode == 0, (
@@ -446,7 +446,7 @@ def test_awkward_password_reaches_tier1_verbatim(
 def test_target_ending_in_backslash_restores(
     tmp_path: Path, answer: str, folder: str,
 ) -> None:
-    """#615: restore.bat passes the folder as --target "<folder>", so
+    """#615: restore.bat passes the folder as --restore-folder "<folder>", so
     "E:\\out\\" ended in \\", which the program reads as a quote: the
     folder name swallowed every later argument.  The script drops typed
     quotes and trailing backslashes.  A whole drive is refused:
@@ -468,7 +468,7 @@ def test_target_ending_in_backslash_restores(
     res = _run_bat(
         env, "e",
         stdin_data=answer + "\n",
-        extra_env={"LCSAS_PW": "test"},
+        extra_env={"LCSAS_PASSWORD": "test"},
     )
     out = res.stdout + res.stderr
     assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
@@ -488,7 +488,7 @@ def test_whole_drive_target_is_asked_again(tmp_path: Path) -> None:
     res = _run_bat(
         env, "e",
         stdin_data="E:\\\n",
-        extra_env={"LCSAS_PW": "test"},
+        extra_env={"LCSAS_PASSWORD": "test"},
     )
     out = res.stdout + res.stderr
     assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
@@ -508,7 +508,7 @@ def test_target_left_in_the_environment_is_ignored(tmp_path: Path) -> None:
     res = _run_bat(
         env, "e",
         stdin_data="\n",
-        extra_env={"LCSAS_PW": "test", "TARGET": "E:\\from-env"},
+        extra_env={"LCSAS_PASSWORD": "test", "TARGET": "E:\\from-env"},
     )
     out = res.stdout + res.stderr
     assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
@@ -547,7 +547,7 @@ def test_finished_with_errors_is_reported_as_finished(tmp_path: Path) -> None:
     _map_drive(prefix, "e", meta)
 
     res = _run_bat(env, "e", stdin_data="E:\\restored\n",
-                   extra_env={"LCSAS_PW": "test-password"})
+                   extra_env={"LCSAS_PASSWORD": "test-password"})
     out = res.stdout + res.stderr
     assert res.returncode == 4, f"rc={res.returncode}\n--- output ---\n{out}"
     assert "The restore finished, but 1 item(s) could not be restored." in out, out
@@ -572,9 +572,9 @@ def test_old_failures_list_is_removed_before_tier1(tmp_path: Path) -> None:
         "LCSAS restore: items that were NOT restored.\n\npath\treason\tblob_id\n"
         "old\tname refused: an earlier run\t\n")
     run_env = {**env, "LCSAS_NO_RELOCATE": "1",
-               "LCSAS_TARGET": "x86_64-pc-windows-gnu",
-               "LCSAS_NEWEST_DISC_PROMPT": "0", "LCSAS_PW": "test",
-               "LCSAS_FORCE_NONEMPTY_TARGET": "1"}
+               "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
+               "LCSAS_NEWEST_DISC_PROMPT": "0", "LCSAS_PASSWORD": "test",
+               "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1"}
     res = subprocess.run(
         ["wine", "cmd", "/c", "E:\\recovery\\scripts\\restore.bat",
          "--snapshot", "deadbeef"],

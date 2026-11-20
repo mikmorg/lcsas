@@ -12,30 +12,31 @@
 #   Tier 2b. bin/<arch>/restic (or PATH)     stock restic/rustic — independent
 #                                            audited reader of the same format
 #   ----- Bare minimum stops here.  None of the above needs Python. -----
-#   Tier 3.  python3 standalone_restorer.py  (only if all above failed)
+#   Tier 3.  python3 python_reader.py  (only if all above failed)
 #
 # The script can be invoked two ways:
 #
 #   1. Auto-locate from script path:
-#        sh /path/to/restore.sh [TARGET_DIR] [SNAPSHOT_ID|latest]
+#        sh /path/to/restore.sh [--restore-folder DIR] [--snapshot ID]
 #      Recovery root is auto-detected from $0's location.
 #
 #   2. Explicit:
-#        sh restore.sh RECOVERY_ROOT TARGET_DIR [SNAPSHOT_ID|latest]
+#        sh restore.sh [--restore-folder DIR] [--snapshot ID] RECOVERY_ROOT
 #
-#   Flags come first: --target DIR and --snapshot ID name the target and
-#   the snapshot (sh restore.sh --target DIR --snapshot ID); see --help.
+#   Flags come first: --restore-folder DIR and --snapshot ID name the
+#   restore folder and the snapshot; RECOVERY_ROOT is the one positional
+#   argument; see --help.
 #
 # Inputs:
 #   $LCSAS_PASSWORD  -- if set, used as password (otherwise prompts on stdin)
-#   $LCSAS_PWFILE    -- if set, path to a password file (overrides above)
+#   $LCSAS_PASSWORD_FILE -- if set, path to a password file (overrides above)
 #   $LCSAS_SHARES_DIR -- if set, a folder of share card files: the password
 #                       is rebuilt from them (after the two above)
 # With none of these, the script asks: for the share cards when the set's
-# marker (metadata/<id>/LCSAS_REPO.txt) says its password is split, else
+# marker (metadata/<id>/LCSAS_BACKUP_SET.txt) says its password is split, else
 # for the password, again after a wrong one.
 #
-# Documented exit codes (recovery/docs/RECOVER.txt, "EXIT CODES"):
+# Documented exit codes (recovery/docs/RESTORE.txt, "EXIT CODES"):
 #   0    success
 #   1    generic failure (no repository, unsupported OS/arch, not enough
 #        free space, no recovery method available, a tier that failed,
@@ -61,13 +62,33 @@
 #
 # Tools folder (#609): run off a disc, the script copies itself, this
 # computer's binaries, the docs and the meta disc's metadata/ into
-# $LCSAS_TOOLS_DIR (default $HOME/lcsas-restore-tools) and runs from
+# $LCSAS_TOOLS_DIR (default $HOME/lcsas-tools) and runs from
 # there.  The pack cache, a copy of the catalog and resume.sh live
 # there too.  It is removed after a restore that succeeds, or that
 # finishes with items not restored (exit 4) unless a disc was not there,
 # and kept after any other exit, so `sh <tools>/resume.sh` can carry on.
 
 set -eu
+
+# A retired environment variable, set, is refused before anything else
+# happens (#934): its value would be silently ignored otherwise.
+for _old_new in \
+    LCSAS_REPO:LCSAS_BACKUP_SET \
+    LCSAS_PWFILE:LCSAS_PASSWORD_FILE \
+    LCSAS_TARGET:LCSAS_PLATFORM \
+    LCSAS_ALLOW_TMPFS_TARGET:LCSAS_ALLOW_TMPFS_RESTORE_FOLDER \
+    LCSAS_FORBID_TMPFS_TARGET:LCSAS_FORBID_TMPFS_RESTORE_FOLDER \
+    LCSAS_FORCE_NONEMPTY_TARGET:LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER
+do
+    _old="${_old_new%%:*}"
+    eval "_old_set=\${$_old+x}"
+    if [ -n "$_old_set" ]; then
+        printf 'restore.sh: %s was renamed: use %s\n' "$_old" "${_old_new#*:}" >&2
+        exit 2
+    fi
+done
+unset _old_new _old _old_set
+
 
 # Test-infrastructure hook (issue #213): when `LCSAS_SHELL_TRACE` is
 # set to a writable path, the script emits a `bash -x`-style trace
@@ -247,7 +268,7 @@ sh_word() {
 # One fixed folder per user holds everything a restore needs once the
 # meta disc is out of the drive.  A marker file says a folder is ours:
 # the script only ever empties or deletes a folder that carries it.
-TOOLS_MARK=".lcsas-restore-tools"
+TOOLS_MARK=".lcsas-tools"
 
 # tools_dir_claim DIR: make DIR a tools folder.  0 = DIR now carries the
 # marker.  An existing folder is claimed only when it is empty or
@@ -303,7 +324,7 @@ room_for() {
 # script: .lcsas-build is the build line of the restore.sh that filled
 # it, .lcsas-sets the ids of the META disc's backup sets it was filled
 # for, .lcsas-copy-ok says the copy off the disc finished.
-TOOLS_FILES="recovery metadata catalog.db pack-cache resume.sh standalone_restorer.py tools .lcsas-build .lcsas-sets .lcsas-copy-ok .exec-probe"
+TOOLS_FILES="recovery metadata catalog.db pack-cache resume.sh python_reader.py tools .lcsas-build .lcsas-sets .lcsas-copy-ok .exec-probe"
 
 build_line() {
     grep '^LCSAS_RESTORE_BUILD_SHA=' "$1" 2>/dev/null | sed -n 1p
@@ -439,7 +460,7 @@ relocate_to_ram() {
     # for one target.  Unknown platform or no such dir: copy everything.
     _copy_from="$src_bin"
     _copy_to="bin"
-    _reloc_triple="${LCSAS_TARGET:-$(host_triple "$(uname -s 2>/dev/null)" "$(uname -m 2>/dev/null)")}"
+    _reloc_triple="${LCSAS_PLATFORM:-$(host_triple "$(uname -s 2>/dev/null)" "$(uname -m 2>/dev/null)")}"
     if [ -n "$src_bin" ] && [ -n "$_reloc_triple" ] \
        && [ -d "$src_bin/$_reloc_triple" ]; then
         _copy_from="$src_bin/$_reloc_triple"
@@ -465,7 +486,7 @@ relocate_to_ram() {
     # one unreadable file on a scratched disc must not block relocation.
     ramdir=""
     _reuse=0
-    _td="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
+    _td="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-tools}}"
     case "$_td" in ''|/*) ;; *) _td="$(pwd)/$_td" ;; esac
     # Reused only when an earlier run copied ALL of it off a disc of this
     # same build and archive: the copy finished (.lcsas-copy-ok), its
@@ -575,18 +596,18 @@ relocate_to_ram() {
             cp -f "$cat_cand" "$ramdir/recovery/catalog.db" 2>/dev/null || true
             break
         done
-        # Issue #234 — copy standalone_restorer.py for tier 3 too.  Without
+        # Issue #234 — copy python_reader.py for tier 3 too.  Without
         # this, post-relocation the tier-3 fall-through can't find the
         # script (the orig location was under the now-ejected meta disc).
-        # The tier-3 search looks at $RECOVERY/../standalone_restorer.py
-        # (which resolves to $ramdir/standalone_restorer.py post-reloc).
+        # The tier-3 search looks at $RECOVERY/../python_reader.py
+        # (which resolves to $ramdir/python_reader.py post-reloc).
         for pyrest_cand in \
-            "$SCRIPT_DIR/../standalone_restorer.py" \
-            "$SCRIPT_DIR/standalone_restorer.py" \
-            "$SCRIPT_DIR/../../standalone_restorer.py"
+            "$SCRIPT_DIR/../python_reader.py" \
+            "$SCRIPT_DIR/python_reader.py" \
+            "$SCRIPT_DIR/../../python_reader.py"
         do
             [ -f "$pyrest_cand" ] || continue
-            cp -f "$pyrest_cand" "$ramdir/standalone_restorer.py" 2>/dev/null || true
+            cp -f "$pyrest_cand" "$ramdir/python_reader.py" 2>/dev/null || true
             break
         done
 
@@ -690,11 +711,9 @@ RECOVERY=""
 RECOVERY_GIVEN=0
 TARGET=""
 TARGET_FLAG=""
-TARGET_FROM_POS=0
 SNAP="latest"
-# --snapshot ID, and the snapshot given as a positional argument.
+# --snapshot ID.
 SNAP_FLAG=""
-SNAP_POS=""
 # --check-disc IMAGE: the heir-facing "my disc is scratched" path.  When
 # set, restore.sh runs the bundled in-house RS03 ECC tool (lcsas-ecc) on
 # IMAGE to check and, on damage, offer/perform a repair -- then exits.
@@ -711,7 +730,7 @@ flag_value() {
 }
 
 # Flag parsing: strip named flags before positional-arg parsing so
-# heirs can write `sh restore.sh --repo alpha RECOVERY TARGET` or
+# heirs can write `sh restore.sh --backup-set alpha RECOVERY` or
 # `sh restore.sh --help` without knowing about LCSAS_* env vars.
 # The `*) break ;;` stops the loop at the first non-flag argument so
 # the existing positional-arg if/elif block below still works unchanged.
@@ -722,9 +741,9 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
             cat <<EOF
-usage: $0 [--repo NAME] [--target DIR] [--snapshot ID] [--key FILE]
-         [--version] [--check-disc IMAGE]
-         [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
+usage: $0 [--backup-set NAME] [--restore-folder DIR] [--snapshot ID]
+         [--password-file FILE] [--version] [--check-disc IMAGE]
+         [RECOVERY_ROOT]
 
 SCRATCHED / DAMAGED DISC?
   sh restore.sh --check-disc /path/to/disc.iso
@@ -738,53 +757,54 @@ SCRATCHED / DAMAGED DISC?
 QUICK START:
   1. Insert the disc labelled LCSAS_META into your drive.
   2. Mount it (typically: sudo mount /dev/sr0 /mnt).
-  3. Run: sh /mnt/restore.sh ~/restored/ latest
+  3. Run: sh /mnt/restore.sh --restore-folder ~/restored
   4. Answer the prompts: put in your newest data disc (or type S to
      skip), choose the backup set, then type its password (or the
      words of its share cards).
   5. When asked to swap discs, do so and press Enter.
   To stop, type q at a disc prompt (or press Ctrl-C).  The tools stay
-  in ~/lcsas-restore-tools; run 'sh ~/lcsas-restore-tools/resume.sh'
+  in ~/lcsas-tools; run 'sh ~/lcsas-tools/resume.sh'
   to carry on later.
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
-  TARGET_DIR is where to write restored files (default: /tmp/restored).
+  The restore folder is where to write restored files (default:
+  /tmp/restored); name it with --restore-folder.
 
 FLAGS AND ENVIRONMENT VARIABLES:
-  --repo NAME             Backup set to restore, by its name or its id
-                          (same as LCSAS_REPO=NAME).  Skips the
-                          repository selection prompt.
-  --target DIR            Where to write restored files.  Equivalent to
-                          the positional TARGET_DIR; give one or the
-                          other, not both.
+  --backup-set NAME       Backup set to restore, by its name or its id
+                          (same as LCSAS_BACKUP_SET=NAME).  Skips the
+                          backup set selection prompt.
+  --restore-folder DIR    Where to write restored files (default:
+                          /tmp/restored).
   --snapshot ID           Which snapshot to restore: 'latest' (the
-                          default), an ID or the start of one.  Equivalent
-                          to the positional SNAPSHOT_ID, and the way to
-                          name a snapshot together with --target:
-                            sh restore.sh --target ~/restored --snapshot a1b2c3d4
-  --key FILE              Path to a file whose contents are the password
-                          (same as LCSAS_PWFILE=FILE).  Skips the
+                          default), an ID or the start of one:
+                            sh restore.sh --restore-folder ~/restored --snapshot a1b2c3d4
+  --password-file FILE    Path to a file whose contents are the password
+                          (same as LCSAS_PASSWORD_FILE=FILE).  Skips the
                           Password: prompt.
   --version               Print the build commit SHA and date, then exit.
   LCSAS_PASSWORD          Repository password (skips the Password: prompt).
-                          Mutually exclusive with LCSAS_PWFILE.
-  LCSAS_PWFILE            Path to a file whose contents are the password.
+                          Mutually exclusive with LCSAS_PASSWORD_FILE.
+  LCSAS_PASSWORD_FILE
+                          Path to a file whose contents are the password.
                           Read instead of prompting; preserves any
                           trailing newline in the file.
   LCSAS_SHARES_DIR        Folder of share card files, one card per file.
                           The password is rebuilt from them with the
-                          bundled lcsas-keyshare instead of prompting.
-  LCSAS_REPO              Backup set to restore, by name or id.  Skips
-                          the repository prompt on archives with more
-                          than one repository.
+                          bundled lcsas-shares instead of prompting.
+  LCSAS_BACKUP_SET
+                          Backup set to restore, by name or id.  Skips
+                          the backup set prompt on archives with more
+                          than one backup set.
   LCSAS_NEWEST_DISC_PROMPT
                           0 → skip the "put in your NEWEST data disc"
                           step at the start: use the discs mounted now,
                           else the copies on the META disc.
   LCSAS_ANOTHER_SET       0 → do not ask "Restore another backup set?"
                           after a restore that succeeds.
-  LCSAS_TARGET            Override the auto-detected rust-triple (e.g.
+  LCSAS_PLATFORM
+                          Override the auto-detected rust-triple (e.g.
                           force x86_64-unknown-linux-musl on a host
                           where uname -m misreports).
   LCSAS_META_DISC         Mount point of the meta disc.
@@ -795,7 +815,7 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           for mounted data discs (default:
                           /Volumes:/media/<user>:/media:/mnt:/run/media/<user>).
                           Set to '' (empty) to disable the auto-scan.
-  LCSAS_TOOLS_DIR         Tools folder (default: \$HOME/lcsas-restore-tools).
+  LCSAS_TOOLS_DIR         Tools folder (default: \$HOME/lcsas-tools).
                           Run off a disc, the script copies itself, this
                           computer's binaries, the docs and the disc's
                           metadata/ there, keeps the pack cache, a copy
@@ -824,23 +844,23 @@ FLAGS AND ENVIRONMENT VARIABLES:
   LCSAS_ALLOW_NO_PACK_SEARCH
                           1 → suppress the 'no data discs detected'
                           hard-error (advanced / test environments).
-  LCSAS_ALLOW_TMPFS_TARGET
+  LCSAS_ALLOW_TMPFS_RESTORE_FOLDER
                           1 → skip the 'Continue restoring into RAM
-                          anyway?' prompt when TARGET_DIR sits on
+                          anyway?' prompt when the restore folder sits on
                           a RAM-backed filesystem (tmpfs/ramfs).  The
                           warning still prints.
-  LCSAS_FORBID_TMPFS_TARGET
-                          1 → refuse a RAM-backed TARGET_DIR outright,
+  LCSAS_FORBID_TMPFS_RESTORE_FOLDER
+                          1 → refuse a RAM-backed restore folder outright,
                           even with no TTY attached.  For automation
                           that must never restore into RAM.
   LCSAS_SKIP_SPACE_CHECK  1 → skip the free-space preflight that
                           compares the chosen set's size (from the
-                          catalog) against free space at TARGET_DIR and the
+                          catalog) against free space at the restore folder and the
                           pack cache (twice the size when both are on
                           one disk) before any password/disc prompt.
                           Default: check ON when the size is derivable.
-  LCSAS_FORCE_NONEMPTY_TARGET
-                          1 → skip the 'TARGET_DIR is non-empty and not
+  LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER
+                          1 → skip the 'The restore folder is non-empty and not
                           a previous LCSAS restore -- overwrite?' prompt.
                           Restoring into such a folder otherwise prompts
                           (and refuses with exit 65 when no terminal is
@@ -868,33 +888,42 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           stderr lines.  Default ON.
 
 Most heirs don't need any of these.  See the meta disc's
-recovery/docs/RECOVER.txt for the heir-friendly walkthrough, and
+recovery/docs/RESTORE.txt for the heir-friendly walkthrough, and
 docs/TROUBLESHOOTING.md when something goes wrong.
 EOF
             exit 0 ;;
-        --repo)
-            flag_value --repo 'a NAME' "${2-}"
-            LCSAS_REPO="$2"
+        --backup-set)
+            flag_value --backup-set 'a NAME' "${2-}"
+            LCSAS_BACKUP_SET="$2"
             shift 2 ;;
-        --target)
-            flag_value --target 'a DIR' "${2-}"
+        --restore-folder)
+            flag_value --restore-folder 'a DIR' "${2-}"
             TARGET_FLAG="$2"
             shift 2 ;;
+        --repo|--repo=*|--target|--target=*|--key|--key=*)
+            _old="${1%%=*}"
+            case "$_old" in
+                --repo) _new=--backup-set ;;
+                --target) _new=--restore-folder ;;
+                *) _new=--password-file ;;
+            esac
+            printf 'restore.sh: %s was renamed: use %s\n' "$_old" "$_new" >&2
+            exit 2 ;;
         --snapshot)
             flag_value --snapshot 'an ID' "${2-}"
             SNAP_FLAG="$2"
             shift 2 ;;
-        --key)
-            flag_value --key 'a FILE' "${2-}"
-            LCSAS_PWFILE="$2"
+        --password-file)
+            flag_value --password-file 'a FILE' "${2-}"
+            LCSAS_PASSWORD_FILE="$2"
             # Validate NOW -- before any password/disc prompts -- so a
             # typo'd path fails in one obvious line, not mid-restore.
-            if [ ! -f "$LCSAS_PWFILE" ] || [ ! -r "$LCSAS_PWFILE" ]; then
-                printf "restore.sh: --key: cannot read '%s'\n" \
-                       "$LCSAS_PWFILE" >&2
+            if [ ! -f "$LCSAS_PASSWORD_FILE" ] || [ ! -r "$LCSAS_PASSWORD_FILE" ]; then
+                printf "restore.sh: --password-file: cannot read '%s'\n" \
+                       "$LCSAS_PASSWORD_FILE" >&2
                 exit 2
             fi
-            export LCSAS_PWFILE
+            export LCSAS_PASSWORD_FILE
             shift 2 ;;
         --version)
             printf 'lcsas-restore.sh %s (built %s)\n' \
@@ -907,7 +936,7 @@ EOF
         --) shift; break ;;
         -*)
             printf "restore.sh: unknown flag '%s'\n" "$1" >&2
-            printf 'valid flags: --repo NAME, --target DIR, --snapshot ID, --key FILE, --version, --check-disc IMAGE, --help\n' >&2
+            printf 'valid flags: --backup-set NAME, --restore-folder DIR, --snapshot ID, --password-file FILE, --version, --check-disc IMAGE, --help\n' >&2
             exit 2 ;;
         *) break ;;
     esac
@@ -936,7 +965,7 @@ if [ -n "$CHECK_DISC_IMG" ]; then
     fi
 
     # Resolve the recovery root the same way the main path does, but
-    # without requiring a TARGET_DIR positional: an explicit recovery
+    # without requiring a restore folder: an explicit recovery
     # root as $1, else the auto-detected tree.
     cd_recovery=""
     if [ $# -ge 1 ] && { [ -d "$1/bin" ] || [ -d "$1/src" ]; } 2>/dev/null; then
@@ -949,12 +978,12 @@ if [ -n "$CHECK_DISC_IMG" ]; then
         exit 3
     fi
 
-    # The triple: $LCSAS_TARGET, else this computer's (host_triple).
+    # The triple: $LCSAS_PLATFORM, else this computer's (host_triple).
     # Resolve bin/<triple>/lcsas-ecc, with a bin/lcsas-ecc fallback for
     # flat layouts / tests.
     cd_machine="$(uname -m 2>/dev/null || echo x86_64)"
-    cd_triple="${LCSAS_TARGET:-$(host_triple "$(uname -s 2>/dev/null || echo Linux)" "$cd_machine")}"
-    if [ -z "${LCSAS_TARGET:-}" ]; then
+    cd_triple="${LCSAS_PLATFORM:-$(host_triple "$(uname -s 2>/dev/null || echo Linux)" "$cd_machine")}"
+    if [ -z "${LCSAS_PLATFORM:-}" ]; then
         case "$cd_machine" in
             armv6*)
                 # #803: lcsas-ecc is built for ARMv7 and stops with an
@@ -1071,64 +1100,47 @@ if [ -n "$CHECK_DISC_IMG" ]; then
     esac
 fi
 
-# Pattern 1: first arg looks like a recovery root (has bin/ or src/).
-if [ $# -ge 2 ] && { [ -d "$1/bin" ] || [ -d "$1/src" ]; } 2>/dev/null; then
-    RECOVERY="$1"
-    RECOVERY_GIVEN=1
-    TARGET="$2"
-    TARGET_FROM_POS=1
-    SNAP_POS="${3:-}"
-elif [ $# -ge 1 ] && [ -n "$TARGET_FLAG" ] \
-     && { [ -d "$1/bin" ] || [ -d "$1/src" ]; } 2>/dev/null; then
-    # --target DIR already supplied the target; the sole positional is
-    # the recovery root (optionally followed by a snapshot id).
-    RECOVERY="$1"
-    RECOVERY_GIVEN=1
-    SNAP_POS="${2:-}"
-elif [ $# -ge 1 ] && [ -n "$AUTO_RECOVERY" ]; then
-    RECOVERY="$AUTO_RECOVERY"
-    TARGET="$1"
-    TARGET_FROM_POS=1
-    SNAP_POS="${2:-}"
+# The one positional argument is RECOVERY_ROOT.  The restore folder and
+# the snapshot are named with --restore-folder and --snapshot (#934); a
+# second positional, or a first that is no recovery root, is refused.
+if [ $# -gt 1 ]; then
+    printf "restore.sh: unexpected argument '%s'\n" "$2" >&2
+    printf 'Name the restore folder with --restore-folder DIR and the snapshot with --snapshot ID; RECOVERY_ROOT is the only positional argument.\n' >&2
+    exit 2
+elif [ $# -eq 1 ]; then
+    if { [ -d "$1/bin" ] || [ -d "$1/src" ]; } 2>/dev/null; then
+        RECOVERY="$1"
+        RECOVERY_GIVEN=1
+    else
+        printf "restore.sh: unexpected argument '%s' (it is not a recovery folder)\n" "$1" >&2
+        printf 'Name the restore folder with --restore-folder DIR and the snapshot with --snapshot ID; RECOVERY_ROOT is the only positional argument.\n' >&2
+        exit 2
+    fi
 elif [ -n "$AUTO_RECOVERY" ]; then
     RECOVERY="$AUTO_RECOVERY"
-    TARGET="${TARGET:-/tmp/restored}"
 else
     cat >&2 <<EOF
-usage: $0 [--repo NAME] [--target DIR] [--snapshot ID] [--key FILE] [--version] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
+usage: $0 [--backup-set NAME] [--restore-folder DIR] [--snapshot ID] [--password-file FILE] [--version] [RECOVERY_ROOT]
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
-  TARGET_DIR is where to write restored files (default: /tmp/restored);
-  --target DIR is the equivalent named form.  SNAPSHOT_ID is 'latest'
-  (the default) or a snapshot ID; --snapshot ID is the named form.
+  --restore-folder DIR is where to write restored files (default:
+  /tmp/restored).  --snapshot ID is 'latest' (the default) or a
+  snapshot ID.
 
-  Password is read from stdin, \$LCSAS_PASSWORD env, \$LCSAS_PWFILE,
-  or --key FILE.
+  Password is read from stdin, \$LCSAS_PASSWORD env, \$LCSAS_PASSWORD_FILE,
+  or --password-file FILE.
 EOF
     exit 2
 fi
 
-# --target DIR (flag) and a positional TARGET_DIR are mutually
-# exclusive -- with both present we cannot tell which the heir
-# meant, so refuse rather than guess.
 if [ -n "$TARGET_FLAG" ]; then
-    if [ "$TARGET_FROM_POS" = "1" ]; then
-        printf 'restore.sh: give the target once: either --target DIR or a positional TARGET_DIR\n' >&2
-        printf 'To choose a snapshot together with --target, use --snapshot ID.\n' >&2
-        exit 2
-    fi
     TARGET="$TARGET_FLAG"
+else
+    TARGET="/tmp/restored"
 fi
-# The same for the snapshot (#807): --snapshot ID or a positional one.
 if [ -n "$SNAP_FLAG" ]; then
-    if [ -n "$SNAP_POS" ] && [ "$SNAP_POS" != "$SNAP_FLAG" ]; then
-        printf 'restore.sh: give the snapshot once: either --snapshot ID or a positional SNAPSHOT_ID\n' >&2
-        exit 2
-    fi
     SNAP="$SNAP_FLAG"
-elif [ -n "$SNAP_POS" ]; then
-    SNAP="$SNAP_POS"
 fi
 
 # A recovery root given as a relative path is made absolute: resume.sh
@@ -1153,18 +1165,18 @@ abs_path() {
 
 # The folders and files the reader named are made full paths now
 # (#625): the copy that runs from the tools folder starts in /, where
-# "restored" would be /restored and a relative --key FILE would name
+# "restored" would be /restored and a relative --password-file FILE would name
 # nothing.
 TARGET="$(abs_path "$TARGET")"
-if [ -n "${LCSAS_PWFILE:-}" ]; then LCSAS_PWFILE="$(abs_path "$LCSAS_PWFILE")"; fi
+if [ -n "${LCSAS_PASSWORD_FILE:-}" ]; then LCSAS_PASSWORD_FILE="$(abs_path "$LCSAS_PASSWORD_FILE")"; fi
 if [ -n "${LCSAS_SHARES_DIR:-}" ]; then LCSAS_SHARES_DIR="$(abs_path "$LCSAS_SHARES_DIR")"; fi
 
 # relocate_with_args MOUNT: relocate_to_ram, handing the copy the
 # arguments as this run read them, every path in them full.
 relocate_with_args() {
     _rw_mount="$1"
-    set -- --target "$TARGET" --snapshot "$SNAP"
-    if [ -n "${LCSAS_REPO:-}" ]; then set -- --repo "$LCSAS_REPO" "$@"; fi
+    set -- --restore-folder "$TARGET" --snapshot "$SNAP"
+    if [ -n "${LCSAS_BACKUP_SET:-}" ]; then set -- --backup-set "$LCSAS_BACKUP_SET" "$@"; fi
     if [ "$RECOVERY_GIVEN" = 1 ]; then set -- "$@" -- "$RECOVERY"; fi
     relocate_to_ram "$_rw_mount" "$@"
 }
@@ -1179,7 +1191,7 @@ relocate_with_args() {
 # and in a run that did not relocate that folder went at the end, so a
 # stop there could not be carried on.  A folder that cannot be made, has
 # no room or cannot run programs still falls back to a temporary folder.
-_tools_want="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
+_tools_want="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-tools}}"
 case "$_tools_want" in ''|/*) ;; *) _tools_want="$(pwd)/$_tools_want" ;; esac
 if [ -n "$_tools_want" ] && tools_dir_foreign "$_tools_want"; then
     cat >&2 <<EOF
@@ -1187,7 +1199,7 @@ ERROR: the tools folder $_tools_want
 already holds other files.  The restore copies its programs there and
 deletes the folder once it has finished, so it uses only a new or empty
 folder, or one it made itself.  Set LCSAS_TOOLS_DIR to a new or empty
-folder, or leave it unset to use the usual one, ~/lcsas-restore-tools.
+folder, or leave it unset to use the usual one, ~/lcsas-tools.
 EOF
     exit 1
 fi
@@ -1251,7 +1263,7 @@ fi
 # ── Target detection (arch + OS) ──────────────────────────────────
 #
 # Picks one of the six targets the meta disc carries (host_triple, at
-# the top).  Override with $LCSAS_TARGET if auto-detection misfires.
+# the top).  Override with $LCSAS_PLATFORM if auto-detection misfires.
 
 if [ -x "$RECOVERY/scripts/detect_arch.sh" ]; then
     MACHINE="$(sh "$RECOVERY/scripts/detect_arch.sh" 2>/dev/null || uname -m)"
@@ -1262,12 +1274,12 @@ OS="$(uname -s 2>/dev/null || printf 'Linux\n')"
 
 # $TARGET so far is the folder to restore into; from here on it is the
 # triple that names the recovery/bin/<triple>/ folder.
-TARGET_DIR="$TARGET"
-TARGET="${LCSAS_TARGET:-$(host_triple "$OS" "$MACHINE")}"
+RESTORE_FOLDER="$TARGET"
+TARGET="${LCSAS_PLATFORM:-$(host_triple "$OS" "$MACHINE")}"
 # 1 on an ARMv6 processor (#803): the bundled programs cannot run.  Only
 # the stock restic (tier 2b) and a python3 of this computer (tier 3) do.
 OLD_ARM=""
-if [ -z "${LCSAS_TARGET:-}" ]; then
+if [ -z "${LCSAS_PLATFORM:-}" ]; then
     case "$MACHINE" in armv6*) OLD_ARM=1 ;; esac
 fi
 if [ -z "$TARGET" ]; then
@@ -1398,7 +1410,7 @@ trap 'exit 129' HUP
 # stopped restore cannot be carried on from it.
 TOOLS=""
 RUN_TMP=""
-_tools_want="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
+_tools_want="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-tools}}"
 case "$_tools_want" in ''|/*) ;; *) _tools_want="$(pwd)/$_tools_want" ;; esac
 if [ -n "$_tools_want" ] && tools_dir_claim "$_tools_want"; then
     TOOLS="$(cd "$_tools_want" && pwd -P)"
@@ -1539,12 +1551,12 @@ clean_text() {
     tr -d '\000-\037\177'
 }
 
-# marker_field SET_DIR KEY: the value of KEY in SET_DIR/LCSAS_REPO.txt,
+# marker_field SET_DIR KEY: the value of KEY in SET_DIR/LCSAS_BACKUP_SET.txt,
 # the backup set marker (C1: key=value lines, a trailing CR stripped,
 # # lines skipped), or nothing.  A marker whose id= is not the folder's
 # name was copied into the wrong folder and is ignored.
 marker_field() {
-    [ -f "$1/LCSAS_REPO.txt" ] || return 0
+    [ -f "$1/LCSAS_BACKUP_SET.txt" ] || return 0
     MF_ID="${1##*/}" MF_KEY="$2" awk '
         { sub(/\r$/, "") }
         /^#/ { next }
@@ -1553,7 +1565,7 @@ marker_field() {
         END {
             if (f["id"] == ENVIRON["MF_ID"] && (ENVIRON["MF_KEY"] in f))
                 print f[ENVIRON["MF_KEY"]]
-        }' "$1/LCSAS_REPO.txt" 2>/dev/null | clean_text
+        }' "$1/LCSAS_BACKUP_SET.txt" 2>/dev/null | clean_text
     return 0
 }
 
@@ -1907,7 +1919,7 @@ fi
 # can be older than the data discs, and missed a set added after it.
 #
 # When multiple candidate repositories are found (typical: a
-# multi-repository archive), LCSAS_REPO selects one by its id or its
+# multi-repository archive), LCSAS_BACKUP_SET selects one by its id or its
 # name.  If exactly one candidate exists we use it; otherwise we list
 # them by name and ask.
 
@@ -2065,7 +2077,7 @@ EOF
         exit 1
         ;;
     *)
-        # Honour LCSAS_REPO (or --repo) if it matches a candidate's id or
+        # Honour LCSAS_BACKUP_SET (or --backup-set) if it matches a candidate's id or
         # name, and stop, listing the sets, if it matches none -- with
         # one set too (#802: that one was restored whatever the name).
         # Otherwise one set is restored; more are listed by name and the
@@ -2086,11 +2098,11 @@ EOF
             [ "$_rn" = "${cand##*/}" ] || _rn="$_rn (id ${cand##*/})"
             REPO_NAMES="$REPO_NAMES${REPO_NAMES:+, }$_rn"
         done
-        if [ -n "${LCSAS_REPO:-}" ]; then
-            REPO="$(set_match "$LCSAS_REPO")"
+        if [ -n "${LCSAS_BACKUP_SET:-}" ]; then
+            REPO="$(set_match "$LCSAS_BACKUP_SET")"
             if [ -z "$REPO" ]; then
-                printf 'LCSAS_REPO=%s not among available repositories: %s\n' \
-                       "$LCSAS_REPO" "$REPO_NAMES" >&2
+                printf 'LCSAS_BACKUP_SET=%s not among available repositories: %s\n' \
+                       "$LCSAS_BACKUP_SET" "$REPO_NAMES" >&2
                 exit 1
             fi
         elif [ "$REPO_COUNT" = 1 ]; then
@@ -2176,7 +2188,7 @@ EXIT_NO_RECOVERY_BIN=64
 # Compute paths the same way the tier-dispatch block does so the
 # diagnostic shows the heir the EXACT path the script looked at.
 # $TARGET is the rust-triple at this point; the caller-supplied target
-# directory was renamed to $TARGET_DIR earlier.
+# directory was renamed to $RESTORE_FOLDER earlier.
 _RESTORE_BIN_PROBE="$RECOVERY/bin/$TARGET/lcsas-restore"
 _RUSTIC_BIN_PROBE="$RECOVERY/bin/$TARGET/rustic-static"
 # On ARMv6 (#803) both stop with an illegal instruction: as if absent.
@@ -2184,7 +2196,7 @@ if [ -n "$OLD_ARM" ]; then _RESTORE_BIN_PROBE=""; _RUSTIC_BIN_PROBE=""; fi
 
 # tier3_python_runs CMD...: 0 when CMD (an interpreter, or the bundled
 # musl loader followed by one) starts and is Python 3.10 or newer, the
-# oldest Python the tier-3 reader runs on: standalone_restorer.py stops
+# oldest Python the tier-3 reader runs on: python_reader.py stops
 # at once on an older one (its `sys.version_info < (3, 10)` check in
 # src/lcsas/restore/standalone_builder.py; CI compiles the reader with
 # Python 3.10, #804).  Otherwise CMD's exit code: 1 when it started but
@@ -2300,7 +2312,7 @@ tier3_none_why() {
     fi
 }
 
-# Probe tier 3 (CPython + standalone_restorer.py) availability using
+# Probe tier 3 (CPython + python_reader.py) availability using
 # the same search rules as the tier-3 dispatch block far below (the
 # interpreter through find_tier3_python, after the tier-2b probe; the
 # script list is repeated there, keep the two in lock-step).
@@ -2312,9 +2324,9 @@ TIER3_PY_SKIPPED=""
 TIER3_PY_WHY=""
 TIER3_HOST_OLD=""
 if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
-    for cand in "$RECOVERY/../standalone_restorer.py" \
-                "$RECOVERY/standalone_restorer.py" \
-                "$SCRIPT_DIR/../standalone_restorer.py"; do
+    for cand in "$RECOVERY/../python_reader.py" \
+                "$RECOVERY/python_reader.py" \
+                "$SCRIPT_DIR/../python_reader.py"; do
         if [ -f "$cand" ]; then
             _tier3_script_probe="$cand"; _have_tier3_script=1; break
         fi
@@ -2364,7 +2376,7 @@ then
             if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" != "1" ]; then
                 printf 'The Python reader (tier 3) is turned off: LCSAS_ALLOW_PYTHON_TIER=0.\n'
             elif [ "$_have_tier3_script" = "0" ]; then
-                printf 'The Python reader standalone_restorer.py is not found near %s.\n' "$RECOVERY"
+                printf 'The Python reader python_reader.py is not found near %s.\n' "$RECOVERY"
             else
                 printf 'The Python reader (tier 3) needs Python 3.10 or newer on this\n'
                 printf 'computer: install python3, then run this again.\n'
@@ -2389,7 +2401,7 @@ then
             printf 'your home folder and run the copy:\n\n'
             printf '    cp -R <this disc> ~/lcsas-meta\n'
             printf '    chmod -R u+x ~/lcsas-meta/recovery/bin\n'
-            printf '    sh ~/lcsas-meta/restore.sh <target folder>\n\n'
+            printf '    sh ~/lcsas-meta/restore.sh --restore-folder <folder>\n\n'
             printf 'Exit code %d = no_recovery_binary_available.\n' \
                    "$EXIT_NO_RECOVERY_BIN"
         } >&2
@@ -2410,7 +2422,7 @@ then
                 tier3_none_why '    '
             fi
             if [ "$_have_tier3_script" = "0" ]; then
-                printf '  tier 3: standalone_restorer.py not found near '
+                printf '  tier 3: python_reader.py not found near '
                 printf '%s\n' "$RECOVERY"
             fi
         fi
@@ -2418,7 +2430,7 @@ then
         printf 'This meta disc cannot be used to restore.  Try another\n'
         printf 'meta disc: the newest one first, then the one burned\n'
         printf 'closest in date to the data discs.  If none works, see\n'
-        printf '%s/docs/RECOVER.txt for manual restore instructions.\n' "$RECOVERY"
+        printf '%s/docs/RESTORE.txt for manual restore instructions.\n' "$RECOVERY"
         printf '\n'
         printf 'Exit code %d = no_recovery_binary_available.\n' \
                "$EXIT_NO_RECOVERY_BIN"
@@ -2649,14 +2661,14 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
         required_kb="${_sp_kb:-0}"
     fi
     if [ "$required_kb" -gt 0 ]; then
-        mkdir -p "$TARGET_DIR" 2>/dev/null || true
+        mkdir -p "$RESTORE_FOLDER" 2>/dev/null || true
         space_fail=0
         # What each still needs: the restored files (less those an
         # earlier restore into this folder already wrote) and the pack
         # cache (less the packs already in it).
         _sp_t_used=0
-        if [ -f "$TARGET_DIR/.lcsas-restore-marker" ]; then
-            _sp_t_used="$(used_kb_in "$TARGET_DIR")"
+        if [ -f "$RESTORE_FOLDER/.lcsas-restore-marker" ]; then
+            _sp_t_used="$(used_kb_in "$RESTORE_FOLDER")"
         fi
         _sp_t_need="$(still_needed_kb "$_sp_t_used")"
         _sp_c_dir="${LCSAS_PACK_CACHE_DIR:-}"
@@ -2664,19 +2676,19 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
         if [ -n "$_sp_c_dir" ]; then
             _sp_c_need="$(still_needed_kb "$(used_kb_in "$_sp_c_dir")")"
         fi
-        _sp_t_dev="$(fs_dev_for "$TARGET_DIR")"
+        _sp_t_dev="$(fs_dev_for "$RESTORE_FOLDER")"
         _sp_c_dev=""
         [ -z "$_sp_c_dir" ] || _sp_c_dev="$(fs_dev_for "$_sp_c_dir")"
         if [ -n "$_sp_c_dir" ] && [ -n "$_sp_t_dev" ] \
            && [ "$_sp_t_dev" = "$_sp_c_dev" ]; then
             # One filesystem holds both: it needs the sum (#660).
-            if ! space_short "$TARGET_DIR" "$(( _sp_t_need + _sp_c_need ))"; then
+            if ! space_short "$RESTORE_FOLDER" "$(( _sp_t_need + _sp_c_need ))"; then
                 printf '    (%s for the restored files and %s for the pack\n' \
                        "$(human_kb "$_sp_t_need")" "$(human_kb "$_sp_c_need")" >&2
                 printf '    cache at %s, on the same disk.)\n' "$_sp_c_dir" >&2
             fi
         else
-            space_short "$TARGET_DIR" "$_sp_t_need" || true
+            space_short "$RESTORE_FOLDER" "$_sp_t_need" || true
             if [ -n "$_sp_c_dir" ]; then
                 space_short "$_sp_c_dir" "$_sp_c_need" || true
             fi
@@ -2701,7 +2713,7 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
                 y|Y|yes|YES|Yes) ;;
                 *)
                     printf 'Not enough free space for this restore; nothing was restored.\n' >&2
-                    printf 'Free space or choose a different --target, then re-run.\n' >&2
+                    printf 'Free space or choose a different --restore-folder, then re-run.\n' >&2
                     printf '(set LCSAS_SKIP_SPACE_CHECK=1 to bypass this check.)\n' >&2
                     exit 1 ;;
             esac
@@ -2719,7 +2731,7 @@ fi
 # secret.
 #
 # A hard refusal would be wrong: re-running into the SAME target is the
-# supported way to resume an interrupted restore (RECOVER.txt RETRY
+# supported way to resume an interrupted restore (RESTORE.txt RETRY
 # SAFETY -- idempotent resume).  So we warn only when the target is
 # non-empty AND lacks our marker file.  After confirmation/creation we
 # drop a hidden marker, so every subsequent re-run is silent.  The
@@ -2730,15 +2742,15 @@ fi
 # older restore.sh, or restore.bat) names no set and stays silent.
 # (EXIT_USER_ABORT, 65, is set with the discovery helpers above.)
 SET_ID="${REPO##*/}"
-MARKER="$TARGET_DIR/.lcsas-restore-marker"
+MARKER="$RESTORE_FOLDER/.lcsas-restore-marker"
 
 # The tools folder (or this run's temporary one) is deleted when the
 # restore is done, so the restored files must not go inside it (C6).
-_tg_probe="$(space_probe_dir "$TARGET_DIR")"
+_tg_probe="$(space_probe_dir "$RESTORE_FOLDER")"
 if [ -n "$STATE_DIR" ] && [ -n "$_tg_probe" ] && path_inside "$_tg_probe" "$STATE_DIR"; then
     {
         printf 'restore.sh: the folder to restore into,\n'
-        printf '    %s\n' "$TARGET_DIR"
+        printf '    %s\n' "$RESTORE_FOLDER"
         printf 'is inside the tools folder %s,\n' "$STATE_DIR"
         printf 'which is deleted when the restore is done.  Choose a folder\n'
         printf 'outside it, for example %s/restored.\n' "$(dirname "$STATE_DIR")"
@@ -2762,14 +2774,14 @@ holds_more_than_marker() {
     done
     return 1
 }
-if [ -d "$TARGET_DIR" ] \
-   && holds_more_than_marker "$TARGET_DIR" \
+if [ -d "$RESTORE_FOLDER" ] \
+   && holds_more_than_marker "$RESTORE_FOLDER" \
    && { [ ! -f "$MARKER" ] || [ "$_tg_other" = 1 ]; } \
-   && [ "${LCSAS_FORCE_NONEMPTY_TARGET:-0}" != "1" ]; then
+   && [ "${LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER:-0}" != "1" ]; then
     {
         printf '==========================================================\n'
         printf '  WARNING: the folder\n'
-        printf '      %s\n' "$TARGET_DIR"
+        printf '      %s\n' "$RESTORE_FOLDER"
         if [ "$_tg_other" = 1 ]; then
             printf '  already holds the restore of ANOTHER backup set.  Files\n'
             printf '  of %s with the same names as that set'"'"'s\n' "$SET_NAME"
@@ -2797,18 +2809,18 @@ if [ -d "$TARGET_DIR" ] \
         fi
     else
         printf 'No terminal to confirm on; refusing to overwrite.\n' >&2
-        printf 'Set LCSAS_FORCE_NONEMPTY_TARGET=1 to proceed non-interactively.\n' >&2
+        printf 'Set LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1 to proceed non-interactively.\n' >&2
         exit "$EXIT_USER_ABORT"
     fi
 fi
 unset _tg_other
-mkdir -p "$TARGET_DIR"
+mkdir -p "$RESTORE_FOLDER"
 if [ ! -s "$MARKER" ] || ! grep -qxF -- "$SET_ID" "$MARKER" 2>/dev/null; then
     printf '%s\n' "$SET_ID" >> "$MARKER" 2>/dev/null || true
 fi
 # The target as a full path: resume.sh and the next set need it from
 # any folder (tier 1 runs from / when the META disc is known).
-TARGET_ABS="$(cd "$TARGET_DIR" && pwd)"
+TARGET_ABS="$(cd "$RESTORE_FOLDER" && pwd)"
 
 # ── resume.sh (#609) ──────────────────────────────────────────────
 #
@@ -2832,7 +2844,7 @@ if [ -n "$TOOLS" ]; then
     esac
     _rs_env="" _rs_set="" _rs_val=""
     for _rs_var in LCSAS_RELOCATED LCSAS_META_DISC LCSAS_MOUNT_DIRS \
-                   LCSAS_PACK_CACHE_DIR LCSAS_TARGET LCSAS_INTERACTIVE \
+                   LCSAS_PACK_CACHE_DIR LCSAS_PLATFORM LCSAS_INTERACTIVE \
                    LCSAS_TIER_FALLBACK LCSAS_ANOTHER_SET; do
         eval "_rs_set=\${$_rs_var+x}"
         [ -n "$_rs_set" ] || continue
@@ -2849,24 +2861,24 @@ if [ -n "$TOOLS" ]; then
 #!/bin/sh
 # Carries on the LCSAS restore that stopped.  Written by restore.sh;
 # it holds no password (the restore asks for it again).  Flags such as
-# --key FILE are passed on.
+# --password-file FILE are passed on.
 ${_rs_env}LCSAS_TOOLS_DIR=$(sh_quote "$TOOLS"); export LCSAS_TOOLS_DIR
-LCSAS_REPO=$(sh_quote "$(basename "$REPO")"); export LCSAS_REPO
+LCSAS_BACKUP_SET=$(sh_quote "$(basename "$REPO")"); export LCSAS_BACKUP_SET
 LCSAS_NEWEST_DISC_PROMPT=0; export LCSAS_NEWEST_DISC_PROMPT
-exec sh $(sh_quote "$SCRIPT") "\$@" $(sh_quote "$RECOVERY") $(sh_quote "$TARGET_ABS") $(sh_quote "$SNAP")
+exec sh $(sh_quote "$SCRIPT") --restore-folder $(sh_quote "$TARGET_ABS") --snapshot $(sh_quote "$SNAP") "\$@" $(sh_quote "$RECOVERY")
 EOF
     chmod 700 "$TOOLS/resume.sh"
 fi
 
 # ── The password (now that we know which backup set) ──────────────
 #
-# In this order: LCSAS_PWFILE (or --key FILE), LCSAS_PASSWORD, the share
+# In this order: LCSAS_PASSWORD_FILE (or --password-file FILE), LCSAS_PASSWORD, the share
 # card files in LCSAS_SHARES_DIR, and otherwise ask (#607, #608): for the
 # share cards when the set's marker says its password is split, else
 # for the password.  An empty answer asks again, and Q (or the end of
 # the input) stops with exit 77.  Asked on a terminal, a password that a
 # repository key rejects is caught before tier 1 starts and asked for
-# again (C7).  So is one given in LCSAS_PWFILE, LCSAS_PASSWORD or
+# again (C7).  So is one given in LCSAS_PASSWORD_FILE, LCSAS_PASSWORD or
 # LCSAS_SHARES_DIR (#627 item 2, as restore.bat): when a person is there
 # (is_interactive) the script says so and asks; in a script it is not
 # checked, tier 1 rejects it and the run ends with 77.  Cards in
@@ -2886,23 +2898,23 @@ bin_preflight_ok() {
     return 0
 }
 
-# The share card combiner for this computer (lcsas-keyshare).  Checked
+# The share card combiner for this computer (lcsas-shares).  Checked
 # like the tier binaries (bin_preflight_ok): a zero-byte (bit-rotted)
 # file would run as an empty script, exit 0 and "accept" every card.
 KEYSHARE_BIN=""
-for _ks in "$RECOVERY/bin/$TARGET/lcsas-keyshare" \
-           "$RECOVERY/bin/$TARGET/lcsas-keyshare.exe"; do
+for _ks in "$RECOVERY/bin/$TARGET/lcsas-shares" \
+           "$RECOVERY/bin/$TARGET/lcsas-shares.exe"; do
     [ -z "$OLD_ARM" ] || break   # built for ARMv7 (#803)
     if [ -x "$_ks" ] && bin_preflight_ok "$_ks"; then KEYSHARE_BIN="$_ks"; break; fi
 done
 
-# keyshare_broken RC: lcsas-keyshare gave an answer it never gives (exit
+# keyshare_broken RC: lcsas-shares gave an answer it never gives (exit
 # RC, or no password at all), so it does not work on this computer: the
 # cards are not to blame.
 keyshare_broken() {
     printf 'The share combiner %s does not work on\n' "$KEYSHARE_BIN" >&2
     printf 'this computer (exit %s); the cards are not to blame.  Rebuild the\n' "$1" >&2
-    printf 'password as RECOVER.txt "SHARE CARDS" says, then type it.\n' >&2
+    printf 'password as RESTORE.txt "SHARE CARDS" says, then type it.\n' >&2
 }
 
 # quit_password: the reader typed Q, or the input ended, at the password
@@ -3040,7 +3052,7 @@ drop_shares() {
 }
 
 # ask_shares K N: the share card prompts (C7).  Each card is typed on one
-# line, checked alone with lcsas-keyshare (a typo is named and that card
+# line, checked alone with lcsas-shares (a typo is named and that card
 # asked again), and kept in its own file in a private temporary folder,
 # never the tools folder.  Exactly K cards are combined into $PWFILE.
 # Returns 1 when the reader types P: they will type the password.
@@ -3060,7 +3072,7 @@ ask_shares() {
             SHARE_DIR=""
             printf 'Cannot make a private temporary folder in %s for the cards;\n' \
                    "${TMPDIR:-/tmp}" >&2
-            printf 'rebuild the password first (see RECOVER.txt) and type it.\n' >&2
+            printf 'rebuild the password first (see RESTORE.txt) and type it.\n' >&2
             return 1
         fi
         _as_i=1
@@ -3104,7 +3116,7 @@ ask_shares() {
                     set -- "$@" "$_as_f"
                     _as_i=$((_as_i + 1)) ;;
                 3)
-                    # lcsas-keyshare names the bad word; the file it
+                    # lcsas-shares names the bad word; the file it
                     # names is this card.
                     SC_FILE="$_as_f" SC_CARD="card $_as_i" awk '{
                         f = ENVIRON["SC_FILE"]; i = index($0, f)
@@ -3155,7 +3167,7 @@ shares_from_dir() {
     fi
     if [ -z "$KEYSHARE_BIN" ]; then
         printf 'LCSAS_SHARES_DIR is set, but there is no share combiner here\n' >&2
-        printf '(%s/bin/%s/lcsas-keyshare).\n' "$RECOVERY" "$TARGET" >&2
+        printf '(%s/bin/%s/lcsas-shares).\n' "$RECOVERY" "$TARGET" >&2
         return 1
     fi
     set --
@@ -3201,14 +3213,14 @@ shares_from_dir() {
     case "$_sd_rc" in
         1|3)
             printf 'Could not rebuild the password from the cards in %s\n' "$LCSAS_SHARES_DIR" >&2
-            printf '(lcsas-keyshare exit %d: see above).\n' "$_sd_rc" >&2 ;;
+            printf '(lcsas-shares exit %d: see above).\n' "$_sd_rc" >&2 ;;
         *)  keyshare_broken "$_sd_rc" ;;
     esac
     return 1
 }
 
 # new_pwfile: PWFILE becomes a new private temporary file (removed on
-# every exit), never the reader's own LCSAS_PWFILE.
+# every exit), never the reader's own LCSAS_PASSWORD_FILE.
 new_pwfile() {
     if ! PWFILE_TMP="$(tmp_file lcsas-pw)"; then
         printf 'Cannot make a private temporary file for the password in %s or /tmp.\n' \
@@ -3227,8 +3239,8 @@ ask_typed() {
     fi
     if [ -n "$_pw_split" ]; then
         printf 'The password for %s is split into share cards, but the share\n' "$SET_NAME" >&2
-        printf 'combiner (lcsas-keyshare) is missing here.  Rebuild the password\n' >&2
-        printf 'as RECOVER.txt "SHARE CARDS" says, then type it.\n' >&2
+        printf 'combiner (lcsas-shares) is missing here.  Rebuild the password\n' >&2
+        printf 'as RESTORE.txt "SHARE CARDS" says, then type it.\n' >&2
     fi
     ask_password
 }
@@ -3237,7 +3249,7 @@ _pw_split="$(set_split "$REPO")"
 # Where a password that was not typed came from, for the line that says
 # it was not accepted.
 _pw_given=""
-PWFILE="${LCSAS_PWFILE:-}"
+PWFILE="${LCSAS_PASSWORD_FILE:-}"
 if [ -n "$PWFILE" ]; then
     _pw_given="the password file $PWFILE"
 else
@@ -3265,7 +3277,7 @@ if [ -n "$_pw_given" ] && ! password_ok; then
 fi
 unset _pw_given
 
-mkdir -p "$TARGET_DIR"
+mkdir -p "$RESTORE_FOLDER"
 
 # ── RAM-backed-target guard [BOOT-05] ─────────────────────────────
 #
@@ -3275,30 +3287,30 @@ mkdir -p "$TARGET_DIR"
 # /tmp/restored, so an heir who accepts it gets a "successful"
 # restore that evaporates at poweroff.  Warn loudly; when a human is
 # reachable (TTY), default to aborting.  Non-interactive automation
-# keeps working (warn-and-continue) unless LCSAS_FORBID_TMPFS_TARGET=1.
+# keeps working (warn-and-continue) unless LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1.
 
 # (target_fstype is defined near the top, before relocation uses it.)
 
-_tgt_fstype="$(target_fstype "$TARGET_DIR")"
+_tgt_fstype="$(target_fstype "$RESTORE_FOLDER")"
 case "$_tgt_fstype" in
 tmpfs|ramfs)
     {
         printf '==========================================================\n'
         printf '  WARNING: the restore target\n'
-        printf '      %s\n' "$TARGET_DIR"
+        printf '      %s\n' "$RESTORE_FOLDER"
         printf '  is on a RAM-backed filesystem (%s).  Restored files\n' "$_tgt_fstype"
         printf '  WILL BE LOST when this computer powers off or reboots.\n'
         printf '  Choose a real disk instead, e.g.:\n'
-        printf '      sh restore.sh /media/<your-usb-drive>/restored latest\n'
+        printf '      sh restore.sh --restore-folder /media/<your-usb-drive>/restored\n'
         printf '==========================================================\n'
     } >&2
-    if [ "${LCSAS_FORBID_TMPFS_TARGET:-0}" = "1" ]; then
-        printf 'aborting: LCSAS_FORBID_TMPFS_TARGET=1 forbids RAM-backed targets.\n' >&2
+    if [ "${LCSAS_FORBID_TMPFS_RESTORE_FOLDER:-0}" = "1" ]; then
+        printf 'aborting: LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1 forbids RAM-backed targets.\n' >&2
         exit 1
     fi
     _tmpfs_ans=""
-    if [ "${LCSAS_ALLOW_TMPFS_TARGET:-0}" = "1" ]; then
-        printf '[restore.sh] LCSAS_ALLOW_TMPFS_TARGET=1 -- continuing into RAM.\n' >&2
+    if [ "${LCSAS_ALLOW_TMPFS_RESTORE_FOLDER:-0}" = "1" ]; then
+        printf '[restore.sh] LCSAS_ALLOW_TMPFS_RESTORE_FOLDER=1 -- continuing into RAM.\n' >&2
     elif [ -t 0 ]; then
         printf 'Continue restoring into RAM anyway? [y/N] ' >&2
         IFS= read -r _tmpfs_ans || _tmpfs_ans=""
@@ -3309,10 +3321,10 @@ tmpfs|ramfs)
         IFS= read -r _tmpfs_ans </dev/tty || _tmpfs_ans=""
     else
         printf '[restore.sh] no TTY -- continuing into the RAM-backed target.\n' >&2
-        printf '[restore.sh] set LCSAS_FORBID_TMPFS_TARGET=1 to make this fatal.\n' >&2
+        printf '[restore.sh] set LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1 to make this fatal.\n' >&2
         _tmpfs_ans="y"
     fi
-    if [ "${LCSAS_ALLOW_TMPFS_TARGET:-0}" != "1" ]; then
+    if [ "${LCSAS_ALLOW_TMPFS_RESTORE_FOLDER:-0}" != "1" ]; then
         case "$_tmpfs_ans" in
             y|Y) ;;
             *)
@@ -3452,7 +3464,7 @@ session_disc_count() {
 
 write_session_log() {
     # $1 = tier (1|2|2b|3), $2 = its outcome.  All other context comes
-    # from the script's environment ($REPO, $TARGET_DIR, $SNAP, etc.).
+    # from the script's environment ($REPO, $RESTORE_FOLDER, $SNAP, etc.).
     _tier="$1"
     [ -n "${HOME:-}" ] || return 0
     [ -d "$HOME" ] || return 0
@@ -3462,7 +3474,7 @@ write_session_log() {
     [ -n "$_ts" ] || return 0
     _tenant="$(basename "$REPO" 2>/dev/null || printf 'unknown')"
     _discs="$(session_disc_count)"
-    _line="$_ts  tenant=$_tenant  target=$TARGET_DIR  snapshot=$SNAP"
+    _line="$_ts  backup_set=$_tenant  restore_folder=$RESTORE_FOLDER  snapshot=$SNAP"
     _line="$_line  tier=$_tier  discs=$_discs  result=$2"
     printf '%s\n' "$_line" >> "$_logfile" 2>/dev/null || true
 }
@@ -3537,7 +3549,7 @@ offer_another_set() {
     # A pack cache this run put in its own temporary folder (which is
     # gone now) is not handed on: the next run picks its own.
     if [ "$_cache_auto" = 1 ]; then unset LCSAS_PACK_CACHE_DIR; fi
-    unset LCSAS_REPO LCSAS_PASSWORD LCSAS_PWFILE LCSAS_SHARES_DIR LCSAS_RESUME
+    unset LCSAS_BACKUP_SET LCSAS_PASSWORD LCSAS_PASSWORD_FILE LCSAS_SHARES_DIR LCSAS_RESUME
     LCSAS_NEWEST_DISC_PROMPT=0
     # Q at the next run's set list then ends with 0 (another_pass_done).
     LCSAS_ANOTHER_PASS=1
@@ -3575,7 +3587,7 @@ restore_succeeded() {
 EXIT_NOT_ALL_RESTORED=4
 
 # The restore's list of the items it could not restore (#783).
-FAILURES_FILE="$TARGET_DIR/RESTORE_FAILURES.txt"
+FAILURES_FILE="$RESTORE_FOLDER/RESTORE_FAILURES.txt"
 
 # drop_old_failures: remove a RESTORE_FAILURES.txt an earlier restore
 # left in the target (only one that starts with the tiers' header), so
@@ -3672,10 +3684,10 @@ not_all_restored() {
     write_session_log "$1" not-all-restored
     {
         printf '\n[restore.sh] The restore finished, but %s item(s) could not be restored.\n' "$_nr_n"
-        printf '[restore.sh] Everything else was restored to %s\n' "$TARGET_DIR"
+        printf '[restore.sh] Everything else was restored to %s\n' "$RESTORE_FOLDER"
         printf '[restore.sh] The items, and why, are listed in\n'
         printf '                 %s\n' "$FAILURES_FILE"
-        printf '[restore.sh] See "ITEMS NOT RESTORED" in RECOVER.txt for what to do.\n'
+        printf '[restore.sh] See "ITEMS NOT RESTORED" in RESTORE.txt for what to do.\n'
     } >&2
     NOT_ALL_SAID=1
     if [ "$_nr_missing" -gt 0 ] 2>/dev/null; then
@@ -3688,7 +3700,7 @@ not_all_restored() {
                 printf '    sh %s\n' "$(sh_word "$TOOLS/resume.sh")"
                 printf 'The META disc is not needed for that.  '
             else
-                printf '    restore.sh from the META disc, into %s\n' "$TARGET_DIR"
+                printf '    restore.sh from the META disc, into %s\n' "$RESTORE_FOLDER"
             fi
             printf 'It skips the files already restored.\n'
             printf 'Run in a terminal window, it asks for each disc it needs by\n'
@@ -3910,7 +3922,7 @@ elif [ -x "$RESTORE_BIN" ]; then
     set -- $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG $INTERACTIVE_ARG
     IFS=$_oifs
     try_tier 1 lcsas 2 "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
-             --target "$TARGET_DIR" --snapshot "$SNAP" "$@"
+             --restore-folder "$RESTORE_FOLDER" --snapshot "$SNAP" "$@"
 fi
 
 # ── Tier 2: vendored rustic-static (no Python) ────────────────────
@@ -3921,7 +3933,7 @@ fi
 # swapped through one drive (issue #227).  Skip tier 2 entirely when
 # the resolved repo doesn't carry its own data/ subtree -- the
 # heir gets the tier-3 prompt (which DOES understand the disc-
-# swap protocol via standalone_restorer.py) instead of a cryptic
+# swap protocol via python_reader.py) instead of a cryptic
 # rustic "pack not found" error after the meta disc is ejected.
 #
 # Tiers 2 and 2b run with the terminal as their stderr (their progress
@@ -3936,7 +3948,7 @@ elif [ -x "$RUSTIC_BIN" ] && [ ! -d "$REPO/data" ]; then
     printf 'restores (no %s/data/); falling through to tier 3\n' "$REPO" >&2
 elif [ -x "$RUSTIC_BIN" ]; then
     printf '[tier 2] using vendored rustic-static (%s)\n' "$TARGET" >&2
-    try_tier 2 rustic 3 "$RUSTIC_BIN" restore "$SNAP" "$TARGET_DIR"
+    try_tier 2 rustic 3 "$RUSTIC_BIN" restore "$SNAP" "$RESTORE_FOLDER"
 fi
 
 # ── Tier 2b: stock restic / rustic (independent, audited reader) ──
@@ -3961,9 +3973,9 @@ if [ -n "$STDTOOL_BIN" ] && [ -x "$STDTOOL_BIN" ] \
     _stdtool_kind="$(stdtool_kind "$STDTOOL_BIN")"
     printf '[tier 2b] using stock %s (%s)\n' "$_stdtool_kind" "$STDTOOL_BIN" >&2
     if [ "$_stdtool_kind" = rustic ]; then
-        try_tier 2b rustic 3 "$STDTOOL_BIN" restore "$SNAP" "$TARGET_DIR"
+        try_tier 2b rustic 3 "$STDTOOL_BIN" restore "$SNAP" "$RESTORE_FOLDER"
     else
-        try_tier 2b restic 3 "$STDTOOL_BIN" restore "$SNAP" --target "$TARGET_DIR"
+        try_tier 2b restic 3 "$STDTOOL_BIN" restore "$SNAP" --target "$RESTORE_FOLDER"
     fi
 fi
 
@@ -3982,9 +3994,9 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
     find_tier3_python
     PYBIN="$TIER3_PYBIN"
     PYREST=""
-    for cand in "$RECOVERY/../standalone_restorer.py" \
-                "$RECOVERY/standalone_restorer.py" \
-                "$SCRIPT_DIR/../standalone_restorer.py"; do
+    for cand in "$RECOVERY/../python_reader.py" \
+                "$RECOVERY/python_reader.py" \
+                "$SCRIPT_DIR/../python_reader.py"; do
         if [ -f "$cand" ]; then PYREST="$cand"; break; fi
     done
     if [ -n "$PYBIN" ] && [ -n "$PYREST" ]; then
@@ -3997,8 +4009,8 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         fi
         printf '[tier 3] falling back to Python (%s + %s)\n' \
                "$PYBIN" "$PYREST" >&2
-        # standalone_restorer.py CLI is flag-based:
-        #   --repo DIR --password-file FILE --target DIR [--snapshot ID]
+        # python_reader.py CLI is flag-based:
+        #   --repo DIR --password-file FILE --restore-folder DIR [--snapshot ID]
         #   [--mount-point DIR ...] [--interactive on|off|auto]
         # See src/lcsas/restore/standalone_builder.py:_cli_main.
         # The pack cache reaches it as the exported LCSAS_PACK_CACHE_DIR
@@ -4043,7 +4055,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         IFS="$OLD_IFS3"
         # Issue #239 -- wire PYTHONPATH to the bundled zstandard.
         #
-        # `standalone_restorer.py` does `import zstandard` at module
+        # `python_reader.py` does `import zstandard` at module
         # top (guarded by try/ImportError -> _HAS_ZSTD=False, so a
         # truly-missing zstandard does NOT crash the script -- it
         # only fails when a zstd-compressed blob is decompressed).
@@ -4102,7 +4114,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         try_tier 3 python "" ${TIER3_PYLOADER:+"$TIER3_PYLOADER"} "$PYBIN" "$PYREST" \
                  --repo "$REPO" \
                  --password-file "$PWFILE" \
-                 --target "$TARGET_DIR" \
+                 --restore-folder "$RESTORE_FOLDER" \
                  --interactive "$_t3_interactive" \
                  "$@"
     fi
@@ -4123,8 +4135,8 @@ The bare-minimum restore path (tiers 1-2) needs ONE of:
 
 The optional Python tier (tier 3) needs Python 3.10 or newer that runs
 on this computer (the bundled one or python3 on PATH) and
-standalone_restorer.py.
+python_reader.py.
 
-See $RECOVERY/docs/RECOVER.txt for manual restore instructions.
+See $RECOVERY/docs/RESTORE.txt for manual restore instructions.
 EOF
 exit 1

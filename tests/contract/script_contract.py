@@ -338,7 +338,7 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
     ScriptCase(
         name="tier 3 usage error",
         tier="3", reader_exit=ReaderExit.USAGE,
-        reader_says=("usage: standalone_restorer.py [-h]",),
+        reader_says=("usage: python_reader.py [-h]",),
         sh=ScriptOutcome(exit=ScriptExit.FAILED,
                          says=r"\[tier 3\] FAILED \(rc=2\)",
                          not_says=r"could not be restored",
@@ -522,7 +522,7 @@ def mismatches(want: ScriptOutcome, got: ScriptOutcome) -> list[str]:
 _SH_ARGS = """\
 target=""
 while [ $# -gt 0 ]; do
-    case "$1" in --target) target="$2"; shift ;; esac
+    case "$1" in --restore-folder) target="$2"; shift ;; esac
     shift
 done
 """
@@ -561,7 +561,7 @@ def _sh_fixture(case: ScriptCase, work: Path) -> tuple[Path, Path]:
             (repo / "data").mkdir()
     stubs = work / "stubbin"
     stubs.mkdir()
-    (work / "standalone_restorer.py").write_text("# stub\n")
+    (work / "python_reader.py").write_text("# stub\n")
     # No host python unless the case is tier 3: tier 3 would otherwise
     # be the fall-back of a case that has no tier at all.
     for name in ("python3", "python"):
@@ -614,7 +614,7 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
         "PATH": f"{stubs}:/usr/bin:/bin",
         "HOME": str(home),
         "LCSAS_TOOLS_DIR": str(tools),
-        "LCSAS_TARGET": SH_TARGET,
+        "LCSAS_PLATFORM": SH_TARGET,
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_NO_RELOCATE": "1",
@@ -622,12 +622,12 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
         # someone can answer); its answer is the end of the input.
         "LCSAS_INTERACTIVE": "on" if case.interactive else "off",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
-        "LCSAS_REPO": SET,
+        "LCSAS_BACKUP_SET": SET,
         "LCSAS_PASSWORD": PASSWORD,
         "LCSAS_TIER_FALLBACK": "1" if case.fallback else "0",
     }
-    for name in ("LCSAS_PWFILE", "LCSAS_SHARES_DIR", "LCSAS_ANOTHER_SET",
-                 "LCSAS_FORCE_NONEMPTY_TARGET", "LCSAS_RESUME",
+    for name in ("LCSAS_PASSWORD_FILE", "LCSAS_SHARES_DIR", "LCSAS_ANOTHER_SET",
+                 "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER", "LCSAS_RESUME",
                  "LCSAS_ANOTHER_PASS", "LCSAS_PACK_CACHE_DIR"):
         env.pop(name, None)
     if case.check_disc is not None:
@@ -636,9 +636,9 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
         img.write_bytes(b"\0" * 2048)
         argv = ["--check-disc", str(img), str(recovery)]
     elif case.usage_error:
-        argv = ["--bogus", str(recovery), str(target)]
+        argv = ["--bogus", str(recovery)]
     else:
-        argv = [str(recovery), str(target), "latest"]
+        argv = ["--restore-folder", str(target), str(recovery)]
     # Not a terminal: the overwrite question is then refused, not asked.
     res = subprocess.run(["sh", str(RESTORE_SH), *argv], stdin=subprocess.DEVNULL,
                          capture_output=True, text=True, env=env, timeout=60)
@@ -664,7 +664,7 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
 #: One stub for every program restore.bat runs (lcsas-restore.exe,
 #: rustic-static.exe, lcsas-ecc.exe).  ``--help`` and ``--list-*`` (the
 #: password check, the size of the set) exit 0.  Any other call prints
-#: <name>.say, writes <name>.failures to <--target>\RESTORE_FAILURES.txt
+#: <name>.say, writes <name>.failures to <--restore-folder>\RESTORE_FAILURES.txt
 #: and exits with the number in <name>.rc (files beside the .exe).
 STUB_C = r"""
 #include <stdio.h>
@@ -687,7 +687,7 @@ int main(int argc, char **argv) {
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strncmp(argv[i], "--list-", 7))
             return 0;
-        if (!strcmp(argv[i], "--target") && i + 1 < argc) target = argv[i + 1];
+        if (!strcmp(argv[i], "--restore-folder") && i + 1 < argc) target = argv[i + 1];
     }
     if (!GetModuleFileNameA(NULL, self, MAX_PATH)) return 99;
     dot = strrchr(self, '.');
@@ -811,16 +811,16 @@ def run_restore_bat(case: ScriptCase, work: Path, rig: WineRig) -> ScriptOutcome
     env = {
         **rig.env,
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": BAT_TARGET,
+        "LCSAS_PLATFORM": BAT_TARGET,
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         "LCSAS_TOOLS_DIR": f"C:\\{tools_name}",
-        "LCSAS_REPO": SET,
-        "LCSAS_PW": PASSWORD,
+        "LCSAS_BACKUP_SET": SET,
+        "LCSAS_PASSWORD": PASSWORD,
         "LCSAS_INTERACTIVE": "off",
         "LCSAS_SKIP_SPACE_CHECK": "1",
     }
-    for name in ("LCSAS_PWFILE", "LCSAS_PASSWORD", "LCSAS_SHARES_DIR",
-                 "LCSAS_ANOTHER_SET", "LCSAS_FORCE_NONEMPTY_TARGET",
+    for name in ("LCSAS_PASSWORD_FILE", "LCSAS_SHARES_DIR",
+                 "LCSAS_ANOTHER_SET", "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER",
                  "LCSAS_PACK_CACHE_DIR", "LCSAS_TIER_FALLBACK"):
         env.pop(name, None)
     bat = "E:\\recovery\\scripts\\restore.bat"

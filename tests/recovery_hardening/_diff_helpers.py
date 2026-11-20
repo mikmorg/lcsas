@@ -141,14 +141,14 @@ def rustic_backup(src: Path, repo: Path, pwfile: Path) -> str:
 
 def restore_with_tier1(repo: Path, target: Path, pwfile: Path,
                        restore_bin: Path) -> None:
-    """Invoke `lcsas-restore --repo <repo> --target <target>
+    """Invoke `lcsas-restore --repo <repo> --restore-folder <target>
     --password-file <pw>`.  Raises CalledProcessError on non-zero
     exit."""
     target.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [str(restore_bin),
          "--repo", str(repo),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--password-file", str(pwfile)],
         capture_output=True, check=True, timeout=300,
     )

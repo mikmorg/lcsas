@@ -1,6 +1,6 @@
 # Restore from a Running macOS Host
 
-> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the macOS-specific context, variant axes, and the tests that validate this path. If it differs from RECOVER.txt, RECOVER.txt wins.
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RESTORE.txt` (Linux and macOS) and `recovery/docs/RESTORE_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RESTORE.txt](../../recovery/docs/RESTORE.txt), [RESTORE_WINDOWS.txt](../../recovery/docs/RESTORE_WINDOWS.txt). This file covers the macOS-specific context, variant axes, and the tests that validate this path. If it differs from RESTORE.txt, RESTORE.txt wins.
 
 > **Storage stage:** the discs — exercises the repository metadata +
 > packs on optical discs from a macOS host.
@@ -50,7 +50,7 @@ the meta disc; this doc is the heir-facing companion.
 2. Open Terminal and run:
 
    ```sh
-   sh /Volumes/LCSAS_META/restore.sh ~/Restored
+   sh /Volumes/LCSAS_META/restore.sh --restore-folder ~/Restored
    ```
 
    The driver auto-detects the host arch via `uname -s` + `uname -m`
@@ -58,9 +58,9 @@ the meta disc; this doc is the heir-facing companion.
    or `recovery/bin/x86_64-apple-darwin/` on Intel (see the `Darwin`
    arm of the target-dispatch block in `recovery/scripts/restore.sh`).
 3. The script copies itself, the binaries for this Mac and the backup
-   sets' metadata into its tools folder, `~/lcsas-restore-tools`, and
+   sets' metadata into its tools folder, `~/lcsas-tools`, and
    runs from there, so the meta disc can come out of the drive.  It
-   then asks, in order (see `recovery/docs/RECOVER.txt`, "WHAT
+   then asks, in order (see `recovery/docs/RESTORE.txt`, "WHAT
    restore.sh ASKS"):
    - for your **newest data disc**: eject the meta disc
      (`drutil eject`, or Finder's Eject), insert the data disc with the
@@ -73,18 +73,18 @@ the meta disc; this doc is the heir-facing companion.
 
    Alternative non-interactive forms:
 
-   - `LCSAS_PASSWORD='...' sh restore.sh ~/Restored`
-   - `LCSAS_PWFILE=/path/to/key.txt sh restore.sh ~/Restored`
+   - `LCSAS_PASSWORD='...' sh restore.sh --restore-folder ~/Restored`
+   - `LCSAS_PASSWORD_FILE=/path/to/key.txt sh restore.sh --restore-folder ~/Restored`
 
    If the password of the repository you are restoring was **split** into
    SLIP-0039 shares, the script asks for the share cards itself when the
-   set's `LCSAS_REPO.txt` says so (type `P` there to type a rebuilt
+   set's `LCSAS_BACKUP_SET.txt` says so (type `P` there to type a rebuilt
    password instead).  When only `PASSWORD_INFO.txt` says the password
    is split (an older disc), rebuild it first with the
    bundled combiner — primary path is the static
-   `recovery/bin/aarch64-apple-darwin/lcsas-keyshare <card1> <card2> ...`
+   `recovery/bin/aarch64-apple-darwin/lcsas-shares <card1> <card2> ...`
    (or the `x86_64-apple-darwin` build on Intel); the Python fallback is
-   `python3 keyshare_combine.py <card1> <card2> ...` run under the meta
+   `python3 combine_shares.py <card1> <card2> ...` run under the meta
    disc's bundled CPython at
    `recovery/bin/<platform>/python/bin/python3`.  See
    [`docs/SHARE_FORMAT.md`](../SHARE_FORMAT.md) for the share
@@ -93,7 +93,7 @@ the meta disc; this doc is the heir-facing companion.
 
 4. Tier 1 (prebuilt C89 `lcsas-restore`) runs.  If it succeeds, restored
    files land in `~/Restored/`.  Tier 2 (`rustic-static`) and
-   tier 3 (`python3 standalone_restorer.py`, using the meta disc's
+   tier 3 (`python3 python_reader.py`, using the meta disc's
    bundled CPython at `recovery/bin/<target>/python/bin/python3`)
    are reached only when tier 1 is missing or will not run on this
    Mac; the cascade is transparent to the heir.  Tier-1 fall-through
@@ -102,7 +102,7 @@ the meta disc; this doc is the heir-facing companion.
    code, so a tier-1 regression surfaces loudly — see
    `recovery/docs/ENV_VARS.txt`).  If you stop (`q` at a disc prompt,
    exit 75, or Ctrl-C), the tools folder stays: carry on with
-   `sh ~/lcsas-restore-tools/resume.sh`, no meta disc needed.  The macOS tier-1 binaries are
+   `sh ~/lcsas-tools/resume.sh`, no meta disc needed.  The macOS tier-1 binaries are
    cross-built with `zig cc -target <arch>-macos` (Phase 21.12; no
    Apple SDK required).
 
@@ -133,7 +133,7 @@ network), mount each one explicitly:
 hdiutil mount -nobrowse -mountpoint /Volumes/LCSAS_BD25_2026_0001 LCSAS_BD25_2026_0001.iso
 hdiutil mount -nobrowse -mountpoint /Volumes/LCSAS_BD25_2026_0002 LCSAS_BD25_2026_0002.iso
 # ... etc, one per disc
-sh /Volumes/LCSAS_META/restore.sh ~/Restored
+sh /Volumes/LCSAS_META/restore.sh --restore-folder ~/Restored
 ```
 
 `hdiutil` is in the macOS base install — no Homebrew or App Store
@@ -185,12 +185,12 @@ If you're on Apple Silicon but want to run the Intel binary under
 Rosetta 2 (e.g. for compatibility testing), force it:
 
 ```sh
-LCSAS_TARGET=x86_64-apple-darwin sh /Volumes/LCSAS_META/restore.sh ~/Restored
+LCSAS_PLATFORM=x86_64-apple-darwin sh /Volumes/LCSAS_META/restore.sh --restore-folder ~/Restored
 ```
 
-The `LCSAS_TARGET` env var short-circuits auto-detection in
-`restore.sh` (the `if [ -n "${LCSAS_TARGET:-}" ]` branch of the
-target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
+The `LCSAS_PLATFORM` env var short-circuits auto-detection in
+`restore.sh` (the `if [ -n "${LCSAS_PLATFORM:-}" ]` branch of the
+target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_PLATFORM).
 
 ## Gaps and known limitations
 

@@ -7,11 +7,11 @@ sees them:
 
 * UX-07 non-empty-target overwrite guard (restore.sh ~1003-1030):
   the boxed WARNING, the non-interactive refusal (exit 65 naming the
-  override env var), the ``LCSAS_FORCE_NONEMPTY_TARGET=1`` bypass, and
+  override env var), the ``LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1`` bypass, and
   the interactive ``Type YES`` / not-YES branches via a pty.
 
 * BOOT-05 RAM-backed (tmpfs) target guard (restore.sh ~1100-1127):
-  the ``LCSAS_ALLOW_TMPFS_TARGET=1`` continue line, the TTY ``[y/N]``
+  the ``LCSAS_ALLOW_TMPFS_RESTORE_FOLDER=1`` continue line, the TTY ``[y/N]``
   prompt (continue on ``y``; abort on anything else), and the
   ``/dev/tty`` fallback when stdin is redirected but a terminal exists.
 
@@ -86,14 +86,14 @@ def _base_env() -> dict[str, str]:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_SKIP_SPACE_CHECK": "1",
         "LCSAS_PASSWORD": "stub-pw",
-        "LCSAS_REPO": "alpha",
+        "LCSAS_BACKUP_SET": "alpha",
     }
     for var in (
-        "LCSAS_PWFILE",
+        "LCSAS_PASSWORD_FILE",
         "LCSAS_PROC_MOUNTS",
-        "LCSAS_ALLOW_TMPFS_TARGET",
-        "LCSAS_FORBID_TMPFS_TARGET",
-        "LCSAS_FORCE_NONEMPTY_TARGET",
+        "LCSAS_ALLOW_TMPFS_RESTORE_FOLDER",
+        "LCSAS_FORBID_TMPFS_RESTORE_FOLDER",
+        "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER",
     ):
         env.pop(var, None)
     return env
@@ -104,7 +104,7 @@ def _run_pipe(recovery: Path, target: Path, env: dict[str, str],
     """Run with stdin as a pipe (NOT a tty).  Goes through
     ``subprocess.run`` so the gate's trace wrapper applies."""
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=30,
         input=stdin_text,
     )
@@ -150,14 +150,14 @@ def _run_pty(recovery: Path, target: Path, env: dict[str, str],
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
         proc = subprocess.Popen(
-            [interp, str(RESTORE_SH), str(recovery), str(target), "latest"],
+            [interp, str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
             stdin=stdin_r, stdout=slave, stderr=slave, env=env,
             close_fds=True, preexec_fn=_make_ctty,
         )
         os.close(stdin_r)
     else:
         proc = subprocess.Popen(
-            [interp, str(RESTORE_SH), str(recovery), str(target), "latest"],
+            [interp, str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
             stdin=slave, stdout=slave, stderr=slave, env=env,
             close_fds=True,
         )
@@ -205,7 +205,7 @@ def test_nonempty_foreign_target_noninteractive_refuses(tmp_path: Path) -> None:
     )
     combined = res.stdout + res.stderr
     assert NONEMPTY_WARNING in combined, f"warning not shown:\n{combined[:600]}"
-    assert "LCSAS_FORCE_NONEMPTY_TARGET=1" in combined, (
+    assert "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1" in combined, (
         "non-TTY refusal must name the override env var"
     )
     assert "STUB-TIER1-RAN" not in combined, "tier 1 ran despite refusal"
@@ -214,13 +214,13 @@ def test_nonempty_foreign_target_noninteractive_refuses(tmp_path: Path) -> None:
 
 
 def test_nonempty_force_env_bypasses_guard(tmp_path: Path) -> None:
-    """LCSAS_FORCE_NONEMPTY_TARGET=1 proceeds past the guard without a
+    """LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1 proceeds past the guard without a
     prompt on a foreign non-empty target (restore.sh 1005 short-circuit)."""
     recovery = _make_recovery(tmp_path)
     target = tmp_path / "myfiles"
     target.mkdir()
     (target / "foreign.txt").write_text("x")
-    env = {**_base_env(), "LCSAS_FORCE_NONEMPTY_TARGET": "1"}
+    env = {**_base_env(), "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1"}
 
     res = _run_pipe(recovery, target, env)
 
@@ -272,12 +272,12 @@ def test_nonempty_foreign_target_interactive_not_yes_aborts(
 
 
 def test_tmpfs_allow_env_continues(tmp_path: Path) -> None:
-    """LCSAS_ALLOW_TMPFS_TARGET=1 warns then continues into RAM without a
+    """LCSAS_ALLOW_TMPFS_RESTORE_FOLDER=1 warns then continues into RAM without a
     prompt -- the explicit-opt-in line (restore.sh 1106)."""
     recovery = _make_recovery(tmp_path)
     stubs = tmp_path / "stubs"
     _install_findmnt_stub(stubs, "tmpfs")
-    env = {**_base_env(), "LCSAS_ALLOW_TMPFS_TARGET": "1"}
+    env = {**_base_env(), "LCSAS_ALLOW_TMPFS_RESTORE_FOLDER": "1"}
     env["PATH"] = f"{stubs}:{env['PATH']}"
 
     res = _run_pipe(recovery, tmp_path / "restored", env)

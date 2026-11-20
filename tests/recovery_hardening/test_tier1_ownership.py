@@ -110,7 +110,7 @@ def test_root_uid_gid_restored(tmp_path: Path) -> None:
         subprocess.run(
             ["sudo", "-n", str(bin_path),
              "--repo", str(repo),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--password-file", str(pwfile)],
             check=True, capture_output=True, timeout=120,
         )

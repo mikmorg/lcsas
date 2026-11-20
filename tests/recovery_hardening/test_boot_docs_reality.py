@@ -9,7 +9,7 @@ FAILURE MODE CAUGHT
 recovery/docs/BOOT.txt shipped the command
 `lcsas meta build --output meta/ --recovery-boot` on every burned meta disc
 for a long time, but `--recovery-boot` never existed in the argparse tree.
-Similarly, READINESS_CHECKLIST.txt documented `--snapshot`/`--target` flags
+Similarly, READINESS_CHECKLIST.txt documented `--snapshot`/`--restore-folder` flags
 on `restore exec` that are actually positionals.  An heir following the
 on-disc docs decades from now gets `error: unrecognized arguments` with no
 hint the documented flag is fictional.
@@ -80,11 +80,11 @@ def _validate(tokens: list[str]) -> list[str]:
     problems: list[str] = []
     parser = build_parser()
     # Flags documented mid-line may legally belong to any parser on the
-    # subcommand path, including the root parser (e.g. `--db`).
+    # subcommand path, including the root parser (e.g. `--catalog`).
     allowed_flags = _option_strings(parser)
 
     # Walk the subcommand path as deep as the tokens allow.  Root-parser
-    # flags may legally precede the first subcommand (`lcsas --db X burn`),
+    # flags may legally precede the first subcommand (`lcsas --catalog X burn`),
     # so skip them (and their value tokens) while still validating them.
     choices = _subparser_actions(parser)
     consumed_path: list[str] = []
@@ -106,7 +106,7 @@ def _validate(tokens: list[str]) -> list[str]:
                 f"flag '{flag}' does not exist on the root lcsas parser"
             )
         idx += 1
-        # Skip the flag's value token (`--db <catalog>`), but never a
+        # Skip the flag's value token (`--catalog <catalog>`), but never a
         # token that is itself a flag or a subcommand.
         if (
             "=" not in token
@@ -162,11 +162,11 @@ def test_recovery_docs_lcsas_invocations_exist_in_argparse_tree():
 
 
 def test_validator_accepts_root_flags_before_subcommand():
-    """`lcsas --db <catalog> burn --media MDISC100 ...` is a legal shape —
-    --db is a root-parser flag consumed before the subcommand (regression:
+    """`lcsas --catalog <catalog> burn --media MDISC100 ...` is a legal shape —
+    --catalog is a root-parser flag consumed before the subcommand (regression:
     checkpoint A, 2026-06, from a since-reworded PHYSICAL_DISC_VALIDATION.txt
     line)."""
-    assert _validate(["--db", "<catalog>", "burn", "--media", "MDISC100", "..."]) == []
+    assert _validate(["--catalog", "<catalog>", "burn", "--media", "MDISC100", "..."]) == []
     assert _validate(["--verbose", "status"]) == []
     # Phantom root flags are still caught.
     assert _validate(["--no-such-flag", "burn"])

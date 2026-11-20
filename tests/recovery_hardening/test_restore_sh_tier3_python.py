@@ -50,7 +50,7 @@ def _fixture(tmp_path: Path, bundled: str | None) -> Path:
     repo = recovery / "metadata" / "alpha"
     (repo / "keys").mkdir(parents=True)
     (repo / "index").mkdir()
-    (tmp_path / "standalone_restorer.py").write_text("# stub\n")
+    (tmp_path / "python_reader.py").write_text("# stub\n")
     if bundled is not None:
         py = bin_dir / "python" / "bin" / "python3"
         py.parent.mkdir(parents=True)
@@ -98,14 +98,14 @@ def _run(recovery: Path, tmp_path: Path, stub_dir: Path,
         # left out: a stock tool would be tier 2b and run before tier 3.
         "PATH": f"{stub_dir}:/usr/bin:/bin",
         "HOME": str(tmp_path),
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         **extra,
     }
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"),
-         "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"),
+         str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=30,
     )
@@ -129,7 +129,7 @@ def test_bundled_python_that_cannot_run_falls_back_to_host(
     assert res.returncode == 0, (
         f"rc={res.returncode}\nstdout:{res.stdout}\nstderr:{res.stderr}")
     assert "HOST_PYTHON_RAN" in res.stdout, res.stdout
-    assert log.read_text().splitlines()[0].endswith("standalone_restorer.py")
+    assert log.read_text().splitlines()[0].endswith("python_reader.py")
     assert ("[tier 3] the bundled Python cannot run on this host "
             f"({why}); using the host python3") in res.stderr, (
         res.stderr)
@@ -279,7 +279,7 @@ def test_bundled_python_runs_through_the_bundled_loader(tmp_path: Path) -> None:
     argv = ld_log.read_text().splitlines()
     assert argv[0].endswith(
         f"/recovery/bin/{HOST_TARGET}/python/bin/python3"), argv
-    assert argv[1].endswith("standalone_restorer.py"), argv
+    assert argv[1].endswith("python_reader.py"), argv
     assert "--repo" in argv, argv
     line = next(ln for ln in res.stderr.splitlines()
                 if "running it through the bundled loader" in ln)

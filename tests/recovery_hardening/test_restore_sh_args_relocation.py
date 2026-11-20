@@ -6,11 +6,11 @@ Hardening for #800, #625, #807, #802 and #806.
   ``--check-disc IMAGE`` copied about 130 MB of tools first and left the
   tools folder behind; ``--check-disc`` with a relative image path then
   failed, because the copy starts in ``/``.
-* #625: a relative restore folder (and a relative ``--key FILE``) typed
+* #625: a relative restore folder (and a relative ``--password-file FILE``) typed
   from the META disc landed under ``/`` for the same reason.
-* #807: ``--target DIR`` could not be combined with a snapshot:
+* #807: ``--restore-folder DIR`` could not be combined with a snapshot:
   ``--snapshot ID`` is the way now.
-* #802: with one backup set on the discs, ``--repo NAME`` restored that
+* #802: with one backup set on the discs, ``--backup-set NAME`` restored that
   set whatever NAME was.
 * #806: every failing run left a ``/tmp/lcsas-restore-exit.*`` file.
 
@@ -41,7 +41,7 @@ from .test_restore_sh_tools_folder import (
 )
 
 # The stub tier 1 of test_restore_sh_tools_folder, and it also checks
-# that the password file it is given can be read (a relative --key FILE
+# that the password file it is given can be read (a relative --password-file FILE
 # read from / could not be).
 STUB = textwrap.dedent("""\
     #!/bin/sh
@@ -51,7 +51,7 @@ STUB = textwrap.dedent("""\
     prev=""
     for a in "$@"; do
         printf 'ARG: %s\\n' "$a"
-        [ "$prev" = "--target" ] && target="$a"
+        [ "$prev" = "--restore-folder" ] && target="$a"
         [ "$prev" = "--password-file" ] && pwfile="$a"
         prev="$a"
     done
@@ -202,9 +202,8 @@ def test_a_mistyped_command_line_off_the_meta_disc_copies_nothing(
 # ── #625: relative paths are taken from the starting folder ──────────
 
 
-@pytest.mark.parametrize("form", ["positional", "flag"])
 def test_a_relative_target_off_the_meta_disc_lands_under_the_starting_folder(
-    tmp_path: Path, readonly: Callable[[Path], None], form: str,
+    tmp_path: Path, readonly: Callable[[Path], None],
 ) -> None:
     """The run is started from a folder reached through a link (as a
     macOS /var path is): the target keeps that form (no pwd -P)."""
@@ -213,19 +212,19 @@ def test_a_relative_target_off_the_meta_disc_lands_under_the_starting_folder(
     real = _workdir(tmp_path)
     link = tmp_path / "start-link"
     link.symlink_to(real)
-    args = ["restored"] if form == "positional" else ["--target", "restored"]
+    args = ["--restore-folder", "restored"]
     env = {**_private(tmp_path), "PWD": str(link)}
     res = _run_meta(meta, args, env, link)
     assert res.returncode == 0, res.stderr
     assert "copied recovery binaries to" in res.stderr, "the run must relocate"
-    assert _arg(res.stdout, "--target") == f"{link}/restored"
+    assert _arg(res.stdout, "--restore-folder") == f"{link}/restored"
     assert (real / "restored" / "restored.txt").read_text() == "restored\n"
 
 
 def test_a_relative_key_file_and_snapshot_off_the_meta_disc(
     tmp_path: Path, readonly: Callable[[Path], None],
 ) -> None:
-    """--key FILE relative to the starting folder is read after the
+    """--password-file FILE relative to the starting folder is read after the
     relocation, and --snapshot reaches tier 1 through it (#807)."""
     meta = _meta(tmp_path)
     readonly(meta)
@@ -234,28 +233,28 @@ def test_a_relative_key_file_and_snapshot_off_the_meta_disc(
     env = _private(tmp_path)
     env.pop("LCSAS_PASSWORD")
     res = _run_meta(
-        meta, ["--key", "pw.txt", "--target", "./out", "--snapshot", "a1b2c3d4"],
+        meta, ["--password-file", "pw.txt", "--restore-folder", "./out", "--snapshot", "a1b2c3d4"],
         env, work,
     )
     assert res.returncode == 0, res.stderr
     assert "copied recovery binaries to" in res.stderr, "the run must relocate"
     assert _arg(res.stdout, "--snapshot") == "a1b2c3d4"
-    assert _arg(res.stdout, "--target") == f"{work}/out"
+    assert _arg(res.stdout, "--restore-folder") == f"{work}/out"
     assert (work / "out" / "restored.txt").exists()
 
 
 def test_a_relative_recovery_root_off_the_meta_disc(
     tmp_path: Path, readonly: Callable[[Path], None],
 ) -> None:
-    """RECOVERY_ROOT TARGET_DIR SNAPSHOT, both paths relative: the copy
-    still finds the recovery root and the target."""
+    """--restore-folder DIR and RECOVERY_ROOT, both paths relative: the copy
+    still finds the recovery root and the restore folder."""
     meta = _meta(tmp_path)
     readonly(meta)
-    res = _run_meta(meta, ["LCSAS_META/recovery", "out", "latest"],
+    res = _run_meta(meta, ["--restore-folder", "out", "LCSAS_META/recovery"],
                     _private(tmp_path), tmp_path)
     assert res.returncode == 0, res.stderr
     assert "copied recovery binaries to" in res.stderr, "the run must relocate"
-    assert _arg(res.stdout, "--target") == f"{tmp_path}/out"
+    assert _arg(res.stdout, "--restore-folder") == f"{tmp_path}/out"
     assert (tmp_path / "out" / "restored.txt").exists()
 
 
@@ -273,38 +272,36 @@ def _in_place(tmp_path: Path, args: list[str], **extra: str) -> subprocess.Compl
 
 
 @pytest.mark.parametrize("args", [
-    ["--target", "@OUT", "--snapshot", "a1b2c3d4", "@REC"],
-    ["--snapshot", "a1b2c3d4", "@REC", "@OUT"],
-    ["--snapshot", "a1b2c3d4", "@REC", "@OUT", "a1b2c3d4"],
-    ["--target", "@OUT", "--snapshot", "a1b2c3d4", "--", "@REC"],
+    ["--restore-folder", "@OUT", "--snapshot", "a1b2c3d4", "@REC"],
+    ["--restore-folder", "@OUT", "--snapshot", "a1b2c3d4", "--", "@REC"],
 ])
 def test_snapshot_flag_reaches_tier_1(tmp_path: Path, args: list[str]) -> None:
     out = str(tmp_path / "out")
     res = _in_place(tmp_path, [out if a == "@OUT" else a for a in args])
     assert res.returncode == 0, res.stderr
     assert _arg(res.stdout, "--snapshot") == "a1b2c3d4"
-    assert _arg(res.stdout, "--target") == out
+    assert _arg(res.stdout, "--restore-folder") == out
 
 
-def test_two_different_snapshots_exit_2(tmp_path: Path) -> None:
+def test_a_positional_snapshot_exits_2(tmp_path: Path) -> None:
+    """The old SNAPSHOT_ID positional: refused, with the flags that replaced it."""
     res = _in_place(tmp_path, ["--snapshot", "a1b2", "@REC", str(tmp_path / "o"), "c3d4"])
     assert res.returncode == 2
-    assert "give the snapshot once" in res.stderr
+    assert "--snapshot" in res.stderr and "--restore-folder" in res.stderr
     assert "ARG: " not in res.stdout
 
 
-def test_target_flag_with_a_positional_snapshot_points_at_snapshot_flag(
+def test_restore_folder_flag_with_a_positional_snapshot_points_at_snapshot_flag(
     tmp_path: Path,
 ) -> None:
-    """The reviewer's `--target DIR latest`: still refused (latest could
-    be a folder), and the message says how to name the snapshot."""
+    """`--restore-folder DIR latest`: refused, and the message says how to
+    name the snapshot."""
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--target", str(tmp_path / "o"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "o"), "latest"],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
         env=_private(tmp_path),
     )
     assert res.returncode == 2
-    assert "give the target once" in res.stderr
     assert "--snapshot ID" in res.stderr
 
 
@@ -317,8 +314,8 @@ def test_snapshot_flag_needs_a_value() -> None:
 
 @pytest.mark.parametrize("shell", ["dash", "bash"])
 @pytest.mark.parametrize("args", [
-    ["--repo"], ["--target"], ["--snapshot", ""], ["--key"],
-    ["--check-disc"], ["--key", "/nonexistent/lcsas-key"],
+    ["--backup-set"], ["--restore-folder"], ["--snapshot", ""], ["--password-file"],
+    ["--check-disc"], ["--password-file", "/nonexistent/lcsas-key"],
 ])
 def test_a_flag_without_its_value_is_a_usage_error(shell: str,
                                                    args: list[str]) -> None:
@@ -333,11 +330,13 @@ def test_a_flag_without_its_value_is_a_usage_error(shell: str,
     assert "restore.sh: --" in res.stderr, res.stderr
 
 
-# ── #802: --repo with one backup set ─────────────────────────────────
+# ── #802: --backup-set with one backup set ─────────────────────────────────
 
 
 def test_an_unknown_repo_with_one_set_stops_and_lists_the_set(tmp_path: Path) -> None:
-    res = _in_place(tmp_path, ["--repo", "no-such-set", "@REC", str(tmp_path / "o")])
+    res = _in_place(
+        tmp_path,
+        ["--backup-set", "no-such-set", "--restore-folder", str(tmp_path / "o"), "@REC"])
     assert res.returncode == 1
     assert "not among available repositories" in res.stderr
     assert f"{SET_NAME} (id {SET_ID})" in res.stderr
@@ -347,15 +346,17 @@ def test_an_unknown_repo_with_one_set_stops_and_lists_the_set(tmp_path: Path) ->
 
 @pytest.mark.parametrize("name", [SET_NAME, SET_ID])
 def test_the_one_set_by_its_name_or_id(tmp_path: Path, name: str) -> None:
-    res = _in_place(tmp_path, ["--repo", name, "@REC", str(tmp_path / "o")])
+    res = _in_place(
+        tmp_path, ["--backup-set", name, "--restore-folder", str(tmp_path / "o"), "@REC"])
     assert res.returncode == 0, res.stderr
     assert _arg(res.stdout, "--repo").endswith(f"/metadata/{SET_ID}")
 
 
 def test_an_unknown_lcsas_repo_with_one_set_stops_too(tmp_path: Path) -> None:
-    res = _in_place(tmp_path, ["@REC", str(tmp_path / "o")], LCSAS_REPO="other")
+    res = _in_place(tmp_path, ["--restore-folder", str(tmp_path / "o"), "@REC"],
+                    LCSAS_BACKUP_SET="other")
     assert res.returncode == 1
-    assert "LCSAS_REPO=other not among available repositories" in res.stderr
+    assert "LCSAS_BACKUP_SET=other not among available repositories" in res.stderr
 
 
 # ── #806: no exit file under /tmp ────────────────────────────────────
@@ -365,7 +366,7 @@ def test_a_failed_run_leaves_no_exit_file(tmp_path: Path) -> None:
     """A failing run says its exit code on the terminal and leaves no
     file behind in TMPDIR (it used to leave /tmp/lcsas-restore-exit.*,
     which also ignored TMPDIR)."""
-    res = _in_place(tmp_path, ["@REC", str(tmp_path / "o")], STUB_RC="1")
+    res = _in_place(tmp_path, ["--restore-folder", str(tmp_path / "o"), "@REC"], STUB_RC="1")
     assert res.returncode == 1, res.stderr
     assert "[restore.sh] stopped with exit code 1" in res.stderr
     assert "exit log" not in res.stderr

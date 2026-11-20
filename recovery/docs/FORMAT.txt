@@ -161,12 +161,12 @@ VOLUME LAYOUT (LCSAS data disc)
       snapshots/             its snapshot files: only those whose
                              packs are all on discs (this disc's
                              burn session counted)
-      LCSAS_REPO.txt         backup set marker: plain "key=value"
+      LCSAS_BACKUP_SET.txt         backup set marker: plain "key=value"
                              lines (format, id, name, name_cmd,
                              split, split_id).  Restore works
                              without it.
   /catalog.db                the disc catalog (see LCSAS CATALOG)
-  /standalone_restorer.py    the Python reader (tier 3)
+  /python_reader.py    the Python reader (tier 3)
   /volume_info.json          this disc: label, uuid, media type,
                              pack count, the repositories with packs
                              here, and the SHA-256 of every pack

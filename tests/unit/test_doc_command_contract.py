@@ -105,14 +105,14 @@ def test_no_legacy_windows_triple_in_docs() -> None:
     )
 
 
-_INVOKE = re.compile(r"\b(?:python3?|py)(?:\.exe)?\s+\S*standalone_restorer\.py")
+_INVOKE = re.compile(r"\b(?:python3?|py)(?:\.exe)?\s+\S*python_reader\.py")
 
 # Flags of the generated CLI that consume a value (see
 # src/lcsas/restore/standalone_builder.py _CLI_BLOCK).
 _VALUE_FLAGS = {
     "--repo",
     "--password-file",
-    "--target",
+    "--restore-folder",
     "--snapshot",
     "--mount-point",
     "--interactive",
@@ -133,7 +133,7 @@ def _is_continued(line: str) -> bool:
 
 def _extract_invocations(text: str) -> list[tuple[int, str]]:
     """Return ``(lineno, full_command)`` for every doc-quoted
-    standalone_restorer.py run, joining continuation lines."""
+    python_reader.py run, joining continuation lines."""
     lines = text.splitlines()
     found: list[tuple[int, str]] = []
     i = 0
@@ -162,9 +162,9 @@ def _extract_invocations(text: str) -> list[tuple[int, str]]:
 
 
 def test_standalone_restorer_invocations_use_real_flags() -> None:
-    """Every doc-quoted standalone_restorer.py command must use the
+    """Every doc-quoted python_reader.py command must use the
     script's real interface: ``--repo``, ``--password-file`` and
-    ``--target`` are all ``required=True`` and there are NO positional
+    ``--restore-folder`` are all ``required=True`` and there are NO positional
     arguments, so a positional invocation makes argparse error out.
     ``--help``-style mentions are exempt.
     """
@@ -175,15 +175,15 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
             tokens = [t.strip("`'\"") for t in cmd.split()]
             tokens = [t for t in tokens if t]
             script_idx = next(
-                idx for idx, t in enumerate(tokens) if "standalone_restorer.py" in t
+                idx for idx, t in enumerate(tokens) if "python_reader.py" in t
             )
             args = tokens[script_idx + 1:]
-            # Bare references ("run `python3 standalone_restorer.py`,
+            # Bare references ("run `python3 python_reader.py`,
             # see ...") and --help pointers are mentions, not commands
             # an heir would copy verbatim.
             if not args or "--help" in args:
                 continue
-            for flag in ("--repo", "--password-file", "--target"):
+            for flag in ("--repo", "--password-file", "--restore-folder"):
                 if flag not in args:
                     problems.append(f"{where}: missing {flag} in: {cmd}")
             idx = 0
@@ -199,7 +199,7 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
                     problems.append(f"{where}: positional argument {tok!r} in: {cmd}")
                     idx += 1
     assert not problems, (
-        "doc-quoted standalone_restorer.py commands diverge from the real CLI:\n"
+        "doc-quoted python_reader.py commands diverge from the real CLI:\n"
         + "\n".join(problems)
     )
 
@@ -207,7 +207,7 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
 def _meta_build_parser_flags() -> set[str]:
     """Option strings the real ``lcsas meta build`` subparser accepts.
 
-    Root-parser flags (``--config``, ``--db``, ...) are deliberately
+    Root-parser flags (``--config``, ``--catalog``, ...) are deliberately
     NOT included: argparse rejects them after the subcommand, so a doc
     quoting ``lcsas meta build --config ...`` sends the operator to an
     ``unrecognized arguments`` error.
@@ -306,8 +306,8 @@ def test_restore_sh_help_starts_from_meta() -> None:
     """The ``--help`` QUICK START must route the operator to the META
     disc (UX-06).
 
-    Data discs carry standalone_restorer.py, docs and packs — never
-    restore.sh; only the LCSAS_META disc does (RECOVER.txt).  The old
+    Data discs carry python_reader.py, docs and packs — never
+    restore.sh; only the LCSAS_META disc does (RESTORE.txt).  The old
     "Insert ANY data disc" step 1 walked a first-time heir straight
     into ``sh: can't open /mnt/restore.sh``.
     """
@@ -319,7 +319,7 @@ def test_restore_sh_help_starts_from_meta() -> None:
     )
     assert "ANY data disc" not in help_text, (
         "--help QUICK START must not tell the operator to insert a data "
-        "disc: data discs do not carry restore.sh (recovery/docs/RECOVER.txt)"
+        "disc: data discs do not carry restore.sh (recovery/docs/RESTORE.txt)"
     )
 
 
@@ -447,7 +447,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
     parser accepts (UX-02).
 
     This is the gate that kills the phantom-flag class of failure:
-    PASSWORD_INFO.txt shipped ``./restore.sh --target ~/restored`` for a
+    PASSWORD_INFO.txt shipped ``./restore.sh --restore-folder ~/restored`` for a
     long time while restore.sh accepted no such flag, dead-ending the
     heir right after the hardest step (password reconstruction).
     """
@@ -480,7 +480,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
                         f"{flag}: restore.sh {cmd}"
                     )
     # Extractor self-check: the corpus is known to contain flagged
-    # restore.sh commands (e.g. PASSWORD_INFO's --target STEP 2); a count
+    # restore.sh commands (e.g. PASSWORD_INFO's --restore-folder STEP 2); a count
     # of zero means the scanner broke, not that the docs are clean.
     assert flagged_commands >= 3, (
         f"extractor self-check: only {flagged_commands} restore.sh "
@@ -575,16 +575,16 @@ def test_lcsas_cli_flags_in_recovery_docs_exist() -> None:
     generalizes the UX-03 ``meta build`` gate to every subcommand).
 
     Red-first catch: PHYSICAL_DISC_VALIDATION.txt quoted
-    ``lcsas burn --media ... --db <catalog>``, but ``--db`` is a
+    ``lcsas burn --media ... --catalog <catalog>``, but ``--catalog`` is a
     root-parser flag that argparse rejects after the subcommand.
     """
     # Walker self-checks against known shapes so a silent breakage of
     # the walker cannot turn the gate into a no-op.
-    assert _lcsas_parser_walk(["burn", "--db", "x"]), (
-        "walker self-check: --db after the burn subcommand must be "
+    assert _lcsas_parser_walk(["burn", "--catalog", "x"]), (
+        "walker self-check: --catalog after the burn subcommand must be "
         "rejected (root flags are invalid post-subcommand)"
     )
-    assert not _lcsas_parser_walk(["--db", "x", "burn", "--media", "BD25"])
+    assert not _lcsas_parser_walk(["--catalog", "x", "burn", "--media", "BD25"])
 
     problems = []
     for doc in _recovery_docs():
@@ -605,7 +605,7 @@ def test_split_key_python_fallback_matches_bundle_layout(tmp_path: Path) -> None
     documented path must match the layout restore.sh itself probes
     and the meta-builder ships (UX-02).
 
-    Fallback chain pinned: lcsas-keyshare (static, primary) → system
+    Fallback chain pinned: lcsas-shares (static, primary) → system
     python3 → bundled ``recovery/bin/<platform>/python/bin/python3``.
     """
     fallback = "recovery/bin/<platform>/python/bin/python3"
@@ -621,9 +621,9 @@ def test_split_key_python_fallback_matches_bundle_layout(tmp_path: Path) -> None
             f"{name}: no bundled-python fallback for the combiner "
             "pre-step — an heir on a host without python3 dead-ends"
         )
-        assert "keyshare_combine.py" in text[idx : idx + 200], (
+        assert "combine_shares.py" in text[idx : idx + 200], (
             f"{name}: the bundled-python fallback must run "
-            "keyshare_combine.py"
+            "combine_shares.py"
         )
         # The example platform folder named in the doc must be a real
         # bundled target, or the heir hunts for a directory that does
@@ -647,13 +647,13 @@ def test_split_key_python_fallback_matches_bundle_layout(tmp_path: Path) -> None
 def test_no_stdin_password_claim_for_standalone() -> None:
     """The generated standalone restorer never prompts for the
     password (``--password-file`` is required); the docs must not
-    claim otherwise near a standalone_restorer mention."""
+    claim otherwise near a python_reader mention."""
     claim = re.compile(r"prompts?\s+for\s+the\s+password", re.IGNORECASE)
     offenders = []
     for doc in _all_docs():
         lines = doc.read_text().splitlines()
         for i, line in enumerate(lines):
-            if "standalone_restorer" not in line:
+            if "python_reader" not in line:
                 continue
             for j in range(i, min(i + 4, len(lines))):
                 if claim.search(lines[j]):
@@ -661,7 +661,7 @@ def test_no_stdin_password_claim_for_standalone() -> None:
                         f"{doc.relative_to(REPO_ROOT)}:{j + 1}: {lines[j].strip()}"
                     )
     assert not offenders, (
-        "stdin-password claim near standalone_restorer mention:\n"
+        "stdin-password claim near python_reader mention:\n"
         + "\n".join(offenders)
     )
 
@@ -877,7 +877,7 @@ def test_lcsas_commands_in_cli_help_and_messages_exist() -> None:
     real subcommands, with each flag accepted where it stands.
 
     Red-first catches: a failed disc read told owners to run
-    ``lcsas catalog locations <label>`` (no such subcommand); a key split
+    ``lcsas catalog locations <label>`` (no such subcommand); a password split
     warning said ``lcsas migrate``; DISC_CARE.txt, burned on every disc,
     quoted ``lcsas verify --isos`` (no such flag); and two key messages put
     ``--config`` after the subcommand, which argparse rejects.  Docstrings
@@ -921,7 +921,7 @@ _LABEL_ALLOWLIST: set[tuple[str, str]] = {
     # Quotes what File Explorer shows for a CD: the 16-character volume
     # name, the label cut short, which is why restore.bat reads the full
     # label from VOLUME_INFO.txt (#605).
-    ("recovery/docs/RECOVER_WINDOWS.txt", "LCSAS_CD700_2026"),
+    ("recovery/docs/RESTORE_WINDOWS.txt", "LCSAS_CD700_2026"),
 }
 
 

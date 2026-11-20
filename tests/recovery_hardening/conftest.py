@@ -40,7 +40,7 @@ Scale with ``LCSAS_TEST_TIMEOUT_SCALE`` (default 4; 1 disables).
 
 **3. A private tools folder (#609).**  restore.sh keeps its tools folder
 (binaries copied off the disc, the pack cache, the catalog copy and
-resume.sh) in ``$LCSAS_TOOLS_DIR``, by default ``$HOME/lcsas-restore-tools``,
+resume.sh) in ``$LCSAS_TOOLS_DIR``, by default ``$HOME/lcsas-tools``,
 and keeps it after any run that does not succeed.  A test that runs
 restore.sh (or resume.sh, or restore_auto.sh) with the developer's own HOME and no
 ``LCSAS_TOOLS_DIR`` gets a fresh folder under the pytest basetemp

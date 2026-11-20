@@ -12,7 +12,7 @@ quoting the exact command and message.
 inside, open file handle, SQLite catalog).  Used to happen
 constantly before commit `c6f89a0` — the catalog SQLite handle
 pinned the mount.  Since rc6 the script gives tier 1 a copy of the
-catalog in its tools folder (`~/lcsas-restore-tools/catalog.db`),
+catalog in its tools folder (`~/lcsas-tools/catalog.db`),
 and tier 1 copies a catalog it finds on a disc later into its pack
 cache before opening it, so this is rare.
 
@@ -43,7 +43,7 @@ in PR #83) finds each repository's metadata on any data disc:
 
 ```sh
 sudo mount /dev/sr0 /mnt
-sh restore.sh ~/restored/ latest
+sh restore.sh --restore-folder ~/restored
 ```
 
 If you have NO data disc yet and only the meta disc, the meta
@@ -58,13 +58,13 @@ disc itself carries repository metadata under `metadata/<repo>/`
 historical version of this bug was a positional-vs-flag arg
 mismatch (fixed in commit `36a836d`).  If you still see this loop
 on a current build, something is wrong with the bundled
-`standalone_restorer.py`.
+`python_reader.py`.
 
 **Fix**: opt into tier-fallback explicitly so the script tries
 all three tiers in order instead of failing fast on tier 1:
 
 ```sh
-LCSAS_TIER_FALLBACK=1 sh restore.sh ~/restored/ latest
+LCSAS_TIER_FALLBACK=1 sh restore.sh --restore-folder ~/restored
 ```
 
 If tier 3 itself is broken, drop to a manual rustic run.  rustic
@@ -121,7 +121,7 @@ newest data disc when it names none.
 ## `WARNING: the cache at X has N MB free, too little to copy disc L`
 
 **Cause**: the pack cache (default `pack-cache/` in the tools folder,
-`~/lcsas-restore-tools/`, since rc6; before that
+`~/lcsas-tools/`, since rc6; before that
 `${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>/`) is on a drive without room
 for the whole disc plus some to spare (5 % of the drive, at most
 1 GB).  The binary does not copy discs that do not fit, rather than
@@ -135,14 +135,14 @@ disabling further drains`.)
 ```sh
 mkdir -p /home/me/big-disk/lcsas-cache
 LCSAS_PACK_CACHE_DIR=/home/me/big-disk/lcsas-cache \
-    sh restore.sh ~/restored/ latest
+    sh restore.sh --restore-folder ~/restored
 ```
 
 Or disable the cache entirely if you have enough RAM/optical
 patience to swap discs many times:
 
 ```sh
-LCSAS_PACK_CACHE_DIR= sh restore.sh ~/restored/ latest
+LCSAS_PACK_CACHE_DIR= sh restore.sh --restore-folder ~/restored
 ```
 
 ---
@@ -172,7 +172,7 @@ the discs already copied into its pack cache, until a restore
 succeeds.  Run the command the script printed (no META disc needed):
 
 ```sh
-sh ~/lcsas-restore-tools/resume.sh
+sh ~/lcsas-tools/resume.sh
 ```
 
 Re-running the first command from the META disc works too.  Once a
@@ -206,7 +206,7 @@ to manually assemble a rustic-format repository by hand:
 1. Pick a writable directory `$R` (call it `/tmp/manual-repo`).
 2. Copy `config`, `keys/`, `index/` and `snapshots/` from your
    NEWEST data disc's `metadata/<id>/` into `$R/` (the newest disc
-   knows the newest snapshots; `grep -H '^name=' /mnt/metadata/*/LCSAS_REPO.txt`
+   knows the newest snapshots; `grep -H '^name=' /mnt/metadata/*/LCSAS_BACKUP_SET.txt`
    says which `<id>` is which backup set).
 3. For every data disc, mount it and copy `data/` into `$R/data/`
    (or `cp -r` over the existing tree; both directories are

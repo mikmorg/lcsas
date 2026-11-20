@@ -101,22 +101,22 @@ You do NOT need two Blu-ray drives.  Before the first question,
 restore.bat copies what this computer needs from the meta disc into
 a folder on this computer, the tools folder:
 
-     %LOCALAPPDATA%\LCSAS-restore
-     (usually C:\Users\<you>\AppData\Local\LCSAS-restore)
+     %LOCALAPPDATA%\lcsas-tools
+     (usually C:\Users\<you>\AppData\Local\lcsas-tools)
 
 and runs that copy.  From then on nothing on the meta disc is in
 use, so it can come out of the drive.  The copy is small, a few MB:
 the three restore programs for Windows (lcsas-restore.exe,
-lcsas-keyshare.exe, lcsas-ecc.exe), this guide, and the index of
+lcsas-shares.exe, lcsas-ecc.exe), this guide, and the index of
 each backup set (the metadata folder).  The script names each file
 as it copies it:
 
      [lcsas-restore] copying the restore programs for this computer to
-                     C:\Users\<you>\AppData\Local\LCSAS-restore
+                     C:\Users\<you>\AppData\Local\lcsas-tools
                      so that the META disc can come out of the drive:
                        recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe
                        ...
-     [lcsas-restore] copied recovery files to C:\Users\<you>\AppData\Local\LCSAS-restore
+     [lcsas-restore] copied recovery files to C:\Users\<you>\AppData\Local\lcsas-tools
 
 The tools folder stays until the restore has finished, and is then
 deleted.  If a tools folder from an earlier run is there and was
@@ -217,7 +217,7 @@ To stop, type Q and press Enter at a disc box.  The script says:
 
      To carry on, double-click "Resume LCSAS restore.bat" on
      your Desktop, or type this command:
-       "C:\Users\<you>\AppData\Local\LCSAS-restore\Resume LCSAS restore.bat"
+       "C:\Users\<you>\AppData\Local\lcsas-tools\Resume LCSAS restore.bat"
 
 The files restored so far stay in the folder you chose, and the
 tools folder stays too, with the disc copies made so far.
@@ -249,7 +249,7 @@ another backup set (see "MORE THAN ONE BACKUP SET"), the script
 deletes the tools folder and "Resume LCSAS restore.bat" (both
 copies).  To give up a restore
 you do not want to finish, delete the folder
-%LOCALAPPDATA%\LCSAS-restore and the file on your Desktop yourself.
+%LOCALAPPDATA%\lcsas-tools and the file on your Desktop yourself.
 
 ────────────────────────────────────────────────────────────────────
 FILES LARGER THAN 4 GiB (multi-extent ISO 9660 limitation)
@@ -350,7 +350,7 @@ tries the password.  If it is wrong, it says so:
 and asks again.  An empty answer asks again too.  To stop, type Q
 and press Enter: nothing is restored (exit code 77).  A password
 that is just the letter Q cannot be typed here: put it in a file
-and use LCSAS_PWFILE (below).
+and use LCSAS_PASSWORD_FILE (below).
 
 THE PASSWORD IS VISIBLE WHILE YOU TYPE IT.  Plain CMD cannot hide
 it; the script says so before it asks.  Make sure nobody can see
@@ -369,7 +369,7 @@ the file afterwards:
     $f = "$env:TEMP\lcsas-pw.txt"
     $u = New-Object Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($f, $p, $u)
-    $env:LCSAS_PWFILE = $f
+    $env:LCSAS_PASSWORD_FILE = $f
     D:\restore.bat
     Remove-Item $f
 
@@ -377,15 +377,15 @@ the file afterwards:
 Windows PowerShell 5.1 that comes with Windows; they do not need
 PowerShell 7.
 
-The script reads the password from the file LCSAS_PWFILE names, byte
+The script reads the password from the file LCSAS_PASSWORD_FILE names, byte
 for byte, and does not ask for it.  Any file that holds only the
 password will do, for example one on a USB stick:
 
-    set LCSAS_PWFILE=E:\password.txt
+    set LCSAS_PASSWORD_FILE=E:\password.txt
     D:\restore.bat
 
-LCSAS_PASSWORD holds the password itself instead of a file name
-(LCSAS_PW, an older name, works too).  If the password from either
+LCSAS_PASSWORD holds the password itself instead of a file name.
+If the password from either
 is wrong, the script says so and asks for it on the keyboard.
 
 ────────────────────────────────────────────────────────────────────
@@ -417,7 +417,7 @@ them, and press Enter.  The first 4 letters of each word are enough.
 The script checks each card on its own as you type it: if a word is
 wrong, it names the word and asks for that card again.  When it has
 K cards, it rebuilds the password with the bundled
-lcsas-keyshare.exe and goes on.  Cards from another backup set, or
+lcsas-shares.exe and goes on.  Cards from another backup set, or
 the same card typed twice, do not rebuild the password: the script
 says so.  Press ENTER to type the cards again, or Q to stop (exit
 code 77).
@@ -451,22 +451,22 @@ rebuild the password yourself and type it at the "Password:" prompt:
   STEP 2.  Open a Command Prompt at the meta disc root (e.g. D:)
            and run the bundled combiner:
 
-               recovery\bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe ^
+               recovery\bin\x86_64-pc-windows-gnu\lcsas-shares.exe ^
                    C:\Users\me\card1.txt C:\Users\me\card2.txt
 
            It prints the password and nothing else.  Append
            " > C:\Users\me\repo.key" to the command to save it to
-           a file instead, and use that file as LCSAS_PWFILE (see
+           a file instead, and use that file as LCSAS_PASSWORD_FILE (see
            "THE PASSWORD" above).
 
   STEP 3.  Run restore.bat as normal and type the rebuilt password
            at its "Password:" prompt.
 
-If lcsas-keyshare.exe will not run on your host, install Python 3
+If lcsas-shares.exe will not run on your host, install Python 3
 (see "MANUAL PYTHON RESTORE" below for the python.org steps) and
 use the pure-Python fallback at the meta disc root:
 
-               python D:\keyshare_combine.py ^
+               python D:\combine_shares.py ^
                    C:\Users\me\card1.txt C:\Users\me\card2.txt
 
 Format + re-implementation details: docs/SHARE_FORMAT.md on the
@@ -506,12 +506,20 @@ and only then is the tools folder deleted.
 To choose a set without the menu, give its name or its code to
 restore.bat from a CMD prompt at the META disc root:
 
-    restore.bat --repo "Holiday photos"
+    restore.bat --backup-set "Holiday photos"
 
-or set LCSAS_REPO to it before you start (see ENV_VARS.txt).  If no
+or set LCSAS_BACKUP_SET to it before you start (see ENV_VARS.txt).  If no
 set has that name, the script stops and lists the sets.  If two sets
 have the same name, the script stops and lists their codes: use the
 code.
+
+To name the folder without being asked, give it with --restore-folder:
+
+    restore.bat --restore-folder D:\restored
+
+It answers the folder question for the first set.  When you ask for
+another set, the question comes back, with that folder, a dash and
+the set's name as the default (D:\restored-<its name>).
 
 ────────────────────────────────────────────────────────────────────
 DESTINATION FOLDER NOTES
@@ -531,7 +539,7 @@ DESTINATION FOLDER NOTES
 
   * While it runs, the restore also keeps a copy of the packs of
     each data disc it has read, in the tools folder
-    (%LOCALAPPDATA%\LCSAS-restore, usually on drive C:).  That needs
+    (%LOCALAPPDATA%\lcsas-tools, usually on drive C:).  That needs
     free space too: about the size of those discs.  It is deleted
     when the restore has finished.
 
@@ -659,18 +667,18 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
            (b) Use WSL.  Install WSL2 from the Microsoft Store (no
                admin needed in recent Windows versions), then:
                    wsl
-                   sh /mnt/d/restore.sh ~/restored
+                   sh /mnt/d/restore.sh --restore-folder ~/restored
                (replace /mnt/d with your disc mount point inside WSL;
-               RECOVER.txt on the disc describes that restore).
+               RESTORE.txt on the disc describes that restore).
 
            (c) Use the Python reader (manual; this is NOT chained
                from restore.bat any more -- see "MANUAL PYTHON
                RESTORE" below for details).  Install Python from
                python.org, then run:
-                   python D:\standalone_restorer.py ^
+                   python D:\python_reader.py ^
                        --repo C:\lcsas-set ^
                        --password-file C:\path\to\pw.txt ^
-                       --target C:\Users\me\restored ^
+                       --restore-folder C:\Users\me\restored ^
                        --mount-point E:\
                See "MANUAL PYTHON RESTORE" below for how to make
                C:\lcsas-set, the password file and what
@@ -712,17 +720,17 @@ PRIVACY / SECURITY
 
   * The password is written to a file in %TEMP% while the restore
     runs, and so are the share cards you type; a password from
-    LCSAS_PWFILE is copied there too.  The script deletes them when
+    LCSAS_PASSWORD_FILE is copied there too.  The script deletes them when
     the restore ends.  If the window is closed first, they stay
     until restore.bat runs again, which deletes every lcsas-pw-*.txt
     file and lcsas-shares-* folder in %TEMP% before it asks for a
     password; you may delete them yourself instead.  If your machine
     has full-disk encryption, this is safe enough.  On a shared
     machine, restore on a computer only you use, or delete those
-    files as soon as the restore stops.  Keep the file LCSAS_PWFILE
+    files as soon as the restore stops.  Keep the file LCSAS_PASSWORD_FILE
     names on removable media, and take it away afterwards.
 
-  * The tools folder (%LOCALAPPDATA%\LCSAS-restore) and "Resume
+  * The tools folder (%LOCALAPPDATA%\lcsas-tools) and "Resume
     LCSAS restore.bat" never hold the password.  resume.cfg in that
     folder names only the backup set, the restore folder and the
     drive letters.  The tools folder does hold a copy of the packs
@@ -762,7 +770,7 @@ TROUBLESHOOTING -- error messages
       Split ID on the cards), or one card was typed twice.  Press
       ENTER to type the cards again, or Q to stop (exit code 77).
 
-"lcsas-keyshare.exe does not work on this computer"
+"lcsas-shares.exe does not work on this computer"
    -> The program that rebuilds the password from the cards gave an
       answer it never gives for a card, so the cards are not to
       blame.  Rebuild the password another way (see "SHARE CARDS
@@ -775,8 +783,8 @@ TROUBLESHOOTING -- error messages
       password.  Correct the file, or remove it from the folder.
 
 "ERROR: more than one backup set is called ..."
-   -> LCSAS_REPO names a backup set by its name, and two sets have
-      that name.  Set LCSAS_REPO to the id of the one you want (the
+   -> LCSAS_BACKUP_SET names a backup set by its name, and two sets have
+      that name.  Set LCSAS_BACKUP_SET to the id of the one you want (the
       message lists the ids), or remove the setting and choose from
       the list.
 
@@ -803,7 +811,7 @@ TROUBLESHOOTING -- error messages
 "ERROR: the tools folder ... is a folder that already holds other
  files, or a whole drive."
    -> The tools folder (LCSAS_TOOLS_DIR, or the usual
-      %LOCALAPPDATA%\LCSAS-restore) holds files the script did not
+      %LOCALAPPDATA%\lcsas-tools) holds files the script did not
       put there, or is a whole drive such as E:\.  The tools folder
       is deleted once the restore has finished, so the script will
       not use such a folder, and changed nothing in it.  Set
@@ -824,7 +832,7 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
 
     --repo DIR             path to the restic repository
     --password-file FILE   path to a file containing the password
-    --target DIR           where to write restored files
+    --restore-folder DIR           where to write restored files
     --snapshot ID|latest   which snapshot (default: latest)
     --list-snapshots       print all snapshots; do not restore
     --pack-search DIR      extra dir to scan for pack files
@@ -850,10 +858,10 @@ typed q at a disc box) or 77 (wrong password).
 
 Each backup set's keys, index and snapshots live under
 metadata\<id>\ on every disc, where <id> is the set's id, a long
-code; the set's name is on the name= line of LCSAS_REPO.txt in that
+code; the set's name is on the name= line of LCSAS_BACKUP_SET.txt in that
 folder.  To see which folder is which set:
 
-    findstr /s /b /c:"name=" D:\metadata\LCSAS_REPO.txt
+    findstr /s /b /c:"name=" D:\metadata\LCSAS_BACKUP_SET.txt
 
 (VOLUME_INFO.txt on a data disc lists each set's name too, with an
 "ID <id>" line under it.)  Use the copy on your NEWEST data disc
@@ -869,7 +877,7 @@ Example, with the meta disc in D: and the newest data disc in E:
     recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe ^
         --repo E:\metadata\<id> ^
         --password-file C:\path\pw.txt ^
-        --target C:\Users\me\restored ^
+        --restore-folder C:\Users\me\restored ^
         --pack-search E:\ ^
         --verbose
 
@@ -883,13 +891,15 @@ restore.bat then asks its questions as usual.  A restore that stopped
 carries on with the same snapshot.
 
 EXIT CODES of restore.bat (0, 4, 5, 64, 65, 74, 75 and 77 mean the
-same as for restore.sh; see RECOVER.txt):
+same as for restore.sh; see RESTORE.txt):
 
     0   the restore finished: every backup set you chose
     1   a failure; the message above it says what (for example not
         enough free space, after any answer but y)
     2   restore.bat was called wrongly: an argument it does not
-        take (it lists the ones it does), --repo without a name, or
+        take (it lists the ones it does), --backup-set without a name,
+        --restore-folder without a folder, a flag or variable that was
+        renamed (the message names the new one), or
         --snapshot without an ID or with something that is not one
         (an ID is made of the digits 0-9 and the letters a-f)
     3   --check-disc only: no image, no lcsas-ecc.exe on this disc, or
@@ -897,7 +907,7 @@ same as for restore.sh; see RECOVER.txt):
     4   the restore finished, but some items could not be restored:
         the message names the file RESTORE_FAILURES.txt in the folder
         you restored into, which lists them and why (see "ITEMS NOT
-        RESTORED" in RECOVER.txt).  Nothing is left to carry on,
+        RESTORED" in RESTORE.txt).  Nothing is left to carry on,
         unless a disc was not there ("pack not found"): then insert
         it and carry on as the message says
     5   --check-disc only: the image has no ECC data, so there is
@@ -942,17 +952,17 @@ in order of effort:
   C. Use a Linux/macOS machine instead.  Boot a Linux live USB
      (Ubuntu, Mint, Debian -- any modern distro will do), insert
      the meta disc, and run:
-        sh /media/<user>/<DISC>/restore.sh ~/restored
+        sh /media/<user>/<DISC>/restore.sh --restore-folder ~/restored
      The Linux binary has NO UCRT dependency; it only needs glibc
      or musl, both universal on Linux.
 
   D. Use the Python reader.  Install Python 3 from
      python.org (Python 3.10 or newer; the script exits with a clear
      message on anything older), then run:
-        python D:\standalone_restorer.py ^
+        python D:\python_reader.py ^
             --repo C:\lcsas-set ^
             --password-file C:\path\to\pw.txt ^
-            --target C:\Users\me\restored ^
+            --restore-folder C:\Users\me\restored ^
             --mount-point E:\
      (C:\lcsas-set is the set's folder copied off your newest data
      disc: see "MANUAL PYTHON RESTORE", STEP 4.)
@@ -973,14 +983,14 @@ MANUAL PYTHON RESTORE (last resort, no binaries needed)
 If both lcsas-restore.exe and rustic-static.exe are unusable on
 your host -- missing UCRT, antivirus quarantine, broken bits, wrong
 architecture -- you can still restore using the Python reader
-(standalone_restorer.py) that ships on every meta disc.
+(python_reader.py) that ships on every meta disc.
 
 restore.bat does NOT chain to this script.  Older versions did, but
 the chain required the `py` launcher to be on PATH, which is not a
 safe assumption on a stock Windows host that has never had Python
 installed.  We removed the chain so the .bat fails fast with a
 clear error instead of pretending a Python restore is automatic.
-The standalone_restorer.py file is still on the meta disc; you
+The python_reader.py file is still on the meta disc; you
 invoke it directly when you need it.
 
 STEP 1.  Install Python 3 from https://www.python.org if it is not
@@ -1005,10 +1015,10 @@ STEP 3.  Put the password in a file.  The script reads the password
 STEP 4.  Copy the backup set's folder to this computer.  Each set's
          keys, index and snapshots are in metadata\<id>\ on every
          disc, where <id> is the set's id, a long code; the name= line
-         of LCSAS_REPO.txt in that folder names the set.  To see which
+         of LCSAS_BACKUP_SET.txt in that folder names the set.  To see which
          folder is which set:
 
-             findstr /s /b /c:"name=" D:\metadata\LCSAS_REPO.txt
+             findstr /s /b /c:"name=" D:\metadata\LCSAS_BACKUP_SET.txt
 
          Take the copy from your NEWEST data disc (the latest year,
          then the highest number, in its label): it has the latest
@@ -1019,17 +1029,17 @@ STEP 4.  Copy the backup set's folder to this computer.  Each set's
              xcopy /e /i E:\metadata\<id> C:\lcsas-set
 
          A copy on this computer stays readable while you swap discs.
-         Every data disc carries standalone_restorer.py too, so STEP 5
+         Every data disc carries python_reader.py too, so STEP 5
          also works from a data disc's root.
 
 STEP 5.  Run the Python reader.  --repo, --password-file and
-         --target are all required flags; there are no positional
+         --restore-folder are all required flags; there are no positional
          arguments.
 
-             python standalone_restorer.py ^
+             python python_reader.py ^
                  --repo C:\lcsas-set ^
                  --password-file C:\Users\me\pw.txt ^
-                 --target C:\Users\me\restored ^
+                 --restore-folder C:\Users\me\restored ^
                  --mount-point E:\
 
          Pack data lives on the data discs, not under metadata\.

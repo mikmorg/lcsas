@@ -30,7 +30,7 @@ THE TIERS
   │ B  │   BARE MINIMUM PATH ENDS HERE                              │
   ╞════╪══════════════════════════════╪═════════════════════════════╡
   │ 3  │ Python reader                │ python3 (>=3.10)            │
-  │    │ standalone_restorer.py       │ stdlib only (no pip needed) │
+  │    │ python_reader.py       │ stdlib only (no pip needed) │
   └────┴──────────────────────────────┴─────────────────────────────┘
 
 DESIGN INVARIANT
@@ -55,10 +55,10 @@ OPTING OUT OF TIER 3
 
 If you want a hard guarantee that the restore never touches Python:
 
-  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh /mnt/recovery /tmp/restored
+  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
 
 restore.sh will refuse to try tier 3 even if python3 and
-standalone_restorer.py are both present.
+python_reader.py are both present.
 
 TIER-2 ON MULTI-DISC ARCHIVES
 
@@ -79,7 +79,7 @@ ON WINDOWS (restore.bat)
 restore.bat runs tier 1 (lcsas-restore.exe) and, when tier 1 is
 present, tier 2 (rustic-static.exe) only for a backup set whose
 folder holds its own data\.  It has no tier 2b and no tier 3: the
-Python reader is a manual step (RECOVER_WINDOWS.txt, "MANUAL PYTHON
+Python reader is a manual step (RESTORE_WINDOWS.txt, "MANUAL PYTHON
 RESTORE").  It has no LCSAS_TIER_FALLBACK knob:
   * tier 1 exits 0: done.
   * tier 1 exits 77 (wrong password) or 75 (q at the disc prompt):
@@ -93,7 +93,7 @@ RESTORE").  It has no LCSAS_TIER_FALLBACK knob:
     the password, with exit 64 and a message that the program is
     missing and may have been removed by antivirus (#631).  Tier 2
     cannot ask for discs, so it never runs.  Restore the .exe
-    (RECOVER_WINDOWS.txt, "SMARTSCREEN WARNING") and start again from
+    (RESTORE_WINDOWS.txt, "SMARTSCREEN WARNING") and start again from
     the META disc, or use the Python reader.  For a set with its own
     data\: try tier 2.
 
@@ -131,7 +131,7 @@ exists because POSIX ``sh`` execs an empty file as a no-op script
 that exits 0 -- without the pre-flight, a bit-rotted tier-1 binary
 would silently claim success and the heir would get nothing.
 
-See ``RECOVER.txt`` (CASCADE DETAILS, pre-flight paragraph) for the
+See ``RESTORE.txt`` (CASCADE DETAILS, pre-flight paragraph) for the
 heir-facing version of this note.
 
 DISC-INTEGRITY LAYER (BENEATH THE TIERS)
@@ -222,7 +222,7 @@ instruction).  A python3 on PATH that is older than 3.10 is named too.
 ARMV6 (RASPBERRY PI 1 AND ZERO)
 
 The 32-bit ARM programs on the disc (bin/armv7-*: lcsas-restore,
-rustic-static, lcsas-keyshare, lcsas-ecc and the bundled Python) are
+rustic-static, lcsas-shares, lcsas-ecc and the bundled Python) are
 built for ARMv7.  On an ARMv6 processor (uname -m says armv6l: a
 Raspberry Pi 1 or Zero, not a Zero 2) each one stops at once with an
 illegal instruction (checked under qemu-arm -cpu arm1176, #803).
@@ -291,7 +291,7 @@ cannot run; for a whole large archive, get tier 1 or 2 working
 
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
 
-Tier 3 (the Python reader, standalone_restorer.py, last resort) is
+Tier 3 (the Python reader, python_reader.py, last resort) is
 TOLERANT by default: a single corrupt blob, a missing index entry, or
 a disc that stays unreadable after the disc-swap retries are exhausted
 records ONE failure and the restore CONTINUES, instead of aborting the
@@ -337,7 +337,7 @@ either tier.
     also its usage error (#875).  The generated script prints a plain-English
     message, never a raw Python traceback, for any outcome.
 
-NOTE for ALREADY-BURNED data discs: standalone_restorer.py is
+NOTE for ALREADY-BURNED data discs: python_reader.py is
 generated from the LCSAS source, so newer meta discs carry this
 behaviour automatically, but data discs burned BEFORE this change ship
 the older abort-on-first-error script forever.  The remedy is to run
@@ -455,7 +455,7 @@ be able to decompress zstd to be useful.  Two backends, fast-path first:
     a restore host that matches that arch + CPython minor.
   * Pure-Python decoder (lcsas.restore._zstd_pure), the fallback.  It is
     stdlib-only and ships in the LCSAS source on every meta disc AND
-    inlined into the per-disc standalone_restorer.py, so it works under
+    inlined into the per-disc python_reader.py, so it works under
     ANY of the bundled per-target CPython interpreters (all six approved
     targets) and on any future CPython -- slower, but always available.
     The reader prints one line when it uses the slow decoder.
@@ -487,7 +487,7 @@ To make restore.sh walk the cascade on a tier-1 runtime failure
 fall through to the next tier on a non-zero exit code.  Tier 3 is
 always run as a subprocess too (its stderr is captured and replayed
 on failure -- issue #240); it is the last resort, so there is nothing
-to fall back to.  See ``RECOVER.txt`` ENVIRONMENT VARIABLES.
+to fall back to.  See ``RESTORE.txt`` ENVIRONMENT VARIABLES.
 
 EXCEPTION -- wrong password is TERMINAL (issue #384): when tier 1
 runs and exits 77, restore.sh and restore.bat STOP with a clear
@@ -580,7 +580,7 @@ Tier 1 exit status, in full:
   75  stopped at the disc prompt (q, or the input ended)
   77  wrong password (see above)
 
-Tier 3 (standalone_restorer.py) exit status:
+Tier 3 (python_reader.py) exit status:
   0   restored (or, with --list-snapshots, listed); as for tier 1,
       special files or links may be listed in RESTORE_FAILURES.txt
   1   failed (setup: no repository, key files that cannot be read,
@@ -684,14 +684,14 @@ DEPENDENCY CHAIN AT A GLANCE
 INVOCATION
 
   # Auto-discover recovery root from script location:
-  sh /restore.sh /tmp/restored
+  sh /restore.sh --restore-folder /tmp/restored
 
   # Explicit:
-  sh /restore.sh /mnt/recovery /tmp/restored latest
+  sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
 
   # Skip Python tier:
-  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh /mnt/recovery /tmp/restored
+  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
 
   # Non-interactive (password from env or file):
-  LCSAS_PASSWORD='secret' sh /restore.sh /mnt/recovery /tmp/restored
-  LCSAS_PWFILE=/path/pw    sh /restore.sh /mnt/recovery /tmp/restored
+  LCSAS_PASSWORD='secret' sh /restore.sh --restore-folder /tmp/restored /mnt/recovery
+  LCSAS_PASSWORD_FILE=/path/pw    sh /restore.sh --restore-folder /tmp/restored /mnt/recovery

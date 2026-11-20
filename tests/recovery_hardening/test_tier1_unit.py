@@ -90,13 +90,13 @@ def test_help_exits_zero_and_prints_usage() -> None:
     out = res.stdout + res.stderr
     assert "usage" in out.lower()
     assert "--repo" in out
-    assert "--target" in out
+    assert "--restore-folder" in out
     assert "--password-file" in out
 
 
 def test_missing_repo_fails_with_actionable_error() -> None:
     bin_path = _find_bin()
-    res = _run(bin_path, "--target", "/tmp/x", "--password-file", "/dev/null")
+    res = _run(bin_path, "--restore-folder", "/tmp/x", "--password-file", "/dev/null")
     assert res.returncode != 0
     # Must name what's missing.  Don't pin the exact string; just
     # require that "repo" appears in some form.
@@ -133,7 +133,7 @@ def test_cache_dir_created_on_first_use(tmp_path: Path) -> None:
     _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
         timeout=5,
@@ -155,7 +155,7 @@ def test_cache_off_when_env_unset(tmp_path: Path) -> None:
     _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         env=env, timeout=5,
     )
@@ -196,7 +196,7 @@ def test_catalog_is_copied_to_cache_not_held_in_place(tmp_path: Path) -> None:
     _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         "--catalog", str(fake_cat),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
@@ -223,7 +223,7 @@ def test_no_crash_on_empty_repo(tmp_path: Path) -> None:
     res = _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=5,
     )
@@ -244,7 +244,7 @@ def test_no_crash_on_garbage_password_file(tmp_path: Path) -> None:
     res = _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=5,
     )
@@ -256,7 +256,7 @@ def test_missing_password_file_path() -> None:
     res = _run(
         bin_path,
         "--repo", "/tmp/nonexistent-repo",
-        "--target", "/tmp/restored",
+        "--restore-folder", "/tmp/restored",
         "--password-file", "/this/path/does/not/exist",
         timeout=5,
     )
@@ -293,7 +293,7 @@ def test_drain_exits_cleanly_on_dir_not_found(tmp_path: Path) -> None:
     res = _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         "--mount-parent", str(empty_mount_parent),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
@@ -356,7 +356,7 @@ def test_list_pending_packs_no_catalog_exits_nonzero(tmp_path: Path) -> None:
 
 def test_no_crash_on_existing_target_dir(tmp_path: Path) -> None:
     """Issue #92 — idempotent resume: running lcsas-restore twice with
-    the same --target directory must not crash on the second run.
+    the same --restore-folder directory must not crash on the second run.
 
     The first run fails (stub repo has no valid key data), but still
     creates the target directory via lcsas_mkdir_p.  The second run
@@ -375,7 +375,7 @@ def test_no_crash_on_existing_target_dir(tmp_path: Path) -> None:
     res1 = _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=5,
     )
@@ -392,7 +392,7 @@ def test_no_crash_on_existing_target_dir(tmp_path: Path) -> None:
     res2 = _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=5,
     )
@@ -600,7 +600,7 @@ def test_verbose_flag_accepted(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(tmp_path / "restored"),
+        "--restore-folder", str(tmp_path / "restored"),
         "--verbose",
         timeout=5,
     )
@@ -622,7 +622,7 @@ def test_interactive_on_off_auto_accepted(tmp_path: Path) -> None:
             bin_path,
             "--repo", str(repo),
             "--password-file", str(pwfile),
-            "--target", str(tmp_path / f"out-{mode}"),
+            "--restore-folder", str(tmp_path / f"out-{mode}"),
             "--interactive", mode,
             timeout=5,
         )
@@ -688,7 +688,7 @@ def test_fixture_verbose_full_restore(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--verbose",
         timeout=10,
     )
@@ -747,7 +747,7 @@ def test_fixture_refused_names_exit_nonzero(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=30,
     )
     err = res.stderr
@@ -785,7 +785,7 @@ def test_fixture_trailing_zeros_restored_correctly(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=10,
     )
     assert res.returncode == 0, res.stderr
@@ -819,7 +819,7 @@ def test_fixture_snapshot_not_found_fails(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--snapshot", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         timeout=10,
     )
@@ -844,7 +844,7 @@ def test_fixture_snapshot_find_by_prefix(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--snapshot", snap_prefix,
         timeout=10,
     )
@@ -865,7 +865,7 @@ def test_fixture_meta_disc_excludes_path(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--meta-disc", "/tmp/nonexistent_meta_disc",
         timeout=10,
     )
@@ -887,7 +887,7 @@ def test_fixture_verbose_catalog_open_warn(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--catalog", str(tmp_path / "no-such.db"),
         timeout=10,
     )
@@ -910,7 +910,7 @@ def test_fixture_verbose_pack_cache_logs(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--verbose",
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
         timeout=10,
@@ -940,7 +940,7 @@ def test_fixture_broken_snapshot_lists_and_exits_4(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--snapshot", broken_snap,
         timeout=10,
     )
@@ -975,7 +975,7 @@ def test_fixture_unwritable_target_restore_fails(tmp_path: Path) -> None:
             bin_path,
             "--repo", str(repo),
             "--password-file", str(pwfile),
-            "--target", str(target),
+            "--restore-folder", str(target),
             timeout=10,
         )
     finally:
@@ -1002,7 +1002,7 @@ def test_fixture_target_unwritable_fails_cleanly(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=10,
     )
     assert res.returncode != 0
@@ -1054,7 +1054,7 @@ def test_fixture_supersedes_overflow_load_fails(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(fixture_copy),
         "--password-file", str(pwfile),
-        "--target", str(tmp_path / "restored"),
+        "--restore-folder", str(tmp_path / "restored"),
         timeout=30,
     )
     assert res.returncode != 0
@@ -1081,7 +1081,7 @@ def test_fixture_pack_cache_dir_speeds_repeat_restore(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target1),
+        "--restore-folder", str(target1),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
         timeout=10,
     )
@@ -1093,7 +1093,7 @@ def test_fixture_pack_cache_dir_speeds_repeat_restore(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target2),
+        "--restore-folder", str(target2),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
         timeout=10,
     )
@@ -1141,7 +1141,7 @@ def test_fixture_xattr_restored_correctly(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(out),
+        "--restore-folder", str(out),
         timeout=15,
     )
     assert res.returncode == 0, res.stderr
@@ -1167,7 +1167,7 @@ def test_fixture_hardlink_restored_correctly(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(out),
+        "--restore-folder", str(out),
         timeout=15,
     )
     assert res.returncode == 0, res.stderr
@@ -1223,7 +1223,7 @@ def test_progress_line_emitted_to_stderr(tmp_path: Path) -> None:
     res = _run(
         restore_bin,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=30,
     )

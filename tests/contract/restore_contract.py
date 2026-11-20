@@ -2,7 +2,7 @@
 
 What a restore does when X happens is implemented twice: in tier 1 (C,
 ``lcsas-restore``) and in the Python reader (tier 3, the generated
-``standalone_restorer.py``).  ``restore.sh`` falls from one to the other,
+``python_reader.py``).  ``restore.sh`` falls from one to the other,
 so an heir must get the same answer from both.  This module states that
 answer once, as data, and drives the real readers on it.
 
@@ -160,7 +160,7 @@ class Faults:
     answers: bytes | None = None
     #: The target is a 1 MiB tmpfs (needs passwordless ``sudo mount``).
     target_full: bool = False
-    #: Leave ``--target`` off the command line.
+    #: Leave ``--restore-folder`` off the command line.
     usage_error: bool = False
     #: Repository files (relative paths) emptied before the judged run:
     #: a folder loses what is in it, a file is removed.
@@ -855,12 +855,12 @@ _TIER3_SCRIPT: dict[str, Path] = {}
 
 
 def tier3_script(work: Path) -> Path:
-    """The generated standalone_restorer.py, written once per session."""
+    """The generated python_reader.py, written once per session."""
     if "path" not in _TIER3_SCRIPT:
         from lcsas.restore.standalone_builder import build_standalone
 
         work.mkdir(parents=True, exist_ok=True)
-        script = work / "standalone_restorer.py"
+        script = work / "python_reader.py"
         script.write_text(build_standalone())
         _TIER3_SCRIPT["path"] = script
     return _TIER3_SCRIPT["path"]
@@ -921,7 +921,7 @@ def _command(reader: str, repo: Path, target: Path, pwfile: Path,
     if snapshot:
         cmd += ["--snapshot", snapshot]
     if not faults.usage_error:
-        cmd += ["--target", str(target)]
+        cmd += ["--restore-folder", str(target)]
     return cmd
 
 
@@ -1031,7 +1031,7 @@ def run_tier1(case: Case, built: Built, work: Path) -> Outcome:
 
 
 def run_tier3(case: Case, built: Built, work: Path) -> Outcome:
-    """Run the generated ``standalone_restorer.py`` with ``python3 -I``."""
+    """Run the generated ``python_reader.py`` with ``python3 -I``."""
     return run_reader("tier3", case, built, work)
 
 

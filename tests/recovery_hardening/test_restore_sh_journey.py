@@ -11,12 +11,12 @@ Drill #476 restored on a one-drive computer and met, in order:
   newest disc (C2).
 * F4 (#606): the set list showed folder names, which are UUIDs on real
   discs (every fixture used id == name, so no gate saw one).  Now it
-  shows the marker's name (metadata/<id>/LCSAS_REPO.txt), with the split
-  note; LCSAS_REPO and the typed answer match the id or the name.  Names
+  shows the marker's name (metadata/<id>/LCSAS_BACKUP_SET.txt), with the split
+  note; LCSAS_BACKUP_SET and the typed answer match the id or the name.  Names
   are untrusted text off a disc.
 * F6 (#607): a split password had to be rebuilt by hand before the
   restore.  Now the script asks for exactly K share cards, checks each
-  one alone with lcsas-keyshare, and combines them (C7).
+  one alone with lcsas-shares, and combines them (C7).
 * F7 (#608): an empty or wrong password ended the run.  Now it asks
   again; Q quits with 77.
 * Another set: after a restore that succeeds it asks "Restore another
@@ -54,7 +54,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 RESTORE_AUTO_SH = REPO_ROOT / "recovery" / "scripts" / "restore_auto.sh"
 HOST_TARGET = "x86_64-unknown-linux-musl"
-KEYSHARE_REAL = REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-keyshare"
+KEYSHARE_REAL = REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-shares"
 
 # Invented ids and names (the repository is public).  The ids sort so
 # that DOCS is listed first; the names differ from the ids.
@@ -68,12 +68,12 @@ GOOD_PW = "not-a-real-password-2718"
 needs_keyshare = pytest.mark.skipif(
     not (sys.platform.startswith("linux") and platform.machine() == "x86_64"
          and KEYSHARE_REAL.is_file()),
-    reason="the committed lcsas-keyshare is an x86_64 Linux binary",
+    reason="the committed lcsas-shares is an x86_64 Linux binary",
 )
 
 # The stub tier 1.  --help answers the pre-flight.  --list-snapshots is
 # the password check: 0 for GOOD_PW, else 77, as tier 1 does.  A restore
-# run logs its --repo, --target and password (and, on a line of its own,
+# run logs its --repo, --restore-folder and password (and, on a line of its own,
 # its pack cache, which it makes as tier 1 does) and exits 77 on a wrong
 # password, else $STUB_RC (default 0) after writing restored.txt.
 STUB = textwrap.dedent("""\
@@ -83,7 +83,7 @@ STUB = textwrap.dedent("""\
     for a in "$@"; do
         case "$prev" in
             --password-file) pw="$(cat "$a")" ;;
-            --target) target="$a" ;;
+            --restore-folder) target="$a" ;;
             --repo) repo="$a" ;;
         esac
         [ "$a" = "--list-snapshots" ] && list=1
@@ -120,14 +120,14 @@ def _set(root: Path, set_id: str, name: str | None, *, tag: str = "meta",
         (repo / sub).mkdir(parents=True, exist_ok=True)
         (repo / sub / f"{sub}-{tag}").write_text(tag)
     if name is not None:
-        (repo / "LCSAS_REPO.txt").write_text(_marker(set_id, name, split, split_id))
+        (repo / "LCSAS_BACKUP_SET.txt").write_text(_marker(set_id, name, split, split_id))
     return repo
 
 
 def _meta(root: Path, *, keyshare: bool | str = False) -> Path:
     """A META disc: recovery/ with the stub tier 1 and the sentinel
     recovery/scripts/restore.sh (the disc is in the drive while it is
-    there).  *keyshare*: True copies the real lcsas-keyshare; a string is
+    there).  *keyshare*: True copies the real lcsas-shares; a string is
     a log file for a wrapper that records each file's mode first."""
     recovery = root / "recovery"
     bin_dir = recovery / "bin" / HOST_TARGET
@@ -135,11 +135,11 @@ def _meta(root: Path, *, keyshare: bool | str = False) -> Path:
     (bin_dir / "lcsas-restore").write_text(STUB)
     (bin_dir / "lcsas-restore").chmod(0o755)
     if keyshare:
-        real = bin_dir / "lcsas-keyshare.real"
+        real = bin_dir / "lcsas-shares.real"
         shutil.copy2(KEYSHARE_REAL, real)
         real.chmod(0o755)
         log = keyshare if isinstance(keyshare, str) else "/dev/null"
-        (bin_dir / "lcsas-keyshare").write_text(textwrap.dedent(f"""\
+        (bin_dir / "lcsas-shares").write_text(textwrap.dedent(f"""\
             #!/bin/sh
             for a in "$@"; do
                 [ -f "$a" ] || continue
@@ -148,7 +148,7 @@ def _meta(root: Path, *, keyshare: bool | str = False) -> Path:
             done
             exec '{real}' "$@"
         """))
-        (bin_dir / "lcsas-keyshare").chmod(0o755)
+        (bin_dir / "lcsas-shares").chmod(0o755)
     (recovery / "scripts").mkdir()
     (recovery / "scripts" / "restore.sh").write_text("# the META disc is in\n")
     return recovery
@@ -189,7 +189,7 @@ def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
         "GOOD_PW": GOOD_PW,
         **extra,
     }
-    for var in ("LCSAS_PASSWORD", "LCSAS_PWFILE", "LCSAS_REPO", "LCSAS_RELOCATED",
+    for var in ("LCSAS_PASSWORD", "LCSAS_PASSWORD_FILE", "LCSAS_BACKUP_SET", "LCSAS_RELOCATED",
                 "LCSAS_META_DISC", "LCSAS_NO_RELOCATE", "LCSAS_TIER_FALLBACK",
                 "LCSAS_INTERACTIVE", "LCSAS_NEWEST_DISC_PROMPT",
                 "LCSAS_ANOTHER_SET", "LCSAS_SHARES_DIR", "LCSAS_PACK_CACHE_DIR"):
@@ -208,7 +208,7 @@ def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
 def _run(recovery: Path, target: Path, env: dict[str, str], stdin: str = "",
          ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input=stdin, capture_output=True, text=True, env=env, timeout=30,
     )
 
@@ -303,7 +303,7 @@ def _shares(secret: bytes, k: int, n: int) -> tuple[list[str], str]:
 
 def _card(mnemonic: str) -> str:
     """A printed share card: prose around the words."""
-    return f"SHARE CARD\nRepository: invented\n\n{mnemonic}\n\nKeep this card safe.\n"
+    return f"SHARE CARD\nBackup set: invented\n\n{mnemonic}\n\nKeep this card safe.\n"
 
 
 # ── F4: names, not ids (#606) ────────────────────────────────────────
@@ -345,7 +345,7 @@ def test_lcsas_repo_matches_the_name_or_the_id(tmp_path: Path, value: str) -> No
     """resume.sh and restore_auto.sh pass the id; a person passes the name."""
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=value))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=value))
     assert res.returncode == 0, res.stderr
     assert "Multiple repositories" not in res.stderr
     assert f"repo={tmp_path}/meta/metadata/{PHOTOS_ID} " in _runs(tmp_path)[0]
@@ -369,13 +369,13 @@ def test_a_hostile_name_is_printed_and_matched_never_run(tmp_path: Path) -> None
     assert "\x1b" not in res.stderr
     assert not list(tmp_path.glob("pwned*")), "a name was run as a command"
 
-    # LCSAS_REPO matches it literally; "*" matches no set.
+    # LCSAS_BACKUP_SET matches it literally; "*" matches no set.
     res = _run(recovery, tmp_path / "out2",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=hostile + "[31m"))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=hostile + "[31m"))
     assert res.returncode == 0, res.stderr
     assert f"repo={tmp_path}/meta/metadata/{PHOTOS_ID} " in _runs(tmp_path)[-1]
     res = _run(recovery, tmp_path / "out3",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO="*"))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET="*"))
     assert res.returncode == 1
     assert "not among available repositories" in res.stderr
     assert not list(tmp_path.glob("pwned*"))
@@ -385,7 +385,7 @@ def test_no_marker_or_a_marker_for_another_folder_shows_the_id(tmp_path: Path) -
     recovery = _meta(tmp_path / "meta")
     _set(tmp_path / "meta", DOCS_ID, None)
     photos = _set(tmp_path / "meta", PHOTOS_ID, None)
-    (photos / "LCSAS_REPO.txt").write_text(_marker(DOCS_ID, "copied from elsewhere"))
+    (photos / "LCSAS_BACKUP_SET.txt").write_text(_marker(DOCS_ID, "copied from elsewhere"))
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW), stdin="1\n")
     assert res.returncode == 0, res.stderr
@@ -454,7 +454,7 @@ def test_the_newest_label_wins_not_the_scan_order(tmp_path: Path, older: str, ne
         _set(disc, DOCS_ID, DOCS, tag=tag)
         _set(disc, PHOTOS_ID, PHOTOS, tag=tag)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS))
     assert res.returncode == 0, res.stderr
     assert f"repo={new}/metadata/{DOCS_ID} " in _runs(tmp_path)[0], res.stderr
 
@@ -467,7 +467,7 @@ def test_label_from_volume_info_json_and_unlabelled_discs_rank_lower(tmp_path: P
     _set(plain, DOCS_ID, DOCS, tag="plain")
     _set(labelled, DOCS_ID, DOCS, tag="labelled")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS))
     assert res.returncode == 0, res.stderr
     assert f"repo={labelled}/metadata/{DOCS_ID} " in _runs(tmp_path)[0]
 
@@ -503,14 +503,14 @@ def test_the_tools_copy_from_a_newer_disc_beats_an_older_disc(tmp_path: Path) ->
     recovery = _two_sets(tmp_path)
     tools = tmp_path / "tools"
     copy = _set(tools, DOCS_ID, DOCS, tag="tools")
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     (tools / "metadata" / ".from").mkdir()
     (tools / "metadata" / ".from" / DOCS_ID).write_text("LCSAS_TEST_TINY_2026_0002\n")
     old = _data_disc(tmp_path / "media", "OLD", "LCSAS_TEST_TINY_2026_0001")
     _set(old, DOCS_ID, DOCS, tag="old")
     _set(old, PHOTOS_ID, PHOTOS, tag="old")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS, STUB_RC="1"))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS, STUB_RC="1"))
     assert res.returncode == 1, res.stderr
     assert f"repo={copy} " in _runs(tmp_path)[0], res.stderr
     # ...and the older disc's copy never replaces it.
@@ -519,7 +519,7 @@ def test_the_tools_copy_from_a_newer_disc_beats_an_older_disc(tmp_path: Path) ->
     # Without the tag (a META copy), the older disc's copy is better.
     (tools / "metadata" / ".from" / DOCS_ID).unlink()
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS, STUB_RC="1"))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS, STUB_RC="1"))
     assert f"repo={old}/metadata/{DOCS_ID} " in _runs(tmp_path)[-1], res.stderr
 
 
@@ -542,8 +542,8 @@ def test_the_newest_disc_step_waits_for_a_labelled_data_disc(tmp_path: Path) -> 
     meta, recovery = _single_drive(tmp_path)
     media = tmp_path / "media"
     env = _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_RELOCATED=str(meta),
-               LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS, STUB_RC="1")
-    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"], env)
+               LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS, STUB_RC="1")
+    s = _Session([str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)], env)
     s.expect("put in your NEWEST data disc")
     s.expect("ENTER, S or Q: ")
     # /mnt, not /media: mounting over /media hides /media/$USER/*, where a
@@ -590,7 +590,7 @@ def test_the_merge_unions_keys_and_keeps_meta_only_sets(tmp_path: Path) -> None:
     copies, and the newest disc refreshes the sets it holds."""
     tools = tmp_path / "tools"
     recovery = _meta(tools)
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     _set(tools, DOCS_ID, DOCS, tag="meta")
     _set(tools, PHOTOS_ID, PHOTOS, tag="meta")
     new = _data_disc(tmp_path / "media", "NEW", "LCSAS_TEST_TINY_2026_0002")
@@ -598,7 +598,7 @@ def test_the_merge_unions_keys_and_keeps_meta_only_sets(tmp_path: Path) -> None:
     (tools / "recovery" / "scripts" / "restore.sh").unlink()
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_RELOCATED=str(tmp_path / "gone-meta"),
-                    LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=PHOTOS, STUB_RC="1"))
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=PHOTOS, STUB_RC="1"))
     assert res.returncode == 1, res.stderr
     docs = tools / "metadata" / DOCS_ID
     assert sorted(p.name for p in (docs / "keys").iterdir()) == ["keys-meta", "keys-new"]
@@ -609,7 +609,7 @@ def test_the_merge_unions_keys_and_keeps_meta_only_sets(tmp_path: Path) -> None:
     # A second run with the same disc copies nothing again.
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_RELOCATED=str(tmp_path / "gone-meta"),
-                    LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=PHOTOS, STUB_RC="1"))
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=PHOTOS, STUB_RC="1"))
     assert "copying the backup sets' metadata" not in res.stderr
 
 
@@ -626,7 +626,7 @@ def test_the_newest_disc_step_skip_and_quit(
     meta, recovery = _single_drive(tmp_path)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_RELOCATED=str(meta),
-                    LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID),
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS_ID),
                stdin=answer)
     assert res.returncode == rc, res.stderr
     assert said in res.stderr
@@ -667,7 +667,7 @@ def test_the_newest_disc_step_is_asked_only_when_it_can_be(tmp_path: Path, case:
             meta.chmod(0o555)
     try:
         res = _run(recovery, tmp_path / "out",
-                   _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID, **extra))
+                   _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS_ID, **extra))
     finally:
         meta.chmod(0o755)
     assert res.returncode == 0, res.stderr
@@ -689,7 +689,7 @@ def test_the_newest_disc_step_from_a_meta_copy_run_in_place(
     meta, recovery = _single_drive(tmp_path)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_NEWEST_DISC_PROMPT="1",
-                    LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID),
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS_ID),
                stdin=answer)
     assert res.returncode == rc, res.stderr
     assert "Put your NEWEST data disc in the drive" in res.stderr
@@ -712,7 +712,7 @@ def test_a_meta_copy_run_in_place_merges_the_newest_disc(tmp_path: Path) -> None
     new = _data_disc(tmp_path / "media", "NEW", "LCSAS_TEST_TINY_2026_0002")
     _set(new, DOCS_ID, DOCS, tag="new")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS_ID, STUB_RC="1"))
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS_ID, STUB_RC="1"))
     assert res.returncode == 1, res.stderr
     assert "copying the backup sets' metadata from the disc labelled" in res.stderr
     copied = tmp_path / "tools" / "metadata" / DOCS_ID
@@ -781,9 +781,9 @@ def test_on_a_terminal_the_step_is_asked_and_the_password_is_hidden(tmp_path: Pa
     terminal's echo back on; a typed password is not echoed and is
     checked before tier 1 runs."""
     meta, recovery = _single_drive(tmp_path)
-    argv = [str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"]
+    argv = [str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)]
     rc, out, lflag = _pty_run(
-        argv, _env(tmp_path, LCSAS_RELOCATED=str(meta), LCSAS_REPO=DOCS),
+        argv, _env(tmp_path, LCSAS_RELOCATED=str(meta), LCSAS_BACKUP_SET=DOCS),
         [("ENTER, S or Q: ", b"s\n"), ("Password: ", b"\x03")],
     )
     assert rc == 130, out
@@ -791,7 +791,7 @@ def test_on_a_terminal_the_step_is_asked_and_the_password_is_hidden(tmp_path: Pa
     assert lflag & termios.ECHO, "Ctrl-C at the password prompt left echo off"
 
     rc, out, lflag = _pty_run(
-        argv, _env(tmp_path, LCSAS_RELOCATED=str(meta), LCSAS_REPO=DOCS,
+        argv, _env(tmp_path, LCSAS_RELOCATED=str(meta), LCSAS_BACKUP_SET=DOCS,
                    LCSAS_NEWEST_DISC_PROMPT="0", LCSAS_ANOTHER_SET="0"),
         [("Password: ", f"{GOOD_PW}\n".encode())],
     )
@@ -807,7 +807,7 @@ def test_on_a_terminal_the_step_is_asked_and_the_password_is_hidden(tmp_path: Pa
 def test_an_empty_or_wrong_password_is_asked_again(tmp_path: Path) -> None:
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS_ID,
                     LCSAS_ANOTHER_SET="0"),
                stdin=f"\nnot-it\n{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
@@ -824,7 +824,7 @@ def test_an_empty_or_wrong_password_is_asked_again(tmp_path: Path) -> None:
 def test_q_or_the_end_of_input_at_the_password_exits_77(tmp_path: Path, answer: str) -> None:
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID),
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS_ID),
                stdin=answer)
     assert res.returncode == 77, res.stderr
     assert "Stopped at your request; no password was given." in res.stderr
@@ -837,7 +837,7 @@ def test_a_piped_password_is_not_checked_first_and_77_is_explained(tmp_path: Pat
     to exit 77 with no word from the script)."""
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=DOCS_ID), stdin="not-it\n")
+               _env(tmp_path, LCSAS_BACKUP_SET=DOCS_ID), stdin="not-it\n")
     assert res.returncode == 77, res.stderr
     assert not _checks(tmp_path)
     assert "[tier 1] wrong password" in res.stderr
@@ -847,7 +847,7 @@ def test_a_wrong_password_from_the_environment_is_asked_again_when_someone_is_th
     tmp_path: Path,
 ) -> None:
     """#627 item 2 (and #608 C4 as amended): a wrong password from
-    LCSAS_PASSWORD or LCSAS_PWFILE is caught before tier 1 and asked for
+    LCSAS_PASSWORD or LCSAS_PASSWORD_FILE is caught before tier 1 and asked for
     again when a person is there, as restore.bat does.  Up to rc9 this
     test pinned the opposite: restore.sh never asked, and stopped with
     77.  In a script (no terminal) it is not checked: tier 1 rejects it
@@ -855,7 +855,7 @@ def test_a_wrong_password_from_the_environment_is_asked_again_when_someone_is_th
     password file is never written to.  A right one is not asked again."""
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS_ID,
                     LCSAS_PASSWORD="not-it", LCSAS_ANOTHER_SET="0"),
                stdin=f"{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
@@ -867,7 +867,7 @@ def test_a_wrong_password_from_the_environment_is_asked_again_when_someone_is_th
     # The input ends at that question: 77, nothing restored.
     (tmp_path / "stub.log").unlink()
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS_ID,
                     LCSAS_PASSWORD="not-it"))
     assert res.returncode == 77, res.stderr
     assert not _runs(tmp_path)
@@ -875,19 +875,19 @@ def test_a_wrong_password_from_the_environment_is_asked_again_when_someone_is_th
     # Scripted: not checked, not asked; tier 1 says it and exits 77.
     (tmp_path / "stub.log").unlink()
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=DOCS_ID, LCSAS_PASSWORD="not-it"),
+               _env(tmp_path, LCSAS_BACKUP_SET=DOCS_ID, LCSAS_PASSWORD="not-it"),
                stdin=f"{GOOD_PW}\n")
     assert res.returncode == 77, res.stderr
     assert "Password:" not in res.stderr
     assert not _checks(tmp_path)
 
-    # LCSAS_PWFILE with a wrong password: asked again; the file is kept.
+    # LCSAS_PASSWORD_FILE with a wrong password: asked again; the file is kept.
     (tmp_path / "stub.log").unlink()
     pwfile = tmp_path / "pw"
     pwfile.write_text("not-it\n")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
-                    LCSAS_PWFILE=str(pwfile), LCSAS_ANOTHER_SET="0"),
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS_ID,
+                    LCSAS_PASSWORD_FILE=str(pwfile), LCSAS_ANOTHER_SET="0"),
                stdin=f"{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
     assert f"The password from the password file {pwfile} was not accepted" in res.stderr
@@ -898,8 +898,8 @@ def test_a_wrong_password_from_the_environment_is_asked_again_when_someone_is_th
     # The right one is not asked again.
     pwfile.write_text(GOOD_PW + "\n")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS_ID,
-                    LCSAS_PWFILE=str(pwfile), LCSAS_ANOTHER_SET="0"))
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS_ID,
+                    LCSAS_PASSWORD_FILE=str(pwfile), LCSAS_ANOTHER_SET="0"))
     assert res.returncode == 0, res.stderr
     assert "Password:" not in res.stderr
 
@@ -927,7 +927,7 @@ def test_typed_share_cards_rebuild_the_password(tmp_path: Path) -> None:
     ks_log = tmp_path / "ks.log"
     recovery = _split_sets(tmp_path, split_id, keyshare=str(ks_log))
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_ANOTHER_SET="0"),
                stdin=f"   \n{mistyped}\n{cards[0]}\n{cards[0].upper()}\n{cards[2]}\n")
     assert res.returncode == 0, res.stderr
@@ -955,7 +955,7 @@ def test_cards_from_two_splits_or_another_set_start_again(tmp_path: Path) -> Non
     wrong, _ = _shares(b"the-password-of-another-set", 2, 3)
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS_ID,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS_ID,
                     LCSAS_ANOTHER_SET="0"),
                stdin=(f"{good[0]}\n{other[1]}\n"      # two splits
                       f"{wrong[0]}\n{wrong[1]}\n"     # another set's password
@@ -981,7 +981,7 @@ def test_p_types_the_password_and_q_quits(tmp_path: Path, answer: str, rc: int) 
     cards, split_id = _shares(GOOD_PW.encode(), 2, 3)
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_ANOTHER_SET="0"), stdin=answer.replace("CARD1", cards[0]))
     assert res.returncode == rc, res.stderr
     if rc == 0:
@@ -1006,7 +1006,7 @@ def test_lcsas_shares_dir_rebuilds_the_password_with_no_questions(tmp_path: Path
         (shares / f"photos-share-{i}-card.txt").write_text(_card(card))
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
+               _env(tmp_path, LCSAS_BACKUP_SET=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
     assert res.returncode == 0, res.stderr
     assert "Share card" not in res.stderr and "Password:" not in res.stderr
     assert "from the 3 card files in" in res.stderr
@@ -1024,7 +1024,7 @@ def test_lcsas_shares_dir_that_cannot_rebuild_exits_77(tmp_path: Path, case: str
         (shares / "card1.txt").write_text(_card(cards[0]))
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
+               _env(tmp_path, LCSAS_BACKUP_SET=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
     assert res.returncode == 77, res.stderr
     assert not _runs(tmp_path)
 
@@ -1043,7 +1043,7 @@ def test_lcsas_shares_dir_that_cannot_rebuild_asks_when_someone_is_there(
     (shares / "card1.txt").write_text(_card(cards[0]))
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_SHARES_DIR=str(shares), LCSAS_ANOTHER_SET="0"),
                stdin=f"P\n{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
@@ -1051,7 +1051,7 @@ def test_lcsas_shares_dir_that_cannot_rebuild_asks_when_someone_is_there(
     assert "Type the cards or the password instead." in res.stderr
     assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_SHARES_DIR=str(shares), LCSAS_ANOTHER_SET="0"),
                stdin=f"{cards[1]}\n{cards[2]}\n")
     assert res.returncode == 0, res.stderr
@@ -1066,7 +1066,7 @@ def test_no_private_folder_for_the_cards_asks_for_the_password(tmp_path: Path) -
     _, split_id = _shares(GOOD_PW.encode(), 2, 3)
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_ANOTHER_SET="0", TMPDIR=str(tmp_path / "no-such-dir")),
                stdin=f"{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
@@ -1078,12 +1078,12 @@ def test_no_private_folder_for_the_cards_asks_for_the_password(tmp_path: Path) -
 def test_a_split_set_with_no_combiner_asks_for_the_password(tmp_path: Path) -> None:
     recovery = _split_sets(tmp_path, "01234", keyshare=False)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_ANOTHER_SET="0"),
+               _env(tmp_path, LCSAS_BACKUP_SET=PHOTOS, LCSAS_ANOTHER_SET="0"),
                stdin=f"{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
-    assert "the share\ncombiner (lcsas-keyshare) is missing here" in res.stderr
+    assert "the share\ncombiner (lcsas-shares) is missing here" in res.stderr
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(tmp_path)))
+               _env(tmp_path, LCSAS_BACKUP_SET=PHOTOS, LCSAS_SHARES_DIR=str(tmp_path)))
     assert res.returncode == 77
     assert "there is no share combiner here" in res.stderr
 
@@ -1129,7 +1129,7 @@ def test_another_set_enter_takes_a_new_folder_and_tilde_is_home(
     res = _run(recovery, tmp_path / "out",
                # The home folder holds the session log by then.
                _env(tmp_path, LCSAS_INTERACTIVE="on", HOME=str(home),
-                    LCSAS_FORCE_NONEMPTY_TARGET="1"),
+                    LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER="1"),
                stdin=f"1\n{GOOD_PW}\ny\n{folder}\n2\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
     assert f"(ENTER: {tmp_path}/out-3; Q then ENTER: no other set)" in res.stderr
@@ -1148,7 +1148,7 @@ def test_another_set_enter_takes_a_new_folder_and_tilde_is_home(
 def test_another_set_no_or_not_asked(tmp_path: Path, extra: dict[str, str], answer: str) -> None:
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS, **extra),
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS, **extra),
                stdin=answer)
     assert res.returncode == 0, res.stderr
     asked = "Restore another backup set" in res.stderr
@@ -1179,7 +1179,7 @@ def test_restore_auto_turns_the_questions_off(tmp_path: Path) -> None:
         (recovery / "repos" / set_id / "keys").mkdir(parents=True)  # its list
     pwfile = tmp_path / "pw"
     pwfile.write_text(GOOD_PW + "\n")
-    env = _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PWFILE=str(pwfile),
+    env = _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD_FILE=str(pwfile),
                LCSAS_RELOCATED=str(meta))
     res = subprocess.run(
         ["sh", str(RESTORE_AUTO_SH), str(recovery), str(tmp_path / "out")],
@@ -1197,11 +1197,11 @@ def test_restore_auto_turns_the_questions_off(tmp_path: Path) -> None:
 def test_resume_sh_skips_the_step_and_names_the_set_by_id(tmp_path: Path) -> None:
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_ANOTHER_SET="0", STUB_RC="1"))
     assert res.returncode == 1, res.stderr
     text = (tmp_path / "tools" / "resume.sh").read_text()
-    assert f"LCSAS_REPO='{PHOTOS_ID}'" in text
+    assert f"LCSAS_BACKUP_SET='{PHOTOS_ID}'" in text
     assert "LCSAS_NEWEST_DISC_PROMPT=0; export LCSAS_NEWEST_DISC_PROMPT" in text
     assert "LCSAS_ANOTHER_SET='0'; export LCSAS_ANOTHER_SET" in text
     assert stat.S_IMODE((tmp_path / "tools" / "resume.sh").stat().st_mode) == 0o700
@@ -1220,7 +1220,7 @@ def test_another_set_q_or_no_input_at_the_folder_prompt_ends_the_run(
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD=GOOD_PW,
-                    LCSAS_REPO=DOCS),
+                    LCSAS_BACKUP_SET=DOCS),
                stdin="y\n" + answer)
     assert res.returncode == 0, res.stderr
     assert f"No other backup set restored; {DOCS} is done." in res.stderr
@@ -1265,9 +1265,9 @@ def test_ctrl_c_at_the_another_set_question_removes_the_tools(tmp_path: Path) ->
     """The set is restored; Ctrl-C at "another set?" leaves nothing to
     carry on: exit 130, no resume box, the tools folder goes."""
     recovery = _two_sets(tmp_path)
-    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+    s = _Session([str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)],
                  _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD=GOOD_PW,
-                      LCSAS_REPO=DOCS))
+                      LCSAS_BACKUP_SET=DOCS))
     s.expect("Restore another backup set from these discs? [y/N] ")
     s.proc.send_signal(signal.SIGINT)
     assert s.finish() == 130, s.text
@@ -1282,8 +1282,8 @@ def test_ctrl_c_at_the_password_prompt_keeps_the_tools_and_says_how_to_resume(
     whose exit code would hide the trap's): exit 130, resume.sh kept.  The
     old INT trap ran the exit handler and carried on (here: 77)."""
     recovery = _two_sets(tmp_path)
-    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
-                 _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS))
+    s = _Session([str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)],
+                 _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS))
     s.expect("Password: ")
     s.proc.send_signal(signal.SIGINT)
     assert s.finish() == 130, s.text
@@ -1311,27 +1311,30 @@ def test_a_folder_holding_another_sets_restore_is_warned_about(tmp_path: Path) -
     recovery = _two_sets(tmp_path)
     out = tmp_path / "out"
     env = _env(tmp_path, LCSAS_PASSWORD=GOOD_PW)
-    assert _run(recovery, out, {**env, "LCSAS_REPO": DOCS}).returncode == 0
+    assert _run(recovery, out, {**env, "LCSAS_BACKUP_SET": DOCS}).returncode == 0
     assert (out / ".lcsas-restore-marker").read_text() == f"{DOCS_ID}\n"
-    res = _run(recovery, out, {**env, "LCSAS_REPO": PHOTOS})
+    res = _run(recovery, out, {**env, "LCSAS_BACKUP_SET": PHOTOS})
     assert res.returncode == 65, res.stderr
     assert "already holds the restore of ANOTHER backup set" in res.stderr
     assert len(_runs(tmp_path)) == 1
-    res = _run(recovery, out, {**env, "LCSAS_REPO": DOCS})
+    res = _run(recovery, out, {**env, "LCSAS_BACKUP_SET": DOCS})
     assert res.returncode == 0, res.stderr
     assert "WARNING" not in res.stderr
-    res = _run(recovery, out, {**env, "LCSAS_REPO": PHOTOS, "LCSAS_FORCE_NONEMPTY_TARGET": "1"})
+    res = _run(recovery, out, {
+        **env, "LCSAS_BACKUP_SET": PHOTOS,
+        "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1",
+    })
     assert res.returncode == 0, res.stderr
     assert (out / ".lcsas-restore-marker").read_text() == f"{DOCS_ID}\n{PHOTOS_ID}\n"
     # An empty marker (an older restore.sh, or restore.bat) names no set.
     (out / ".lcsas-restore-marker").write_text("")
-    res = _run(recovery, out, {**env, "LCSAS_REPO": PHOTOS})
+    res = _run(recovery, out, {**env, "LCSAS_BACKUP_SET": PHOTOS})
     assert res.returncode == 0, res.stderr
     # A folder emptied but for the marker (`rm -rf restored/*` leaves the
     # dot-file, as the blind harness does between runs) has nothing to mix.
     (out / "restored.txt").unlink()
     (out / ".lcsas-restore-marker").write_text("5d2e7a10-3c4b-4f6e-8a9b-0c1d2e3f4a5b\n")
-    res = _run(recovery, out, {**env, "LCSAS_REPO": DOCS})
+    res = _run(recovery, out, {**env, "LCSAS_BACKUP_SET": DOCS})
     assert res.returncode == 0, res.stderr
     assert "WARNING" not in res.stderr
 
@@ -1357,17 +1360,17 @@ def test_another_set_with_no_tools_folder_leaves_no_cache_behind(tmp_path: Path)
 
 
 def test_lcsas_repo_matches_the_cmd_safe_name(tmp_path: Path) -> None:
-    """C4: LCSAS_REPO matches the name, the name_cmd (the plain form
+    """C4: LCSAS_BACKUP_SET matches the name, the name_cmd (the plain form
     restore.bat shows) or the id."""
     recovery = _meta(tmp_path / "meta")
     _set(tmp_path / "meta", DOCS_ID, DOCS)
     photos = _set(tmp_path / "meta", PHOTOS_ID, None)
-    (photos / "LCSAS_REPO.txt").write_text(
+    (photos / "LCSAS_BACKUP_SET.txt").write_text(
         f"format=1\nid={PHOTOS_ID}\nname=Fotos de família\nname_cmd=Fotos de fam_lia\n"
         "split=none\nsplit_id=\n", encoding="utf-8")
     for value in ("Fotos de família", "Fotos de fam_lia"):
         res = _run(recovery, tmp_path / "out",
-                   _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=value))
+                   _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=value))
         assert res.returncode == 0, res.stderr
         assert f"repo={tmp_path}/meta/metadata/{PHOTOS_ID} " in _runs(tmp_path)[-1]
 
@@ -1377,7 +1380,7 @@ def test_the_merge_never_replaces_a_copy_from_a_newer_disc(tmp_path: Path) -> No
     the META disc's, but the copy tagged from a newer disc stays."""
     tools = tmp_path / "tools"
     recovery = _meta(tools)
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     _set(tools, DOCS_ID, DOCS, tag="newer")
     (tools / "metadata" / ".from").mkdir()
     (tools / "metadata" / ".from" / DOCS_ID).write_text("LCSAS_TEST_TINY_2026_0002\n")
@@ -1388,7 +1391,7 @@ def test_the_merge_never_replaces_a_copy_from_a_newer_disc(tmp_path: Path) -> No
     (tools / "recovery" / "scripts" / "restore.sh").unlink()
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_RELOCATED=str(tmp_path / "gone-meta"),
-                    LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=PHOTOS, STUB_RC="1"))
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=PHOTOS, STUB_RC="1"))
     assert res.returncode == 1, res.stderr
     md = tools / "metadata"
     assert sorted(p.name for p in (md / DOCS_ID / "index").iterdir()) == ["index-newer"]
@@ -1402,7 +1405,7 @@ def test_a_merge_that_cannot_copy_every_file_keeps_the_old_copy(tmp_path: Path) 
     disc's label, so it is tried again; resume.sh is not tied to it."""
     tools = tmp_path / "tools"
     recovery = _meta(tools)
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     _set(tools, DOCS_ID, DOCS, tag="meta")
     new = _data_disc(tmp_path / "media", "NEW", "LCSAS_TEST_TINY_2026_0002")
     _set(new, DOCS_ID, DOCS, tag="new")
@@ -1413,7 +1416,7 @@ def test_a_merge_that_cannot_copy_every_file_keeps_the_old_copy(tmp_path: Path) 
     try:
         res = _run(recovery, tmp_path / "out",
                    _env(tmp_path, LCSAS_RELOCATED=str(tmp_path / "gone-meta"),
-                        LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS, STUB_RC="1"))
+                        LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS, STUB_RC="1"))
     finally:
         bad.chmod(0o644)
     assert res.returncode == 1, res.stderr
@@ -1439,7 +1442,7 @@ def test_lcsas_shares_dir_leaves_out_a_card_with_a_mistake(tmp_path: Path) -> No
     (shares / "c.txt").write_text(_card(cards[2]))
     recovery = _split_sets(tmp_path, split_id)
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
+               _env(tmp_path, LCSAS_BACKUP_SET=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
     assert res.returncode == 0, res.stderr
     assert f"leaving out {shares}/b.txt: it has a mistake" in res.stderr
     assert _runs(tmp_path)[0].endswith(f"pw={GOOD_PW}")
@@ -1447,22 +1450,22 @@ def test_lcsas_shares_dir_leaves_out_a_card_with_a_mistake(tmp_path: Path) -> No
 
 def _broken_keyshare(tmp_path: Path, body: str) -> Path:
     recovery = _split_sets(tmp_path, "01234", keyshare=False)
-    ks = recovery / "bin" / HOST_TARGET / "lcsas-keyshare"
+    ks = recovery / "bin" / HOST_TARGET / "lcsas-shares"
     ks.write_text(body)
     ks.chmod(0o755)
     return recovery
 
 
 def test_a_zero_byte_share_combiner_is_not_used(tmp_path: Path) -> None:
-    """A bit-rotted (empty) lcsas-keyshare runs as an empty script and
+    """A bit-rotted (empty) lcsas-shares runs as an empty script and
     exits 0: every card was "valid" and the rebuilt password empty.  It is
     checked like the tier binaries and left out."""
     recovery = _broken_keyshare(tmp_path, "")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_ANOTHER_SET="0"), stdin=f"{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
-    assert "combiner (lcsas-keyshare) is missing here" in res.stderr
+    assert "combiner (lcsas-shares) is missing here" in res.stderr
     assert "Share card" not in res.stderr
 
 
@@ -1470,13 +1473,13 @@ def test_a_zero_byte_share_combiner_is_not_used(tmp_path: Path) -> None:
 def test_a_share_combiner_that_does_not_work_asks_for_the_password(
     tmp_path: Path, rc: int,
 ) -> None:
-    """An exit lcsas-keyshare never gives for a card (2: usage, a crash)
+    """An exit lcsas-shares never gives for a card (2: usage, a crash)
     is not the card's fault: no "that card has a mistake" loop, but the
     password prompt.  LCSAS_SHARES_DIR says so and exits 77."""
     recovery = _broken_keyshare(
         tmp_path, f'#!/bin/sh\n[ "${{1:-}}" = --help ] && exit 0\nexit {rc}\n')
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS,
                     LCSAS_ANOTHER_SET="0"),
                stdin=f"some card words\n{GOOD_PW}\n")
     assert res.returncode == 0, res.stderr
@@ -1487,6 +1490,6 @@ def test_a_share_combiner_that_does_not_work_asks_for_the_password(
     cards.mkdir()
     (cards / "one.txt").write_text("some card words\n")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(cards)))
+               _env(tmp_path, LCSAS_BACKUP_SET=PHOTOS, LCSAS_SHARES_DIR=str(cards)))
     assert res.returncode == 77, res.stderr
     assert "the cards are not to blame" in res.stderr

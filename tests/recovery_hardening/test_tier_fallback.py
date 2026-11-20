@@ -86,7 +86,7 @@ def _run(recovery: Path, target_dir: Path, env_extra: dict[str, str],
         **env_extra,
     }
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -144,7 +144,7 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
     _make_repo(recovery)
     _install_failing_binary(recovery, "lcsas-restore", exit_code=17)
     _install_failing_binary(recovery, "rustic-static", exit_code=19)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
 
     # Stub python3 that just prints a marker and exits 0.
     pybin_dir = tmp_path / "stubbin"
@@ -167,7 +167,7 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -184,7 +184,7 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
 def _make_tier3_fixture(tmp_path: Path) -> tuple[Path, Path]:
     """Return (recovery, pybin_dir) for a tier-3-only fixture.
 
-    Both tier-1 and tier-2 stubs crash.  standalone_restorer.py is
+    Both tier-1 and tier-2 stubs crash.  python_reader.py is
     placed at recovery.parent.  Caller is responsible for installing
     the desired stub python3 into the returned pybin_dir.
     """
@@ -193,7 +193,7 @@ def _make_tier3_fixture(tmp_path: Path) -> tuple[Path, Path]:
     _make_repo(recovery)
     _install_failing_binary(recovery, "lcsas-restore", exit_code=17)
     _install_failing_binary(recovery, "rustic-static", exit_code=19)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
     pybin_dir = tmp_path / "stubbin"
     pybin_dir.mkdir()
     return recovery, pybin_dir
@@ -218,7 +218,7 @@ def test_tier3_snap_args_non_latest(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "abc123snap"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery), "abc123snap"],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -256,7 +256,7 @@ def test_tier3_pack_search_converted_to_mount_args(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -293,7 +293,7 @@ def test_tier3_mount_dirs_appended_when_not_in_pack_search(tmp_path: Path) -> No
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -331,7 +331,7 @@ def test_tier3_pythonpath_set_from_bundled_zstandard(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -368,7 +368,7 @@ def test_tier3_failure_stderr_replayed(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )

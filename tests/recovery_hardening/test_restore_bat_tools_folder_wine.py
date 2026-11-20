@@ -7,7 +7,7 @@ without a word (#612), into a random %TEMP% folder that every run
 deleted, so carrying on meant the META disc and the whole copy again
 (#609).  A click in the window paused it, and nothing said so (#613).
 
-Now the copy goes to the tools folder, %LOCALAPPDATA%\LCSAS-restore
+Now the copy goes to the tools folder, %LOCALAPPDATA%\lcsas-tools
 (LCSAS_TOOLS_DIR names another), holds only this computer's programs,
 names each on screen, and stays until the restore has finished.  A
 restore that stopped carries on from it with "Resume LCSAS restore.bat",
@@ -67,8 +67,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY = REPO_ROOT / "recovery"
 RESTORE_BAT = RECOVERY / "scripts" / "restore.bat"
 WIN_BIN = RECOVERY / "bin" / "x86_64-windows"
-PROGRAMS = ("lcsas-ecc.exe", "lcsas-keyshare.exe", "lcsas-restore.exe")
-GUIDE = RECOVERY / "docs" / "RECOVER_WINDOWS.txt"
+PROGRAMS = ("lcsas-ecc.exe", "lcsas-shares.exe", "lcsas-restore.exe")
+GUIDE = RECOVERY / "docs" / "RESTORE_WINDOWS.txt"
 
 TRIPLE = "x86_64-pc-windows-gnu"
 # Invented for this test: a UUID id and a name that is not the id, as
@@ -180,11 +180,11 @@ class _Fixture:
 
     @property
     def default_tools(self) -> Path:
-        return self.user_dir / "AppData" / "Local" / "LCSAS-restore"
+        return self.user_dir / "AppData" / "Local" / "lcsas-tools"
 
     @property
     def default_tools_win(self) -> str:
-        return f"C:\\users\\{self.user}\\AppData\\Local\\LCSAS-restore"
+        return f"C:\\users\\{self.user}\\AppData\\Local\\lcsas-tools"
 
     @property
     def desktop(self) -> Path:
@@ -277,7 +277,7 @@ def fx(tmp_path: Path):
         (meta / "recovery" / "bin" / other).mkdir()
         (meta / "recovery" / "bin" / other / "lcsas-restore").write_bytes(b"\x7fELF")
     (meta / "recovery" / "docs").mkdir()
-    shutil.copy2(GUIDE, meta / "recovery" / "docs" / "RECOVER_WINDOWS.txt")
+    shutil.copy2(GUIDE, meta / "recovery" / "docs" / "RESTORE_WINDOWS.txt")
     copy_set(meta)
     (meta / "volume_info.json").write_text(json.dumps({"type": "meta"}))
 
@@ -294,7 +294,7 @@ def fx(tmp_path: Path):
     # The newest-data-disc step (#605) is skipped: this test counts the
     # disc prompts from the META disc on.  test_restore_bat_journey_wine.py
     # runs the step.
-    run_env.update({"LCSAS_TARGET": TRIPLE, "LCSAS_INTERACTIVE": "on",
+    run_env.update({"LCSAS_PLATFORM": TRIPLE, "LCSAS_INTERACTIVE": "on",
                     "LCSAS_NEWEST_DISC_PROMPT": "0"})
 
     _make_read_only(meta)
@@ -497,12 +497,12 @@ def test_stop_and_carry_on_from_the_tools_folder(fx: _Fixture) -> None:
     for other in ("x86_64-unknown-linux-musl", "aarch64-apple-darwin",
                   "x86_64-windows", "rustic-static.exe", "restic.exe", "python.exe"):
         assert other not in out, f"{other} named in the copy:\n{out}"
-    assert (tools / "recovery" / "docs" / "RECOVER_WINDOWS.txt").read_bytes() == (
+    assert (tools / "recovery" / "docs" / "RESTORE_WINDOWS.txt").read_bytes() == (
         GUIDE.read_bytes())
     assert (tools / "recovery" / "scripts" / "restore.bat").read_bytes() == (
         RESTORE_BAT.read_bytes())
     assert f"metadata\\{SET_ID}" in out, out
-    assert (tools / "metadata" / SET_ID / "LCSAS_REPO.txt").is_file()
+    assert (tools / "metadata" / SET_ID / "LCSAS_BACKUP_SET.txt").is_file()
     assert (tools / "metadata" / SET_ID / "keys").is_dir()
     assert not list(fx.meta.glob("lcsas-probe-*")), "probe file left on the disc"
     # Not finished: the tools folder stays.

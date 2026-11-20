@@ -54,7 +54,7 @@ WIN_BIN = REPO_ROOT / "recovery" / "bin" / "x86_64-windows"
 _ARCHIVE_TOOLS = all(shutil.which(t) for t in ("rustic", "xorriso"))
 _WINE_OK = shutil.which("wine") is not None and all(
     (WIN_BIN / p).is_file()
-    for p in ("lcsas-restore.exe", "lcsas-keyshare.exe", "lcsas-ecc.exe"))
+    for p in ("lcsas-restore.exe", "lcsas-shares.exe", "lcsas-ecc.exe"))
 
 pytestmark = [
     pytest.mark.integration,

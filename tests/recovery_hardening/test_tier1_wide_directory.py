@@ -58,7 +58,7 @@ def test_wide_directory_5000_entries_restores(tmp_path: Path) -> None:
 
     res = subprocess.run(
         [str(bin_path), "--repo", str(repo),
-         "--target", str(target), "--password-file", str(pwfile)],
+         "--restore-folder", str(target), "--password-file", str(pwfile)],
         capture_output=True, text=True, timeout=300,
     )
     assert res.returncode == 0, (

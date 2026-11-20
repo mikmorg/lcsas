@@ -35,7 +35,7 @@ def test_coverage_c_completes() -> None:
         f"coverage.txt has unexpected format:\n{content}"
     )
 
-    # KEY-06: the lcsas-keyshare SLIP-0039 combiner sits on the tier-1
+    # KEY-06: the lcsas-shares SLIP-0039 combiner sits on the tier-1
     # critical path and must stay inside the coverage report.  Assert the
     # gcovr filter still includes it, so a future edit that drops the
     # `--filter src/lcsas-keyshare/.*` line fails loudly here instead of

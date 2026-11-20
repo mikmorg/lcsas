@@ -1,4 +1,4 @@
-"""rc6: the committed Windows ``lcsas-keyshare.exe`` under wine.
+"""rc6: the committed Windows ``lcsas-shares.exe`` under wine.
 
 restore.bat drives this binary to rebuild a split password from share
 cards, so its Windows build must keep the contract the Linux one is held
@@ -31,7 +31,7 @@ from tests.recovery_hardening._wine_helpers import stop_wineserver
 REPO_ROOT = Path(__file__).resolve().parents[2]
 KEYSHARE_EXE = Path(os.environ["LCSAS_KEYSHARE_EXE"]) if os.environ.get(
     "LCSAS_KEYSHARE_EXE"
-) else REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-keyshare.exe"
+) else REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-shares.exe"
 
 _OK = KEYSHARE_EXE.is_file() and shutil.which("wine") is not None
 
@@ -54,7 +54,7 @@ def cards(tmp_path_factory) -> list[Path]:
     base = tmp_path_factory.mktemp("ks_wine")
     out = base / "shares"
     out.mkdir()
-    # The cards are made from the library, not `lcsas key split`: since
+    # The cards are made from the library, not `lcsas password split`: since
     # #641 a password FILE gives only its first line (as rustic reads
     # it), and this password must keep its newline and CR to prove the
     # binary writes exact bytes.
@@ -67,14 +67,14 @@ def cards(tmp_path_factory) -> list[Path]:
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         subprocess.run(["wine", "wineboot", "--init"], env=ENV,
                        capture_output=True, timeout=180)
-    shutil.copy2(KEYSHARE_EXE, base / "lcsas-keyshare.exe")
+    shutil.copy2(KEYSHARE_EXE, base / "lcsas-shares.exe")
     yield sorted(out.glob("alpha-share-*-card.txt"))
     stop_wineserver(WINEPREFIX)
 
 
 def _run(cards_dir: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
-        ["wine", str(cards_dir.parent.parent / "lcsas-keyshare.exe"), *args],
+        ["wine", str(cards_dir.parent.parent / "lcsas-shares.exe"), *args],
         env=ENV, capture_output=True, timeout=120, check=False)
 
 

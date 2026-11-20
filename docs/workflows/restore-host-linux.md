@@ -1,6 +1,6 @@
 # Restore from a Running Linux Host
 
-> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the owner's `lcsas restore` path (LCSAS installed on a working host), the variant axes, and the tests that validate it. It is not the heir's procedure.
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RESTORE.txt` (Linux and macOS) and `recovery/docs/RESTORE_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RESTORE.txt](../../recovery/docs/RESTORE.txt), [RESTORE_WINDOWS.txt](../../recovery/docs/RESTORE_WINDOWS.txt). This file covers the owner's `lcsas restore` path (LCSAS installed on a working host), the variant axes, and the tests that validate it. It is not the heir's procedure.
 
 This document covers the **easy-mode** restore path: LCSAS is already
 installed on a working Linux host, the host can mount the archive
@@ -25,7 +25,7 @@ cover the harder modes:
   restore from a Windows workstation.
 - [`docs/workflows/restore-disc-only.md`](restore-disc-only.md) —
   restore from a single disc without the master catalog
-  (`lcsas restore standalone`).
+  (`lcsas restore from-disc`).
 
 If the host is alive and the master catalog is intact, **start here**.
 
@@ -177,7 +177,7 @@ assembling required packs into a local cache and running
   (early check in `prepare_restore()`
   ([`src/lcsas/restore/orchestrator.py`](../../src/lcsas/restore/orchestrator.py)),
   declared in the `restore exec` subparser of `build_parser()`).
-- A writable `target_path` on the host
+- A writable `restore_folder` on the host
   (positional argument of the `restore exec` subparser).
 - Either a TTY for the interactive disc prompt
   (interactive branch of `run_restore()`)
@@ -247,7 +247,7 @@ assembling required packs into a local cache and running
     (end of `run_restore()`).
 
 **Expected outcome:**
-- Exit `0` with `target_path/` populated with restored files.
+- Exit `0` with `restore_folder/` populated with restored files.
 - Exit `1` on: missing config, missing repository, missing password file,
   unmet rustic version, packs missing from every volume,
   uncorrectable pack corruption (raised as `PackCorruptionError`),
@@ -694,7 +694,7 @@ must still be readable.
   Packs ingested from a bare mounted directory get only the per-pack
   SHA-256 check.
 - **Missing-disc + missing-catalog combination** is out of scope here
-  (intentional) and handled by `lcsas restore standalone` — see
+  (intentional) and handled by `lcsas restore from-disc` — see
   [`restore-disc-only.md`](restore-disc-only.md).
 - **No interactive password prompt** (rustic's `--password-command` is
   not surfaced). Decided against (#491): like the rest of the CLI,

@@ -134,7 +134,7 @@ def _setup(tmp: Path) -> tuple[list[str], Path, Path, Path, dict[str, bytes]]:
         str(BINARY),
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--snapshot", "latest",
         "--pack-search", str(disc_a),
         "--mount-parent", str(mount_parent),
@@ -231,7 +231,7 @@ def test_auto_mount_rejects_anything_but_on_or_off(tmp_path: Path) -> None:
     pwfile.write_text("x\n")
     res = subprocess.run(
         [str(BINARY), "--repo", str(tmp_path), "--password-file", str(pwfile),
-         "--target", str(tmp_path / "out"), "--auto-mount", "yes"],
+         "--restore-folder", str(tmp_path / "out"), "--auto-mount", "yes"],
         capture_output=True, text=True, timeout=120,
     )
     assert res.returncode == 2, (

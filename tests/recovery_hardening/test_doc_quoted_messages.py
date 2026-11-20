@@ -1,8 +1,8 @@
 """The recovery docs quote only messages the recovery programs print (#809).
 
-An heir reads RECOVER.txt, RECOVER_WINDOWS.txt and TIERS.txt and looks
+An heir reads RESTORE.txt, RESTORE_WINDOWS.txt and TIERS.txt and looks
 for the words on the screen.  A quoted message the scripts no longer
-print sends them looking for words that never come: RECOVER.txt quoted
+print sends them looking for words that never come: RESTORE.txt quoted
 restore.sh's old "noexec" report long after it changed, and its exit
 code table quoted a question ("restore into RAM anyway?") the script
 asks in other words.
@@ -31,7 +31,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY = REPO_ROOT / "recovery"
 DOCS = [RECOVERY / "docs" / n for n in
-        ("RECOVER.txt", "RECOVER_WINDOWS.txt", "TIERS.txt")]
+        ("RESTORE.txt", "RESTORE_WINDOWS.txt", "TIERS.txt")]
 
 # Messages of other programs, and printed labels, quoted on purpose.
 NOT_OURS = {
@@ -245,9 +245,9 @@ def test_a_message_no_program_prints_is_caught(quote: str) -> None:
 
 
 def test_the_next_set_folder_example_matches_the_script() -> None:
-    """#809: RECOVER.txt's example of the next set's folder is the one
+    """#809: RESTORE.txt's example of the next set's folder is the one
     restore.sh offers: the first folder's name with -2."""
     sh = (RECOVERY / "scripts" / "restore.sh").read_text(encoding="utf-8")
     assert "_os_n=2" in sh and '"$_os_base-$_os_n"' in sh
-    assert "~/restored-2)" in (RECOVERY / "docs" / "RECOVER.txt").read_text(
+    assert "~/restored-2)" in (RECOVERY / "docs" / "RESTORE.txt").read_text(
         encoding="utf-8")

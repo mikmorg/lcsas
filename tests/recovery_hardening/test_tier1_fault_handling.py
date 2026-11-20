@@ -85,7 +85,7 @@ def test_wrong_password_fails_with_clear_error(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=30,
     )
 
@@ -134,7 +134,7 @@ def test_missing_keys_dir_is_not_a_password_verdict(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(tmp_path / "restored"),
+        "--restore-folder", str(tmp_path / "restored"),
         timeout=30,
     )
 
@@ -166,7 +166,7 @@ def test_corrupt_key_file_is_not_a_password_verdict(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(tmp_path / "restored"),
+        "--restore-folder", str(tmp_path / "restored"),
         timeout=30,
     )
 
@@ -218,7 +218,7 @@ def test_truncated_data_field_is_not_a_password_verdict(
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(tmp_path / "restored"),
+        "--restore-folder", str(tmp_path / "restored"),
         timeout=30,
     )
 
@@ -269,7 +269,7 @@ def test_out_of_range_kdf_is_refused_fast_not_a_password_verdict(
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(tmp_path / "restored"),
+        "--restore-folder", str(tmp_path / "restored"),
         timeout=30,
     )
 
@@ -319,7 +319,7 @@ def test_wrong_password_is_terminal_even_with_a_corrupt_second_key(
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(tmp_path / "restored"),
+        "--restore-folder", str(tmp_path / "restored"),
         timeout=30,
     )
     assert res.returncode == 77, (
@@ -368,7 +368,7 @@ def test_truncated_pack_fails_with_clear_error(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=30,
     )
 
@@ -422,7 +422,7 @@ def test_wrong_snapshot_id_fails_with_clear_error(tmp_path: Path) -> None:
         bin_path,
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--snapshot", bogus_id,
         timeout=30,
     )

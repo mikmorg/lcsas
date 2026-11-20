@@ -3,7 +3,7 @@
 FAILURE MODE CAUGHT
 -------------------
 recovery/MANIFEST.sha256 and recovery/docs/MANIFEST.sha256 on a meta disc
-are the heir's tamper-evidence record: RECOVER_WINDOWS.txt tells an
+are the heir's tamper-evidence record: RESTORE_WINDOWS.txt tells an
 operator to ``findstr`` a file's name in it and compare hashes before
 trusting the disc, and READINESS_CHECKLIST.txt tells them to run
 ``sha256sum -c recovery/MANIFEST.sha256``.  A stale manifest is worse than

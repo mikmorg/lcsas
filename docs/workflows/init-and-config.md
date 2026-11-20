@@ -18,16 +18,16 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 
 **Prerequisites:**
 - A writable parent directory for the chosen catalog path; missing intermediate dirs are fine — the handler calls `mkdir(parents=True, exist_ok=True)`.
-- Optional TOML config — when `--config` is set, `paths.database` from the config is used as the catalog path.
+- Optional TOML config — when `--config` is set, `paths.catalog` from the config is used as the catalog path.
 
 **Steps:**
-1. `lcsas [--config FILE] init [--db-path PATH]` — create the SQLite file and run `ensure_schema()` (which calls `create_all()` on a fresh catalog). (`cmd_init`, `src/lcsas/cli/commands/init.py`)
+1. `lcsas [--config FILE] init [--catalog-path PATH]` — create the SQLite file and run `ensure_schema()` (which calls `create_all()` on a fresh catalog). (`cmd_init`, `src/lcsas/cli/commands/init.py`)
    - Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/parser.py`).
-   - Catalog path resolution order: explicit `--db-path` > global `--db` > `--config`'s `paths.database` > `archive.db` in cwd.
+   - Catalog path resolution order: explicit `--catalog-path` > global `--catalog` > `--config`'s `paths.catalog` > `catalog.db` in cwd.
 2. `create_all()` issues `CREATE TABLE IF NOT EXISTS` for every table and inserts a row into `schema_version` if empty. (`src/lcsas/db/schema.py`)
 
 **Expected outcome:**
-- A valid SQLite file exists at `--db-path` with tables `schema_version`, `volumes`, `repositories`, `packs`, `volume_packs`, `snapshots`, `locations`, `volume_copies`, `burn_sessions`, `session_volumes`, `volume_events`, `key_escrow`.
+- A valid SQLite file exists at `--catalog-path` with tables `schema_version`, `volumes`, `repositories`, `packs`, `volume_packs`, `snapshots`, `locations`, `volume_copies`, `burn_sessions`, `session_volumes`, `volume_events`, `key_escrow`.
 - `SELECT MAX(version) FROM schema_version` returns `CURRENT_SCHEMA_VERSION` (currently `10`).
 - Idempotent — re-running against an existing catalog is a no-op and returns 0.
 
@@ -45,7 +45,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
   - `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` — `--config` is honored (regression test for issue #17).
   - `tests/unit/test_cli.py::TestCLIParsing::test_init_command` — argparse wiring.
   - `tests/unit/test_cli_init.py::TestCmdInit::test_reinit_on_existing_db` — idempotent re-init.
-  - `tests/unit/test_cli_init.py::TestCmdInit::test_init_creates_nested_parent_dirs` — the `mkdir(parents=True)` branch (`--db-path` under several missing directories, issue #40).
+  - `tests/unit/test_cli_init.py::TestCmdInit::test_init_creates_nested_parent_dirs` — the `mkdir(parents=True)` branch (`--catalog-path` under several missing directories, issue #40).
   - `tests/unit/test_db_schema.py::TestSchema::test_schema_version_recorded` — `create_all()` stamps `CURRENT_SCHEMA_VERSION`; `TestMigrateV3ToV4::test_migrate_updates_version` and `tests/unit/test_cli_repo_retirement.py::TestRepoRetireActivate::test_retire_migrates_a_v9_catalog_in_place` cover `ensure_schema()` migrating an older catalog.
 - Gaps:
   - No CLI-level assertion that `init` itself leaves `schema_version == CURRENT_SCHEMA_VERSION` (intentional: `cmd_init` is a thin wrapper over `ensure_schema()`, and the stamp and migration are pinned one layer down by the tests above).
@@ -72,8 +72,8 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
    - Parser: `config` subparser in `build_parser()` (`src/lcsas/cli/parser.py`).
    - Missing `--config` logs `--config is required for config check.` and returns 1.
 2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py`) It stops with an error naming the key, for every command, when (#682):
-   - a known key has the wrong TOML type: strings must be quoted, numbers and `true`/`false` must not be (`key_split = "false"`, `key_threshold = "3"`, `metadata_reserve_mb = "100"`, `media_type = 25`, `label_prefix = 7` are all errors);
-   - `key_threshold`/`key_shares` (in `[defaults]`, or the pair a `[repos.<name>]` table makes by overriding either) is not `2 <= K <= N <= 16`, or `K = N = 1` for no split;
+   - a known key has the wrong TOML type: strings must be quoted, numbers and `true`/`false` must not be (`split = "false"`, `split_threshold = "3"`, `metadata_reserve_mb = "100"`, `media_type = 25`, `label_prefix = 7` are all errors);
+   - `split_threshold`/`split_shares` (in `[defaults]`, or the pair a `[repos.<name>]` table makes by overriding either) is not `2 <= K <= N <= 16`, or `K = N = 1` for no split;
    - two `[repos.<name>]` tables have the same `mirror_path`;
    - a `[repos.<name>]` `sources` is not a list of strings, or a `[collections.<name>]` table has no `location`, an empty or missing `repos`, a repository with no `[repos.<name>]` table, an unknown `media_type`, or a `min_fill_pct` outside 0-100 (#701, [collections.md](collections.md)).
 3. `validate_config()` checks (`src/lcsas/config/settings.py`):
@@ -132,9 +132,9 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 Observations from reading the source; **not** fixes.
 
 - **Every disc carries a disc catalog.** The complete SQLite catalog is copied onto every burned disc by `staging/metadata.py::HolographicInjector`, so any single disc is self-describing. There is no separate JSON-export step. (intentional: design note, not a defect.)
-- **True backup = copy the `.sqlite` file.** There is no `db import` and no `db export` command; an owner wanting an off-disc copy of the master catalog should copy the raw SQLite file. The catalog runs in WAL mode (`get_connection` in `src/lcsas/db/connection.py`), so copy it while no `lcsas` command is running (a copy taken mid-command can miss the `-wal` sidecar), or take a consistent copy with `sqlite3 archive.db ".backup copy.db"`. (intentional: the disc catalog on every disc is the designed backup; no export command is planned.)
-- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 and pinned by `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/commands/init.py`). Resolved; kept as a behaviour note.
+- **True backup = copy the `.sqlite` file.** There is no `db import` and no `db export` command; an owner wanting an off-disc copy of the master catalog should copy the raw SQLite file. The catalog runs in WAL mode (`get_connection` in `src/lcsas/db/connection.py`), so copy it while no `lcsas` command is running (a copy taken mid-command can miss the `-wal` sidecar), or take a consistent copy with `sqlite3 catalog.db ".backup copy.db"`. (intentional: the disc catalog on every disc is the designed backup; no export command is planned.)
+- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.catalog` (resolution order: `--catalog-path` > `--catalog` > `--config` > `./catalog.db`) — fixed in issue #17 and pinned by `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/commands/init.py`). Resolved; kept as a behaviour note.
 - **`init` migrates if needed.** On an existing catalog `ensure_schema()` calls `migrate()` to bring an older catalog up to `CURRENT_SCHEMA_VERSION`; on a fresh catalog `create_all()` stamps the current version directly (`src/lcsas/db/schema.py`). Pinned by `tests/unit/test_db_schema.py` (`TestSchema`, `TestMigrateV3ToV4`). Resolved; kept as a behaviour note.
 - **`config check` does not validate `optical_device`** — typos surface only at burn time. (intentional: see the Gaps bullet under `lcsas config check`.)
-- **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse (`lcsas: error: unrecognized arguments: --config foo.toml`); correct form is `lcsas --config foo.toml config check`. The error now adds `--config: top-level option(s); put them before the subcommand, ...` (the same for `--db`, `--lock-timeout` and `--verbose`); the exit is still argparse's status 2 with nothing run (`_LcsasArgumentParser` in `src/lcsas/cli/parser.py`; `tests/unit/test_cli_config_placement.py`, #517).
+- **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse (`lcsas: error: unrecognized arguments: --config foo.toml`); correct form is `lcsas --config foo.toml config check`. The error now adds `--config: top-level option(s); put them before the subcommand, ...` (the same for `--catalog`, `--lock-timeout` and `--verbose`); the exit is still argparse's status 2 with nothing run (`_LcsasArgumentParser` in `src/lcsas/cli/parser.py`; `tests/unit/test_cli_config_placement.py`, #517).
 - **Unknown TOML keys are warnings everywhere except `config check`.** (Resolved for `config check` by #515.) `unknown_toml_keys` (`src/lcsas/config/settings.py`) lists unknown sections and keys; `load_config()` only logs each as `Unknown ... (typo?)`, so no command is blocked by a typo, but `config check` now adds an error and exits 1 instead of printing `Configuration is valid.` (`tests/unit/test_cli_config.py::TestCmdConfigCheck::test_section_typo_fails_the_check` and `::test_repo_key_typo_fails_the_check`). A `[repos.<name>]` block without `mirror_path` is now reported by name (`::test_missing_mirror_path_is_named`) instead of a bare `Unexpected error: 'mirror_path'`. Other commands such as `scan` still only warn, so a typo'd `passwrd_file` is still dropped silently there (the repository is scanned with no password file, so snapshot listing is skipped).

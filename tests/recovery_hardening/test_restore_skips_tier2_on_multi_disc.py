@@ -9,7 +9,7 @@ cryptic "pack not found" error AFTER the meta disc is unmounted --
 leaving the operator stranded.
 
 The fix: detect the missing ``$REPO/data/`` before tier-2 dispatch
-and fall straight through to tier 3 (standalone_restorer.py), which
+and fall straight through to tier 3 (python_reader.py), which
 DOES understand the LCSAS pack-search protocol.  Single-disc
 archives (where ``$REPO/data/`` IS present) still go through tier 2
 as before.
@@ -73,10 +73,10 @@ def _make_singledisc_repo(recovery: Path) -> Path:
 
 
 def _install_tier3(recovery: Path, tmp_path: Path) -> Path:
-    """Wire up a stub tier-3 (standalone_restorer.py + python3) that
+    """Wire up a stub tier-3 (python_reader.py + python3) that
     just prints a marker and exits 0.  Returns the stub bin dir
     (caller prepends to PATH)."""
-    (recovery.parent / "standalone_restorer.py").write_text(
+    (recovery.parent / "python_reader.py").write_text(
         "# stub tier-3 restorer\n"
     )
     stub_dir = tmp_path / "stubbin"
@@ -113,7 +113,7 @@ def test_tier2_skipped_when_repo_has_no_local_data(tmp_path: Path) -> None:
         "PATH": f"{stub_path}:" + os.environ.get("PATH", ""),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -155,7 +155,7 @@ def test_tier2_runs_when_repo_has_local_data(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

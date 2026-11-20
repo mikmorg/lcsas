@@ -66,18 +66,18 @@ volumes — show how many fresh target volumes their surviving (non-pruned)
 packs will require, without touching any state.
 
 **Prerequisites:**
-- Master catalog reachable (`--db` / config `db_path`).
+- Master catalog reachable (`--catalog` / config `db_path`).
 - Source volumes exist in the catalog and contain packs.
 - Pack rows for sources have `is_pruned` correctly set by a prior
   `lcsas scan` or pack-pruning workflow (pruned packs are *excluded*
   from the consolidation plan — `tests/unit/test_consolidate.py:46-62`).
 
 **Steps:**
-1. Parse `volume_ids` (positional, one or more) and `--target-media`
+1. Parse `volume_ids` (positional, one or more) and `--media-type`
    (default `MDISC100`) from the CLI (`build_parser()`).
 2. Open a locked catalog connection and ensure schema is current
    (`cmd_consolidate`).
-3. Resolve `--target-media` to a `MediaType`; reject unknown names
+3. Resolve `--media-type` to a `MediaType`; reject unknown names
    with the list of valid types (`cmd_consolidate`).
 4. Construct `VolumeMerger` with the configured metadata reserve
    (default 100 MiB — `cmd_consolidate`,
@@ -115,7 +115,7 @@ packs will require, without touching any state.
   or missing volume).
 
 **Variant axes that apply:**
-- **Media type** — `--target-media` accepts any `MediaType` enum
+- **Media type** — `--media-type` accepts any `MediaType` enum
   member (`BD25`, `MDISC100`, `BDXL100`, `TEST_TINY` —
   `src/lcsas/config/media.py`).  Bigger targets mean fewer
   output volumes; ECC overhead is media-specific.
@@ -473,7 +473,7 @@ catalog and physical reality (FMA-01).  Two independent checks:
    Report-only; never auto-fixed.
 
 **Prerequisites:**
-- Master catalog reachable (`--db` / config `db_path`).
+- Master catalog reachable (`--catalog` / config `db_path`).
 - For `--fix`: an interactive terminal for the confirmation prompt,
   or `--yes` to skip it (`cmd_catalog_reconcile`).
 
@@ -711,7 +711,7 @@ Answers "is it safe to lose these discs?" before taking them out of
 service or destroying them.
 
 **Prerequisites:**
-- Master catalog reachable (`--db` / config `db_path`).
+- Master catalog reachable (`--catalog` / config `db_path`).
 - The volume exists in the catalog (looked up by **label**, not ID).
 - `--snapshots` additionally needs the live Rustic mirror reachable
   to map at-risk packs to the snapshots they break.

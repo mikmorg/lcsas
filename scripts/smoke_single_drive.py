@@ -48,7 +48,7 @@ META_ISO = ISO_OUT / "LCSAS_META.iso"
 RESTORE_TARGET = ROOT / "restored"
 # restore.sh's work folder is its tools folder (LCSAS_TOOLS_DIR); it looks
 # for discs in MOUNT_DIR (LCSAS_MOUNT_DIRS), where the drive is mounted.
-TOOLS_DIR = ROOT / "lcsas-restore-tools"
+TOOLS_DIR = ROOT / "lcsas-tools"
 MOUNT_DIR = ROOT / "mnt"
 PW_FILE = ROOT / "smoke.pw"
 CDEMU = Path(__file__).parent / "cdemu_drive.sh"
@@ -349,7 +349,7 @@ def run_restore(iso_files: list[Path]) -> int:
 
 def verify_restore(manifest: dict[str, str]) -> bool:
     """Compare every source file's SHA-256 against the restored copy."""
-    # restore.sh --target DIR restores into DIR itself (the retired
+    # restore.sh --restore-folder DIR restores into DIR itself (the retired
     # driver used DIR/<set>, #756); the snapshot's absolute source path
     # is kept below it, so find the source folder inside.
     restored_root = RESTORE_TARGET

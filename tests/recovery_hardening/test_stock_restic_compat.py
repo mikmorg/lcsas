@@ -4,7 +4,7 @@ WHY THIS GATE EXISTS
 --------------------
 LCSAS ships three restore tiers built from code we wrote or bundle (the C89
 ``lcsas-restore``, the pinned ``rustic-static``, the pure-Python
-``standalone_restorer.py``).  A separate, deliberate hedge is that an LCSAS
+``python_reader.py``).  A separate, deliberate hedge is that an LCSAS
 archive must *also* be recoverable with **only widely-available, externally-
 audited tools and zero LCSAS code** -- so a heir who distrusts (or cannot run)
 anything we shipped can still get their data back:

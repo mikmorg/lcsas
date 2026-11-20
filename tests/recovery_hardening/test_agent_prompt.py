@@ -91,7 +91,7 @@ def test_tmux_is_not_presented_as_required_to_real_operators() -> None:
     This test verifies that any tmux reference in the file is accompanied
     by clear framing — either "test-rig" or "test harness" — within 500
     characters of the first tmux mention.  It also verifies that
-    recovery/docs/RECOVER.txt (the real-operator guide) contains no tmux
+    recovery/docs/RESTORE.txt (the real-operator guide) contains no tmux
     reference at all.
     """
     text = _text()
@@ -117,18 +117,18 @@ def test_tmux_is_not_presented_as_required_to_real_operators() -> None:
         "agent_prompt.txt mentions tmux but does not flag it as a "
         "test-rig or test-harness workaround within 500 characters of "
         "the first 'tmux' occurrence.  Add a NOTE explaining that real "
-        "operators do not need tmux — see recovery/docs/RECOVER.txt for "
+        "operators do not need tmux — see recovery/docs/RESTORE.txt for "
         "the real flow."
     )
 
-    # 2. RECOVER.txt (the real-operator guide) must NOT mention tmux.
+    # 2. RESTORE.txt (the real-operator guide) must NOT mention tmux.
     recover_txt = (
-        REPO_ROOT / "recovery" / "docs" / "RECOVER.txt"
+        REPO_ROOT / "recovery" / "docs" / "RESTORE.txt"
     ).read_text(encoding="utf-8")
     assert "tmux" not in recover_txt, (
-        "recovery/docs/RECOVER.txt mentions tmux.  The real-operator "
+        "recovery/docs/RESTORE.txt mentions tmux.  The real-operator "
         "guide must not reference tmux — that is a test-rig artifact.  "
-        "Remove any tmux references from RECOVER.txt."
+        "Remove any tmux references from RESTORE.txt."
     )
 
 

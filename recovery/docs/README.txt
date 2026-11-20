@@ -15,13 +15,13 @@ QUICK START
   make test
 
   # Restore from a meta disc:
-  sh scripts/restore.sh /path/to/recovery /path/to/target
+  sh scripts/restore.sh --restore-folder /path/to/folder /path/to/recovery
 
 DOCUMENTATION
 
   BUILD.txt           -- compilation and cross-compilation
-  RECOVER.txt         -- macOS / Linux manual restore walkthrough
-  RECOVER_WINDOWS.txt -- Windows restore walkthrough
+  RESTORE.txt         -- macOS / Linux manual restore walkthrough
+  RESTORE_WINDOWS.txt -- Windows restore walkthrough
   TIERS.txt           -- recovery tier hierarchy + Python-free guarantee
   BOOT.txt            -- no-OS restore procedure (live-USB; the
                          discs themselves are NOT bootable)

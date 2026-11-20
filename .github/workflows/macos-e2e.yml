@@ -30,12 +30,12 @@ name: macos-e2e
 # discovery offered the one backup set once per disc ("Multiple
 # repositories on this archive: 1) win 2) win ...") and exited 1 without a
 # terminal.  The happy path runs both ways: the heir's plain invocation and
-# with LCSAS_REPO set to the set's name.
+# with LCSAS_BACKUP_SET set to the set's name.
 #
 # The set is registered with `lcsas repo add`, as an owner does, so its
 # folder on the discs is named by a UUID id, not by its name "Family
 # photos" (#617); the happy path checks restore.sh prints the name (#606).
-# The fixture has ONE set.  restore.sh still checks that LCSAS_REPO names
+# The fixture has ONE set.  restore.sh still checks that LCSAS_BACKUP_SET names
 # it (#802: an unknown name stops the run), so these legs show the set's
 # name is matched on macOS too.  Picking one set among several is gated
 # on Linux (tests/recovery_hardening/test_restore_sh_journey.py).  A second
@@ -147,12 +147,12 @@ jobs:
           path: fixture
 
       # The name is fixture_lib.WINDOWS_SET_NAME.  With one set restore.sh
-      # checks LCSAS_REPO names it (see the header).
-      - name: restore.sh with every disc attached (happy path, LCSAS_REPO set)
+      # checks LCSAS_BACKUP_SET names it (see the header).
+      - name: restore.sh with every disc attached (happy path, LCSAS_BACKUP_SET set)
         timeout-minutes: 10
         run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo "Family photos"
 
-      - name: restore.sh with every disc attached (happy path, no LCSAS_REPO)
+      - name: restore.sh with every disc attached (happy path, no LCSAS_BACKUP_SET)
         # The heir's plain invocation.  Until #533 it died at a bogus
         # "Multiple repositories" picker with >= 2 data discs mounted.
         timeout-minutes: 10

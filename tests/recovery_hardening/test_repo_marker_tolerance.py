@@ -1,8 +1,8 @@
-"""test_repo_marker_tolerance.py -- the real readers ignore LCSAS_REPO.txt.
+"""test_repo_marker_tolerance.py -- the real readers ignore LCSAS_BACKUP_SET.txt.
 
 WHY THIS GATE EXISTS
 --------------------
-rc6 (contract C1) puts a backup set marker, ``LCSAS_REPO.txt``, inside
+rc6 (contract C1) puts a backup set marker, ``LCSAS_BACKUP_SET.txt``, inside
 every ``metadata/<repo_id>/`` folder on every disc.  That folder is the
 root of the restic repository that the readers open: tier 1 with
 ``--repo``, tier 2 (rustic-static) with ``--repository``, tier 2b and the
@@ -18,7 +18,7 @@ carries a marker (with a hostile name and a split), and
     byte for byte.
 
 The tier-3 Python reader (``restic_fallback`` and the generated
-``standalone_restorer.py``) is checked in ``tests/unit/test_repo_marker.py``.
+``python_reader.py``) is checked in ``tests/unit/test_repo_marker.py``.
 
 Each test skips when its binary is absent (``rustic`` / ``restic`` on
 PATH, or ``LCSAS_RESTIC_BIN`` for stock restic).
@@ -169,7 +169,7 @@ def test_stock_restic_restores_and_checks_with_the_marker(
     # The tier-2b command line of restore.sh.
     res = subprocess.run(
         [restic, "--no-cache", "-r", str(repo), "restore", "latest",
-         "--target", str(out), "--no-lock"],
+         "--restore-folder", str(out), "--no-lock"],
         capture_output=True, text=True, env=env, timeout=180,
     )
     assert res.returncode == 0, res.stderr
@@ -191,7 +191,7 @@ def test_tier1_restores_with_the_marker(
     out = tmp_path / "tier1-out"
     res = subprocess.run(
         [str(_tier1_bin()), "--repo", str(repo), "--password-file", str(pwfile),
-         "--target", str(out), "--interactive", "off"],
+         "--restore-folder", str(out), "--interactive", "off"],
         capture_output=True, text=True, timeout=180,
     )
     assert res.returncode == 0, res.stderr

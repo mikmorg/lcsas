@@ -99,7 +99,7 @@ def meta(wine: _Wine, tmp_path: Path) -> Iterator[Path]:
     no folder, no pack cache, no tools folder (its catalog copy would be
     used again).  The META tree sits beside the prefix, on its disk."""
     _harden_prefix_drives(wine.prefix)
-    for tools in wine.drive_c.glob("users/*/AppData/Local/LCSAS-restore"):
+    for tools in wine.drive_c.glob("users/*/AppData/Local/lcsas-tools"):
         shutil.rmtree(tools, ignore_errors=True)
     root = wine.prefix.parent / f"meta-{tmp_path.name}"
     _make_meta_tree(root)
@@ -169,7 +169,7 @@ def _run(wine: _Wine, target: str, **extra: str) -> tuple[int, str]:
     res = _run_bat(
         wine.env, "e",
         stdin_data=target + "\n",
-        extra_env={"LCSAS_PW": "not-used", "LCSAS_PACK_CACHE_DIR": "C:\\cache660",
+        extra_env={"LCSAS_PASSWORD": "not-used", "LCSAS_PACK_CACHE_DIR": "C:\\cache660",
                    **extra},
     )
     return res.returncode, res.stdout + res.stderr
@@ -209,9 +209,9 @@ def _several_sets_up_to_the_question(wine: _Wine, meta: Path) -> _Run:
     # _Run reads only .env and .drive_c, which this _Wine has too.
     run = _Run(wine, "E:\\recovery\\scripts\\restore.bat", extra_env={  # type: ignore[arg-type]
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
-        "LCSAS_PW": "not-used",
+        "LCSAS_PASSWORD": "not-used",
         "LCSAS_PACK_CACHE_DIR": "C:\\cache660",
     })
     run.answer("Which one do you want to restore? [1]: ", "1")
@@ -264,9 +264,9 @@ def test_the_chosen_set_is_sized_on_its_own(wine: _Wine, meta: Path) -> None:
     _catalog_per_set(meta, {"repo": 1024 * 1024, "setb": _free(wine) * 2})
     run = _Run(wine, "E:\\recovery\\scripts\\restore.bat", extra_env={  # type: ignore[arg-type]
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
-        "LCSAS_PW": "not-used",
+        "LCSAS_PASSWORD": "not-used",
         "LCSAS_PACK_CACHE_DIR": "C:\\cache660",
     })
     run.answer("Which one do you want to restore? [1]: ", "1")

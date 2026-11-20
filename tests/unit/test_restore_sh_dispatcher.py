@@ -32,7 +32,7 @@ def _run_dispatcher(
     uname_s: str, uname_m: str, *, target_override: str = ""
 ) -> tuple[int, str, str]:
     """Run the live host_triple, then the main dispatch's choice
-    (``${LCSAS_TARGET:-$(host_triple ...)}``) and its messages for an
+    (``${LCSAS_PLATFORM:-$(host_triple ...)}``) and its messages for an
     unsupported computer, in a fresh /bin/sh.
 
     ``MACHINE`` and ``OS`` come in as environment variables rather than
@@ -44,7 +44,7 @@ def _run_dispatcher(
     """
     script = _host_triple_source() + r"""
         set -eu
-        TARGET="${LCSAS_TARGET:-$(host_triple "$OS" "$MACHINE")}"
+        TARGET="${LCSAS_PLATFORM:-$(host_triple "$OS" "$MACHINE")}"
         if [ -z "$TARGET" ]; then
             case "$OS" in
                 Linux)  printf 'unsupported Linux machine: %s\n' "$MACHINE" >&2 ;;
@@ -61,7 +61,7 @@ def _run_dispatcher(
         "PATH": "/usr/bin:/bin",
         "MACHINE": uname_m,
         "OS": uname_s,
-        "LCSAS_TARGET": target_override,
+        "LCSAS_PLATFORM": target_override,
     }
     proc = subprocess.run(
         ["sh", "-c", script], capture_output=True, text=True, env=env
@@ -98,11 +98,11 @@ def test_dispatcher_maps_supported_pair_to_target(os, machine, expected_target):
     assert out == expected_target
 
 
-# ── Override path: $LCSAS_TARGET wins over auto-detection ──
+# ── Override path: $LCSAS_PLATFORM wins over auto-detection ──
 
 
 def test_dispatcher_honors_lcsas_target_override():
-    """Setting $LCSAS_TARGET forces the dispatcher to skip auto-detection."""
+    """Setting $LCSAS_PLATFORM forces the dispatcher to skip auto-detection."""
     rc, out, _err = _run_dispatcher(
         "Linux", "x86_64",
         target_override="aarch64-unknown-linux-musl",
@@ -156,7 +156,7 @@ def test_live_restore_sh_contains_full_target_matrix():
     assert '"$RECOVERY/bin/$TARGET/lcsas-restore"' in content
     assert '"$RECOVERY/bin/$TARGET/rustic-static"' in content
     # The override env var must still be honored.
-    assert "LCSAS_TARGET" in content
+    assert "LCSAS_PLATFORM" in content
     # The messages _run_dispatcher prints are the live script's.
     for msg in ("unsupported Linux machine: %s", "unsupported macOS machine: %s",
                 "unsupported Windows machine: %s", "unsupported OS: %s"):

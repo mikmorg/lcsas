@@ -1,7 +1,7 @@
 """Hardening (#517): with nowhere to relocate to, restore.sh warns and goes on.
 
 relocate_to_ram tries the tools folder ($LCSAS_TOOLS_DIR, default
-$HOME/lcsas-restore-tools, #609), then $TMPDIR, $XDG_RUNTIME_DIR, /tmp,
+$HOME/lcsas-tools, #609), then $TMPDIR, $XDG_RUNTIME_DIR, /tmp,
 /run, /var/tmp and $HOME.  When none of them takes a copy, it prints "cannot find a
 writable dir to relocate to; continuing from <disc> (drive will be
 held)" and returns 1, and the caller's `|| true` keeps `set -eu` from
@@ -102,12 +102,12 @@ def test_no_scratch_dir_warns_and_restores_from_the_disc(tmp_path: Path) -> None
         "LCSAS_MOUNT_DIRS": str(meta),
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_SKIP_SPACE_CHECK": "1",
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
     }
     for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE"):
         env.pop(k, None)
     res = subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "out")],
         input="pw\n", capture_output=True, text=True, env=env, timeout=60,
         cwd=meta,
     )

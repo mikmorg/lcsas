@@ -10,7 +10,7 @@ Now it copies only bin/<host triple>/ (all restore.sh ever reads), and
 the copy is removed when a restore succeeds (#508).
 
 Since rc6 the copy goes to the fixed tools folder ($LCSAS_TOOLS_DIR,
-default $HOME/lcsas-restore-tools), which stays after any exit that is
+default $HOME/lcsas-tools), which stays after any exit that is
 not a success so the restore can carry on (#609); a temporary folder is
 the fallback.  A line before the copy says it may take minutes (#612).
 These tests were updated for that: they used to expect the copy under
@@ -72,21 +72,21 @@ def _stick(tmp_path: Path) -> Path:
 def _run(meta: Path, tmp_path: Path, relocate_into: Path,
          tools: Path | None = None, stub_rc: int = 0, repo: str = "alpha"):
     env = {
-        "LCSAS_REPO": repo,
+        "LCSAS_BACKUP_SET": repo,
         **os.environ,
         "HOME": str(tmp_path),
         "TMPDIR": str(relocate_into),
         "LCSAS_MOUNT_DIRS": str(meta),
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_SKIP_SPACE_CHECK": "1",
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
         "LCSAS_TOOLS_DIR": str(tools or relocate_into / "tools"),
         "STUB_RC": str(stub_rc),
     }
     for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC"):
         env.pop(k, None)
     return subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "out")],
         input="pw\n", capture_output=True, text=True, env=env, timeout=60,
     )
 
@@ -167,7 +167,7 @@ def _old_tools(tools: Path, build_line: str) -> None:
     )
     (tools / "pack-cache" / "data").mkdir(parents=True)
     (tools / "pack-cache" / "data" / "cached-pack").write_text("pack")
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
 
 
 def test_tools_from_another_build_are_replaced(tmp_path: Path, shm_dir: Path) -> None:
@@ -222,7 +222,7 @@ def test_temporary_tools_folder_can_be_carried_on(
     busy LCSAS_TOOLS_DIR IS the tools folder: a stop keeps it, with a
     resume.sh that carries the restore on (#609).  The docs used to say
     such a run could not be carried on (ENV_VARS.txt LCSAS_TOOLS_DIR,
-    RECOVER.txt "THE TOOLS FOLDER", MULTI_DISC_DESIGN.txt, the sh-vs-bat
+    RESTORE.txt "THE TOOLS FOLDER", MULTI_DISC_DESIGN.txt, the sh-vs-bat
     table in restore-windows.md); only a run in place cannot.  (The
     LCSAS_TOOLS_DIR here cannot be made; one that holds other files is
     refused since #627 item 4.)"""
@@ -249,7 +249,7 @@ def test_temporary_tools_folder_can_be_carried_on(
         "STUB_RC": "0",
     }
     for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC",
-              "LCSAS_TOOLS_DIR", "LCSAS_REPO"):
+              "LCSAS_TOOLS_DIR", "LCSAS_BACKUP_SET"):
         env.pop(k, None)
     again = subprocess.run(
         ["sh", str(resume)], input="pw\n", capture_output=True, text=True,
@@ -271,7 +271,7 @@ def test_run_from_recovery_scripts_copies_the_docs_and_root_metadata(
     meta = _stick(tmp_path)
     (meta / "recovery" / "scripts" / "restore.sh").write_text(RESTORE_SH.read_text())
     (meta / "recovery" / "docs").mkdir()
-    (meta / "recovery" / "docs" / "RECOVER.txt").write_text("manual\n")
+    (meta / "recovery" / "docs" / "RESTORE.txt").write_text("manual\n")
     tools = shm_dir / "tools"
     env = {
         **os.environ,
@@ -280,18 +280,19 @@ def test_run_from_recovery_scripts_copies_the_docs_and_root_metadata(
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_SKIP_SPACE_CHECK": "1",
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
         "LCSAS_TOOLS_DIR": str(tools),
         "STUB_RC": "1",
     }
-    for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC", "LCSAS_REPO"):
+    for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC", "LCSAS_BACKUP_SET"):
         env.pop(k, None)
     res = subprocess.run(
-        ["sh", str(meta / "recovery" / "scripts" / "restore.sh"), str(tmp_path / "out")],
+        ["sh", str(meta / "recovery" / "scripts" / "restore.sh"),
+         "--restore-folder", str(tmp_path / "out")],
         input="pw\n", capture_output=True, text=True, env=env, timeout=60,
     )
     assert res.returncode == 1, res.stderr
-    assert (tools / "recovery" / "docs" / "RECOVER.txt").read_text() == "manual\n"
+    assert (tools / "recovery" / "docs" / "RESTORE.txt").read_text() == "manual\n"
     assert (tools / "metadata" / "alpha" / "keys").is_dir(), res.stderr
     # With no data disc mounted, the set comes from the copy.
     assert f"using repository {tools}/metadata/alpha" in res.stderr, res.stderr

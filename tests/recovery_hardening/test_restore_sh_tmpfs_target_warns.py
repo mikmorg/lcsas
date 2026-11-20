@@ -12,7 +12,7 @@ target directory:
   runs;
 * tmpfs target, non-interactive → warning on stderr, restore proceeds
   (automation that legitimately restores to tmp paths keeps working);
-* ``LCSAS_FORBID_TMPFS_TARGET=1`` makes the non-interactive case fatal;
+* ``LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1`` makes the non-interactive case fatal;
 * disk-backed targets produce no warning and no prompt;
 * the ``/proc/mounts`` awk fallback (no findmnt) detects tmpfs via the
   ``LCSAS_PROC_MOUNTS`` test seam.
@@ -95,10 +95,10 @@ def _env(stub_dir: Path | None) -> dict[str, str]:
         "LCSAS_PASSWORD": "stub-pw",
     }
     for var in (
-        "LCSAS_PWFILE",
+        "LCSAS_PASSWORD_FILE",
         "LCSAS_PROC_MOUNTS",
-        "LCSAS_ALLOW_TMPFS_TARGET",
-        "LCSAS_FORBID_TMPFS_TARGET",
+        "LCSAS_ALLOW_TMPFS_RESTORE_FOLDER",
+        "LCSAS_FORBID_TMPFS_RESTORE_FOLDER",
     ):
         env.pop(var, None)
     if stub_dir is not None:
@@ -118,7 +118,7 @@ def test_tmpfs_target_warns_and_prompts(tmp_path: Path) -> None:
     master, slave = pty.openpty()
     try:
         proc = subprocess.Popen(
-            ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored")],
+            ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
             stdin=slave,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -157,7 +157,7 @@ def test_tmpfs_target_noninteractive_warns_continues(tmp_path: Path) -> None:
     target = tmp_path / "restored"
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=_env(stubs), timeout=30,
@@ -183,32 +183,32 @@ def test_tmpfs_target_noninteractive_warns_continues(tmp_path: Path) -> None:
     )
 
 
-# ── LCSAS_FORBID_TMPFS_TARGET=1 makes non-interactive runs fail ───────
+# ── LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1 makes non-interactive runs fail ───────
 
 
 def test_forbid_env_blocks(tmp_path: Path) -> None:
-    """LCSAS_FORBID_TMPFS_TARGET=1 + tmpfs target → warn and hard-fail."""
+    """LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1 + tmpfs target → warn and hard-fail."""
     recovery = _recovery_fixture(tmp_path)
     stubs = tmp_path / "stubs"
     _install_findmnt_stub(stubs, "tmpfs")
     env = _env(stubs)
-    env["LCSAS_FORBID_TMPFS_TARGET"] = "1"
+    env["LCSAS_FORBID_TMPFS_RESTORE_FOLDER"] = "1"
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored")],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=env, timeout=30,
         start_new_session=True,
     )
     assert res.returncode != 0, (
-        f"LCSAS_FORBID_TMPFS_TARGET=1 must abort on a tmpfs target.\n"
+        f"LCSAS_FORBID_TMPFS_RESTORE_FOLDER=1 must abort on a tmpfs target.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     assert WARNING_SNIPPET in res.stderr, (
         f"the abort must still show the RAM warning.\nstderr:\n{res.stderr}"
     )
-    assert "LCSAS_FORBID_TMPFS_TARGET" in res.stderr, (
+    assert "LCSAS_FORBID_TMPFS_RESTORE_FOLDER" in res.stderr, (
         f"the abort must name the env knob.\nstderr:\n{res.stderr}"
     )
     assert "ARG: " not in res.stdout, (
@@ -228,7 +228,7 @@ def test_disk_target_silent(tmp_path: Path) -> None:
     target = tmp_path / "restored"
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=_env(stubs), timeout=30,
@@ -266,7 +266,7 @@ def test_proc_mounts_fallback(tmp_path: Path) -> None:
     env["LCSAS_PROC_MOUNTS"] = str(mounts)
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=env, timeout=30,

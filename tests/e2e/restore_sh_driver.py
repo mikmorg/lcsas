@@ -11,7 +11,8 @@ below is text ``restore.sh`` or tier 1 really prints, and
 
 The interface (``recovery/scripts/restore.sh``, since #689):
 
-- Flags: ``--repo NAME``, ``--target DIR``, ``--key FILE`` (and
+- Flags: ``--backup-set NAME``, ``--restore-folder DIR``,
+  ``--password-file FILE``, ``--snapshot ID`` (and
   ``--version``, ``--check-disc IMAGE``, ``--help``).  Any other flag
   exits 2.  There is no drive flag and no work folder flag.
 - The work folder is the tools folder, ``LCSAS_TOOLS_DIR``.  Run from a
@@ -90,9 +91,9 @@ def build_restore_cmd(
     """``sh <meta>/restore.sh`` with the flags a scripted restore uses."""
     return [
         "sh", str(meta_root / "restore.sh"),
-        "--key", str(key),
-        "--target", str(target),
-        "--repo", repo,
+        "--password-file", str(key),
+        "--restore-folder", str(target),
+        "--backup-set", repo,
     ]
 
 

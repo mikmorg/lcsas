@@ -44,7 +44,7 @@ LCSAS v1.0 ships without an independent security review. No outside person
 has reviewed LCSAS's own code, including the code that handles the crypto:
 the tier-1 C reader's decryption and authentication (scrypt, AES, Poly1305),
 the tier-3 Python reader's decryption and authentication, and the SLIP-0039
-share code (in Python and in the `lcsas-keyshare` C binary). The 2026-06
+share code (in Python and in the `lcsas-shares` C binary). The 2026-06
 audit was self-graded. The encryption format itself is not LCSAS's: it is
 restic's repository format, which rustic also uses.
 
@@ -58,7 +58,7 @@ Why this is acceptable:
 - **Tier 2b is the hedge.** It restores with no LCSAS code at all. The steps
   are in [`recovery/docs/RESTORE_STANDARD_TOOLS.txt`](recovery/docs/RESTORE_STANDARD_TOOLS.txt).
 - **The silent risk is the share code.** A bug there could write share cards
-  that do not rebuild the password. The yearly `lcsas key verify` in the
+  that do not rebuild the password. The yearly `lcsas password verify` in the
   [owner schedule](docs/workflows/verify-and-audit.md#owner-schedule) tests
   exactly that: it rebuilds the password from the cards and checks that it
   unlocks the repository.
@@ -107,7 +107,7 @@ Both repositories write to 100 GB M-Discs. Each burn cycle produces two discs of
 pip install -e .
 
 # Initialize the master catalog
-lcsas init --db-path /var/lib/lcsas/archive.db
+lcsas init --catalog-path /var/lib/lcsas/catalog.db
 ```
 
 ### 2. Create Password Files
@@ -162,7 +162,7 @@ Create `/etc/lcsas/config.toml`:
 [paths]
 mirror_base = "/mnt/mirror"
 staging     = "/mnt/staging"
-database    = "/var/lib/lcsas/archive.db"
+catalog     = "/var/lib/lcsas/catalog.db"
 
 [defaults]
 media_type         = "MDISC100"
@@ -516,16 +516,16 @@ The **meta disc** solves this by bundling *everything* needed for a restore onto
 
 | Path | Contents |
 |------|----------|
-| `recovery/bin/<triple>/` | Per-platform tier-1 (`lcsas-restore`), share combiner (`lcsas-keyshare`), disc repair (`lcsas-ecc`) and tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md). |
-| `metadata/<id>/` | Every backup set's keys, index and snapshots as of the meta disc's build, with its `LCSAS_REPO.txt` (the set's name).  The newest data disc carries newer copies. |
+| `recovery/bin/<triple>/` | Per-platform tier-1 (`lcsas-restore`), share combiner (`lcsas-shares`), disc repair (`lcsas-ecc`) and tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/history/CROSS_PLATFORM_META_RFC.md`](docs/history/CROSS_PLATFORM_META_RFC.md). |
+| `metadata/<id>/` | Every backup set's keys, index and snapshots as of the meta disc's build, with its `LCSAS_BACKUP_SET.txt` (the set's name).  The newest data disc carries newer copies. |
 | `tools/` | Portable Linux x86_64 tools (rustic, Python 3) and shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
-| `recovery/docs/` | On-disc recovery manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
+| `recovery/docs/` | On-disc recovery manual (`RESTORE.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
 | `restore.sh` | Interactive restore script — start here |
 | `restore.bat` | Windows entry point |
 | `recovery/scripts/restore_auto.sh` | Automation only: runs `restore.sh` for every backup set with no questions (off the disc root, so heirs see one restore script) |
-| `standalone_restorer.py` | Tier-3 Python reader (requires only Python 3.10+) |
-| `README_RESTORE.md` | Short guide that points at `recovery/docs/RECOVER.txt` (Linux, macOS) and `RECOVER_WINDOWS.txt` |
+| `python_reader.py` | Tier-3 Python reader (requires only Python 3.10+) |
+| `README_RESTORE.md` | Short guide that points at `recovery/docs/RESTORE.txt` (Linux, macOS) and `RESTORE_WINDOWS.txt` |
 | `VOLUME_INFO.txt` | Plain-text note: this is the meta disc, when it was built, the LCSAS version |
 | `volume_info.json` | Machine-readable details of this disc |
 
@@ -558,8 +558,8 @@ asks which backup set to restore and for its password, and pauses whenever it
 needs the next data disc.
 
 The heir's step-by-step procedure is not repeated here. It lives in one
-place: [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) (Linux and
-macOS) and [`recovery/docs/RECOVER_WINDOWS.txt`](recovery/docs/RECOVER_WINDOWS.txt)
+place: [`recovery/docs/RESTORE.txt`](recovery/docs/RESTORE.txt) (Linux and
+macOS) and [`recovery/docs/RESTORE_WINDOWS.txt`](recovery/docs/RESTORE_WINDOWS.txt)
 (Windows), both on the meta disc. They cover the exact commands, the
 questions the script asks, the disc swap steps, resuming a stopped restore,
 restoring from ISO images when you have no optical drive, and all
@@ -614,7 +614,7 @@ The recovery cascade declares three tiers (see
 |---|---|---|
 | **1** (primary) | our C89 `lcsas-restore` against vendored sqlite/zstd | **All 6 approved targets** (Phase 21.10.b/.11/.12) |
 | 2 (fallback) | upstream `rustic-static` | All 6 targets bundled |
-| 3 (last resort) | bundled CPython + `standalone_restorer.py` | All 6 targets bundled |
+| 3 (last resort) | bundled CPython + `python_reader.py` | All 6 targets bundled |
 
 The intent (see PR #30 and `recovery/docs/TIERS.txt`): tier 1 is
 the **primary** recovery tool because C89 has been ABI-stable for
@@ -686,7 +686,7 @@ in the original design RFC (historical) [`docs/history/CROSS_PLATFORM_META_RFC.m
 
 The restore driver (`recovery/scripts/restore.sh`) auto-detects the
 restoring host's `(uname -s, uname -m)` and selects the right
-`bin/<target>/` subtree.  Override with `$LCSAS_TARGET=<target-triple>`
+`bin/<target>/` subtree.  Override with `$LCSAS_PLATFORM=<target-triple>`
 if auto-detection misfires (e.g. when running under QEMU or chroot).
 
 ### Operational Recommendation
@@ -833,7 +833,7 @@ resolve somewhere predictable. Override with `LCSAS_IMAGE`, `LCSAS_ROOT`,
 `LCSAS_CONFIG`, `LCSAS_SRC` (rustic-c source mounts, read-only) and
 `LCSAS_EXTRA` (lcsas restore targets).
 
-`[paths].database` may point anywhere under `LCSAS_ROOT`; every command
+`[paths].catalog` may point anywhere under `LCSAS_ROOT`; every command
 honours it, and `LCSAS_CONFIG` is injected automatically.
 
 The image bakes in `src/`, so rebuild it after changing LCSAS source.

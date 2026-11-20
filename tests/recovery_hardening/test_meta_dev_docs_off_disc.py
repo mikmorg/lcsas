@@ -4,7 +4,7 @@ FAILURE MODE CAUGHT
 -------------------
 recovery/docs/ held nine developer-process records (audit ledgers, a
 Windows design plan, the owner's readiness checklist, two redirect stubs)
-next to RECOVER.txt.  Every meta disc burned them, so a non-technical heir
+next to RESTORE.txt.  Every meta disc burned them, so a non-technical heir
 browsing the disc met hundreds of lines of developer noise.
 
 WHAT THIS GATE ASSERTS
@@ -94,7 +94,7 @@ def test_no_developer_record_on_the_disc(
     assert found == [], f"developer records on the meta disc: {found}"
     assert not (out / "docs" / "development" / "recovery").exists()
     # The heir manuals are still there.
-    assert (out / "recovery" / "docs" / "RECOVER.txt").is_file()
+    assert (out / "recovery" / "docs" / "RESTORE.txt").is_file()
     assert (out / "docs" / "development" / "roadmap.md").is_file()
 
     _check_manifest(out / "recovery" / "MANIFEST.sha256")
