@@ -89,7 +89,7 @@ TEST_BINS = \
 # Binary extension is overridden by the Windows cross-build target.
 BIN_EXT ?=
 
-all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-keyshare$(BIN_EXT) $(BUILD)/lcsas-ecc$(BIN_EXT)
+all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-shares$(BIN_EXT) $(BUILD)/lcsas-ecc$(BIN_EXT)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -112,11 +112,11 @@ $(BUILD)/iso9660_main.o: src/lcsas-iso9660/main.c src/lcsas-iso9660/iso9660.h $(
 $(BUILD)/main.o: $(SRCDIR)/main.c $(SRCDIR)/repo.h $(SRCDIR)/tree.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/main.c -o $@
 
-# ── lcsas-keyshare (SLIP-0039 combiner) ───────────────────────────
+# ── lcsas-shares (SLIP-0039 combiner) ───────────────────────────
 # Reuses sha256.o + pbkdf2.o + hex.o objects from lcsas-restore.
 KEYSHARE_DIR = src/lcsas-keyshare
 
-$(BUILD)/lcsas-keyshare$(BIN_EXT): $(BUILD) $(BUILD)/keyshare_slip39.o \
+$(BUILD)/lcsas-shares$(BIN_EXT): $(BUILD) $(BUILD)/keyshare_slip39.o \
 		$(BUILD)/keyshare_wordlist.o $(BUILD)/keyshare_main.o \
 		$(BUILD)/sha256.o $(BUILD)/pbkdf2.o
 	$(CC) $(CFLAGS) $(LDFLAGS) \
@@ -319,8 +319,13 @@ $(BUILD)/test_ecc: $(TESTDIR)/test_ecc.c \
 	$(CC) $(CFLAGS) -I$(ECC_DIR) $(TESTDIR)/test_ecc.c \
 	    $(BUILD)/ecc_gf256.o $(BUILD)/ecc_rs03.o -o $@
 
-test: $(TEST_BINS) $(BUILD)/lcsas-restore
+test: $(TEST_BINS) $(BUILD)/lcsas-restore $(BUILD)/lcsas-shares
 	@set -e; for t in $(TEST_BINS); do echo "==> $$t"; $$t; done; echo "ALL OK"
+	@# #934: the retired flag and variable fail with exit 2 and a
+	@# "renamed" line.  Runs the built programs, so coverage-c and
+	@# sanitize cover those branches.
+	@echo "==> renamed names"
+	@sh tests/test_renamed_names.sh $(BUILD)
 	@# UX-08 layer 2 (local): restore.bat wine smoke.  Conditional on wine
 	@# being installed -- the script self-skips (exit 77) otherwise, so a
 	@# host without wine still passes `make test`.  The faithful Windows
@@ -467,7 +472,7 @@ bin/aarch64-macos/lcsas-restore:
 
 macos: bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore
 
-# ── lcsas-keyshare per-arch cross builds ──────────────────────────
+# ── lcsas-shares per-arch cross builds ──────────────────────────
 # The SLIP-0039 combiner, so rebuilding a split password is python-free on
 # every approved tier-1 target.  Built with zig cc; the combiner links
 # ONLY the C89 recovery crypto primitives (sha256/pbkdf2/hex) — no
@@ -476,36 +481,36 @@ macos: bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore
 # dynamic; windows-gnu is PE).  Separate build/<arch>-ks dirs so these
 # never clobber the lcsas-restore cross-build trees.  `make keyshare-arches`
 # regenerates all six.
-bin/x86_64/lcsas-keyshare:
-	$(MAKE) BUILD=build/x86_64-ks CC="$(ZIG_CC) -target x86_64-linux-musl" build/x86_64-ks/lcsas-keyshare
-	mkdir -p bin/x86_64 && cp build/x86_64-ks/lcsas-keyshare bin/x86_64/
+bin/x86_64/lcsas-shares:
+	$(MAKE) BUILD=build/x86_64-ks CC="$(ZIG_CC) -target x86_64-linux-musl" build/x86_64-ks/lcsas-shares
+	mkdir -p bin/x86_64 && cp build/x86_64-ks/lcsas-shares bin/x86_64/
 
-bin/aarch64/lcsas-keyshare:
-	$(MAKE) BUILD=build/aarch64-ks CC="$(ZIG_CC) -target aarch64-linux-musl" build/aarch64-ks/lcsas-keyshare
-	mkdir -p bin/aarch64 && cp build/aarch64-ks/lcsas-keyshare bin/aarch64/
+bin/aarch64/lcsas-shares:
+	$(MAKE) BUILD=build/aarch64-ks CC="$(ZIG_CC) -target aarch64-linux-musl" build/aarch64-ks/lcsas-shares
+	mkdir -p bin/aarch64 && cp build/aarch64-ks/lcsas-shares bin/aarch64/
 
-bin/armv7/lcsas-keyshare:
-	$(MAKE) BUILD=build/armv7-ks CC="$(ZIG_CC) -target arm-linux-musleabihf" build/armv7-ks/lcsas-keyshare
-	mkdir -p bin/armv7 && cp build/armv7-ks/lcsas-keyshare bin/armv7/
+bin/armv7/lcsas-shares:
+	$(MAKE) BUILD=build/armv7-ks CC="$(ZIG_CC) -target arm-linux-musleabihf" build/armv7-ks/lcsas-shares
+	mkdir -p bin/armv7 && cp build/armv7-ks/lcsas-shares bin/armv7/
 
-bin/x86_64-windows/lcsas-keyshare.exe:
-	$(MAKE) BUILD=build/x86_64-windows-ks CC="$(ZIG_CC) -target x86_64-windows-gnu" "LDFLAGS=-Wl,--strip-debug" BIN_EXT=.exe build/x86_64-windows-ks/lcsas-keyshare.exe
-	mkdir -p bin/x86_64-windows && cp build/x86_64-windows-ks/lcsas-keyshare.exe bin/x86_64-windows/
+bin/x86_64-windows/lcsas-shares.exe:
+	$(MAKE) BUILD=build/x86_64-windows-ks CC="$(ZIG_CC) -target x86_64-windows-gnu" "LDFLAGS=-Wl,--strip-debug" BIN_EXT=.exe build/x86_64-windows-ks/lcsas-shares.exe
+	mkdir -p bin/x86_64-windows && cp build/x86_64-windows-ks/lcsas-shares.exe bin/x86_64-windows/
 
-bin/x86_64-macos/lcsas-keyshare:
-	$(MAKE) BUILD=build/x86_64-macos-ks CC="$(ZIG_CC) -target x86_64-macos" "LDFLAGS=-Wl,-S" build/x86_64-macos-ks/lcsas-keyshare
-	mkdir -p bin/x86_64-macos && cp build/x86_64-macos-ks/lcsas-keyshare bin/x86_64-macos/
+bin/x86_64-macos/lcsas-shares:
+	$(MAKE) BUILD=build/x86_64-macos-ks CC="$(ZIG_CC) -target x86_64-macos" "LDFLAGS=-Wl,-S" build/x86_64-macos-ks/lcsas-shares
+	mkdir -p bin/x86_64-macos && cp build/x86_64-macos-ks/lcsas-shares bin/x86_64-macos/
 
-bin/aarch64-macos/lcsas-keyshare:
-	$(MAKE) BUILD=build/aarch64-macos-ks CC="$(ZIG_CC) -target aarch64-macos" "LDFLAGS=-Wl,-S" build/aarch64-macos-ks/lcsas-keyshare
-	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ks/lcsas-keyshare bin/aarch64-macos/
+bin/aarch64-macos/lcsas-shares:
+	$(MAKE) BUILD=build/aarch64-macos-ks CC="$(ZIG_CC) -target aarch64-macos" "LDFLAGS=-Wl,-S" build/aarch64-macos-ks/lcsas-shares
+	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ks/lcsas-shares bin/aarch64-macos/
 
 # Source deps so a keyshare .c/.h edit forces a rebuild (see ecc-arches).
 KEYSHARE_SRCS := $(wildcard $(KEYSHARE_DIR)/*.c $(KEYSHARE_DIR)/*.h)
-bin/x86_64/lcsas-keyshare bin/aarch64/lcsas-keyshare bin/armv7/lcsas-keyshare bin/x86_64-windows/lcsas-keyshare.exe bin/x86_64-macos/lcsas-keyshare bin/aarch64-macos/lcsas-keyshare: $(KEYSHARE_SRCS)
+bin/x86_64/lcsas-shares bin/aarch64/lcsas-shares bin/armv7/lcsas-shares bin/x86_64-windows/lcsas-shares.exe bin/x86_64-macos/lcsas-shares bin/aarch64-macos/lcsas-shares: $(KEYSHARE_SRCS)
 
-keyshare-arches: bin/x86_64/lcsas-keyshare bin/aarch64/lcsas-keyshare bin/armv7/lcsas-keyshare bin/x86_64-windows/lcsas-keyshare.exe bin/x86_64-macos/lcsas-keyshare bin/aarch64-macos/lcsas-keyshare
-	@echo "keyshare-arches: built lcsas-keyshare for all 6 approved tier-1 targets"
+keyshare-arches: bin/x86_64/lcsas-shares bin/aarch64/lcsas-shares bin/armv7/lcsas-shares bin/x86_64-windows/lcsas-shares.exe bin/x86_64-macos/lcsas-shares bin/aarch64-macos/lcsas-shares
+	@echo "keyshare-arches: built lcsas-shares for all 6 approved tier-1 targets"
 
 # ── lcsas-ecc per-arch cross builds ───────────────────────────────
 # The in-house RS03 verify/repair tool, so the disc-integrity REPAIR
@@ -685,13 +690,15 @@ coverage-c-run:
 	        ../tests/recovery_hardening/test_tier1_resume_fat_mtime.py
 	# (Step 3b, the LCSAS_STRESS_LOOKUPS run, is gone: that bench hook
 	# left main.c for tests/bench_index.c, #791.)
-	# Step 3d: exercise the lcsas-keyshare CLI (main.c) so coverage-c
+	# Step 3d: exercise the lcsas-shares CLI (main.c) so coverage-c
 	# reports it [KEY-06].  test_keyshare links only the combiner library
 	# (slip39.c/wordlist.c), never main.c, so without this main.c shows 0%.
 	# Compile an instrumented main.o, link it against the already-
 	# instrumented combiner+crypto objects, then drive both the success
-	# path (real LCSAS cards via `lcsas key split`) and the failure/usage
-	# paths.  All steps non-fatal: a source-only checkout without python3
+	# path (real LCSAS cards via `lcsas password split`) and the failure/usage
+	# paths, including the refused old LCSAS_KEYSHARE_PASSPHRASE (#934:
+	# recompiling keyshare_main.o here resets the counts `make test` took).
+	# All steps non-fatal: a source-only checkout without python3
 	# or the lcsas package skips cleanly (the integration card test is the
 	# binding proof — this only contributes coverage).
 	@( cc -O0 -g --coverage -std=c89 -pedantic -Wall -Wextra -Wshadow \
@@ -700,28 +707,29 @@ coverage-c-run:
 	   cc --coverage \
 	      $(BUILD)/keyshare_main.o $(BUILD)/keyshare_slip39.o \
 	      $(BUILD)/keyshare_wordlist.o $(BUILD)/sha256.o $(BUILD)/pbkdf2.o \
-	      -o $(BUILD)/lcsas-keyshare-cov ) 2>/dev/null \
-	    && echo "[coverage-c] built instrumented lcsas-keyshare-cov" \
+	      -o $(BUILD)/lcsas-shares-cov ) 2>/dev/null \
+	    && echo "[coverage-c] built instrumented lcsas-shares-cov" \
 	    || echo "[coverage-c] keyshare main.c instrument skipped (non-fatal)"
-	@if [ -x $(BUILD)/lcsas-keyshare-cov ] && command -v python3 >/dev/null 2>&1; then \
+	@if [ -x $(BUILD)/lcsas-shares-cov ] && command -v python3 >/dev/null 2>&1; then \
 	    ksdir=$(BUILD)/_cov_ks; rm -rf $$ksdir; mkdir -p $$ksdir; \
 	    printf 'coverage-pw\1' > $$ksdir/pw; \
-	    ( cd .. && python3 -m lcsas.cli.main key split --repo cov \
+	    ( cd .. && python3 -m lcsas.cli.main password split --repo cov \
 	          --threshold 2 --shares 3 \
 	          --password-file recovery/$$ksdir/pw \
 	          --out recovery/$$ksdir/shares >/dev/null 2>&1 ) \
-	      && $(BUILD)/lcsas-keyshare-cov \
+	      && $(BUILD)/lcsas-shares-cov \
 	            $$ksdir/shares/cov-share-1-card.txt \
 	            $$ksdir/shares/cov-share-2-card.txt >/dev/null 2>&1 \
 	      && echo "[coverage-c] keyshare main.c success path exercised" \
 	      || echo "[coverage-c] keyshare main.c success path skipped (non-fatal)"; \
 	    cat $$ksdir/shares/cov-share-1-card.txt $$ksdir/shares/cov-share-2-card.txt 2>/dev/null \
-	        | $(BUILD)/lcsas-keyshare-cov >/dev/null 2>&1 || true; \
-	    $(BUILD)/lcsas-keyshare-cov </dev/null >/dev/null 2>&1 || true; \
-	    $(BUILD)/lcsas-keyshare-cov --bogus-flag >/dev/null 2>&1 || true; \
-	    $(BUILD)/lcsas-keyshare-cov /nonexistent/card.txt >/dev/null 2>&1 || true; \
+	        | $(BUILD)/lcsas-shares-cov >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-shares-cov </dev/null >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-shares-cov --bogus-flag >/dev/null 2>&1 || true; \
+	    LCSAS_KEYSHARE_PASSPHRASE=x $(BUILD)/lcsas-shares-cov >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-shares-cov /nonexistent/card.txt >/dev/null 2>&1 || true; \
 	    echo "not a share" > $$ksdir/junk.txt; \
-	    $(BUILD)/lcsas-keyshare-cov $$ksdir/junk.txt >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-shares-cov $$ksdir/junk.txt >/dev/null 2>&1 || true; \
 	else \
 	    echo "[coverage-c] keyshare main.c exercise skipped (no python3/binary)"; \
 	fi
@@ -1045,7 +1053,7 @@ fuzz-repo: $(FUZZ_BUILD)/fuzz_repo_strip_v2
 	@echo "[fuzz-repo] 30min PASS — 0 crashes"
 
 # ── fuzz_slip39_mnemonic ─────────────────────────────────────────
-# The lcsas-keyshare SLIP-0039 combiner parses untrusted heir-typed text
+# The lcsas-shares SLIP-0039 combiner parses untrusted heir-typed text
 # (mnemonics + whole card files) on the 50-year critical path [KEY-06].
 # Links the combiner (slip39.c + wordlist.c) plus the reused C89 crypto
 # primitives (sha256.c + pbkdf2.c) — no vendored sqlite/zstd.

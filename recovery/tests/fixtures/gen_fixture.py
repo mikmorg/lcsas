@@ -1050,7 +1050,7 @@ def make_snapshot(repo_dir: Path, tree_id_hex: str,
 
     if broken_tree_hex:
         # Snapshot pointing at the broken tree — used by tests that
-        # exercise main.c's "tree restore failed" path under --target.
+        # exercise main.c's "tree restore failed" path under --restore-folder.
         broken_doc = {
             "time": "2026-04-01T00:00:00Z",
             "tree": broken_tree_hex,

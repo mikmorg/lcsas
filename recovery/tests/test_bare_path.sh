@@ -131,10 +131,10 @@ TARGET="$TMP/restored"
 mkdir -p "$TARGET"
 
 LCSAS_ALLOW_PYTHON_TIER=0 \
-LCSAS_PWFILE="$PWFILE" \
+LCSAS_PASSWORD_FILE="$PWFILE" \
 PATH="$SAFE_PATH" \
     sh "$META/recovery/scripts/restore.sh" \
-       "$META/recovery" "$TARGET" latest >/dev/null
+       "$META/recovery" --restore-folder "$TARGET" --snapshot latest >/dev/null
 
 # Verify
 for name in hello.txt binary.bin; do

@@ -1,7 +1,7 @@
 /*
  * fuzz_slip39_mnemonic.c -- LibFuzzer harness for the SLIP-0039 combiner.
  *
- * The lcsas-keyshare combiner parses untrusted, heir-typed text — bare
+ * The lcsas-shares combiner parses untrusted, heir-typed text — bare
  * mnemonics and (via KEY-01) whole printed share-card files — on the
  * 50-year critical path.  This harness exercises every public entry of
  * slip39.h with arbitrary bytes:

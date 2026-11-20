@@ -52,7 +52,7 @@ mkdir -p "$TARGET"
 WINEDEBUG=-all wine "$EXE" \
     --repo "$REPO" \
     --password-file "$PWFILE" \
-    --target "$TARGET" \
+    --restore-folder "$TARGET" \
     --snapshot latest >/dev/null 2>"$TMP/stderr" || {
     printf 'FAIL: wine .exe exit non-zero\n' >&2
     cat "$TMP/stderr" >&2
