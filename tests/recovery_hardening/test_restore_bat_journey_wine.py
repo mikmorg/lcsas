@@ -377,10 +377,15 @@ class _Run:
     """One wine command, stdin held open, output pumped; answers are
     written one at a time, each once its prompt is on screen."""
 
-    def __init__(self, wine: _Wine, cmd: str,
+    def __init__(self, wine: _Wine, cmd: str | list[str],
                  extra_env: dict[str, str] | None = None) -> None:
+        # A list: the script and its arguments, one argv entry each.  wine
+        # writes the Windows command line from argv, quoting an entry with
+        # a space and escaping a '"' inside one as \" -- which cmd does
+        # not undo -- so a quoted argument must not go inside a string.
+        argv = [cmd] if isinstance(cmd, str) else list(cmd)
         self.proc = subprocess.Popen(
-            ["wine", "cmd", "/c", cmd],
+            ["wine", "cmd", "/c", *argv],
             env={**wine.env, **(extra_env or {})}, cwd=str(wine.drive_c),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

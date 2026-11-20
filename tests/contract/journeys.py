@@ -793,7 +793,7 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
     _bat_tools_copy(archive, tools)
     _map_drive(wine.prefix, "d", archive.meta)  # the one drive: META in
 
-    def leg(cmd: str, env: dict[str, str], typed_: tuple[Typed, ...],
+    def leg(cmd: str | list[str], env: dict[str, str], typed_: tuple[Typed, ...],
             quit_at: int | None) -> JourneyResult:
         typed = list(typed_)
         asked: list[str] = []
@@ -856,8 +856,10 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
             output=run.text,
         )
 
-    args = "".join(f' "{arg_text(a, archive)}"' for a in journey.args)
-    result = leg(f"C:\\{name}\\recovery\\scripts\\restore.bat{args}",
+    # One argv entry each (see _Run): inside one string, wine would pass
+    # a '"' to cmd as \", and restore.bat would see \--repo\.
+    result = leg([f"C:\\{name}\\recovery\\scripts\\restore.bat",
+                  *(arg_text(a, archive) for a in journey.args)],
                  {"LCSAS_RELOCATED": "D:\\", **journey.env},
                  journey.typed_for("bat"), journey.quit_at_disc)
     launcher = wine.desktop / "Resume LCSAS restore.bat"
