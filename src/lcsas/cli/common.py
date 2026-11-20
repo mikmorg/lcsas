@@ -80,7 +80,7 @@ def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
         raise ConfigError(
             f"--config path does not exist: {cfg_path}",
             recovery_hint=(
-                "Check the path, or omit --config to use ./archive.db."
+                "Check the path, or omit --config to use ./catalog.db."
             ),
         ) from e
     except tomllib.TOMLDecodeError as e:
@@ -108,14 +108,14 @@ def _resolve_db_path(
 ) -> Path:
     """Resolve the catalog path from CLI args, config, or default.
 
-    Priority: ``--db`` flag > config ``[paths].database`` > ``archive.db``
+    Priority: ``--catalog`` flag > config ``[paths].catalog`` > ``catalog.db``
     relative to the current working directory.
 
     *config* is an optimisation, not a switch: handlers that already
     loaded it pass it in to avoid a second parse.  When it is omitted this
     still honours ``--config``, because a handler that forgets to load one
     must not end up addressing a *different* catalog than the rest of the
-    CLI — that silently creates an empty ``archive.db`` in whatever
+    CLI — that silently creates an empty ``catalog.db`` in whatever
     directory the owner happened to be standing in, while ``scan`` and
     ``stage`` keep using the configured path.
     """
@@ -125,7 +125,7 @@ def _resolve_db_path(
         config = _load_config_opt(args)
     if config is not None and hasattr(config, "db_path"):
         return Path(config.db_path)
-    return Path("archive.db")
+    return Path("catalog.db")
 
 
 def _resolve_device(
@@ -296,7 +296,7 @@ def _resolve_repo_names_to_ids(
 
 def _config_if_loadable(args: argparse.Namespace) -> LCSASConfig | None:
     """``--config`` when it loads, else None: for commands that only use it
-    as a hint (the mirror path of ``[repos.<name>]``) and work with ``--db``
+    as a hint (the mirror path of ``[repos.<name>]``) and work with ``--catalog``
     alone, so a broken config must not stop them."""
     try:
         return _load_config_opt(args)

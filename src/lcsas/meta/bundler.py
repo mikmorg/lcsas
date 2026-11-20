@@ -303,7 +303,7 @@ class ToolBundler:
     #
     # ``lcsas.keyshare`` is the stdlib-only SLIP-0039 split/combine module
     # (plus its ``wordlist.txt`` package_data).  It is bundled so the
-    # standalone ``keyshare_combine.py`` pre-step can rebuild a split
+    # standalone ``combine_shares.py`` pre-step can rebuild a split
     # repository password from the meta disc.  Because ``import_module``
     # resolves ``lcsas.keyshare`` to the ``.../lcsas/keyshare`` directory, it
     # lands as the top-level package ``keyshare`` on the meta disc.

@@ -10,7 +10,7 @@ Contents of a meta disc:
     docs/           Architecture and project documentation
     restore.sh      The one restore driver (POSIX sh, from recovery/scripts/)
     recovery/       Recovery tools: tier-1 binaries, restore_auto.sh
-                    (automation), docs (RECOVER.txt, RECOVER_WINDOWS.txt)
+                    (automation), docs (RESTORE.txt, RESTORE_WINDOWS.txt)
     README_RESTORE.md   Short pointer to the restore manuals
     VOLUME_INFO.txt     What this disc is, in plain text
     volume_info.json    Self-describing disc metadata

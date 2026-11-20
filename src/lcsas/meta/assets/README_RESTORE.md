@@ -8,8 +8,8 @@ The step-by-step instructions are on this disc, in one place:
 
 | Your computer | Read |
 |---|---|
-| Linux or macOS | `recovery/docs/RECOVER.txt` |
-| Windows | `recovery/docs/RECOVER_WINDOWS.txt` (you run `restore.bat`) |
+| Linux or macOS | `recovery/docs/RESTORE.txt` |
+| Windows | `recovery/docs/RESTORE_WINDOWS.txt` (you run `restore.bat`) |
 
 `START_HERE.txt`, at the top of this disc, is the one-page version.
 This file only shows the first two commands.
@@ -30,7 +30,7 @@ the disc, so the meta disc can come out of the drive (set
 press Ctrl+Z to pause it, swap the disc (`sudo eject /dev/sr0`), type
 `fg` and press Enter.
 
-RECOVER.txt explains each question, how to stop and carry on later,
+RESTORE.txt explains each question, how to stop and carry on later,
 share cards, damaged discs, and what to do when the tools will not run.
 
 ## What's on This Disc
@@ -42,8 +42,8 @@ share cards, damaged discs, and what to do when the tools will not run.
 | `START_HERE.txt` | The one-page start. |
 | `recovery/` | The recovery programs for each kind of computer; their manuals are in `recovery/docs/`. |
 | `recovery/scripts/restore_auto.sh` | Automation only: restores every backup set with no questions. |
-| `standalone_restorer.py` | The Python reader, the last resort. `restore.sh` uses it when it must. |
-| `keyshare_combine.py` | Rebuilds a split password from its share cards. |
+| `python_reader.py` | The Python reader, the last resort. `restore.sh` uses it when it must. |
+| `combine_shares.py` | Rebuilds a split password from its share cards. |
 | `tools/` | Programs copied from the computer that made this disc. |
 | `lcsas/` | The LCSAS source code. |
 | `docs/` | Project documentation, including the restic format specification. |
@@ -54,7 +54,7 @@ share cards, damaged discs, and what to do when the tools will not run.
 password in a file:
 
 ```sh
-LCSAS_PWFILE=/full/path/to/password.txt \
+LCSAS_PASSWORD_FILE=/full/path/to/password.txt \
     sh /mnt/recovery/scripts/restore_auto.sh /mnt/recovery ~/restored
 ```
 

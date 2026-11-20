@@ -26,7 +26,7 @@ class LCSASConfig:
     # Core paths
     mirror_base_path: Path          # Root of the local mirrors
     staging_path: Path              # The staging area
-    db_path: Path                   # The master catalog (archive.db by default)
+    db_path: Path                   # The master catalog (catalog.db by default)
 
     # Defaults
     default_media_type: MediaType = MediaType.BD25
@@ -49,7 +49,7 @@ class LCSASConfig:
     metadata_reserve_bytes: int = 104_857_600  # 100 MB
 
     # ── Password split (Shamir / SLIP-0039) defaults ─────────────
-    # Default K-of-N split parameters for `lcsas key split`.  Bias toward
+    # Default K-of-N split parameters for `lcsas password split`.  Bias toward
     # restorability (a backup's dominant risk is loss, not theft).
     key_threshold: int = 2          # K: shares needed to reconstruct
     key_shares: int = 5             # N: total shares produced
@@ -142,13 +142,47 @@ class CollectionConfig:
 def _xdg_db_path() -> str:
     """Return the XDG-compliant default master catalog path.
 
-    Uses ``$XDG_DATA_HOME/lcsas/archive.db``, falling back to
-    ``~/.local/share/lcsas/archive.db``.
+    Uses ``$XDG_DATA_HOME/lcsas/catalog.db``, falling back to
+    ``~/.local/share/lcsas/catalog.db``.
     """
     xdg = os.environ.get("XDG_DATA_HOME", "")
     if xdg:
-        return str(Path(xdg) / "lcsas" / "archive.db")
-    return str(Path.home() / ".local" / "share" / "lcsas" / "archive.db")
+        return str(Path(xdg) / "lcsas" / "catalog.db")
+    return str(Path.home() / ".local" / "share" / "lcsas" / "catalog.db")
+
+
+# Config keys renamed before v1.0.0 (#934): (section, old key, new key).
+_RETIRED_KEYS = (
+    ("paths", "database", "catalog"),
+    ("defaults", "key_split", "split"),
+    ("defaults", "key_threshold", "split_threshold"),
+    ("defaults", "key_shares", "split_shares"),
+    ("survivability", "key_storage_hints", "password_hints"),
+)
+_RETIRED_REPO_KEYS = (
+    ("key_split", "split"),
+    ("key_threshold", "split_threshold"),
+    ("key_shares", "split_shares"),
+)
+
+
+def retired_toml_key_errors(raw: dict[str, Any]) -> list[str]:
+    """One error per retired config key, in the form ``[section] OLD was
+    renamed: use NEW``.  An old key is never ignored."""
+    found: list[str] = []
+    for section, old, new in _RETIRED_KEYS:
+        table = raw.get(section, {})
+        if isinstance(table, dict) and old in table:
+            found.append(f"[{section}] {old} was renamed: use {new}")
+    repos = raw.get("repos", {})
+    if isinstance(repos, dict):
+        for name, cfg in repos.items():
+            if not isinstance(cfg, dict):
+                continue
+            for old, new in _RETIRED_REPO_KEYS:
+                if old in cfg:
+                    found.append(f"[repos.{name}] {old} was renamed: use {new}")
+    return found
 
 
 def unknown_toml_keys(raw: dict[str, Any]) -> list[str]:
@@ -164,20 +198,20 @@ def unknown_toml_keys(raw: dict[str, Any]) -> list[str]:
     known_sections = {
         "paths", "defaults", "repos", "survivability", "collections",
     }
-    known_paths = {"mirror_base", "staging", "database"}
+    known_paths = {"mirror_base", "staging", "catalog"}
     known_defaults = {
         "media_type", "ecc_redundancy_pct", "location",
         "optical_device", "label_prefix", "metadata_reserve_mb",
-        "key_threshold", "key_shares", "key_split",
+        "split_threshold", "split_shares", "split",
         "allow_unverified_repo_format",
     }
     known_survive = {
         "archive_owner", "archive_description",
-        "key_storage_hints", "technical_contact",
+        "password_hints", "technical_contact",
     }
     known_repo_keys = {
         "mirror_path", "password_file", "encryption_key_id",
-        "key_split", "key_threshold", "key_shares", "sources",
+        "split", "split_threshold", "split_shares", "sources",
     }
 
     unknown_sections = set(raw.keys()) - known_sections
@@ -225,21 +259,21 @@ def _validate_toml_keys(raw: dict[str, Any]) -> None:
 # Expected TOML type of each known key (#682), by section.  "str" keys take
 # a quoted string, "int" a bare whole number, "number" a bare whole or
 # decimal number, "bool" a bare true/false.
-_PATHS_TYPES = {"mirror_base": "str", "staging": "str", "database": "str"}
+_PATHS_TYPES = {"mirror_base": "str", "staging": "str", "catalog": "str"}
 _DEFAULTS_TYPES = {
     "media_type": "str", "ecc_redundancy_pct": "int", "location": "str",
     "optical_device": "str", "label_prefix": "str",
-    "metadata_reserve_mb": "number", "key_threshold": "int",
-    "key_shares": "int", "key_split": "bool",
+    "metadata_reserve_mb": "number", "split_threshold": "int",
+    "split_shares": "int", "split": "bool",
     "allow_unverified_repo_format": "bool",
 }
 _SURVIVE_TYPES = {
     "archive_owner": "str", "archive_description": "str",
-    "key_storage_hints": "str", "technical_contact": "str",
+    "password_hints": "str", "technical_contact": "str",
 }
 _REPO_TYPES = {
     "mirror_path": "str", "password_file": "str", "encryption_key_id": "str",
-    "key_split": "bool", "key_threshold": "int", "key_shares": "int",
+    "split": "bool", "split_threshold": "int", "split_shares": "int",
     "sources": "strlist",
 }
 _COLLECTION_TYPES = {
@@ -254,7 +288,7 @@ _TYPE_WORDS = {
     "strlist": 'a list of quoted strings, like ["a", "b"]',
 }
 
-# Largest share count `lcsas key split` makes (SLIP-0039 allows 16 shares).
+# Largest share count `lcsas password split` makes (SLIP-0039 allows 16 shares).
 MAX_KEY_SHARES = 16
 
 
@@ -267,7 +301,7 @@ def _type_ok(kind: str, value: object) -> bool:
         return isinstance(value, list) and all(
             isinstance(v, str) for v in value
         )
-    # bool is an int subclass: `key_threshold = true` is not a number.
+    # bool is an int subclass: `split_threshold = true` is not a number.
     if isinstance(value, bool):
         return False
     if kind == "int":
@@ -279,8 +313,8 @@ def _type_errors(raw: dict[str, Any]) -> list[str]:
     """One message per known key whose value has the wrong TOML type (#682).
 
     Each message names the key and the type it needs, so the owner can fix
-    the line instead of meeting a TypeError later (``key_split = "false"``
-    used to read as true, ``key_threshold = "3"`` crashed `key split`).
+    the line instead of meeting a TypeError later (``split = "false"``
+    used to read as true, ``split_threshold = "3"`` crashed `password split`).
     """
     errors: list[str] = []
 
@@ -319,7 +353,7 @@ def key_split_pair_error(threshold: int, shares: int) -> str | None:
     """Why *threshold*-of-*shares* is not a usable split, or None (#682).
 
     A split needs 2 <= K <= N <= 16; K = N = 1 means the password is not
-    split.  ``lcsas key split`` checks its own -k/-n with the same rule.
+    split.  ``lcsas password split`` checks its own -k/-n with the same rule.
     """
     if (threshold, shares) == (1, 1):
         return None
@@ -327,8 +361,8 @@ def key_split_pair_error(threshold: int, shares: int) -> str | None:
         return None
     return (
         f"{threshold}-of-{shares} is not a usable split: it needs "
-        f"2 <= key_threshold <= key_shares <= {MAX_KEY_SHARES}, or "
-        f"key_threshold = key_shares = 1 for no split"
+        f"2 <= split_threshold <= split_shares <= {MAX_KEY_SHARES}, or "
+        f"split_threshold = split_shares = 1 for no split"
     )
 
 
@@ -340,7 +374,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         [paths]
         mirror_base = "/mnt/mirror"
         staging = "/mnt/staging"
-        database = "~/.local/share/lcsas/archive.db"
+        catalog = "~/.local/share/lcsas/catalog.db"
 
         [defaults]
         media_type = "BD25"
@@ -355,7 +389,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         # The hint is printed verbatim on EVERY disc, so it must point an heir
         # to the password without handing it to a disc thief — name a custodian,
         # not a findable place.  See docs/DISC_CONFIDENTIALITY.md.
-        key_storage_hints = "Sealed envelope with the family attorney (see my will)"
+        password_hints = "Sealed envelope with the family attorney (see my will)"
         technical_contact = "Jane Doe (jane@example.com) or any Linux-savvy IT professional"
 
         [repos.family]
@@ -370,9 +404,9 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         password_file = "/root/keys/work.key"
         # Optional: split only this repository's password (#587); each
         # key overrides the same [defaults] key for this repository.
-        key_split = true
-        key_threshold = 2
-        key_shares = 3
+        split = true
+        split_threshold = 2
+        split_shares = 3
 
         # Optional (#701): `lcsas stage --collection bank` stages family
         # and work for Bank_Box on MDISC100, holding back a last volume
@@ -389,6 +423,10 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
     with open(config_path, "rb") as f:
         raw = tomllib.load(f)
 
+    # A retired key is an error naming the new one, never ignored (#934).
+    retired = retired_toml_key_errors(raw)
+    if retired:
+        raise ValueError("; ".join(retired))
     # Validate known sections and keys
     _validate_toml_keys(raw)
     # Wrong value types are errors, named by key (#682).  _load_config_opt
@@ -429,15 +467,15 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         if "mirror_path" not in repo_cfg:
             raise ValueError(f"[repos.{repo_name}] has no mirror_path (required)")
         pw_file = repo_cfg.get("password_file")
-        repo_split = repo_cfg.get("key_split")
+        repo_split = repo_cfg.get("split")
         repos[repo_name] = RepositoryConfig(
             name=repo_name,
             mirror_path=resolve(repo_cfg["mirror_path"]),
             password_file=resolve(pw_file) if pw_file else None,
             encryption_key_id=repo_cfg.get("encryption_key_id", ""),
             key_split=None if repo_split is None else bool(repo_split),
-            key_threshold=repo_cfg.get("key_threshold"),
-            key_shares=repo_cfg.get("key_shares"),
+            key_threshold=repo_cfg.get("split_threshold"),
+            key_shares=repo_cfg.get("split_shares"),
             sources=tuple(repo_cfg.get("sources", ())),
         )
 
@@ -490,7 +528,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
     config = LCSASConfig(
         mirror_base_path=resolve(paths.get("mirror_base", "/mnt/mirror")),
         staging_path=resolve(paths.get("staging", "/mnt/staging")),
-        db_path=resolve(paths.get("database", _xdg_db_path())),
+        db_path=resolve(paths.get("catalog", _xdg_db_path())),
         default_media_type=media_type,
         default_ecc_redundancy_pct=defaults.get("ecc_redundancy_pct", 15),
         default_location=defaults.get("location", "Home_Shelf"),
@@ -499,9 +537,9 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         metadata_reserve_bytes=int(
             defaults.get("metadata_reserve_mb", 100) * 1_048_576
         ),
-        key_threshold=defaults.get("key_threshold", 2),
-        key_shares=defaults.get("key_shares", 5),
-        key_split=bool(defaults.get("key_split", False)),
+        key_threshold=defaults.get("split_threshold", 2),
+        key_shares=defaults.get("split_shares", 5),
+        key_split=bool(defaults.get("split", False)),
         allow_unverified_repo_format=bool(
             defaults.get("allow_unverified_repo_format", False)
         ),
@@ -509,7 +547,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         collections=collections,
         archive_owner=survive.get("archive_owner", ""),
         archive_description=survive.get("archive_description", ""),
-        key_storage_hints=survive.get("key_storage_hints", ""),
+        key_storage_hints=survive.get("password_hints", ""),
         technical_contact=survive.get("technical_contact", ""),
     )
     problems = _split_and_mirror_errors(config)
@@ -623,7 +661,7 @@ def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
     errors: list[str] = []
     problem = key_split_pair_error(config.key_threshold, config.key_shares)
     if problem is not None:
-        errors.append(f"[defaults] key_threshold/key_shares: {problem}")
+        errors.append(f"[defaults] split_threshold/split_shares: {problem}")
     for name, repo in config.repositories.items():
         if repo.key_threshold is None and repo.key_shares is None:
             continue  # uses [defaults], checked above
@@ -631,7 +669,7 @@ def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
         problem = key_split_pair_error(k, n)
         if problem is not None:
             errors.append(
-                f"[repos.{name}] key_threshold/key_shares: {problem}"
+                f"[repos.{name}] split_threshold/split_shares: {problem}"
             )
     # Two repositories on one mirror would make the catalog unable to tell
     # them apart (repositories are matched by mirror path first, #687).
@@ -652,7 +690,7 @@ def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
 def password_file_lines_warning(path: Path) -> str | None:
     """A warning when password file *path* has more than one line (#641).
 
-    rustic, both restore tiers and ``lcsas key`` all take the first line
+    rustic, both restore tiers and ``lcsas password`` all take the first line
     as the password, so a key file of two lines (``openssl rand -base64
     64`` wraps its output) works, but its second line is ignored by every
     reader: the owner should know.  None when the file has one non-empty

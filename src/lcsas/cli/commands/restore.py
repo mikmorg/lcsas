@@ -132,7 +132,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         planned,
         staging_path=config.staging_path,
         snapshot_id=args.snapshot_id,
-        target_path=args.target_path,
+        target_path=args.restore_folder,
         password_file=args.password_file,
         cache_dir=args.cache_dir,
         volume_dir=args.volume_dir,
@@ -162,7 +162,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
     """
     return restore_from_disc(
         args.disc,
-        args.target_path,
+        args.restore_folder,
         args.password_file,
         catalog=args.catalog,
         repo=args.repo,

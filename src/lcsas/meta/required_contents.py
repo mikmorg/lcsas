@@ -34,7 +34,7 @@ Two levels (issue #367):
   ``metadata/<repo>/keys``) — restore-BLOCKING.  Missing any of these fails
   ``--require-complete``.
 * **Recommended** (``recommended_meta_paths``: stock restic tier-2b hedge,
-  lcsas-keyshare) — WARNS but does not fail: a disc with tier 1 + tier 3
+  lcsas-shares) — WARNS but does not fail: a disc with tier 1 + tier 3
   still allows a restore, and stock restic is legitimately absent when the
   upstream cache is empty.
 """
@@ -66,8 +66,8 @@ _WINDOWS_TARGETS = frozenset({"x86_64-pc-windows-gnu"})
 # root restore.sh is copied from recovery/scripts/restore.sh, and the
 # build fails without that (#689).
 _ROOT_ARTIFACTS: tuple[str, ...] = (
-    "standalone_restorer.py",
-    "keyshare_combine.py",
+    "python_reader.py",
+    "combine_shares.py",
     "START_HERE.txt",
     "recovery/scripts/restore.sh",
     "restore.bat",
@@ -162,7 +162,7 @@ def _restic_name(target: str) -> str:
 
 
 def _keyshare_name(target: str) -> str:
-    return "lcsas-keyshare.exe" if target in _WINDOWS_TARGETS else "lcsas-keyshare"
+    return "lcsas-shares.exe" if target in _WINDOWS_TARGETS else "lcsas-shares"
 
 
 def recommended_target_paths(target: str) -> list[str]:
@@ -177,7 +177,7 @@ def recommended_target_paths(target: str) -> list[str]:
     * stock ``restic`` — the tier-2b "standard tools" hedge, sourced from the
       upstream cache (``recovery/UPSTREAM.sha256``), so it is legitimately
       absent on a build whose upstream cache is empty.
-    * ``lcsas-keyshare`` — the SLIP-0039 combiner, only needed to rebuild
+    * ``lcsas-shares`` — the SLIP-0039 combiner, only needed to rebuild
       a password that was split into K-of-N shares.
     """
     return [

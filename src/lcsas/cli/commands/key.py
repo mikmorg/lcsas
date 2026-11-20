@@ -1,4 +1,4 @@
-"""``lcsas key``: split, unsplit, combine, verify, card.
+"""``lcsas password``: split, unsplit, combine, verify, card.
 
 The card text itself is in :mod:`lcsas.cli.main`.
 """
@@ -432,7 +432,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     # smaller N would leave the old higher-numbered cards beside the new
     # ones, and they cannot combine with them.  Checked before the password
     # is read, so nothing is written.
-    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
+    out_dir: Path = args.out if args.out is not None else Path(f"./shares-{args.repo}")
     old_cards = _existing_share_files(out_dir, args.repo)
     if old_cards:
         logger.error(
@@ -618,8 +618,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         f"  Give the {shares} shares to separate share holders."
     )
     print(
-        f"NEXT STEP: set key_split = true (and key_threshold = {threshold}, "
-        f"key_shares = {shares}) under [repos.{args.repo}] in lcsas.toml, or "
+        f"NEXT STEP: set split = true (and split_threshold = {threshold}, "
+        f"split_shares = {shares}) under [repos.{args.repo}] in lcsas.toml, or "
         "under [defaults] if every repository is split, so burned discs "
         "print share instructions."
     )
@@ -714,7 +714,7 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
         else f"the repository's [repos.<name>] table ('{repo.name}' in the catalog)"
     )
     print(
-        f"NEXT STEP: make sure key_split is false for this repository in "
+        f"NEXT STEP: make sure split is false for this repository in "
         f"lcsas.toml ({table}, else [defaults]), so the config and the "
         f"catalog agree."
     )
@@ -725,7 +725,7 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
     """Reconstruct a repository password from K SLIP-0039 share mnemonics.
 
     stdout carries the rebuilt password and nothing else: a script runs
-    ``lcsas key combine > pw``, so every message, log line included, goes
+    ``lcsas password combine > pw``, so every message, log line included, goes
     to stderr.  On failure stdout stays empty.
     """
     with log_to_stderr():
@@ -785,7 +785,7 @@ def _key_combine(args: argparse.Namespace) -> int:
     # named verdict, so a single mistyped card is pinpointed (file + word
     # position + token) instead of collapsing into one generic failure.
     # Verdicts go to stderr so stdout stays password-only (the combiner's
-    # raw-bytes contract); mirrors the C lcsas-keyshare pre-pass.
+    # raw-bytes contract); mirrors the C lcsas-shares pre-pass.
     any_bad = False
     for label, mnemonic in zip(labels, mnemonics, strict=True):
         reason = check_share(mnemonic)

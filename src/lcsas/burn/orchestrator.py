@@ -488,7 +488,7 @@ class BurnOrchestrator:
 
         # 2. Inject repository metadata — strict for repositories with packs
         #    on this volume (the disc must stay self-describing for them) —
-        #    and each repository's metadata/<repo_id>/LCSAS_REPO.txt.
+        #    and each repository's metadata/<repo_id>/LCSAS_BACKUP_SET.txt.
         injector = HolographicInjector(staging_root)
         injector.inject_metadata(
             mirror_paths, required_repos=set(packs_by_repo), markers=markers,
@@ -901,7 +901,7 @@ class BurnOrchestrator:
         return paths
 
     def _escrow_preflight(self, repo_ids: list[str]) -> str | None:
-        """Abort the burn if config key_split/K/N drifts from the record.
+        """Abort the burn if config split/K/N drifts from the record.
 
         Returns the drift message when ``allow_escrow_drift`` suppresses the
         abort (so callers can log it as a volume event), else None.  Raises

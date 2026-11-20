@@ -1,6 +1,6 @@
 """Extract a share mnemonic from a bare mnemonic file or a printed share card.
 
-``lcsas key split`` writes two artifacts per share: a bare mnemonic file
+``lcsas password split`` writes two artifacts per share: a bare mnemonic file
 (``{repo}-share-N.txt``, words only) and a plain-language printable *share
 card* (``{repo}-share-N-card.txt``) with header lines, prose, and the mnemonic
 under a "THE SHARE WORDS" heading.  The share card is the artifact an owner is

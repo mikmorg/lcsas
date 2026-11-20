@@ -5,7 +5,7 @@ disc, and asks for a disc when none has it.  ``PurePythonRestorer``
 (``restic_fallback.py``) holds one search and reads packs only through
 it.
 
-This file is inlined into the generated ``standalone_restorer.py``
+This file is inlined into the generated ``python_reader.py``
 ahead of ``restic_fallback.py`` (see ``standalone_builder.py``), so it
 imports nothing but the standard library, compiles under Python 3.10,
 and defines no top-level name that another inlined file defines.

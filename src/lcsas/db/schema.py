@@ -211,10 +211,10 @@ CREATE TABLE IF NOT EXISTS volume_events (
 );
 """
 
-# Durable record of a `lcsas key split`: the K/N actually performed and the
+# Durable record of a `lcsas password split`: the K/N actually performed and the
 # SLIP-0039 identifier of that split (KEY-08).  Disc share instructions are
 # derived from this row when present, and the burn pipeline aborts if the
-# config's key_split/K/N disagrees with it — so heir-facing instructions can
+# config's split/K/N disagrees with it — so heir-facing instructions can
 # never silently drift away from the split that was really done.
 SQL_CREATE_KEY_ESCROW = """
 CREATE TABLE IF NOT EXISTS key_escrow (
@@ -540,7 +540,7 @@ def migrate(conn: sqlite3.Connection) -> int:
             )
             cursor.execute("COMMIT")
 
-        # v8 → v9: key_escrow — the durable record of a `lcsas key split`
+        # v8 → v9: key_escrow — the durable record of a `lcsas password split`
         # (KEY-08).  Additive bare CREATE TABLE, no data movement; pre-upgrade
         # catalogs simply gain an empty table.  Restore-side readers (the
         # tier-1 C reader, the tier-3 Python reader) never touch it, and

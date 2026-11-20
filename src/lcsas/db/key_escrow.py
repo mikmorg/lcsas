@@ -1,4 +1,4 @@
-"""CRUD for the key_escrow table — durable record of `lcsas key split` (KEY-08).
+"""CRUD for the key_escrow table — durable record of `lcsas password split` (KEY-08).
 
 Whether burned discs print instructions for combining shares, and the K/N
 they claim, used to come solely from hand-edited ``lcsas.toml`` fields.
@@ -217,7 +217,7 @@ def clear_split(
 
 
 class EscrowDriftError(RuntimeError):
-    """Config key_split/K/N disagrees with the recorded split (KEY-08).
+    """Config split/K/N disagrees with the recorded split (KEY-08).
 
     Burning would print share instructions that contradict the split that was
     actually performed — permanently, on discs read decades later.  The
@@ -247,10 +247,10 @@ def detect_escrow_drift(
     For each repository being burned:
 
     - config says split, no record (or K/N mismatch) → drift.
-    - record exists, config says ``key_split=false`` → drift (the heir would
+    - record exists, config says ``split=false`` → drift (the heir would
       be told to find a single password that was superseded by the split).
 
-    A repository with neither a record nor ``key_split`` is consistent (no split).
+    A repository with neither a record nor ``split`` is consistent (no split).
     """
     for repo_id in sorted(set(repo_ids)):
         record = get_split_for_repo(conn, repo_id)
@@ -266,31 +266,31 @@ def detect_escrow_drift(
             if record is None:
                 return (
                     f"password split drift for repository '{name}': lcsas.toml says "
-                    f"key_split=true {threshold}-of-{shares} but "
+                    f"split=true {threshold}-of-{shares} but "
                     f"the catalog records no split for this repository. Discs would "
                     f"print instructions to gather share cards that were never "
                     f"made. Re-run 'lcsas --config ... key split --repo "
-                    f"{name}' or set key_split=false under {where}."
+                    f"{name}' or set split=false under {where}."
                 )
             if (record.threshold, record.shares) != (threshold, shares):
                 return (
                     f"password split drift for repository '{name}': lcsas.toml says "
-                    f"key_split=true {threshold}-of-{shares} but "
+                    f"split=true {threshold}-of-{shares} but "
                     f"the catalog records a {record.threshold}-of-"
                     f"{record.shares} split on {record.split_at}. Discs would "
-                    f"print wrong instructions. Re-run 'lcsas key split' or fix "
-                    f"key_threshold/key_shares under {where}."
+                    f"print wrong instructions. Re-run 'lcsas password split' or fix "
+                    f"split_threshold/split_shares under {where}."
                 )
         else:
             if record is not None:
                 return (
                     f"password split drift for repository '{name}': lcsas.toml says "
-                    f"key_split=false but the catalog records a "
+                    f"split=false but the catalog records a "
                     f"{record.threshold}-of-{record.shares} split on "
                     f"{record.split_at}. Discs would tell the heir to find a "
                     f"single password that was superseded by that split. Set "
-                    f"key_split=true (key_threshold={record.threshold}, "
-                    f"key_shares={record.shares}) under {where}, or, if the "
+                    f"split=true (split_threshold={record.threshold}, "
+                    f"split_shares={record.shares}) under {where}, or, if the "
                     f"split was abandoned, run 'lcsas --config ... key "
                     f"unsplit --repo {name}' to clear the recorded split."
                 )

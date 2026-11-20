@@ -867,7 +867,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         )
         logger.warning(
             "For each disc of them you hold, put it in the drive and run "
-            "(against the rebuilt catalog, --db %s):", output_db,
+            "(against the rebuilt catalog, --catalog %s):", output_db,
         )
         for label in result.needs_verify:
             logger.warning(

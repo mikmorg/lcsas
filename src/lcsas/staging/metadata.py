@@ -72,7 +72,7 @@ VOLUME_INFO_BYTES_PER_PACK = 80
 #: of volume_info.json: about 25 KB together; with headroom for long
 #: owner-written hints.
 TEXT_FILES_BYTES = 64 * 1024
-#: Each repository's LCSAS_REPO.txt.
+#: Each repository's LCSAS_BACKUP_SET.txt.
 REPO_MARKER_BYTES = 4096
 
 
@@ -337,12 +337,12 @@ def _share_card_section(
                 "ordinary password."
             )
         intro += [
-            "Each share card names its repository: use the cards of the",
-            "repository you are restoring.  Fewer cards than it needs",
+            "Each share card names its backup set: use the cards of the",
+            "backup set you are restoring.  Fewer cards than it needs",
             "reveal nothing.",
         ]
         gather = [
-            "STEP 1: gather enough share cards of that repository (the",
+            "STEP 1: gather enough share cards of that backup set (the",
             "  list above says how many).  On the META disc, run the",
             "  share combiner for your machine:",
         ]
@@ -358,7 +358,7 @@ def _share_card_section(
         "",
         *gather,
         "",
-        "      /mnt/recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
+        "      /mnt/recovery/bin/<machine>/lcsas-shares <card1> <card2>",
         "",
         f"  Give {which_cards}, each by its full path, e.g.",
         "  ~/card1.txt (or pipe the share words in).  <machine> is the",
@@ -366,34 +366,35 @@ def _share_card_section(
         "  x86_64-unknown-linux-musl for most PCs,",
         "  aarch64-unknown-linux-musl for 64-bit ARM, aarch64-apple-darwin",
         "  for an Apple Silicon Mac (on Windows: x86_64-pc-windows-gnu,",
-        "  and the program is lcsas-keyshare.exe).",
+        "  and the program is lcsas-shares.exe).",
         "",
         "  If that program will not run, the fallback is:",
         "",
-        "      python3 /mnt/keyshare_combine.py <card1> <card2>",
+        "      python3 /mnt/combine_shares.py <card1> <card2>",
         "",
         "  If python3 is not installed, use the copy bundled on the",
         "  META disc.  <platform> is the same folder as <machine> above",
         "  (for most PCs that is x86_64-unknown-linux-musl):",
         "",
         "      /mnt/recovery/bin/<platform>/python/bin/python3 \\",
-        "          /mnt/keyshare_combine.py <card1> <card2>",
+        "          /mnt/combine_shares.py <card1> <card2>",
         "",
         "  Either combiner prints the password and nothing else.  Save",
         "  it in your home folder (the disc cannot be written to), e.g.:",
         "",
-        "      /mnt/recovery/bin/<machine>/lcsas-keyshare \\",
+        "      /mnt/recovery/bin/<machine>/lcsas-shares \\",
         "          <card1> <card2> > ~/repo.key",
         "",
         "STEP 2: run the normal restore and use that password:",
         "",
-        "      sh /mnt/restore.sh --target ~/restored",
+        "      sh /mnt/restore.sh --restore-folder ~/restored",
         "",
         "  When restore.sh shows the  Password:  prompt, type the",
         "  password from STEP 1, or give the saved file by its full",
         "  path:",
         "",
-        "      sh /mnt/restore.sh --key ~/repo.key --target ~/restored",
+        "      sh /mnt/restore.sh --password-file ~/repo.key \\",
+        "          --restore-folder ~/restored",
         "",
         "  If it asks for the share cards instead, type P, then the",
         "  password.",
@@ -521,7 +522,7 @@ def render_volume_info_txt(
     session, as in ``prepare``) leaves the line out.
 
     ``repo_names`` maps a repo_id to its name (the name in the folder's
-    ``LCSAS_REPO.txt``).  A repository whose name differs from its id is
+    ``LCSAS_BACKUP_SET.txt``).  A repository whose name differs from its id is
     listed by name, then ``ID <id>`` and its pack count on lines of
     their own, so a UUID folder name can be matched to the set's name
     and every line stays inside 72 columns.
@@ -581,7 +582,7 @@ def render_volume_info_txt(
         f"  Prepared on:   {prepared}\n"
         f"  Made with:     LCSAS version {__version__}\n"
         f"  Media type:    {_media_type_text(volume.media_type)}\n"
-        f"  Repositories:  {repo_text}\n"
+        f"  Backup sets:   {repo_text}\n"
         f"  Packs:         {pack_text}\n"
         "\n"
         "This file was written when the volume was prepared, before the\n"
@@ -743,7 +744,7 @@ class HolographicInjector:
                 warning.  Repositories not listed keep the lenient skip.
             markers: Each repository's backup set marker, by repo_id
                 (``repo_marker.repo_markers``).  It is written as
-                ``metadata/<repo_id>/LCSAS_REPO.txt``.  A repository with
+                ``metadata/<repo_id>/LCSAS_BACKUP_SET.txt``.  A repository with
                 no marker here gets no file: restore works without it.
             snapshot_allow: #657 — for a repository listed here, only the
                 snapshot files named in its set are copied: the snapshots
@@ -877,7 +878,7 @@ class HolographicInjector:
                 of the M volumes in its burn session.  Only the text
                 file shows it.
             repo_names: Optional ``{repo_id: name}``, the names in the
-                repositories' ``LCSAS_REPO.txt``.  Only the text file
+                repositories' ``LCSAS_BACKUP_SET.txt``.  Only the text file
                 shows them.
         """
         # This file (like the disc catalog) is written BEFORE the burn:
@@ -944,13 +945,13 @@ class HolographicInjector:
     def write_standalone_restorer(self) -> None:
         """Write the tier 3 Python reader to the staging root.
 
-        This file (``standalone_restorer.py``) is generated from ``_aes_pure.py`` and
+        This file (``python_reader.py``) is generated from ``_aes_pure.py`` and
         ``restic_fallback.py`` and has zero dependencies on the
         ``lcsas`` package.  It provides a last-resort restore path
         that works with nothing but Python 3.10+ stdlib.
         """
         text = build_standalone()
-        self._write_text("standalone_restorer.py", text)
+        self._write_text("python_reader.py", text)
 
     def write_restore_instructions(self) -> None:
         """Write a human-readable RESTORE_INSTRUCTIONS.txt to the staging root.
@@ -994,10 +995,10 @@ several), insert it and mount it, then run the interactive restore
 script:
 
     sudo mount /dev/sr0 /mnt
-    sh /mnt/restore.sh ~/restored/ latest
+    sh /mnt/restore.sh --restore-folder ~/restored --snapshot latest
 
 It first copies its tools to a folder on this computer
-(~/lcsas-restore-tools), so the meta disc can come out of the drive.
+(~/lcsas-tools), so the meta disc can come out of the drive.
 Then it asks, one question at a time: for your NEWEST data disc (the
 latest year in its label, then the highest number), for the backup
 set when there is more than one, and for its password, or for the
@@ -1007,10 +1008,10 @@ and press Enter.  It is done when it prints
 "[lcsas-restore] restore complete".
 
 To stop, type q at a disc prompt.  To carry on later, with no meta
-disc, run:  sh ~/lcsas-restore-tools/resume.sh
+disc, run:  sh ~/lcsas-tools/resume.sh
 
 If you prefer a password file over the interactive prompt, set
-LCSAS_PWFILE=/path/to/password.txt before invoking restore.sh.
+LCSAS_PASSWORD_FILE=/path/to/password.txt before invoking restore.sh.
 
 HOW TO RESTORE (pure Python — no native binaries needed)
 ---------------------------------------------------------
@@ -1021,8 +1022,8 @@ If no rustic/restic binary works (wrong architecture, missing libs):
   2. Assemble a cache directory (copy metadata + packs — see manual steps).
   3. Run the Python reader included on this disc:
 
-       python3 standalone_restorer.py --repo /tmp/cache \\
-           --password-file /path/to/password.txt --target /path/to/output
+       python3 python_reader.py --repo /tmp/cache \\
+           --password-file /path/to/password.txt --restore-folder /path/to/output
 
   This script requires only Python 3.10+ standard library.
   For zstd-compressed repositories, also install: pip install zstandard
@@ -1051,12 +1052,12 @@ HOW TO RESTORE (manual)
 
 4. Copy metadata (index, snapshots, keys, config) from any disc.
    Each folder in metadata/ is one repository, named by its ID.  The
-   LCSAS_REPO.txt file in the folder gives the repository's name:
-       grep -H '^name=' /tmp/vol1/metadata/*/LCSAS_REPO.txt
+   LCSAS_BACKUP_SET.txt file in the folder gives the repository's name:
+       grep -H '^name=' /tmp/vol1/metadata/*/LCSAS_BACKUP_SET.txt
        cp -r /tmp/vol1/metadata/REPO_ID/* /tmp/cache/
 
 5. Restore:
-       rustic restore latest -r /tmp/cache --password-file password.txt --target /output
+       rustic restore latest /output -r /tmp/cache --password-file password.txt
 
 DISC CONTENTS
 --------------
@@ -1064,7 +1065,7 @@ DISC CONTENTS
   data/                     Pack files (encrypted, each named by its SHA-256)
   metadata/                 Repository index, snapshot, and key files:
                             one folder per repository, and an
-                            LCSAS_REPO.txt in each gives its name
+                            LCSAS_BACKUP_SET.txt in each gives its name
   catalog.db                Disc catalog (SQLite), as of this disc's burn
   VOLUME_INFO.txt           This disc's label and contents, in plain text
   volume_info.json          Machine-readable volume identity and manifest
@@ -1072,7 +1073,7 @@ DISC CONTENTS
   PASSWORD_INFO.txt         Which password each repository needs
   CONFIG_SUMMARY.txt        Archive configuration summary
   DISC_CARE.txt             Storage and handling guidance for optical media
-  standalone_restorer.py    Python restore script (no binaries needed)
+  python_reader.py          Python restore script (no binaries needed)
   RESTORE_INSTRUCTIONS.txt  This file
 
 For the encryption/pack file format specification, see
@@ -1136,7 +1137,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             names = ", ".join(sorted(config.repositories))
             lines += [
                 *_wrap_text(names, "    ",
-                            first="  Repositories on these discs: "),
+                            first="  Backup sets on these discs: "),
                 "",
             ]
         lines += [
@@ -1239,7 +1240,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             "PASSWORD INFORMATION",
             "====================",
             "",
-            "This file lists each backup repository on these discs and",
+            "This file lists each backup set on these discs and",
             "which password is needed to open it.",
             "",
         ]
@@ -1249,7 +1250,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             lines.append("")
         else:
             for name, repo in sorted(config.repositories.items()):
-                lines.append(f"Repository: {name}")
+                lines.append(f"Backup set: {name}")
                 if repo.encryption_key_id:
                     lines.append(f"  Key ID: {repo.encryption_key_id}")
                 if repo.password_file:

@@ -9,7 +9,7 @@ archive discs, minus only the password:
 * The one restore driver, ``restore.sh`` (``recovery/scripts/restore.sh``
   from the source tree), at the disc root.
 * A short ``README_RESTORE.md`` that points at the on-disc manuals
-  (``recovery/docs/RECOVER.txt``, ``RECOVER_WINDOWS.txt``).
+  (``recovery/docs/RESTORE.txt``, ``RESTORE_WINDOWS.txt``).
 * Project documentation (``docs/``).
 """
 
@@ -253,7 +253,7 @@ def _get_tool_version(tool_path: Path) -> str:
 # module (#689), read here once at import and written to the meta disc
 # byte for byte (``tests/unit/test_meta_assets_golden.py`` pins its
 # SHA-256).  It is a short pointer: the restore steps live in one place,
-# recovery/docs/RECOVER.txt (and RECOVER_WINDOWS.txt).
+# recovery/docs/RESTORE.txt (and RESTORE_WINDOWS.txt).
 #
 # The disc has ONE restore driver, recovery/scripts/restore.sh, copied
 # to the disc root as restore.sh (#689 retired the legacy bash driver,
@@ -662,9 +662,9 @@ class MetaVolumeBuilder:
         │   └── src/lcsas/    LCSAS Python package
         ├── docs/             architecture docs
         ├── recovery/         tier-1 binaries, scripts (restore_auto.sh
-        │                     for automation), docs (RECOVER.txt)
+        │                     for automation), docs (RESTORE.txt)
         ├── restore.sh        the one restore driver
-        ├── README_RESTORE.md pointer to recovery/docs/RECOVER.txt
+        ├── README_RESTORE.md pointer to recovery/docs/RESTORE.txt
         ├── VOLUME_INFO.txt   plain-text "what this disc is"
         └── volume_info.json  self-describing metadata
     """
@@ -806,7 +806,7 @@ class MetaVolumeBuilder:
         """Recommended-but-not-required paths absent from the built output.
 
         Issue #367: stock restic (the tier-2b "standard tools" hedge) and
-        lcsas-keyshare (the SLIP-0039 combiner).  Absence WARNS but does not
+        lcsas-shares (the SLIP-0039 combiner).  Absence WARNS but does not
         fail the completeness gate — a disc carrying the tier-1 lcsas-restore
         and the tier-3 CPython path can still restore fully without them.
         """
@@ -863,7 +863,7 @@ class MetaVolumeBuilder:
             )
 
         # Bundle the stdlib-only SLIP-0039 keyshare package (+ wordlist.txt)
-        # so the standalone keyshare_combine.py pre-step can reconstruct a
+        # so the standalone combine_shares.py pre-step can reconstruct a
         # split repository password.  Lands as top-level ``keyshare`` under the
         # bundled stdlib (importlib resolves it to .../lcsas/keyshare).
         bundler.bundle_python_package("lcsas.keyshare")
@@ -980,7 +980,7 @@ class MetaVolumeBuilder:
     # ── Script / doc generation ──────────────────────────────────
 
     def _bundle_standalone_restorer(self) -> None:
-        """Place standalone_restorer.py at the meta disc root.
+        """Place python_reader.py at the meta disc root.
 
         This provides the tier-3 Python restore path when no rustic/restic
         binary is available.  The script is auto-generated from the
@@ -989,12 +989,12 @@ class MetaVolumeBuilder:
         """
         from lcsas.restore.standalone_builder import build_standalone
 
-        restorer_path = self._output / "standalone_restorer.py"
+        restorer_path = self._output / "python_reader.py"
         _write_and_sync(restorer_path, build_standalone())
         os.chmod(str(restorer_path), 0o755)
 
     def _bundle_keyshare_combiner(self) -> None:
-        """Place keyshare_combine.py at the meta disc root.
+        """Place combine_shares.py at the meta disc root.
 
         This standalone, stdlib-only pre-step reconstructs a SLIP-0039
         split repository password (any K of N shares) and prints it so an heir
@@ -1002,14 +1002,14 @@ class MetaVolumeBuilder:
         bundled ``lcsas.keyshare`` package, so reconstruction survives
         even if the rest of LCSAS is broken.
 
-        Manifest pinning: ``keyshare_combine.py`` and the bundled
+        Manifest pinning: ``combine_shares.py`` and the bundled
         ``keyshare/wordlist.txt`` are NOT rows in
         ``recovery/MANIFEST.sha256``.  That "files-we-author" manifest
         is rooted at, and ``find``-verified against, the ``recovery/``
         tree (the tier-1 C binary, vendored sqlite/zstd, recovery
         scripts).  These two artifacts live in the main ``src/`` tree
         and are copied onto the meta disc at build time -- exactly like
-        ``standalone_restorer.py``, which is likewise absent from that
+        ``python_reader.py``, which is likewise absent from that
         manifest.  They are pinned by git
         (every ``src/`` file is version-controlled) and the wordlist is
         additionally guarded by the 45 official SLIP-0039 conformance
@@ -1018,12 +1018,12 @@ class MetaVolumeBuilder:
         its own verifier, so the correct treatment is build-time shipping,
         documented here.
         """
-        src = Path(__file__).parent / "keyshare_combine.py"
+        src = Path(__file__).parent / "combine_shares.py"
         if not src.is_file():
             raise FileNotFoundError(
-                f"keyshare_combine.py missing from source tree: {src}"
+                f"combine_shares.py missing from source tree: {src}"
             )
-        dst = self._output / "keyshare_combine.py"
+        dst = self._output / "combine_shares.py"
         shutil.copy2(str(src), str(dst))
         os.chmod(str(dst), 0o755)
 
@@ -1034,7 +1034,7 @@ class MetaVolumeBuilder:
 
             recovery/
             ├── bin/<arch>/lcsas-restore       (if built)
-            ├── bin/<arch>/lcsas-keyshare      (if built)
+            ├── bin/<arch>/lcsas-shares      (if built)
             ├── bin/<arch>/lcsas-ecc           (if built)
             ├── bin/<arch>/lcsas-iso9660       (if built)
             ├── src/                            C source
@@ -1316,7 +1316,7 @@ class MetaVolumeBuilder:
         skipped silently; targets whose short-arch directory is
         empty are also skipped (owner hasn't built that arch yet).
 
-        KEY-05 extends the same relocation to ``lcsas-keyshare[.exe]``
+        KEY-05 extends the same relocation to ``lcsas-shares[.exe]``
         (the static share combiner): the heir-facing Windows docs
         name a single on-disc bin dir per target, so the combiner must
         live next to lcsas-restore under the rust triple.  The
@@ -1356,7 +1356,7 @@ class MetaVolumeBuilder:
             # KEY-05: the static share combiner is part of the
             # tier-1 binary family — relocate it next to lcsas-restore
             # so the heir docs can name one on-disc Windows path
-            # (bin\<rust-triple>\lcsas-keyshare.exe).
+            # (bin\<rust-triple>\lcsas-shares.exe).
             #
             # FMT-01: the in-house RS03 ECC tool ``lcsas-ecc`` is likewise
             # a required member of the tier-1 binary family — it is the
@@ -1371,7 +1371,7 @@ class MetaVolumeBuilder:
             suffix = ".exe" if exe_name.endswith(".exe") else ""
             for name in (
                 exe_name,
-                f"lcsas-keyshare{suffix}",
+                f"lcsas-shares{suffix}",
                 f"lcsas-ecc{suffix}",
             ):
                 src_bin = src_recovery / "bin" / short_arch / name
@@ -1422,7 +1422,7 @@ class MetaVolumeBuilder:
         ``volume_info.json`` on the disc all report.
 
         Each folder that gets anything copied into it also gets its
-        backup set marker, ``LCSAS_REPO.txt`` (rc6 C1): the same file,
+        backup set marker, ``LCSAS_BACKUP_SET.txt`` (rc6 C1): the same file,
         from the same renderer, as on the data discs.
         """
         self._metadata_results = []
@@ -1844,7 +1844,7 @@ class MetaVolumeBuilder:
                 ],
             },
             "requires": {
-                "key_file": "The repository's password (typed, or in a password file)",
+                "password": "The backup set's password (typed, or in a password file)",
                 "data_isos": "LCSAS data discs or their ISO images",
             },
         }
@@ -2008,19 +2008,19 @@ to restore the files on the LCSAS archive discs.
        Do not click inside its black window: a click pauses
        the restore (the title starts with "Select").  Press
        Esc to let it go on.
-       (See recovery/docs/RECOVER_WINDOWS.txt for details.)
+       (See recovery/docs/RESTORE_WINDOWS.txt for details.)
 
   >>> macOS <<<
        Open Terminal, then run:
            sh /Volumes/{label}/restore.sh ~/restored
-       (See recovery/docs/RECOVER.txt for details.)
+       (See recovery/docs/RESTORE.txt for details.)
 
   >>> Linux <<<
        Open a terminal, then run:
            sh /media/$USER/{label}/restore.sh ~/restored
        (or:  sudo mount /dev/sr0 /mnt
         then: sh /mnt/restore.sh ~/restored)
-       (See recovery/docs/RECOVER.txt for details.)
+       (See recovery/docs/RESTORE.txt for details.)
 
 {no_os_block}
 ╚══════════════════════════════════════════════════════════╝
@@ -2081,7 +2081,7 @@ NEED HELP?
 {contact_block}  Take all the discs plus the password to any computer
   professional.  Any system administrator or IT professional
   should be able to follow the instructions in
-  recovery/docs/RECOVER.txt.
+  recovery/docs/RESTORE.txt.
 
   The full source code is in recovery/src/, so a sufficiently
   motivated future implementer can rebuild the tooling from
