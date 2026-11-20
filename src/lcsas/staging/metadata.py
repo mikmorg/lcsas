@@ -1057,7 +1057,7 @@ HOW TO RESTORE (manual)
        cp -r /tmp/vol1/metadata/REPO_ID/* /tmp/cache/
 
 5. Restore:
-       rustic restore latest /output -r /tmp/cache --password-file password.txt
+       rustic restore latest /output -r /tmp/cache --password-file ~/password.txt
 
 DISC CONTENTS
 --------------

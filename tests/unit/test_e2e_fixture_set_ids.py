@@ -194,9 +194,9 @@ def test_macos_e2e_names_the_fixture_set_by_its_name() -> None:
     yml = (REPO_ROOT / ".github" / "workflows" / "macos-e2e.yml").read_text(
         encoding="utf-8"
     )
-    want = f'--repo "{fixture_lib.WINDOWS_SET_NAME}"'
+    want = f'--backup-set "{fixture_lib.WINDOWS_SET_NAME}"'
     assert yml.count(want) == 2
-    assert "--repo win" not in yml
+    assert "--backup-set win" not in yml
     assert "LCSAS_BACKUP_SET by name" not in yml
     assert "other_set_names" not in (E2E / "macos_restore_smoke.py").read_text(
         encoding="utf-8"
