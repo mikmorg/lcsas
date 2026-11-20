@@ -137,7 +137,7 @@ DISCOVERY OVERRIDES
 LCSAS_REPO
   Default:  unset (prompts when multiple repositories found)
   Since:    Phase 14
-  Read by:  restore.sh (also as --repo NAME) and restore.bat
+  Read by:  restore.sh and restore.bat (both also as --repo NAME)
   What:     Backup set to restore, by its id (the name of its
             metadata/<id>/ folder on the discs) or, since rc6 (#606),
             by its name (name= in that folder's LCSAS_REPO.txt) or its

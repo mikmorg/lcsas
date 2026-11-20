@@ -80,14 +80,34 @@ REM --snapshot ID: restore that snapshot, not the latest one (#807).  ID
 REM is a snapshot's id or the start of one, as lcsas-restore.exe
 REM --list-snapshots prints it (see RECOVER_WINDOWS.txt).  A restore that
 REM carries on takes it from resume.cfg.
+REM --repo NAME: restore that backup set, by its name or its id: the
+REM same as LCSAS_REPO=NAME, as restore.sh takes it (#925).
+REM Any other argument is refused with exit 2, as restore.sh refuses an
+REM unknown flag: up to rc10 restore.bat passed over every word but
+REM --snapshot, so `restore.bat --repo NAME` restored another set.
 set "SNAP=latest"
 set "SNAP_BAD="
+set "ARG_BAD="
+set "ARG_MISSING="
 call :parse_args %*
 REM Top level, not in a ( ) block: an exit /b inside one does not reach
 REM `cmd /c` on real Windows (see the exit 77 note at tier 1).
+if defined ARG_MISSING goto :arg_missing
+if defined ARG_BAD goto :arg_bad
 if not defined SNAP_BAD goto :snap_ok
 echo ERROR: --snapshot needs a snapshot id: the letters 0-9 and a-f,
 echo as the list of snapshots shows it, or the word latest.
+pause
+exit /b 2
+:arg_missing
+echo ERROR: --repo needs the name or the id of a backup set.
+call :arg_usage
+pause
+exit /b 2
+:arg_bad
+REM Delayed expansion prints the word as it is: nothing in it is run.
+echo ERROR: restore.bat does not know the argument "!ARG_BAD!".
+call :arg_usage
 pause
 exit /b 2
 :snap_ok
@@ -1735,14 +1755,44 @@ goto :choose_set
 REM ----- Subroutines --------------------------------------------------
 
 :parse_args
-REM %* = this script's arguments.  SNAP = the ID of --snapshot ID (latest
-REM when none); SNAP_BAD = 1 when the ID is missing, or holds anything
-REM but 0-9 and a-f: it goes on the lcsas-restore.exe command line.
+REM %* = this script's arguments (#925).  SNAP = the ID of --snapshot ID
+REM (latest when none); SNAP_BAD = 1 when the ID is missing, or holds
+REM anything but 0-9 and a-f: it goes on the lcsas-restore.exe command
+REM line.  --repo NAME sets LCSAS_REPO (ARG_MISSING = 1 without a NAME).
+REM --resume and --check-disc IMAGE are read where they are used, and
+REM only as the first argument; the IMAGE is checked there.  Any other
+REM word: ARG_BAD = it, and the rest is not read.  Flat, with goto: a
+REM shift inside a ( ) block does not change %~1 in that block.
+set "PA_FIRST=1"
+:pa_next
 if "%~1"=="" goto :eof
-if /i not "%~1"=="--snapshot" (
-    shift
-    goto :parse_args
-)
+if /i "%~1"=="--snapshot" goto :pa_snapshot
+if /i "%~1"=="--repo" goto :pa_repo
+if defined PA_FIRST if /i "%~1"=="--resume" goto :pa_resume
+if defined PA_FIRST if /i "%~1"=="--check-disc" goto :pa_check_disc
+set "ARG_BAD=%~1"
+goto :eof
+:pa_resume
+set "PA_FIRST="
+shift
+goto :pa_next
+:pa_check_disc
+set "PA_FIRST="
+shift
+shift
+goto :pa_next
+:pa_repo
+set "PA_FIRST="
+if "%~2"=="" goto :pa_repo_missing
+set "LCSAS_REPO=%~2"
+shift
+shift
+goto :pa_next
+:pa_repo_missing
+set "ARG_MISSING=1"
+goto :eof
+:pa_snapshot
+set "PA_FIRST="
 set "SNAP=%~2"
 shift
 shift
@@ -1752,7 +1802,7 @@ if not defined SNAP (
 )
 if /i "!SNAP!"=="latest" (
     set "SNAP=latest"
-    goto :parse_args
+    goto :pa_next
 )
 REM What is left once every 0-9 and a-f (any case) is taken out must be
 REM nothing.  One letter at a time, in a call: wine's cmd neither
@@ -1760,7 +1810,18 @@ REM expands !SNAP! in a for /f string nor !VAR:x=! in a for body.
 set "SNAP_LEFT=!SNAP!"
 for %%H in (0 1 2 3 4 5 6 7 8 9 a b c d e f) do call :strip_hex %%H
 if defined SNAP_LEFT set "SNAP_BAD=1"
-goto :parse_args
+goto :pa_next
+
+:arg_usage
+REM The arguments restore.bat takes, after an argument it refused.
+echo.
+echo restore.bat takes no argument for an ordinary restore: double-click
+echo it, or run it on its own, and it asks its questions.  It also takes:
+echo    --repo NAME        restore the backup set NAME ^(its name or its id^)
+echo    --snapshot ID      restore that snapshot, not the latest one
+echo    --check-disc IMAGE check a disc image for damage, and repair it
+echo See RECOVER_WINDOWS.txt.
+goto :eof
 
 :strip_hex
 REM %~1 = one hex letter: take it out of SNAP_LEFT.

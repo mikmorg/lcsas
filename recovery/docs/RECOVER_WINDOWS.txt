@@ -503,9 +503,15 @@ set goes into a folder of its own by default
 (Documents\restored-<its name>).  Enter alone, or N, ends the run,
 and only then is the tools folder deleted.
 
-To choose a set without the menu, set LCSAS_REPO to its name or its
-code before you start (see ENV_VARS.txt).  If two sets have the same
-name, the script stops and lists their codes: use the code.
+To choose a set without the menu, give its name or its code to
+restore.bat from a CMD prompt at the META disc root:
+
+    restore.bat --repo "Holiday photos"
+
+or set LCSAS_REPO to it before you start (see ENV_VARS.txt).  If no
+set has that name, the script stops and lists the sets.  If two sets
+have the same name, the script stops and lists their codes: use the
+code.
 
 ────────────────────────────────────────────────────────────────────
 DESTINATION FOLDER NOTES
@@ -879,8 +885,10 @@ same as for restore.sh; see RECOVER.txt):
     0   the restore finished: every backup set you chose
     1   a failure; the message above it says what (for example not
         enough free space, after any answer but y)
-    2   --snapshot was given without an ID, or with something that is
-        not one (an ID is made of the digits 0-9 and the letters a-f)
+    2   restore.bat was called wrongly: an argument it does not
+        take (it lists the ones it does), --repo without a name, or
+        --snapshot without an ID or with something that is not one
+        (an ID is made of the digits 0-9 and the letters a-f)
     3   --check-disc only: no image, no lcsas-ecc.exe on this disc, or
         the image could not be read or repaired
     4   the restore finished, but some items could not be restored:

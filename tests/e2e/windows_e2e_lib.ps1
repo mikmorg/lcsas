@@ -548,6 +548,59 @@ function Invoke-RelocatedWrongPasswordLeg {
     Write-Host 'Relocated wrong-password leg passed: exit 77 through the relocation, tools folder kept.'
 }
 
+# #925: restore.bat's arguments on real cmd.  Run from the disc root
+# (relocated, as a double-click is) with -Arguments, no LCSAS_REPO, and
+# blank answers; the exit code must reach `cmd /c` through the relocation.
+#   --repo <a name no set has>: exit 1, the sets listed, nothing restored;
+#   an unknown flag: exit 2 before anything else runs, the valid
+#   arguments listed.
+function Invoke-ArgumentLeg {
+    param(
+        [string]$Fixture,
+        [string]$Arguments,
+        [int]$WantRc,
+        [string[]]$WantText,
+        [string]$Name
+    )
+    $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $false
+    Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
+    Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
+    Remove-Item Env:LCSAS_REPO -ErrorAction SilentlyContinue
+    $sets = Get-FixtureSets -Fixture $Fixture
+    $meta = Find-MetaDrive
+    if (-not $meta) { throw 'meta ISO not mounted (no drive holds restore.bat)' }
+    $bat = "${meta}:\restore.bat"
+    Clear-ToolsDir
+    $answers = Join-Path $env:RUNNER_TEMP "answers-$Name.txt"
+    @('', '', '', '', '', '', '', '') | Set-Content -Path $answers -Encoding ascii
+    $outFile = Join-Path $env:RUNNER_TEMP "out-$Name.txt"
+    Write-Host "Running (cwd ${meta}:\): $bat $Arguments"
+    Push-Location -LiteralPath "${meta}:\"
+    try {
+        cmd /c "`"$bat`" $Arguments < `"$answers`" > `"$outFile`" 2>&1"
+        $rc = $LASTEXITCODE
+    } finally { Pop-Location }
+    $out = Get-Content $outFile -Raw
+    Write-Host '----- restore.bat output -----'
+    Write-Host $out
+    Write-Host '----- end output -----'
+    Write-Host "$Name exit code: $rc"
+    $problems = New-Object 'System.Collections.Generic.List[string]'
+    if ($rc -ne $WantRc) { $problems.Add("exit code $rc (want $WantRc)") }
+    foreach ($t in $WantText) {
+        if (-not $out.Contains($t)) { $problems.Add("output lacks '$t'") }
+    }
+    if ($out.Contains('Restore to which folder')) { $problems.Add('went on to the folder question') }
+    if ($out.Contains('Password: ')) { $problems.Add('went on to the password question') }
+    Assert-NoAccessDenied -Out $out -Problems $problems
+    Clear-ToolsDir
+    if ($problems.Count -gt 0) {
+        throw ("$Name leg failed:`n  - " + ($problems -join "`n  - "))
+    }
+    Write-Host "$Name leg passed: exit $rc."
+}
+
 # ---------------------------------------------------------------------
 # Leg: relocate, then EJECT the meta disc (Dismount-DiskImage) before the
 # restore proper starts, and require the restore to finish anyway.
