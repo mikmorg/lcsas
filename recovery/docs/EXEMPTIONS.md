@@ -18,7 +18,7 @@ The `make coverage-c` target enforces both invariants via
 > `src/lcsas-keyshare/` combiner is *also* in the coverage-c gcovr report
 > (added in KEY-06) and under the fuzz + sanitize gates.  It is not
 > line-pinned, by decision (#488): its contract is the narrative posture in
-> the "lcsas-keyshare (SLIP-0039 combiner)" section at the end of this file.
+> the "lcsas-shares (SLIP-0039 combiner)" section at the end of this file.
 
 ## Categories
 
@@ -91,7 +91,7 @@ lcsas_io.c:55   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs
 lcsas_io.c:56   INTRACTABLE   "
 
 # main.c
-main.c:650   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
+main.c:650   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --restore-folder path; needs filesystem-full tmpfs (integration-only)
 main.c:654   INTRACTABLE   "  (exit 74)
 main.c:690   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
 main.c:696   INTRACTABLE   "
@@ -210,10 +210,11 @@ Reducing the `INTRACTABLE` set further would need a fault-tolerant gcov runtime
 patch (malloc-failure branches), an EINTR-injection wrapper (`lcsas_io.c`), or
 running the integration-tier filesystem/disc-fault fixtures inside `coverage-c`.
 
-## lcsas-keyshare (SLIP-0039 combiner)
+## lcsas-shares (SLIP-0039 combiner)
 
-The combiner (`recovery/src/lcsas-keyshare/`) recovers an LCSAS repository
-password from SLIP-0039 mnemonic shares with no python3 dependency.  It
+The combiner `lcsas-shares` (source: `recovery/src/lcsas-keyshare/`)
+recovers an LCSAS repository password from SLIP-0039 mnemonic shares
+with no python3 dependency.  It
 parses untrusted, heir-typed text (mnemonics and whole printed share-card
 files) on the 50-year critical path, so KEY-06 brought it under the same
 tier-1 gates as `lcsas-restore`:
@@ -251,7 +252,7 @@ Coverage notes (NOT FENCE-enforced — narrative only):
   fails the integrity digest cannot be crafted without breaking the
   primitive).
 - `main.c` is the CLI shell.  coverage-c drives it (Step 3d: real cards
-  via `lcsas key split` for the success path, plus usage/error
+  via `lcsas password split` for the success path, plus usage/error
   invocations); the binding correctness proof is the integration test
   `tests/integration/test_keyshare_binary_cards.py`, which subprocesses
   the *committed* binary against real card artifacts.  A source-only

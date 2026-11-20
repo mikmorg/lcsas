@@ -1,17 +1,17 @@
 /*
- * main.c -- lcsas-keyshare CLI.
+ * main.c -- lcsas-shares CLI.
  *
  * Usage:
- *   lcsas-keyshare [--passphrase X] SHARE_FILE...
- *   lcsas-keyshare [--passphrase X] < shares.txt   (one mnemonic per line)
- *   lcsas-keyshare --help
+ *   lcsas-shares [--passphrase X] SHARE_FILE...
+ *   lcsas-shares [--passphrase X] < shares.txt   (one mnemonic per line)
+ *   lcsas-shares --help
  *
  * Each SHARE_FILE is a bare mnemonic file OR a printed share card (the
  * {repo}-share-N-card.txt artifact a share holder is handed): the share words
  * are recognised by their content, so card header lines and prose are
  * ignored.  When no files are given, mnemonics are read from stdin; each
  * line whose tokens are all wordlist words is one share, others (blanks,
- * card prose) are skipped, so `cat card1 card2 | lcsas-keyshare` works.
+ * card prose) are skipped, so `cat card1 card2 | lcsas-shares` works.
  * A stdin line that is nearly all share words is a share with typing
  * mistakes: it is checked like the others, so the bad word is named.
  *
@@ -23,7 +23,8 @@
  * WITHOUT printing a partial password.  Exit status: see usage() below.
  *
  * Passphrase: default empty.  Overridden by --passphrase X, else by the
- * environment variable LCSAS_KEYSHARE_PASSPHRASE.
+ * environment variable LCSAS_SHARE_PASSPHRASE.  The old name,
+ * LCSAS_KEYSHARE_PASSPHRASE, is refused if set (#934: renamed outright).
  *
  * C89; reuses the SLIP-0039 combiner library.
  */
@@ -50,8 +51,8 @@
 
 static void usage(FILE *o)
 {
-    fputs("usage: lcsas-keyshare [--passphrase X] SHARE_FILE...\n"
-          "       lcsas-keyshare [--passphrase X] < shares.txt\n"
+    fputs("usage: lcsas-shares [--passphrase X] SHARE_FILE...\n"
+          "       lcsas-shares [--passphrase X] < shares.txt\n"
           "\n"
           "Rebuilds an LCSAS repository password from its share cards and\n"
           "writes it to standard output (raw bytes, no newline).\n"
@@ -220,12 +221,12 @@ static int read_file_mnemonic(const char *path, char *buf, size_t cap)
     char err[64];
 
     if (f == NULL) {
-        fprintf(stderr, "lcsas-keyshare: cannot open '%s'\n", path);
+        fprintf(stderr, "lcsas-shares: cannot open '%s'\n", path);
         return EXIT_USAGE;
     }
     got = fread(filebuf, 1, sizeof(filebuf) - 1, f);
     if (ferror(f)) {
-        fprintf(stderr, "lcsas-keyshare: read error on '%s'\n", path);
+        fprintf(stderr, "lcsas-shares: read error on '%s'\n", path);
         fclose(f);
         return EXIT_USAGE;
     }
@@ -245,13 +246,13 @@ static int read_file_mnemonic(const char *path, char *buf, size_t cap)
     }
     if (strncmp(err, "found 0 ", 8) == 0) {
         /* #844: say it plainly. */
-        fprintf(stderr, "lcsas-keyshare: '%s': no share words were found "
+        fprintf(stderr, "lcsas-shares: '%s': no share words were found "
                         "in this file - is it a share card?\n", path);
     } else if (err[0] != '\0') {
-        fprintf(stderr, "lcsas-keyshare: '%s': %s "
+        fprintf(stderr, "lcsas-shares: '%s': %s "
                         "- is this a complete share card?\n", path, err);
     } else {
-        fprintf(stderr, "lcsas-keyshare: '%s': share too large\n", path);
+        fprintf(stderr, "lcsas-shares: '%s': share too large\n", path);
     }
     return EXIT_BAD_SHARE;
 }
@@ -287,11 +288,19 @@ int main(int argc, char **argv)
     size_t skipped = 0;   /* non-blank stdin lines not read as shares */
     int any_bad = 0;
 
+    /* #934: the old variable is refused, first, so a passphrase set
+     * under the old name is never silently ignored. */
+    if (getenv("LCSAS_KEYSHARE_PASSPHRASE") != NULL) {
+        fprintf(stderr, "lcsas-shares: LCSAS_KEYSHARE_PASSPHRASE was "
+                        "renamed: use LCSAS_SHARE_PASSPHRASE\n");
+        return EXIT_USAGE;
+    }
+
     /* Parse options (--passphrase X and --help). */
     while (argi < argc) {
         if (strcmp(argv[argi], "--passphrase") == 0) {
             if (argi + 1 >= argc) {
-                fprintf(stderr, "lcsas-keyshare: --passphrase needs a value\n");
+                fprintf(stderr, "lcsas-shares: --passphrase needs a value\n");
                 return EXIT_USAGE;
             }
             pp_opt = argv[argi + 1];
@@ -304,7 +313,7 @@ int main(int argc, char **argv)
             argi++;
             break;
         } else if (argv[argi][0] == '-' && argv[argi][1] != '\0') {
-            fprintf(stderr, "lcsas-keyshare: unknown option '%s'\n", argv[argi]);
+            fprintf(stderr, "lcsas-shares: unknown option '%s'\n", argv[argi]);
             usage(stderr);
             return EXIT_USAGE;
         } else {
@@ -317,7 +326,7 @@ int main(int argc, char **argv)
         passphrase = (const unsigned char *)pp_opt;
         plen = strlen(pp_opt);
     } else {
-        const char *env = getenv("LCSAS_KEYSHARE_PASSPHRASE");
+        const char *env = getenv("LCSAS_SHARE_PASSPHRASE");
         if (env != NULL) {
             passphrase = (const unsigned char *)env;
             plen = strlen(env);
@@ -331,7 +340,7 @@ int main(int argc, char **argv)
         for (; argi < argc; argi++) {
             int frc;
             if (n >= MAX_MNEMONICS) {
-                fprintf(stderr, "lcsas-keyshare: too many shares (max %d)\n",
+                fprintf(stderr, "lcsas-shares: too many shares (max %d)\n",
                         MAX_MNEMONICS);
                 return EXIT_USAGE;
             }
@@ -340,7 +349,7 @@ int main(int argc, char **argv)
                 return frc;
             }
             if (storage[n][0] == '\0') {
-                fprintf(stderr, "lcsas-keyshare: '%s' is empty\n", argv[argi]);
+                fprintf(stderr, "lcsas-shares: '%s' is empty\n", argv[argi]);
                 return EXIT_BAD_SHARE;
             }
             mnemonics[n] = storage[n];
@@ -386,14 +395,14 @@ int main(int argc, char **argv)
         if (n >= MAX_MNEMONICS && fgets(linebuf, MAX_LINE, stdin) != NULL) {
             /* fgets above already consumed; this branch is defensive only
              * if exactly MAX_MNEMONICS lines were read. */
-            fprintf(stderr, "lcsas-keyshare: too many shares (max %d)\n",
+            fprintf(stderr, "lcsas-shares: too many shares (max %d)\n",
                     MAX_MNEMONICS);
             return EXIT_USAGE;
         }
     }
 
     if (n == 0) {
-        fprintf(stderr, "lcsas-keyshare: no shares provided\n");
+        fprintf(stderr, "lcsas-shares: no shares provided\n");
         print_skipped_hint(skipped);
         usage(stderr);
         return EXIT_USAGE;
@@ -415,7 +424,7 @@ int main(int argc, char **argv)
         }
     }
     if (any_bad) {
-        fprintf(stderr, "lcsas-keyshare: one or more shares failed individual "
+        fprintf(stderr, "lcsas-shares: one or more shares failed individual "
                         "validation; fix the flagged words above and retry\n");
         return EXIT_BAD_SHARE;
     }
@@ -424,9 +433,9 @@ int main(int argc, char **argv)
                                         pw, &pwlen) != 0) {
         /* Every share is internally valid, so the failure is a set-level
          * problem: too few shares, or shares from different splits. */
-        fprintf(stderr, "lcsas-keyshare: failed to rebuild the password "
+        fprintf(stderr, "lcsas-shares: failed to rebuild the password "
                         "(too few, corrupt, or mismatched shares)\n");
-        fprintf(stderr, "lcsas-keyshare: supply at least K shares from the "
+        fprintf(stderr, "lcsas-shares: supply at least K shares from the "
                         "SAME archive (same Split ID on every card)\n");
         print_skipped_hint(skipped);
         return EXIT_CANNOT_COMBINE;
@@ -439,12 +448,12 @@ int main(int argc, char **argv)
     /* Write the raw password bytes, NO trailing newline. */
     for (i = 0; i < pwlen; i++) {
         if (putchar(pw[i]) == EOF) {
-            fprintf(stderr, "lcsas-keyshare: write error\n");
+            fprintf(stderr, "lcsas-shares: write error\n");
             return EXIT_CANNOT_COMBINE;
         }
     }
     if (fflush(stdout) != 0) {
-        fprintf(stderr, "lcsas-keyshare: write error\n");
+        fprintf(stderr, "lcsas-shares: write error\n");
         return EXIT_CANNOT_COMBINE;
     }
     return 0;

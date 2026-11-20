@@ -19,7 +19,7 @@
  * repaired copy and leaves the input untouched.
  *
  * C89; self-contained (stdio/stdlib/string only).  Built and cross-
- * built exactly like lcsas-keyshare.
+ * built exactly like lcsas-shares.
  */
 #include "rs03.h"
 #include "gf256.h"
