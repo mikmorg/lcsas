@@ -160,7 +160,12 @@ PROMPTS: tuple[Phrase, ...] = (
            sh=r"Type YES to overwrite, anything else to stop: ",
            bat=r"Type YES to overwrite, anything else to stop: "),
     Phrase("space", sh=r"Carry on anyway\? \[y/N\] ", bat=r"Carry on anyway\? \[y/N\]: "),
-    Phrase("ram", sh=r"Continue restoring into RAM anyway\? \[y/N\] ", bat=None),
+    # Asked when the folder restored into is on tmpfs: a pytest temp
+    # folder there is fine, so the driver says y (as
+    # test_interactive_restore does), and the journey does not depend on
+    # where the host keeps its temp folders.
+    Phrase("ram", sh=r"Continue restoring into RAM anyway\? \[y/N\] ", bat=None,
+           by_driver=True),
     Phrase("disc", sh=TIER1_BOX_END, bat=TIER1_BOX_END, by_driver=True),
     Phrase("pause", sh=None, bat=r"Press any key to continue[^\r\n]*", by_driver=True),
 )
@@ -715,6 +720,8 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
         over = [0]
 
         def answer(prompt: Prompt, _n: int) -> bytes:
+            if prompt.kind == "ram":
+                return b"y\n"
             if prompt.kind == "disc":
                 discs[0] += 1
                 label = picker.pick(prompt.labels)
