@@ -35,7 +35,8 @@ def _recovery(tmp_path: Path) -> Path:
         exit 0
     """))
     stub.chmod(0o755)
-    (recovery / "metadata" / "alpha" / "keys").mkdir(parents=True)
+    for sub in ("keys", "index", "snapshots", "data"):
+        (recovery / "metadata" / "alpha" / sub).mkdir(parents=True)
     (recovery / "metadata" / "alpha" / "keys" / "k").write_text("k")
     return recovery
 

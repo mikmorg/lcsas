@@ -202,9 +202,8 @@ def test_a_mistyped_command_line_off_the_meta_disc_copies_nothing(
 # ── #625: relative paths are taken from the starting folder ──────────
 
 
-@pytest.mark.parametrize("form", ["positional", "flag"])
 def test_a_relative_target_off_the_meta_disc_lands_under_the_starting_folder(
-    tmp_path: Path, readonly: Callable[[Path], None], form: str,
+    tmp_path: Path, readonly: Callable[[Path], None],
 ) -> None:
     """The run is started from a folder reached through a link (as a
     macOS /var path is): the target keeps that form (no pwd -P)."""
@@ -213,7 +212,7 @@ def test_a_relative_target_off_the_meta_disc_lands_under_the_starting_folder(
     real = _workdir(tmp_path)
     link = tmp_path / "start-link"
     link.symlink_to(real)
-    args = ["restored"] if form == "positional" else ["--restore-folder", "restored"]
+    args = ["--restore-folder", "restored"]
     env = {**_private(tmp_path), "PWD": str(link)}
     res = _run_meta(meta, args, env, link)
     assert res.returncode == 0, res.stderr
@@ -335,7 +334,9 @@ def test_a_flag_without_its_value_is_a_usage_error(shell: str,
 
 
 def test_an_unknown_repo_with_one_set_stops_and_lists_the_set(tmp_path: Path) -> None:
-    res = _in_place(tmp_path, ["--backup-set", "no-such-set", "@REC", str(tmp_path / "o")])
+    res = _in_place(
+        tmp_path,
+        ["--backup-set", "no-such-set", "--restore-folder", str(tmp_path / "o"), "@REC"])
     assert res.returncode == 1
     assert "not among available repositories" in res.stderr
     assert f"{SET_NAME} (id {SET_ID})" in res.stderr
@@ -345,13 +346,15 @@ def test_an_unknown_repo_with_one_set_stops_and_lists_the_set(tmp_path: Path) ->
 
 @pytest.mark.parametrize("name", [SET_NAME, SET_ID])
 def test_the_one_set_by_its_name_or_id(tmp_path: Path, name: str) -> None:
-    res = _in_place(tmp_path, ["--backup-set", name, "@REC", str(tmp_path / "o")])
+    res = _in_place(
+        tmp_path, ["--backup-set", name, "--restore-folder", str(tmp_path / "o"), "@REC"])
     assert res.returncode == 0, res.stderr
     assert _arg(res.stdout, "--repo").endswith(f"/metadata/{SET_ID}")
 
 
 def test_an_unknown_lcsas_repo_with_one_set_stops_too(tmp_path: Path) -> None:
-    res = _in_place(tmp_path, ["@REC", str(tmp_path / "o")], LCSAS_BACKUP_SET="other")
+    res = _in_place(tmp_path, ["--restore-folder", str(tmp_path / "o"), "@REC"],
+                    LCSAS_BACKUP_SET="other")
     assert res.returncode == 1
     assert "LCSAS_BACKUP_SET=other not among available repositories" in res.stderr
 
@@ -363,7 +366,7 @@ def test_a_failed_run_leaves_no_exit_file(tmp_path: Path) -> None:
     """A failing run says its exit code on the terminal and leaves no
     file behind in TMPDIR (it used to leave /tmp/lcsas-restore-exit.*,
     which also ignored TMPDIR)."""
-    res = _in_place(tmp_path, ["@REC", str(tmp_path / "o")], STUB_RC="1")
+    res = _in_place(tmp_path, ["--restore-folder", str(tmp_path / "o"), "@REC"], STUB_RC="1")
     assert res.returncode == 1, res.stderr
     assert "[restore.sh] stopped with exit code 1" in res.stderr
     assert "exit log" not in res.stderr

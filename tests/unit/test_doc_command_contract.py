@@ -105,7 +105,7 @@ def test_no_legacy_windows_triple_in_docs() -> None:
     )
 
 
-_INVOKE = re.compile(r"\b(?:python3?|py)(?:\.exe)?\s+\S*standalone_restorer\.py")
+_INVOKE = re.compile(r"\b(?:python3?|py)(?:\.exe)?\s+\S*python_reader\.py")
 
 # Flags of the generated CLI that consume a value (see
 # src/lcsas/restore/standalone_builder.py _CLI_BLOCK).
@@ -647,13 +647,13 @@ def test_split_key_python_fallback_matches_bundle_layout(tmp_path: Path) -> None
 def test_no_stdin_password_claim_for_standalone() -> None:
     """The generated standalone restorer never prompts for the
     password (``--password-file`` is required); the docs must not
-    claim otherwise near a standalone_restorer mention."""
+    claim otherwise near a python_reader mention."""
     claim = re.compile(r"prompts?\s+for\s+the\s+password", re.IGNORECASE)
     offenders = []
     for doc in _all_docs():
         lines = doc.read_text().splitlines()
         for i, line in enumerate(lines):
-            if "standalone_restorer" not in line:
+            if "python_reader" not in line:
                 continue
             for j in range(i, min(i + 4, len(lines))):
                 if claim.search(lines[j]):
@@ -661,7 +661,7 @@ def test_no_stdin_password_claim_for_standalone() -> None:
                         f"{doc.relative_to(REPO_ROOT)}:{j + 1}: {lines[j].strip()}"
                     )
     assert not offenders, (
-        "stdin-password claim near standalone_restorer mention:\n"
+        "stdin-password claim near python_reader mention:\n"
         + "\n".join(offenders)
     )
 

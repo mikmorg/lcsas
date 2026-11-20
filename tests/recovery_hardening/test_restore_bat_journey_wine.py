@@ -1170,7 +1170,7 @@ def test_tools_folder_must_be_the_restores_own(fresh: _Wine, tmp_path: Path) -> 
         (tools / "pack-cache" / "ab" / "abcd.pack").write_bytes(b"cached")
         (tools / "catalog.db").write_bytes(b"the stopped run's catalog")
         (tools / "resume.cfg").write_text(
-            f"set={docs.repo_id}\r\ntarget=C:\\stopped\r\nmeta=D:\\\r\nletters= D\r\n")
+            f"backup_set={docs.repo_id}\r\nrestore_folder=C:\\stopped\r\nmeta=D:\\\r\nletters= D\r\n")
         (tools / ".lcsas-tools").write_text("made by restore.bat\r\n")
         stopped = _snapshot(tools)
         _map_drive(wine.prefix, "e", disc_b)

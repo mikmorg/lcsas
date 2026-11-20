@@ -2865,7 +2865,7 @@ if [ -n "$TOOLS" ]; then
 ${_rs_env}LCSAS_TOOLS_DIR=$(sh_quote "$TOOLS"); export LCSAS_TOOLS_DIR
 LCSAS_BACKUP_SET=$(sh_quote "$(basename "$REPO")"); export LCSAS_BACKUP_SET
 LCSAS_NEWEST_DISC_PROMPT=0; export LCSAS_NEWEST_DISC_PROMPT
-exec sh $(sh_quote "$SCRIPT") "\$@" $(sh_quote "$RECOVERY") $(sh_quote "$TARGET_ABS") $(sh_quote "$SNAP")
+exec sh $(sh_quote "$SCRIPT") --restore-folder $(sh_quote "$TARGET_ABS") --snapshot $(sh_quote "$SNAP") "\$@" $(sh_quote "$RECOVERY")
 EOF
     chmod 700 "$TOOLS/resume.sh"
 fi

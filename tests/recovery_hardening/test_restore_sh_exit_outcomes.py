@@ -121,8 +121,8 @@ def _run(recovery: Path, tmp_path: Path, stdin: str = "pw\n",
     env.update(extra)
     env = {k: v for k, v in env.items() if v != "<unset>"}
     return subprocess.run(
-        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery),
-         "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"),
+         str(recovery)],
         input=stdin, capture_output=True, text=True, env=env, timeout=60,
     )
 
