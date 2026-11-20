@@ -61,9 +61,6 @@ TIER1_RETRY_LINE = b"Insert the right disc and press ENTER to retry."
 TIER1_ABORT_LINE = b"Type 'q' then ENTER to abort."
 TIER1_DONE = b"[lcsas-restore] restore complete"
 
-# restore.sh's exit code for q at tier 1's disc prompt (#615).
-EXIT_DISC_PROMPT_QUIT = 75
-
 ENTER = b"\n"
 QUIT = b"q\n"
 NO = b"n\n"

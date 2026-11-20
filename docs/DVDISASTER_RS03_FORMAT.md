@@ -378,7 +378,9 @@ lcsas-ecc verify <image>          # dvdisaster equivalent: dvdisaster -i image.i
 Reads all sectors, computes CRC-32, compares against stored CRCs.
 Reports number of good/bad/missing sectors and whether the ECC can
 repair the damage.  Exit 0 = clean, 1 = damage found, 2 = no RS03
-header, 3 = usage/I-O error (see `main.c`).
+header, 3 = usage/I-O error (see `main.c`).  These are `lcsas-ecc`'s own
+codes; `restore.sh --check-disc` and `restore.bat --check-disc` report
+"no RS03 header" as their exit 5, since 2 is their usage error (#887).
 
 ### 5.2 Repair
 

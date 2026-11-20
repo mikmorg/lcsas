@@ -23,3 +23,24 @@ class ReaderExit(enum.IntEnum):
     DISK_FULL = 74           # the target file system is full
     READER_QUIT = 75         # 'q' (or end of input) at the disc prompt
     WRONG_PASSWORD = 77      # a key file rejected the password
+
+
+class ScriptExit(enum.IntEnum):
+    """restore.sh's and restore.bat's own exit codes (#887).
+
+    Their headers and the EXIT CODES tables of ``RECOVER.txt`` and
+    ``RECOVER_WINDOWS.txt`` state them; ``script_contract.py`` runs them.
+    Any other code is the one the tier that ran stopped with.
+    """
+
+    OK = 0
+    FAILED = 1               # the message above it names the failure
+    USAGE = 2                # the script was called wrongly
+    CHECK_DISC_ERROR = 3     # --check-disc: no image or no tool, a read error
+    NOT_ALL_RESTORED = 4     # finished; items listed in RESTORE_FAILURES.txt
+    NO_ECC = 5               # --check-disc: the image has no ECC data (#887)
+    NO_RECOVERY_BIN = 64     # no program here can restore the set
+    USER_ABORT = 65          # the person stopped at a question the script asked
+    DISK_FULL = 74           # the disk restored to is full
+    READER_QUIT = 75         # q at a reader's disc prompt
+    WRONG_PASSWORD = 77      # a key rejected the password, or q at it

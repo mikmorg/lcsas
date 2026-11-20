@@ -353,7 +353,10 @@ Everything not listed was restored.  restore.sh and restore.bat then
 say "The restore finished, but N item(s) could not be restored", give
 the path of RESTORE_FAILURES.txt, and exit with code 4.  The restore
 is over: resume.sh would only skip the same items again, so it is not
-offered, and the tools folder is removed.  What to do:
+offered, and the tools folder is removed.  Not when a row says "pack
+not found" (below): then the tools folder and resume.sh stay, and the
+script says to insert the disc and run the same restore again.  What
+to do:
 
   * "a folder with this name is already there": the folder you
     restored into holds an earlier restore, with a folder where this
@@ -361,9 +364,12 @@ offered, and the tools folder is removed.  What to do:
     Restore into a new, empty folder instead.
   * "pack not found: <id>": the data disc that holds this part of the
     backup was not in a drive, and the restore could not ask for it
-    (it asks only on a terminal).  Insert that disc and run the
-    restore again from the meta disc, into the same folder: the files
-    already restored are skipped.
+    (it asks only on a terminal).  Insert that disc and run the same
+    restore again, into the same folder: with resume.sh (restore.sh
+    prints the command; on Windows "Resume LCSAS restore.bat"), or
+    from the meta disc.  The files already restored are skipped.  Run
+    it in a terminal window and it asks for each disc it needs by its
+    label.
   * "pack damaged: <id>" or "pack unreadable: <id>": the copy of that
     part of the backup on the disc could not be read correctly (a
     scratched or failing disc).  Run the restore again with another
@@ -596,7 +602,9 @@ If the disc returns I/O errors:
      (Or call the tool directly:
          /mnt/recovery/bin/<arch>/lcsas-ecc verify /tmp/disc.iso
          /mnt/recovery/bin/<arch>/lcsas-ecc fix    /tmp/disc.iso
-      -- where <arch> is your machine's target dir under recovery/bin/.)
+      -- where <arch> is your machine's target dir under recovery/bin/.
+      lcsas-ecc verify exits 2 for an image with no ECC data;
+      restore.sh --check-disc exits 5 for it, see EXIT CODES.)
 
      With the default 15% redundancy, roughly 13-15% of unreadable
      sectors can be repaired.  Higher configured redundancy raises
@@ -745,16 +753,20 @@ EXIT CODES
     1  -- a failure the message above it names: no backup set found,
           an unsupported computer, not enough free space (see
           PREREQUISITES), "no recovery method available", or the tier
-          that ran failed
-    2  -- usage error; with --check-disc, the image has no ECC data,
-          so there is nothing to repair
+          that ran failed (also when that tier reported a usage error)
+    2  -- usage error: restore.sh was called wrongly
     3  -- --check-disc only: no image, no recovery folder or no
           lcsas-ecc for this computer, or the image could not be read
           or repaired (see "REPAIRING A DAMAGED DISC")
     4  -- the restore finished, but some items could not be restored:
           they are listed in RESTORE_FAILURES.txt in the folder you
           restored into (see "ITEMS NOT RESTORED").  Nothing to carry
-          on; restore.bat uses the same code
+          on, unless a disc was not there ("pack not found"): then
+          insert it and carry on with resume.sh.  restore.bat uses the
+          same code
+    5  -- --check-disc only: the image has no ECC data, so there is
+          nothing to repair: that disc was burned without ECC.  If it
+          cannot be read, use another disc with the same label
     64 -- no recovery program on this meta disc can run on this
           computer (see below)
     65 -- you stopped at a question restore.sh asked (the newest
@@ -772,7 +784,8 @@ EXIT CODES
           on with resume.sh, if the stop came after the backup set
           and the folder were chosen (see "STOPPING AND CARRYING ON
           LATER")
-  Any other code is the one the tier that ran stopped with.
+  Any other code is the one the tier that ran stopped with (its 2,
+  a usage error, is reported as 1).
   On every exit but 0 and 4 the tools folder stays (see "THE TOOLS
   FOLDER"), except Ctrl-C at "Restore another backup set?" or the
   folder question after it: that set is restored, nothing is left to

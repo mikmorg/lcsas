@@ -271,7 +271,10 @@ jobs:
           # qemu-user-static + wine let the cross-arch committed-binary
           # hardening tests (aarch64/armv7 via qemu, windows .exe via wine)
           # actually run here instead of skipping — raising the floor.
-          sudo apt-get install -y xorriso dvdisaster qemu-user-static wine
+          # gcc-mingw-w64-x86-64 builds the stub .exe the restore.bat rows
+          # of the script contract table run under wine (#887).
+          sudo apt-get install -y xorriso dvdisaster qemu-user-static wine \
+            gcc-mingw-w64-x86-64
           xorriso -version
           dvdisaster --version
 

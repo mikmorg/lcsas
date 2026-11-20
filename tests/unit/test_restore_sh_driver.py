@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.contract.exit_codes import ReaderExit
+from tests.contract.exit_codes import ReaderExit, ScriptExit
 from tests.e2e import restore_sh_driver as drv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -103,8 +103,10 @@ def test_tier1_done_and_quit_code_are_real():
     main_c = TIER1_MAIN.read_text(encoding="utf-8")
     assert drv.TIER1_DONE.decode() in main_c
     # That tier 1 exits 75 at the disc prompt is run in the restore
-    # contract table (#886, case "disc missing, q at the prompt").
-    assert drv.EXIT_DISC_PROMPT_QUIT == ReaderExit.READER_QUIT
+    # contract table (#886, case "disc missing, q at the prompt"), and
+    # that restore.sh then exits 75 in the script table (#887, "tier 1
+    # q at the disc prompt").  The script passes the reader's code on.
+    assert ScriptExit.READER_QUIT == ReaderExit.READER_QUIT
 
 
 @pytest.mark.parametrize("needle", [
@@ -118,11 +120,11 @@ def test_restore_sh_prompt_text_is_real(needle):
 
 
 def test_quit_exit_code_is_documented():
+    """The header of restore.sh documents 75.  (What restore.sh does with
+    a reader's 75 is run in tests/contract/script_contract.py, #887.)"""
     text = drv.RESTORE_SH_SOURCE.read_text(encoding="utf-8")
-    assert re.search(rf"#\s+{drv.EXIT_DISC_PROMPT_QUIT}\s+the reader typed q "
+    assert re.search(rf"#\s+{int(ScriptExit.READER_QUIT)}\s+the reader typed q "
                      r"at the disc prompt of tier 1", text)
-    # The tiers' exit codes are read in one place since #799 (tier_ended).
-    assert f'"$_te_rc" -eq {drv.EXIT_DISC_PROMPT_QUIT}' in text
 
 
 # ---------------------------------------------------------------------------
@@ -261,4 +263,4 @@ def test_drive_restore_quit_gives_75(tmp_path):
     rc, out = drv.drive_restore(["sh", str(fake)],
                                 {"PATH": "/usr/bin:/bin", "DRIVE": str(drive)},
                                 answer, timeout=30)
-    assert rc == drv.EXIT_DISC_PROMPT_QUIT, out
+    assert rc == ScriptExit.READER_QUIT, out

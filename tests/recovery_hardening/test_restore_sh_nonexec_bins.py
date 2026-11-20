@@ -18,10 +18,11 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests.contract.exit_codes import ScriptExit
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 HOST_TARGET = "x86_64-unknown-linux-musl"
-EXIT_NO_RECOVERY_BIN = 64
 
 STUB = textwrap.dedent("""\
     #!/bin/sh
@@ -71,7 +72,7 @@ def test_no_runnable_copy_says_the_disc_is_fine(tmp_path: Path) -> None:
         ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
         input="", capture_output=True, text=True, env=env, timeout=30,
     )
-    assert res.returncode == EXIT_NO_RECOVERY_BIN, res.stderr
+    assert res.returncode == ScriptExit.NO_RECOVERY_BIN, res.stderr
     assert "will not run them" in res.stderr, res.stderr
     assert "The disc itself is fine" in res.stderr, res.stderr
     assert "chmod -R u+x ~/lcsas-meta/recovery/bin" in res.stderr, res.stderr

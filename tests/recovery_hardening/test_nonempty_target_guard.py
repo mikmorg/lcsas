@@ -19,6 +19,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests.contract.exit_codes import ScriptExit
+
 from .conftest import _scaled_timeout
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -26,7 +28,6 @@ RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 HOST_TARGET = "x86_64-unknown-linux-musl"
 MARKER_NAME = ".lcsas-restore-marker"
 WARNING_SNIPPET = "do not look like a previous"
-EXIT_USER_ABORT = 65
 
 
 def _make_recovery(tmp_path: Path) -> Path:
@@ -117,8 +118,8 @@ def test_foreign_nonempty_target_aborts_via_tty(tmp_path: Path) -> None:
 
     rc, out = _run_pty(recovery, target, _base_env(), "no\n")
 
-    assert rc == EXIT_USER_ABORT, (
-        f"expected exit {EXIT_USER_ABORT}; rc={rc}\n{out[:600]}"
+    assert rc == ScriptExit.USER_ABORT, (
+        f"expected exit {ScriptExit.USER_ABORT}; rc={rc}\n{out[:600]}"
     )
     assert WARNING_SNIPPET in out, f"warning not shown:\n{out[:600]}"
     assert "STUB-TIER1-RAN" not in out, "tier 1 ran despite abort"
@@ -198,8 +199,8 @@ def test_non_tty_without_override_aborts_with_hint(tmp_path: Path) -> None:
 
     res = _run_pipe(recovery, target, _base_env(), "")
 
-    assert res.returncode == EXIT_USER_ABORT, (
-        f"expected exit {EXIT_USER_ABORT}; got {res.returncode}\n{res.stderr[:600]}"
+    assert res.returncode == ScriptExit.USER_ABORT, (
+        f"expected exit {ScriptExit.USER_ABORT}; got {res.returncode}\n{res.stderr[:600]}"
     )
     combined = res.stdout + res.stderr
     assert WARNING_SNIPPET in combined

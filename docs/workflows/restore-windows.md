@@ -482,8 +482,9 @@ passed too, and searched once the META disc is out.
 | other | The code tier 1 stopped with, for a set read from the discs. |
 
 `restore.bat --check-disc IMAGE` has its own codes: 0 (no damage, or
-repaired), 1 (damage left, by request or beyond the parity), 2 (no RS03
-layer) and 3 (no image, no `lcsas-ecc.exe`, or a read error).
+repaired), 1 (damage left, by request or beyond the parity), 3 (no image,
+no `lcsas-ecc.exe`, or a read error) and 5 (no RS03 layer: `lcsas-ecc.exe
+verify` exits 2 for that, which `restore.bat` reports as 5, #887).
 
 ## Manual Python fallback (not orchestrated by `restore.bat`)
 

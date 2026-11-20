@@ -34,8 +34,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.contract.exit_codes import ReaderExit
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 BUILDER = REPO_ROOT / "src" / "lcsas" / "restore" / "standalone_builder.py"
@@ -289,7 +287,9 @@ def test_tier3_count_from_the_list_when_not_said(
 
 
 def test_tier3_usage_error_is_still_a_failure(tmp_path: Path) -> None:
-    """Exit 2 without a list (argparse's usage error) stays a failure."""
+    """Exit 2 without a list (argparse's usage error) stays a failure,
+    reported as restore.sh's 1: its own 2 means restore.sh was called
+    wrongly (#887)."""
     recovery = _fixture(tmp_path)
     _python(tmp_path / "stubbin", """\
         echo 'usage: standalone_restorer.py [-h]' >&2
@@ -298,7 +298,7 @@ def test_tier3_usage_error_is_still_a_failure(tmp_path: Path) -> None:
 
     res = _run(recovery, tmp_path)
 
-    assert res.returncode == 2, res.stderr
+    assert res.returncode == 1, res.stderr
     assert "[tier 3] FAILED (rc=2)" in res.stderr, res.stderr
     assert "could not be restored" not in res.stderr, res.stderr
 
@@ -622,14 +622,16 @@ FALLBACK = REPO_ROOT / "src" / "lcsas" / "restore" / "restic_fallback.py"
 
 
 def test_tier_words_restore_sh_reads_are_still_printed() -> None:
-    """restore.sh tells "finished, not all restored" from a failure by
-    the tiers' own words and the list's header.  A tier that rewords
-    one would silently turn exit 4 back into "failed, run resume.sh"
-    while every stub test above stays green."""
+    """restore.sh counts the items not restored by the tiers' own words
+    and the list's header, and takes an older disc's tier-3 exit 2 as
+    "finished" by its words.  A tier that rewords one would silently
+    change what restore.sh says while every stub test above stays
+    green.  (What restore.sh does with those words is run in
+    tests/contract/script_contract.py, #887; the script's own source
+    lines are no longer pinned here.)"""
     main_c = (TIER1_C / "main.c").read_text()
     tree_c = (TIER1_C / "tree.c").read_text()
     fallback = FALLBACK.read_text()
-    sh = RESTORE_SH.read_text()
     assert '"[lcsas-restore] finished with errors: every other "' in main_c
     for src in (tree_c, fallback):
         assert "item(s) were NOT restored." in src
@@ -639,10 +641,6 @@ def test_tier_words_restore_sh_reads_are_still_printed() -> None:
         joined = re.sub(r'"\s*"', "", src)
         assert "special file" in joined
         assert "link not created: the target file system" in joined
-    assert 'tier_said "item(s) were NOT restored."' in sh
-    assert "ERROR: \\([0-9][0-9]*\\) item(s) were NOT restored." in sh
-    assert '"LCSAS "*) rm -f "$FAILURES_FILE"' in sh
-    assert "/^link not created: the target file system/" in sh
 
 
 # ── End to end: the real tier 1 and the real tier-3 reader ──────────
@@ -736,27 +734,3 @@ def test_armv6_relocated_run(tmp_path: Path) -> None:
     assert "TIER1_RAN_ON_ARMV6" not in res.stdout, res.stdout
     assert "HOST_PYTHON_RAN" in res.stdout, res.stdout
     assert "This computer has an ARMv6 processor" in res.stderr, res.stderr
-
-
-def test_tier1_exit_4_is_the_scripts_exit_4() -> None:
-    """#872: tier 1 exits 4 when it finished with items not restored, and
-    restore.sh and restore.bat take its 4 as that, with no guess from
-    its words or the list.  Since #875 restore.sh takes tier 3's 4 the
-    same way: one check in the tiers 1 and 3 arm of tier_ended.
-
-    That the readers exit 4 is run, not read, in the restore contract
-    table (#886: tests/contract/, cases "names refused and not
-    decodable" and "restore over an earlier restore"); this test pins
-    only the scripts' side."""
-    sh = RESTORE_SH.read_text()
-    bat = (REPO_ROOT / "recovery" / "scripts" / "restore.bat").read_text()
-    assert ReaderExit.NOT_ALL_RESTORED == 4
-    assert "EXIT_NOT_ALL_RESTORED=4" in sh
-    arm = sh[sh.index("tier_ended() {"):]
-    arm = arm[arm.index("        lcsas|python)"):arm.index("        rustic|restic)")]
-    assert ('            if [ "$_te_rc" -eq "$EXIT_NOT_ALL_RESTORED" ]; then\n'
-            '                not_all_restored "$1"\n'
-            '            fi\n') in arm
-    assert 'tier_said "finished with errors"' not in sh
-    assert "if !RC! equ 4 (" in bat
-    assert "if !RC! equ 1 if exist" not in bat

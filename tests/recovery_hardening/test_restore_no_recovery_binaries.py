@@ -23,11 +23,12 @@ import os
 import subprocess
 from pathlib import Path
 
+from tests.contract.exit_codes import ScriptExit
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 HOST_TARGET = "x86_64-unknown-linux-musl"
 
-EXIT_NO_RECOVERY_BIN = 64
 
 
 def _make_minimal_repo(recovery: Path) -> Path:
@@ -89,8 +90,8 @@ def test_all_tiers_missing_exits_with_documented_code(tmp_path: Path) -> None:
         ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
         input="", capture_output=True, text=True, env=env, timeout=15,
     )
-    assert res.returncode == EXIT_NO_RECOVERY_BIN, (
-        f"expected documented exit code {EXIT_NO_RECOVERY_BIN}; got "
+    assert res.returncode == ScriptExit.NO_RECOVERY_BIN, (
+        f"expected documented exit code {ScriptExit.NO_RECOVERY_BIN}; got "
         f"{res.returncode}\nstdout:{res.stdout}\nstderr:{res.stderr}"
     )
     # Headline message verbatim per issue #225.
@@ -140,8 +141,8 @@ def test_python_tier_disabled_treated_as_missing(tmp_path: Path) -> None:
         ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
         input="", capture_output=True, text=True, env=env, timeout=15,
     )
-    assert res.returncode == EXIT_NO_RECOVERY_BIN, (
-        f"expected {EXIT_NO_RECOVERY_BIN}; got {res.returncode}\n"
+    assert res.returncode == ScriptExit.NO_RECOVERY_BIN, (
+        f"expected {ScriptExit.NO_RECOVERY_BIN}; got {res.returncode}\n"
         f"stderr:{res.stderr}"
     )
     assert "LCSAS_ALLOW_PYTHON_TIER=0" in res.stderr, (

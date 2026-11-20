@@ -122,16 +122,16 @@ def test_restore_bat_warns_before_overwriting_nonempty_target():
     Functional .bat coverage lives in INFRA-01's Windows e2e
     (``windows-e2e.yml``) and the local wine suite; this is the cheap
     static check that the load-bearing strings are present: the hidden
-    marker filename, the YES confirmation prompt, the override env var,
-    and the distinct abort exit code (65).  The guard must sit BEFORE the
-    password prompt so the heir is stopped before typing a secret.
+    marker filename, the YES confirmation prompt and the override env
+    var.  The guard must sit BEFORE the password prompt so the heir is
+    stopped before typing a secret.  (Its exit code, 65, is run in
+    tests/contract/script_contract.py, "no at the overwrite question".)
     """
     content = RESTORE_BAT.read_text()
 
     assert ".lcsas-restore-marker" in content, "marker filename missing"
     assert "Type YES" in content, "YES confirmation prompt missing"
     assert "LCSAS_FORCE_NONEMPTY_TARGET" in content, "override env var missing"
-    assert "exit /b 65" in content, "distinct abort exit code (65) missing"
 
     # The guard must precede the password prompt.
     guard_at = content.find(".lcsas-restore-marker")
@@ -334,18 +334,20 @@ def test_restore_bat_stops_without_tier2_for_a_metadata_only_set():
     set's own data\\ folder.  A set under metadata\\<id>\\ has none, so
     tier 2 could only fail and then say "no working recovery method".
     The script must stop there instead, from a top-level label (an
-    `exit /b` inside the tier-1 block does not reach `cmd /c`, #384)."""
+    `exit /b` inside the tier-1 block does not reach `cmd /c`, #384).
+
+    That it stops, without tier 2, with tier 1's code and the advice to
+    carry on is run in tests/contract/script_contract.py ("tier 1
+    failed, set read from the discs", "tier 1 usage error").  Kept here:
+    what wine cannot show."""
     content = RESTORE_BAT.read_text()
-    tier1 = content[content.index("----- Tier 1:"):content.index("----- Tier 2:")]
-    stop = tier1.index('if not exist "%REPO%\\data\\" goto :tier1_stopped')
-    assert stop < tier1.index("trying tier 2"), "the guard must come first"
     code = _code(content)
     label = code.index(":tier1_stopped")
+    # Static: only real cmd.exe drops an exit code given inside a block.
     assert label > code.index(":wrong_password"), "must sit at top level, after the exits"
     body = code[label:]
     # Updated (B2 review): /f, as for every delete of the password file.
     assert 'del /f /q "%PWFILE%" >nul 2>nul' in body
-    assert body[-1] == "exit /b %RC%", body
 
 
 def test_restore_bat_target_cannot_end_in_a_backslash():
@@ -577,15 +579,14 @@ def test_restore_bat_q_at_the_disc_prompt_is_terminal():
     """C5 / #615: tier 1 exits 75 when the reader types q at the disc
     prompt ("paused by the reader").  That ends the run whatever the set's
     layout: keep the tools folder, print how to carry on, exit 75.  Tier 2
-    must not run."""
+    must not run.  That is run in tests/contract/script_contract.py
+    ("tier 1 q at the disc prompt", with a set that has data\\ and a
+    tier 2 that says when it runs).  Static: the "Resume LCSAS
+    restore.bat" command, written only by a relocated run, which wine
+    cannot make (it does not end a batch at (goto))."""
     content = RESTORE_BAT.read_text()
-    tier1 = content[content.index("----- Tier 1:"):content.index("----- Tier 2:")]
-    stop = tier1.index("if !RC! equ 75 goto :tier1_stopped")
-    assert stop < tier1.index('if not exist "%REPO%\\data\\" goto :tier1_stopped')
-    assert stop < tier1.index("trying tier 2")
     body = _label_body(content, ":tier1_stopped")
     assert 'echo    "!RESUME_CMD!"' in body, body
-    assert body[-1] == "exit /b %RC%"
 
 
 def test_restore_bat_snapshot_flag_reaches_both_tiers_and_the_resume():
@@ -1050,11 +1051,13 @@ def test_restore_bat_tier1_missing_stops_a_set_read_from_the_discs():
     tier1 = content[content.index("----- Tier 1:"):content.index("----- Tier 2:")]
     assert ":tier1_missing" not in tier1 and ":tier1_present" not in tier1
     body = _label_body(content, ":tier1_missing")
-    assert body[-2:] == ["pause", "exit /b 64"], body
+    # Its exit code, 64, is run in tests/contract/script_contract.py
+    # ("no program here can restore the set").
     text = "\n".join(body)
     for want in ("lcsas-restore.exe", "Antivirus", "RECOVER_WINDOWS.txt",
                  "run restore.bat again from the META disc"):
         assert want in text, want
+    # Static: only real cmd.exe drops an exit code given inside a block.
     assert code.index(":tier1_missing") > code.index(":wrong_password"), "top level"
 
 
@@ -1124,3 +1127,34 @@ def test_restore_bat_banner_repeats_the_quickedit_note():
     banner = content[content.index("LCSAS Restore (Windows)"):content.index(":ask_target")]
     assert "a click pauses the restore" in banner
     assert '"Select"' in banner and "Esc" in banner
+
+
+def test_restore_bat_check_disc_no_ecc_exits_from_top_level():
+    """#887: "no ECC data" is the script's exit 5 (lcsas-ecc.exe's own 2
+    is restore.bat's usage error).  That 5 is run under wine in
+    tests/contract/script_contract.py.  Static, because only real
+    cmd.exe drops an exit code given inside a ( ) block (#384): the exit
+    sits at a label after :wrong_password, reached by goto."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert "if !VRC! equ 2 goto :check_disc_no_ecc" in code
+    label = code.index(":check_disc_no_ecc")
+    assert label > code.index(":wrong_password"), "top level"
+    assert _label_body(content, ":check_disc_no_ecc")[-1] == "exit /b 5"
+
+
+def test_restore_bat_missing_disc_stop_exits_from_top_level():
+    """#887: tier 1's exit 4 with a "pack not found" row keeps the tools
+    folder and exits 4 from :restore_discs_missing (run under wine in
+    tests/contract/script_contract.py, "tier 1 finished, a pack not
+    found").  Static, because only real cmd.exe drops an exit code
+    given inside a ( ) block (#384), and the "Resume LCSAS restore.bat"
+    command is written only by a relocated run, which wine cannot make."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert "if !NR_M! gtr 0 goto :restore_discs_missing" in code
+    assert code.index(":restore_discs_missing") > code.index(":wrong_password")
+    body = _label_body(content, ":restore_discs_missing")
+    assert body[-1] == "exit /b 4", body
+    assert 'echo    "!RESUME_CMD!"' in body, body
+    assert not any(":all_done" in ln or ".done" in ln for ln in body), body
