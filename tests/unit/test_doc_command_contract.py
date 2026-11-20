@@ -457,7 +457,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
         str(doc.relative_to(REPO_ROOT)): doc.read_text()
         for doc in (
             *_all_docs(),
-            REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py",
+            REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py",
         )
     }
     corpus.update(_rendered_heir_docs(tmp_path))

@@ -2012,14 +2012,14 @@ to restore the files on the LCSAS archive discs.
 
   >>> macOS <<<
        Open Terminal, then run:
-           sh /Volumes/{label}/restore.sh ~/restored
+           sh /Volumes/{label}/restore.sh --restore-folder ~/restored
        (See recovery/docs/RESTORE.txt for details.)
 
   >>> Linux <<<
        Open a terminal, then run:
-           sh /media/$USER/{label}/restore.sh ~/restored
+           sh /media/$USER/{label}/restore.sh --restore-folder ~/restored
        (or:  sudo mount /dev/sr0 /mnt
-        then: sh /mnt/restore.sh ~/restored)
+        then: sh /mnt/restore.sh --restore-folder ~/restored)
        (See recovery/docs/RESTORE.txt for details.)
 
 {no_os_block}
@@ -2036,7 +2036,7 @@ IF THE COMPUTER REFUSES TO RUN IT
   be verified", or the restore stops with "Killed":
       cp -R /Volumes/{label} ~/lcsas-meta
       xattr -dr com.apple.quarantine ~/lcsas-meta
-      sh ~/lcsas-meta/restore.sh ~/restored
+      sh ~/lcsas-meta/restore.sh --restore-folder ~/restored
 
   Linux says "Permission denied", says this disc "lacks all
   recovery binaries" although the files are there, or falls
@@ -2045,7 +2045,7 @@ IF THE COMPUTER REFUSES TO RUN IT
   run programs:
       cp -R /media/$USER/{label} ~/lcsas-meta
       chmod -R u+x ~/lcsas-meta/recovery/bin
-      sh ~/lcsas-meta/restore.sh ~/restored
+      sh ~/lcsas-meta/restore.sh --restore-folder ~/restored
 
 WHAT YOU NEED
 

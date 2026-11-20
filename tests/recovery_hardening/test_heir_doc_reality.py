@@ -45,7 +45,7 @@ WIN_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe
 _HEIR_TEXTS = (
     RECOVER,
     RECOVER_WIN,
-    REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py",
+    REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py",
     REPO_ROOT / "src" / "lcsas" / "staging" / "metadata.py",
     REPO_ROOT / "docs" / "RECOVERY_GUIDE.md",
     REPO_ROOT / "docs" / "guides" / "recovery-runbook.md",

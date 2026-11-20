@@ -11,7 +11,7 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     sudo mount /dev/sr0 /mnt
 
   Step 2 — start restore.sh inside the restore-shell facade:
-    restore-shell start sh /mnt/restore.sh ~/restored/ latest
+    restore-shell start sh /mnt/restore.sh --restore-folder ~/restored/
 
     `restore-shell` is a wrapper that runs the recovery process in
     a managed tmux session (test-rig workaround — real operators run
@@ -142,7 +142,7 @@ agent action (start, expect, send, screen, quit).
 A REAL OPERATOR at a single terminal does NOT use restore-shell.  They
 run:
 
-    sh /mnt/recovery/scripts/restore.sh ~/restored/
+    sh /mnt/recovery/scripts/restore.sh --restore-folder ~/restored/
 
 …and the script prompts them interactively in the same terminal.  Disc
 swaps are handled by physically ejecting and inserting the optical medium
@@ -160,7 +160,7 @@ one-shot, the `restore-shell` wrapper hosts a persistent terminal
 session for you.  Typical pattern:
 
   # start the script
-  restore-shell start sh /mnt/restore.sh ~/restored/ latest
+  restore-shell start sh /mnt/restore.sh --restore-folder ~/restored/
   # wait for a prompt
   restore-shell expect 'Choose a repository'
   # respond

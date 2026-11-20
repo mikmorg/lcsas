@@ -1660,7 +1660,7 @@ class TestMetaStartHereVariants:
                 "xattr -dr com.apple.quarantine ~/lcsas-meta",
                 f"cp -R /media/$USER/{label} ~/lcsas-meta",
                 "chmod -R u+x ~/lcsas-meta/recovery/bin",
-                "sh ~/lcsas-meta/restore.sh ~/restored",
+                "sh ~/lcsas-meta/restore.sh --restore-folder ~/restored",
             ):
                 assert cmd in text, f"missing workaround command {cmd!r}"
         # The copied tree must actually hold what the commands touch.
