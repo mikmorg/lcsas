@@ -1,6 +1,6 @@
-"""Hardening test: --repo NAME flag on restore.sh (Issue #91).
+"""Hardening test: --backup-set NAME flag on restore.sh (Issue #91).
 
-Checks that restore.sh accepts ``--repo NAME`` as a CLI flag equivalent to
+Checks that restore.sh accepts ``--backup-set NAME`` as a CLI flag equivalent to
 ``LCSAS_BACKUP_SET=NAME``, making multi-tenant repo selection discoverable from
 ``--help`` without requiring environment-variable knowledge.
 """
@@ -68,11 +68,11 @@ def _arg_value(args: list[str], flag: str) -> str | None:
     return None
 
 
-# ── Test 1: --repo flag appears in --help ────────────────────────────
+# ── Test 1: --backup-set flag appears in --help ────────────────────────────
 
 
 def test_repo_flag_in_help() -> None:
-    """``sh restore.sh --help`` output must contain ``--repo``."""
+    """``sh restore.sh --help`` output must contain ``--backup-set``."""
     res = subprocess.run(
         ["sh", str(RESTORE_SH), "--help"],
         capture_output=True, text=True, timeout=10,
@@ -80,16 +80,16 @@ def test_repo_flag_in_help() -> None:
     assert res.returncode == 0, (
         f"--help exited {res.returncode}.\nstderr:\n{res.stderr}"
     )
-    assert "--repo" in res.stdout, (
-        f"--help output must document the --repo flag; got:\n{res.stdout}"
+    assert "--backup-set" in res.stdout, (
+        f"--help output must document the --backup-set flag; got:\n{res.stdout}"
     )
 
 
-# ── Test 2: --repo flag selects the named tenant ─────────────────────
+# ── Test 2: --backup-set flag selects the named tenant ─────────────────────
 
 
 def test_repo_flag_selects_tenant(tmp_path: Path) -> None:
-    """``sh restore.sh --repo alpha RECOVERY TARGET`` should select alpha
+    """``sh restore.sh --backup-set alpha RECOVERY`` should select alpha
     and pass its path as ``--repo DIR`` to the tier-1 stub binary."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
@@ -106,29 +106,29 @@ def test_repo_flag_selects_tenant(tmp_path: Path) -> None:
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
-            "--repo", "alpha",
-            str(recovery), str(target), "latest",
+            "--backup-set", "alpha",
+            "--restore-folder", str(target), str(recovery),
         ],
         input="stub-pw\n",
         capture_output=True, text=True,
         env=full_env, timeout=15,
     )
     assert res.returncode == 0, (
-        f"restore.sh --repo alpha failed.\n"
+        f"restore.sh --backup-set alpha failed.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     args = _stub_args(res.stdout)
     assert _arg_value(args, "--repo") == str(alpha), (
-        f"--repo alpha should pass {alpha!r} to the binary; got "
+        f"--backup-set alpha should pass {alpha!r} to the binary; got "
         f"{_arg_value(args, '--repo')!r}.  full argv: {args}"
     )
 
 
-# ── Test 3: --repo flag overrides LCSAS_BACKUP_SET env var ─────────────────
+# ── Test 3: --backup-set flag overrides LCSAS_BACKUP_SET env var ─────────────────
 
 
 def test_repo_flag_overrides_env(tmp_path: Path) -> None:
-    """``--repo bravo`` must win over ``LCSAS_BACKUP_SET=alpha`` in the
+    """``--backup-set bravo`` must win over ``LCSAS_BACKUP_SET=alpha`` in the
     environment — the flag is parsed last and sets LCSAS_BACKUP_SET
     unconditionally before the repo-discovery block runs."""
     recovery = tmp_path / "recovery"
@@ -147,39 +147,39 @@ def test_repo_flag_overrides_env(tmp_path: Path) -> None:
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
-            "--repo", "bravo",  # … flag says bravo — flag must win
-            str(recovery), str(target), "latest",
+            "--backup-set", "bravo",  # … flag says bravo — flag must win
+            "--restore-folder", str(target), str(recovery),
         ],
         input="stub-pw\n",
         capture_output=True, text=True,
         env=full_env, timeout=15,
     )
     assert res.returncode == 0, (
-        f"restore.sh --repo bravo (with LCSAS_BACKUP_SET=alpha) failed.\n"
+        f"restore.sh --backup-set bravo (with LCSAS_BACKUP_SET=alpha) failed.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     args = _stub_args(res.stdout)
     assert _arg_value(args, "--repo") == str(bravo), (
-        f"--repo bravo should override LCSAS_BACKUP_SET=alpha; got "
+        f"--backup-set bravo should override LCSAS_BACKUP_SET=alpha; got "
         f"{_arg_value(args, '--repo')!r}.  full argv: {args}"
     )
 
 
-# ── Test 4: --repo with no following argument exits non-zero ──────────
+# ── Test 4: --backup-set with no following argument exits non-zero ──────────
 
 
 def test_repo_flag_missing_arg_exits_nonzero() -> None:
-    """``sh restore.sh --repo`` with no NAME following must exit non-zero."""
+    """``sh restore.sh --backup-set`` with no NAME following must exit non-zero."""
     full_env = {
         **os.environ,
         "LCSAS_NO_RELOCATE": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--repo"],
+        ["sh", str(RESTORE_SH), "--backup-set"],
         capture_output=True, text=True,
         env=full_env, timeout=10,
     )
     assert res.returncode != 0, (
-        f"restore.sh --repo (no argument) should exit non-zero; got 0.\n"
+        f"restore.sh --backup-set (no argument) should exit non-zero; got 0.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )

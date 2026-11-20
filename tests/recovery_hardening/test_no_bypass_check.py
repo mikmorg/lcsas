@@ -167,7 +167,7 @@ def test_python_bypass_shapes_flagged(check, cmd):
         "python3 -m pip --version",
         "python3 -m json.tool /tmp/data.json",
         "sh /mnt/restore.sh",
-        "sh /mnt/restore.sh --repo alpha",
+        "sh /mnt/restore.sh --backup-set alpha",
         "bash /mnt/restore.sh",
         "sudo /mnt/restore.sh",
         "/mnt/restore.sh",

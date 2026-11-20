@@ -505,7 +505,8 @@ def test_pack_search_uses_the_meta_mount_point_once_the_disc_is_out(
     (drive / "recovery" / "scripts").mkdir(parents=True)
     (drive / "recovery" / "scripts" / "restore.sh").write_text("# meta\n")
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored2"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder",
+         str(tmp_path / "restored2"), str(recovery)],
         capture_output=True, text=True, env=env, timeout=15, input="stub-pw\n",
     )
     args = _stub_args(res.stdout)

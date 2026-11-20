@@ -11,7 +11,8 @@ repo.key``.  These tests pin that contract:
 * any unknown ``-*`` flag exits 2 listing the valid flags — the
   silent-misparse class that produced uninterpretable
   snapshot-not-found errors is dead;
-* ``--restore-folder DIR`` plus a positional TARGET_DIR is ambiguous → exit 2.
+* a positional restore folder or snapshot (the old TARGET_DIR and
+  SNAPSHOT_ID) is refused, exit 2: RECOVERY_ROOT is the only positional.
 """
 
 from __future__ import annotations
@@ -142,7 +143,7 @@ def test_target_flag_sets_target_dir(tmp_path: Path) -> None:
     # failure mode.  It must never exist.
     assert not Path("./--restore-folder").exists()
     assert _arg_value(args, "--snapshot") == "latest", (
-        f"the target dir must not be misparsed as SNAPSHOT_ID; argv: {args}"
+        f"the restore folder must not be misparsed as a snapshot; argv: {args}"
     )
 
 
@@ -197,7 +198,8 @@ def test_key_flag_unreadable_path_exits_2(tmp_path: Path) -> None:
         [
             "sh", str(RESTORE_SH),
             "--password-file", str(missing),
-            str(recovery), str(tmp_path / "restored"),
+            "--restore-folder", str(tmp_path / "restored"),
+            str(recovery),
         ],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
@@ -216,14 +218,15 @@ def test_key_flag_unreadable_path_exits_2(tmp_path: Path) -> None:
 
 
 def test_unknown_flag_exits_2_listing_valid_flags(tmp_path: Path) -> None:
-    """``--bogus`` → rc 2 + valid-flag list; never demoted to TARGET_DIR."""
+    """``--bogus`` → rc 2 + valid-flag list; never demoted to a positional."""
     recovery = _recovery_fixture(tmp_path)
 
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
             "--bogus",
-            str(recovery), str(tmp_path / "restored"),
+            "--restore-folder", str(tmp_path / "restored"),
+            str(recovery),
         ],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
@@ -236,23 +239,23 @@ def test_unknown_flag_exits_2_listing_valid_flags(tmp_path: Path) -> None:
     assert "--bogus" in res.stderr, (
         f"error must name the offending flag.\nstderr:\n{res.stderr}"
     )
-    for known in ("--repo", "--restore-folder", "--password-file", "--version", "--help"):
+    for known in ("--backup-set", "--restore-folder", "--password-file", "--version", "--help"):
         assert known in res.stderr, (
             f"error must list valid flag {known}.\nstderr:\n{res.stderr}"
         )
     # The old silent-misparse class: '--bogus' must never have been
-    # treated as a TARGET_DIR (the stub would have printed ARG: lines).
+    # treated as a restore folder (the stub would have printed ARG: lines).
     assert "ARG: " not in res.stdout, (
         f"binary must not run on unknown flags.\nstdout:\n{res.stdout}"
     )
     assert not Path("./--bogus").exists()
 
 
-# ── --restore-folder + positional TARGET_DIR is ambiguous ─────────────────────
+# ── a positional restore folder is refused ────────────────────────────────
 
 
-def test_target_flag_plus_positional_target_exits_2(tmp_path: Path) -> None:
-    """``--restore-folder X RECOVERY Y`` → rc 2 ('give the target once')."""
+def test_restore_folder_flag_plus_positional_folder_exits_2(tmp_path: Path) -> None:
+    """``--restore-folder X RECOVERY Y`` → rc 2: Y would be the old positional."""
     recovery = _recovery_fixture(tmp_path)
 
     res = subprocess.run(
@@ -266,11 +269,11 @@ def test_target_flag_plus_positional_target_exits_2(tmp_path: Path) -> None:
         env={**os.environ, **_BASE_ENV}, timeout=10,
     )
     assert res.returncode == 2, (
-        f"--restore-folder plus positional TARGET_DIR should exit 2; got "
+        f"--restore-folder plus a positional folder should exit 2; got "
         f"{res.returncode}.\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
-    assert "give the target once" in res.stderr, (
-        f"ambiguity error must explain the conflict.\nstderr:\n{res.stderr}"
+    assert "--restore-folder" in res.stderr and "--snapshot" in res.stderr, (
+        f"the error must name the flags that replaced it.\nstderr:\n{res.stderr}"
     )
     assert "ARG: " not in res.stdout
 
@@ -279,27 +282,28 @@ def test_target_flag_plus_positional_target_exits_2(tmp_path: Path) -> None:
 
 
 def test_double_dash_ends_flag_parsing(tmp_path: Path) -> None:
-    """``-- RECOVERY TARGET`` treats everything after ``--`` as positional."""
+    """``--restore-folder X -- RECOVERY`` treats everything after ``--`` as positional."""
     recovery = _recovery_fixture(tmp_path)
     target = tmp_path / "restored"
 
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
+            "--restore-folder", str(target),
             "--",
-            str(recovery), str(target),
+            str(recovery),
         ],
         input="stub-pw\n",
         capture_output=True, text=True,
         env={**os.environ, **_BASE_ENV}, timeout=15,
     )
     assert res.returncode == 0, (
-        f"restore.sh -- RECOVERY TARGET failed.\n"
+        f"restore.sh --restore-folder X -- RECOVERY failed.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     args = _stub_args(res.stdout)
     assert _arg_value(args, "--restore-folder") == str(target), (
-        f"positional TARGET after -- should reach the binary; argv: {args}"
+        f"--restore-folder before -- should reach the binary; argv: {args}"
     )
 
 

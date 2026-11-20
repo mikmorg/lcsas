@@ -412,7 +412,7 @@ def test_restore_sh_threads_catalog_arg_to_tier3(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     result = subprocess.run(
-        ["sh", str(restore_sh), str(recovery), str(target), "latest"],
+        ["sh", str(restore_sh), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

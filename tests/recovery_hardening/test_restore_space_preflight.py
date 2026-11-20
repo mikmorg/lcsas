@@ -195,7 +195,8 @@ def test_restore_sh_refuses_tiny_target_before_password(tmp_path: Path) -> None:
 
     with _tmpfs(Path(f"/tmp/lcsas-fma09-target-{os.getpid()}"), "1m") as mnt:
         res = subprocess.run(
-            ["sh", str(RESTORE_SH), str(recovery), str(mnt / "restored")],
+            ["sh", str(RESTORE_SH), "--restore-folder",
+             str(mnt / "restored"), str(recovery)],
             stdin=subprocess.DEVNULL,
             capture_output=True, text=True,
             env=_env(), timeout=30,
@@ -235,7 +236,8 @@ def test_skip_space_check_proceeds_to_password_prompt(tmp_path: Path) -> None:
 
     with _tmpfs(Path(f"/tmp/lcsas-fma09-skip-{os.getpid()}"), "1m") as mnt:
         res = subprocess.run(
-            ["sh", str(RESTORE_SH), str(recovery), str(mnt / "restored")],
+            ["sh", str(RESTORE_SH), "--restore-folder",
+             str(mnt / "restored"), str(recovery)],
             stdin=subprocess.DEVNULL,
             capture_output=True, text=True,
             env=_env(LCSAS_SKIP_SPACE_CHECK="1"), timeout=30,

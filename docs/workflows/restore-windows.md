@@ -480,7 +480,7 @@ passed too, and searched once the META disc is out.
 |------|---------|
 | 0  | The restore finished: every backup set the reader chose. |
 | 1  | A failure: unsupported processor, a tools folder that is not the restore's own, no backup set found, `LCSAS_BACKUP_SET` matches nothing, the target cannot be made, or no tier works. The message says which. |
-| 2  | `--snapshot` without an ID, or with something that is not one. |
+| 2  | `--snapshot` without an ID, or with something that is not one; `--backup-set` or `--restore-folder` without a value; a flag or environment variable that was renamed (the message names the new one). |
 | 3  | `--check-disc` only: no image, no `lcsas-ecc.exe`, or a read error. |
 | 4  | The restore finished, but some items could not be restored: they are listed in `RESTORE_FAILURES.txt` in the restore folder. |
 | 5  | `--check-disc` only: the image has no ECC data (no RS03 layer). |
