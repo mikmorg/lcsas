@@ -43,6 +43,19 @@ run to *landed* or *escalated*, never to half-done.
   `bin_parity.rebuild` + copy, then `bin_parity.py` must PASS).
 - **Remotes:** after every master change, push `github` AND `origin`;
   delete the merged branch from both.
+- **Pace** (owner, 2026-11-20, for rc11 and later rcs):
+  - Issues that edit the same files go on ONE integration branch: a
+    commit series per issue and one PR with a "Closes #N" line per issue,
+    so CI and the audit-gate run once.
+  - Independent parts of one issue go to parallel workers in worktrees.
+  - Local validation is fast unit tests and lint, plus only what CI cannot
+    run (CDEmu, root, a real-binary spot check of the changed flow); CI's
+    recovery-hardening, windows-e2e and audit-gate carry the rest.
+  - Before a tag, skip the local `make gate` when CI is green on master's
+    merge commit. Keep the blind sweep (split-key-docs twice),
+    `verify-burn-e2e` and the meta disc build.
+  - Memory and the home2 sync happen once per landed PR; tracker comments
+    wait for the tag.
 - **Non-viable (escalate on sight, never attempt):** needs physical
   hardware (burner, disc drills); needs a product/scope decision; needs
   credentials, accounts, or new spend; would change pinned upstream

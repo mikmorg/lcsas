@@ -50,6 +50,10 @@ The kind and capacity of blank disc a volume is sized for, such as 25 GB
 BD-R or 100 GB M-DISC.
 _Avoid_: media tier
 
+**Data disc**:
+A disc of a volume: any disc that is not a meta disc. Heir-facing text says
+"data disc" wherever it could be confused with the meta disc.
+
 **Meta disc**:
 The disc that carries the recovery tools, instructions and source code needed
 to read the archive on a computer with nothing installed. It is not a volume
@@ -97,8 +101,15 @@ ISO image's hash. It is printed and filed with the disc, and holds no secret.
 
 **Repository**:
 One backup repository, with its own password. Several repositories share the
-same discs.
+same discs. Text an heir reads calls it a backup set.
 _Avoid_: tenant
+
+**Backup set**:
+The heir-facing name for a repository, used in everything an heir reads: the
+restore scripts, the recovery documents and the cards. The owner's tools, the
+catalog and the code say repository.
+_Avoid_: repository (in heir-facing text), set (alone, where a disc set could
+be meant)
 
 **Retired repository**:
 A repository that is no longer backed up but whose discs are kept. "Retire"
@@ -160,6 +171,16 @@ media type. "Recovery" otherwise only names the kit that makes a restore
 possible, as in recovery tools. The tiers are the C reader (tier 1), rustic
 (tier 2), stock restic (tier 2b) and the Python reader (tier 3).
 _Avoid_: storage tier, media tier, pure-Python restorer, standalone restorer
+
+**Restore folder**:
+The folder an heir chooses to receive the restored files.
+_Avoid_: target, destination folder, output dir
+
+**Tools folder**:
+The folder on the heir's computer where a restore keeps its copy of the
+recovery tools and what it has read from the discs so far, so that a stopped
+restore can carry on. It is deleted once the restore has finished.
+_Avoid_: work dir, work folder, RAM copy
 
 ### Secrets and cards
 
