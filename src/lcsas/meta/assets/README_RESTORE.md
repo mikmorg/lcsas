@@ -55,7 +55,7 @@ password in a file:
 
 ```sh
 LCSAS_PASSWORD_FILE=/full/path/to/password.txt \
-    sh /mnt/recovery/scripts/restore_auto.sh /mnt/recovery --restore-folder ~/restored
+    sh /mnt/recovery/scripts/restore_auto.sh /mnt/recovery ~/restored
 ```
 
 Each backup set goes into its own folder under `~/restored`. Mount your

@@ -484,10 +484,9 @@ Rustic supports path-based filters at restore time:
 
 ```bash
 # Restore only /srv/family2 from the snapshot
-rustic restore abc123def456 \
+rustic restore abc123def456 /srv/restored \
   --repo /path/to/restore/cache \
   --password-file /root/keys/family.key \
-  --target /srv/restored \
   --filter /srv/family2
 ```
 

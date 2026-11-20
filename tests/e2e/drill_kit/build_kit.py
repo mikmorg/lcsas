@@ -105,9 +105,9 @@ def write_config(work: Path) -> Path:
         ]
         if repo == "photos":
             repos += [
-                "key_split = true",
-                f"key_threshold = {SPLIT_K}",
-                f"key_shares = {SPLIT_N}",
+                "split = true",
+                f"split_threshold = {SPLIT_K}",
+                f"split_shares = {SPLIT_N}",
             ]
         repos.append("")
     cfg.write_text("\n".join([
@@ -115,7 +115,7 @@ def write_config(work: Path) -> Path:
         "[paths]",
         f'mirror_base = "{work / "mirror"}"',
         f'staging = "{work / "staging"}"',
-        f'database = "{work / "catalog.db"}"',
+        f'catalog = "{work / "catalog.db"}"',
         "",
         "[defaults]",
         'media_type = "CD700"',
@@ -126,7 +126,7 @@ def write_config(work: Path) -> Path:
         'archive_owner = "the drill organiser (this is a TEST archive)"',
         'archive_description = "Test files for an LCSAS restore drill: '
         'no personal data"',
-        'key_storage_hints = "For this drill, the cards you need were handed '
+        'password_hints = "For this drill, the cards you need were handed '
         'to you with the discs."',
         'technical_contact = "The person running this drill"',
         "",

@@ -107,9 +107,9 @@ def test_rendered_split_blocks_use_mount_robust_command(
 ) -> None:
     """STEP 2 must be typeable from a freshly-mounted disc."""
     for name, text in rendered_docs.items():
-        assert "sh /mnt/restore.sh --target ~/restored" in text, (
+        assert "sh /mnt/restore.sh --restore-folder ~/restored" in text, (
             f"{name}: split block must show the mount-robust "
-            "'sh /mnt/restore.sh --target ~/restored' command"
+            "'sh /mnt/restore.sh --restore-folder ~/restored' command"
         )
 
 

@@ -3,7 +3,7 @@
 Builds a LCSAS scenario (repo → backup → burn → meta volume), then
 drives the production ``restore.sh`` interactively through a
 pseudoterminal, with the interface it has since #689 (#756): the
-flags ``--key``/``--target``/``--repo``, the tools folder as its work
+flags ``--password-file``/``--restore-folder``/``--backup-set``, the tools folder as its work
 folder, discs found where they are mounted (``LCSAS_MOUNT_DIRS``),
 step 0's newest-disc question and tier 1's disc questions.  The command
 line, the prompts and the answers come from
