@@ -15,6 +15,8 @@ import ast
 import re
 from pathlib import Path
 
+from tests.contract.renames import RENAMES
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -849,6 +851,10 @@ def _lcsas_command_problems(corpus: list[tuple[str, str]]) -> tuple[list[str], i
         for suffix, phrase in _PROSE_LCSAS_MENTIONS:
             if where.split(":", 1)[0].endswith(suffix):
                 text = text.replace(phrase, "")
+        # A "renamed" refusal names the retired command on purpose (#934).
+        for r in RENAMES:
+            if r.kind == "command":
+                text = text.replace(f"{r.old} was renamed", "")
         for lineno, cmd in _extract_lcsas_commands(text):
             checked += 1
             tokens = cmd.split()
@@ -867,7 +873,7 @@ def test_phantom_subcommand_walker_self_check() -> None:
     assert _phantom_subcommand(["migrate"])
     assert _phantom_subcommand(["restore", "instead."])
     assert not _phantom_subcommand(["volume", "impact", "<label>"])
-    assert not _phantom_subcommand(["--config", "x.toml", "key", "split", "--repo", "family"])
+    assert not _phantom_subcommand(["--config", "x.toml", "password", "split", "--repo", "family"])
     assert not _phantom_subcommand(["verify", "LCSAS_BD25_2026_0001", "--disc"])
 
 

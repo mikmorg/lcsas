@@ -261,7 +261,7 @@ def test_ran_restore_sh_forbidden_names_sorted_once(tmp_path: Path) -> None:
     t = _cmds(tmp_path, "sh /media/restore.sh", "sh restore_legacy.sh",
               "python3 x; ./python_reader.py", "sh restore_legacy.sh")
     assert checks.ran_restore_sh(t).reason == (
-        "AGENT INVOKED FORBIDDEN SCRIPT(S): ['restore_legacy.sh', 'python_reader.py']"
+        "AGENT INVOKED FORBIDDEN SCRIPT(S): ['python_reader.py', 'restore_legacy.sh']"
     )
 
 
