@@ -409,6 +409,30 @@ jobs:
           # the intended $LASTEXITCODE=77 and reports red.
           exit 0
 
+      # ---- #925: restore.bat's arguments -----------------------------------
+      # Up to rc10 restore.bat passed over every argument but --snapshot, so
+      # `restore.bat --repo NAME` with a NAME no set has restored the set
+      # there.  Now an unknown --repo stops with the sets listed (exit 1,
+      # through the relocation) and an unknown flag is a usage error (exit
+      # 2), as restore.sh does.
+      - name: Arguments — --repo with an unknown name, and an unknown flag
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          $fixture = Join-Path $PWD 'fixture'
+          $sets = Get-FixtureSets -Fixture $fixture
+          $names = @(Get-AllSets $sets | ForEach-Object { $_.name_cmd })
+          Invoke-ArgumentLeg -Fixture $fixture -Name 'repo-unknown' `
+            -Arguments '--repo NoSuchSet' -WantRc 1 `
+            -WantText (@('is not among the backup sets') + $names)
+          Invoke-ArgumentLeg -Fixture $fixture -Name 'flag-unknown' `
+            -Arguments '--bogus' -WantRc 2 `
+            -WantText @('does not know the argument "--bogus"', '--repo NAME')
+          # Both legs expect a non-zero cmd /c; the step's result is theirs.
+          exit 0
+
       # ---- #608: the hidden-password route of RECOVER_WINDOWS.txt ----------
       # The doc's PowerShell lines ("THE PASSWORD") are read from the META
       # disc and run under Windows PowerShell 5.1 (powershell.exe), with

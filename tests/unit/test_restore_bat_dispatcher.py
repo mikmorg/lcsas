@@ -601,7 +601,7 @@ def test_restore_bat_snapshot_flag_reaches_both_tiers_and_the_resume():
     assert "call :parse_args %*" in code
     assert code.index("call :parse_args %*") < code.index(":resume_loaded")
     start = code.index(":parse_args")
-    parse = code[start:start + 25]
+    parse = code[start:code.index(":arg_usage", start)]
     assert ("for %%H in (0 1 2 3 4 5 6 7 8 9 a b c d e f) "
             "do call :strip_hex %%H") in parse, parse
     assert 'if defined SNAP_LEFT set "SNAP_BAD=1"' in parse, parse

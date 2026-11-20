@@ -253,18 +253,6 @@ DIFFERENCES: dict[str, Difference] = {
              "command line), but no issue records the decision"),
         deliberate=False,
     ),
-    "unknown arguments": Difference(
-        what=("restore.bat passes over any argument but --snapshot ID "
-              "(:parse_args): `restore.bat --repo NAME` with a NAME no set "
-              "has goes on with the set(s) there, and with one set restores "
-              "it.  restore.sh stops on an unknown --repo (#802) and exits 2 "
-              "on an unknown flag"),
-        why=("not in #895's list.  restore.bat chooses a set by LCSAS_REPO "
-             "(which it checks, see the LCSAS_REPO journey), so this may be "
-             "by design, but a reader who types restore.sh's flags gets no "
-             "word that they were not used: a possible bug, for the owner"),
-        deliberate=False,
-    ),
 }
 
 
@@ -984,12 +972,25 @@ JOURNEYS: tuple[Journey, ...] = (
         typed=(NEWEST,),
         expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
                       says=(r"not among", re.escape(PHOTOS))),
-        # restore.bat has no --repo: it passes over the words and goes on
-        # with the one set there.  q at its password question stops it.
-        differs={"bat": Differs(because=("unknown arguments", "folder question"),
-                                typed=(NEWEST, "q"),
-                                asked=("newest data disc", "folder", "password"),
-                                exit=ScriptExit.WRONG_PASSWORD, says=())},
+    ),
+    Journey(
+        name="--repo picks a set by name",
+        archive="two sets",
+        args=("--repo", PHOTOS),
+        typed=(NEWEST, Password(PHOTOS), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "password", "another set"),
+                      restored=PHOTOS, tools_folder="removed"),
+        differs={"bat": Differs(because=("folder question",),
+                                asked=("newest data disc", "folder", "password",
+                                       "another set"))},
+    ),
+    Journey(
+        name="an unknown argument is a usage error",
+        archive="one set",
+        args=("--bogus",),
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(), says=(r"--bogus",)),
     ),
     Journey(
         name="LCSAS_REPO with an unknown name",

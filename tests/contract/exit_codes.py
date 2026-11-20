@@ -100,7 +100,8 @@ READER_WORDS: dict[int, tuple[str, ...]] = {
 SCRIPT_WORDS: dict[int, tuple[str, ...]] = {
     ScriptExit.OK: ("success", "finished"),
     ScriptExit.FAILED: ("failure",),
-    # restore.bat's only wrong call is a bad --snapshot.
+    # restore.bat: an argument it does not take, --repo without a name, a
+    # bad --snapshot (#925).
     ScriptExit.USAGE: ("usage", "wrongly", "--snapshot"),
     ScriptExit.CHECK_DISC_ERROR: ("check-disc",),
     ScriptExit.NOT_ALL_RESTORED: ("RESTORE_FAILURES.txt",),
