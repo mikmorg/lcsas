@@ -55,30 +55,8 @@ Discs          Optical           (burned discs; permanent)
 
 Restore is the reverse: `restore/planner.py` generates a disc pick list; `restore/executor.py` fetches packs from mounted ISO images; then `rustic restore` runs against the assembled cache. `restore/restic_fallback.py` provides a pure-Python AES/zstd restore path requiring no binaries.
 
-### Module map
-
-| Package | Role |
-|---------|------|
-| `cli/` | argparse entry-point (`lcsas` command, 22 top-level subcommands: `burn`, `burn-iso`, `catalog`, `config`, `consolidate`, `copy`, `estate`, `init`, `key`, `location`, `meta`, `pack`, `recovery`, `repo`, `restore`, `scan`, `session`, `stage`, `staging`, `status`, `verify`, `volume`) |
-| `config/` | TOML config loader, media type definitions |
-| `db/` | SQLite catalog — schema (v10), connection, frozen-dataclass models, CRUD, queries |
-| `rustic/` | Protocol-based subprocess wrapper + JSON output parser |
-| `packs/` | Mirror scanner, pack-to-snapshot delta analysis |
-| `binpack/` | FFD bin-packing algorithm |
-| `staging/` | Staging tree builder, disc catalog + repository metadata injector, cleanup |
-| `iso/` | Xorriso wrapper |
-| `ecc/` | DVDisaster wrapper |
-| `burn/` | Full burn pipeline orchestrator |
-| `restore/` | Restore planner, executor, pure-Python fallback, standalone env builder |
-| `consolidate/` | Consolidation (moves the packs of several volumes onto a new volume) |
-| `meta/` | Meta disc builder (bundled recovery tools + source; NOT bootable — the live-boot path was dropped per BOOT-01/BOOT-07) |
-| `recovery/` | C89 recovery-binary cross-compilation harness (drives `lcsas recovery build`; builds tier-1 `lcsas-restore` against vendored sqlite+zstd) |
-| `keyshare/` | Pure-Python SLIP-0039 Shamir password split (a repository's password into N shares, any K rebuild it) |
-| `utils/` | Hashing, label generation, two-level hex pack layout, subprocess base, fs helpers |
-
 ### Key design patterns
 
-- **Protocol-based wrappers** — external tools (`RusticRunner`, xorriso, dvdisaster) are injected via Protocol interfaces, enabling unit tests to use fakes without subprocess calls.
 - **Disc catalog** — the complete SQLite catalog, current as of each disc's burn, is burned onto every disc so a restore never requires a central server.
 - **Multiple repositories** — several Rustic repositories share the same discs; each repository is encrypted under its own password; the catalog tracks which repository owns each pack.
 - **Zero runtime dependencies** — the entire codebase uses only the Python standard library (`zstandard` is optional). This is intentional so the restore path works on a bare system.
@@ -102,7 +80,7 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 ### Catalog schema
 
-Schema version 10 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (burn session audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor); every status change goes through `db/lifecycle.py` (ADR 0004). The volume-wide `DESTROYED` status left the graph (#907) but stays a valid schema value for old catalogs; destroying a disc is per disc (`copy destroy`).
+Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor); every status change goes through `db/lifecycle.py` (ADR 0004). The volume-wide `DESTROYED` status left the graph (#907) but stays a valid schema value for old catalogs; destroying a disc is per disc (`copy destroy`).
 
 ### Test levels
 
