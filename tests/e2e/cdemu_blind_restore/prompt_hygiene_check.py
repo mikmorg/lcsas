@@ -5,7 +5,7 @@ The docs-driven split-key blind variant (agent_prompt_split_docs.txt) is
 the acceptance gate for what the heir actually reads and holds.  Its whole
 value is that it spoon-feeds NOTHING: the agent must derive every command
 from the on-disc instructions.  If a token like ``restore.sh`` or
-``keyshare`` leaks back into the prompt, the gate silently reverts to a
+``keyshare`` (now lcsas-shares) leaks back into the prompt, the gate silently reverts to a
 scripted smoke test (the exact failure mode KEY-04 fixes).
 
 This check asserts the docs-driven prompt contains none of the
@@ -28,10 +28,15 @@ import sys
 FORBIDDEN_TOKENS = (
     "restore.sh",
     "keyshare",
+    "combine_shares",
+    "python_reader",
+    "standalone_restorer",
     "lcsas-",
     "/mnt/recovery/bin",
     "--target",
     "--key",
+    "--restore-folder",
+    "--password-file",
 )
 
 

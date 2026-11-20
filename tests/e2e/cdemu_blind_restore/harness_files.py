@@ -7,10 +7,10 @@ wrapper scripts" (no heredoc into an executable file, no chmod +x).  In
 the rc9 sweep both fired on files that are not the agent's own code:
 
 * resume.sh, which restore.sh itself writes into its tools folder
-  (``~/lcsas-restore-tools/resume.sh``) and tells the operator to run.
+  (``~/lcsas-tools/resume.sh``) and tells the operator to run.
   Reading it is reading a note restore.sh left, not the source tree.
   Only that one file is exempt: the same folder holds copies of the
-  recovery scripts (``standalone_restorer.py``, ``recovery/``), and
+  recovery scripts (``python_reader.py``, ``recovery/``), and
   reading those is still a violation.
 
 * the prompt's own disc-swap loop, saved to a file and run from there.
@@ -47,8 +47,8 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 import transcript  # noqa: E402
 
 # The one file restore.sh writes that a reader may come across: resume.sh
-# in its tools folder (default ~/lcsas-restore-tools; restore.sh #609).
-_RESTORE_SH_WRITES = re.compile(r"(?:^|/)lcsas-restore-tools/resume\.sh$")
+# in its tools folder (default ~/lcsas-tools, formerly ~/lcsas-restore-tools; restore.sh #609).
+_RESTORE_SH_WRITES = re.compile(r"(?:^|/)lcsas-(?:restore-)?tools/resume\.sh$")
 
 # A heredoc into a file: `cat > PATH <<'EOF'`, `cat >> PATH << EOF`,
 # `tee PATH <<-EOF`.  Group "path" is the file, "tag" the end marker.
