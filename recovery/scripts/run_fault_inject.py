@@ -121,13 +121,13 @@ def main() -> int:
                 str(restore),
                 "--repo", str(fixture),
                 "--password-file", str(pwfile),
-                "--target", str(target_dir),
+                "--restore-folder", str(target_dir),
             ]))
             targets.append(("lcsas-restore restore w/ cache", [
                 str(restore),
                 "--repo", str(fixture),
                 "--password-file", str(pwfile),
-                "--target", str(target_dir),
+                "--restore-folder", str(target_dir),
                 "--meta-disc", "/tmp/_fi_meta",
             ]))
 
