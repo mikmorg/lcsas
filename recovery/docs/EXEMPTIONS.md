@@ -91,11 +91,11 @@ lcsas_io.c:55   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs
 lcsas_io.c:56   INTRACTABLE   "
 
 # main.c
-main.c:650   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --restore-folder path; needs filesystem-full tmpfs (integration-only)
-main.c:654   INTRACTABLE   "  (exit 74)
-main.c:690   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
-main.c:696   INTRACTABLE   "
-main.c:697   INTRACTABLE   "
+main.c:656   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --restore-folder path; needs filesystem-full tmpfs (integration-only)
+main.c:660   INTRACTABLE   "  (exit 74)
+main.c:696   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+main.c:702   INTRACTABLE   "
+main.c:703   INTRACTABLE   "
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator
