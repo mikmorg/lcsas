@@ -213,7 +213,7 @@ def test_stock_restic_tier_present_in_script_and_doc() -> None:
     """The stock-restic auto-fallback (tier 2b) must exist in restore.sh AND
     be described in TIERS.txt -- they must not drift apart."""
     # restore.sh dispatches a stock restic/rustic step using restic's flag
-    # form (RESTIC_PASSWORD_FILE + -r REPO restore SNAP --target DIR).
+    # form (RESTIC_PASSWORD_FILE + -r REPO restore SNAP --restore-folder DIR).
     assert "tier 2b" in _RESTORE_TEXT, (
         "restore.sh no longer has the tier-2b stock-restic auto-fallback."
     )

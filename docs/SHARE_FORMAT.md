@@ -38,7 +38,7 @@ document does not apply; use the password directly.
    `lcsas.keyshare` python package on the meta disc, and compiled into
    `lcsas-shares` as `wordlist.c`). You may type just the first 4
    letters of each word — the bundled combiners (`lcsas-shares`,
-   `combine_shares.py`, and `lcsas key combine`) expand any unambiguous
+   `combine_shares.py`, and `lcsas password combine`) expand any unambiguous
    prefix to the full word.
 2. Run the combiner bundled on the meta disc:
    `recovery/bin/<machine>/lcsas-shares <card1> <card2> ...`
@@ -111,7 +111,7 @@ re-implementation must pass all 45. The pieces:
   against — every burned disc carries the password-locked key files forever and
   faces unlimited offline scrypt guessing (`N=2^15, r=8, p=1`). **Generate** the
   password — a diceware passphrase of **7+ words** (≈ 90 bits) or an equivalent
-  random string. `lcsas key split` prints a non-blocking warning when the
+  random string. `lcsas password split` prints a non-blocking warning when the
   password is under 16 chars or below ~60 estimated bits. Full threat model and
   entropy table: `docs/DISC_CONFIDENTIALITY.md`.
 - **Default split: 2-of-5.** A backup's dominant risk is *loss*, so K is kept
@@ -119,22 +119,22 @@ re-implementation must pass all 45. The pieces:
   lose the data.
 - **Secret constraints.** SLIP-0039 master secrets are even-length and ≥128
   bits. LCSAS encodes the (possibly shorter) repository password into a valid
-  master secret at the CLI layer (`lcsas key split`); the inverse decoding is
+  master secret at the CLI layer (`lcsas password split`); the inverse decoding is
   applied after reconstruction. See `PASSWORD_INFO.txt` on the disc for whether an
   archive's password was split and the K/N in effect.
-- **Checked at split time.** `lcsas key split` authenticates the password
+- **Checked at split time.** `lcsas password split` authenticates the password
   against the repository's real `keys/` files (pure-Python scrypt + Poly1305)
   and round-trips the freshly written cards *before* declaring success, so it
   never splits a password that does not unlock the repository or writes a card
   that does not reconstruct. Pass `--no-verify-repo` only when the mirror's
   `keys/` is unreachable at split time. Re-check the split any time with
-  `lcsas --config ... key verify --repo R --share-file CARD …` (or
+  `lcsas --config ... password verify --repo R --share-file CARD …` (or
   `--password-file FILE`); exit code is the contract.
 - **Card stamps & rotation.** Each printed card carries `Split on : <date>` and
   `Split ID : NNNNN` — the 15-bit SLIP-0039 identifier, identical across all
   cards of one split and (almost certainly) different between splits. After a
   password change, *all* old cards are void; re-split, redistribute, destroy
-  superseded cards, and `lcsas key verify` the new set. See `docs/ESTATE_PLANNING.md`
+  superseded cards, and `lcsas password verify` the new set. See `docs/ESTATE_PLANNING.md`
   "ROTATION". Cards from before this stamping (no `Split on`/`Split ID` lines)
   remain valid combiner input — the extractor ignores non-wordlist lines.
 - **Where shares live.** Off-disc, by design — printed share cards in separate

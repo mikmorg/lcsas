@@ -7,7 +7,7 @@ without a word (#612), into a random %TEMP% folder that every run
 deleted, so carrying on meant the META disc and the whole copy again
 (#609).  A click in the window paused it, and nothing said so (#613).
 
-Now the copy goes to the tools folder, %LOCALAPPDATA%\LCSAS-restore
+Now the copy goes to the tools folder, %LOCALAPPDATA%\lcsas-tools
 (LCSAS_TOOLS_DIR names another), holds only this computer's programs,
 names each on screen, and stays until the restore has finished.  A
 restore that stopped carries on from it with "Resume LCSAS restore.bat",
@@ -180,11 +180,11 @@ class _Fixture:
 
     @property
     def default_tools(self) -> Path:
-        return self.user_dir / "AppData" / "Local" / "LCSAS-restore"
+        return self.user_dir / "AppData" / "Local" / "lcsas-tools"
 
     @property
     def default_tools_win(self) -> str:
-        return f"C:\\users\\{self.user}\\AppData\\Local\\LCSAS-restore"
+        return f"C:\\users\\{self.user}\\AppData\\Local\\lcsas-tools"
 
     @property
     def desktop(self) -> Path:

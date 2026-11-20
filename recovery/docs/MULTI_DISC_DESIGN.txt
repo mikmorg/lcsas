@@ -544,7 +544,7 @@ LCSAS releases the drive in three coordinated steps:
                     and the docs; a temporary folder under /tmp,
                     /run and so on only when that folder cannot be
                     used;
-       restore.bat: %LOCALAPPDATA%\LCSAS-restore, with only the three
+       restore.bat: %LOCALAPPDATA%\lcsas-tools, with only the three
                     programs of bin\<triple>\ (rustic-static.exe only
                     when a set holds its own data\), RESTORE_WINDOWS.txt
                     and the backup sets' metadata (#612).
@@ -768,7 +768,7 @@ tools folder, not a throwaway one, so a restore that stops can carry
 on without the META disc:
 
                 restore.sh                   restore.bat
-  folder        $HOME/lcsas-tools    %LOCALAPPDATA%\LCSAS-restore
+  folder        $HOME/lcsas-tools    %LOCALAPPDATA%\lcsas-tools
   marker        .lcsas-tools         .lcsas-tools
   resume        resume.sh (mode 700)         resume.cfg + "Resume LCSAS
                                              restore.bat" (also on the

@@ -113,7 +113,7 @@ def test_tier3_exports_pythonpath_to_bundled_zstandard(tmp_path: Path) -> None:
     env.pop("PYTHONPATH", None)
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -190,7 +190,7 @@ def test_tier3_pythonpath_can_actually_import_zstandard(tmp_path: Path) -> None:
     env.pop("PYTHONPATH", None)
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=20,
     )

@@ -169,7 +169,7 @@ def test_stock_restic_restores_and_checks_with_the_marker(
     # The tier-2b command line of restore.sh.
     res = subprocess.run(
         [restic, "--no-cache", "-r", str(repo), "restore", "latest",
-         "--target", str(out), "--no-lock"],
+         "--restore-folder", str(out), "--no-lock"],
         capture_output=True, text=True, env=env, timeout=180,
     )
     assert res.returncode == 0, res.stderr
@@ -191,7 +191,7 @@ def test_tier1_restores_with_the_marker(
     out = tmp_path / "tier1-out"
     res = subprocess.run(
         [str(_tier1_bin()), "--repo", str(repo), "--password-file", str(pwfile),
-         "--target", str(out), "--interactive", "off"],
+         "--restore-folder", str(out), "--interactive", "off"],
         capture_output=True, text=True, timeout=180,
     )
     assert res.returncode == 0, res.stderr

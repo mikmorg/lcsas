@@ -786,22 +786,25 @@ FLAGS AND ENVIRONMENT VARIABLES:
   --version               Print the build commit SHA and date, then exit.
   LCSAS_PASSWORD          Repository password (skips the Password: prompt).
                           Mutually exclusive with LCSAS_PASSWORD_FILE.
-  LCSAS_PASSWORD_FILE            Path to a file whose contents are the password.
+  LCSAS_PASSWORD_FILE
+                          Path to a file whose contents are the password.
                           Read instead of prompting; preserves any
                           trailing newline in the file.
   LCSAS_SHARES_DIR        Folder of share card files, one card per file.
                           The password is rebuilt from them with the
                           bundled lcsas-shares instead of prompting.
-  LCSAS_BACKUP_SET              Backup set to restore, by name or id.  Skips
-                          the repository prompt on archives with more
-                          than one repository.
+  LCSAS_BACKUP_SET
+                          Backup set to restore, by name or id.  Skips
+                          the backup set prompt on archives with more
+                          than one backup set.
   LCSAS_NEWEST_DISC_PROMPT
                           0 → skip the "put in your NEWEST data disc"
                           step at the start: use the discs mounted now,
                           else the copies on the META disc.
   LCSAS_ANOTHER_SET       0 → do not ask "Restore another backup set?"
                           after a restore that succeeds.
-  LCSAS_PLATFORM            Override the auto-detected rust-triple (e.g.
+  LCSAS_PLATFORM
+                          Override the auto-detected rust-triple (e.g.
                           force x86_64-unknown-linux-musl on a host
                           where uname -m misreports).
   LCSAS_META_DISC         Mount point of the meta disc.

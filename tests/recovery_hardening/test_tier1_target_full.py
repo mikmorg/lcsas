@@ -1,6 +1,6 @@
 """Issue #221 — tier-1 must surface ENOSPC on the target filesystem.
 
-When the operator's --target directory fills up mid-restore the
+When the operator's --restore-folder directory fills up mid-restore the
 binary should emit a clear "out of space" diagnostic rather than a
 generic "file restore failed" line.  Without this, the operator
 sees a half-written tree and no obvious cause.
@@ -48,7 +48,7 @@ def _can_sudo_mount() -> bool:
 
 
 def test_target_dir_out_of_space_reports_enospc(tmp_path: Path) -> None:
-    """A 1 MiB tmpfs --target with a 4 MiB file in the snapshot
+    """A 1 MiB tmpfs --restore-folder with a 4 MiB file in the snapshot
     must fail with a clear ENOSPC message naming the target path,
     not a generic 'file restore failed'."""
     if shutil.which("rustic") is None:
@@ -91,7 +91,7 @@ def test_target_dir_out_of_space_reports_enospc(tmp_path: Path) -> None:
         res = subprocess.run(
             [str(bin_path),
              "--repo", str(repo),
-             "--target", str(mnt),
+             "--restore-folder", str(mnt),
              "--password-file", str(pwfile),
              "--interactive", "off"],
             capture_output=True, text=True, timeout=120,

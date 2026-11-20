@@ -101,8 +101,8 @@ You do NOT need two Blu-ray drives.  Before the first question,
 restore.bat copies what this computer needs from the meta disc into
 a folder on this computer, the tools folder:
 
-     %LOCALAPPDATA%\LCSAS-restore
-     (usually C:\Users\<you>\AppData\Local\LCSAS-restore)
+     %LOCALAPPDATA%\lcsas-tools
+     (usually C:\Users\<you>\AppData\Local\lcsas-tools)
 
 and runs that copy.  From then on nothing on the meta disc is in
 use, so it can come out of the drive.  The copy is small, a few MB:
@@ -112,11 +112,11 @@ each backup set (the metadata folder).  The script names each file
 as it copies it:
 
      [lcsas-restore] copying the restore programs for this computer to
-                     C:\Users\<you>\AppData\Local\LCSAS-restore
+                     C:\Users\<you>\AppData\Local\lcsas-tools
                      so that the META disc can come out of the drive:
                        recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe
                        ...
-     [lcsas-restore] copied recovery files to C:\Users\<you>\AppData\Local\LCSAS-restore
+     [lcsas-restore] copied recovery files to C:\Users\<you>\AppData\Local\lcsas-tools
 
 The tools folder stays until the restore has finished, and is then
 deleted.  If a tools folder from an earlier run is there and was
@@ -217,7 +217,7 @@ To stop, type Q and press Enter at a disc box.  The script says:
 
      To carry on, double-click "Resume LCSAS restore.bat" on
      your Desktop, or type this command:
-       "C:\Users\<you>\AppData\Local\LCSAS-restore\Resume LCSAS restore.bat"
+       "C:\Users\<you>\AppData\Local\lcsas-tools\Resume LCSAS restore.bat"
 
 The files restored so far stay in the folder you chose, and the
 tools folder stays too, with the disc copies made so far.
@@ -249,7 +249,7 @@ another backup set (see "MORE THAN ONE BACKUP SET"), the script
 deletes the tools folder and "Resume LCSAS restore.bat" (both
 copies).  To give up a restore
 you do not want to finish, delete the folder
-%LOCALAPPDATA%\LCSAS-restore and the file on your Desktop yourself.
+%LOCALAPPDATA%\lcsas-tools and the file on your Desktop yourself.
 
 ────────────────────────────────────────────────────────────────────
 FILES LARGER THAN 4 GiB (multi-extent ISO 9660 limitation)
@@ -531,7 +531,7 @@ DESTINATION FOLDER NOTES
 
   * While it runs, the restore also keeps a copy of the packs of
     each data disc it has read, in the tools folder
-    (%LOCALAPPDATA%\LCSAS-restore, usually on drive C:).  That needs
+    (%LOCALAPPDATA%\lcsas-tools, usually on drive C:).  That needs
     free space too: about the size of those discs.  It is deleted
     when the restore has finished.
 
@@ -722,7 +722,7 @@ PRIVACY / SECURITY
     files as soon as the restore stops.  Keep the file LCSAS_PASSWORD_FILE
     names on removable media, and take it away afterwards.
 
-  * The tools folder (%LOCALAPPDATA%\LCSAS-restore) and "Resume
+  * The tools folder (%LOCALAPPDATA%\lcsas-tools) and "Resume
     LCSAS restore.bat" never hold the password.  resume.cfg in that
     folder names only the backup set, the restore folder and the
     drive letters.  The tools folder does hold a copy of the packs
@@ -803,7 +803,7 @@ TROUBLESHOOTING -- error messages
 "ERROR: the tools folder ... is a folder that already holds other
  files, or a whole drive."
    -> The tools folder (LCSAS_TOOLS_DIR, or the usual
-      %LOCALAPPDATA%\LCSAS-restore) holds files the script did not
+      %LOCALAPPDATA%\lcsas-tools) holds files the script did not
       put there, or is a whole drive such as E:\.  The tools folder
       is deleted once the restore has finished, so the script will
       not use such a folder, and changed nothing in it.  Set

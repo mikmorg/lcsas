@@ -22,7 +22,7 @@ every meta disc.
 
 Every data disc carries, for **every repository** in the archive, the
 following in the clear. The meta disc carries the same key files and
-`key_storage_hints`, but no catalog.
+`password_hints`, but no catalog.
 
 - **The disc catalog** (`catalog.db`, a SQLite copy of the whole catalog
   on every data disc, current as of that disc's staging). That includes:
@@ -42,7 +42,7 @@ following in the clear. The meta disc carries the same key files and
   keys. The key-file JSON additionally carries the **plaintext `username` and
   `hostname`** of the machine that created the repository (a content-addressed
   artifact; see §6).
-- **The owner's `key_storage_hints`**, printed verbatim into `START_HERE.txt`
+- **The owner's `password_hints`**, printed verbatim into `START_HERE.txt`
   and `PASSWORD_INFO.txt` on every disc.
 - **Each repository's `LCSAS_BACKUP_SET.txt`** (its id, name and split K/N) and
   the disc's `VOLUME_INFO.txt` / `volume_info.json` (label, pack hashes,
@@ -120,7 +120,7 @@ entropy over a multi-decade horizon.
 
 **Recommendation:** generate the password — do not invent it. Use a
 **diceware passphrase of 7 or more words** (≈ 90 bits) or an equivalent random
-string from a password manager. `lcsas key split` prints a non-blocking
+string from a password manager. `lcsas password split` prints a non-blocking
 warning when the supplied password is under 16 characters or below ~60
 estimated bits.
 
@@ -145,7 +145,7 @@ lifetime, M-DISC included, is proven).
 - **Never store a share card (or the password, or a password card) *with*
   a disc.** Password/data separation is the whole point: a thief who gets both
   a disc and the password (a password card, or K share cards) has everything.
-- **`key_storage_hints` is printed on every disc.** Write it so an heir can
+- **`password_hints` is printed on every disc.** Write it so an heir can
   *locate* the password without a thief being *handed* it — name a custodian,
   not a findable cache. Good: "Sealed envelope with the family attorney (see
   my will)." Bad: "USB in safe deposit box #1234 at First National Bank."
@@ -272,5 +272,5 @@ the next `lcsas scan` writes paths and tags again from rustic. Snapshot
 hostnames stay on the disc for now.
 
 The mitigations stay as they are: opaque repository and location names, and
-custodian-style `key_storage_hints` (§5). Revisit only as an explicit opt-in if
+custodian-style `password_hints` (§5). Revisit only as an explicit opt-in if
 an owner needs per-disc metadata confidentiality.

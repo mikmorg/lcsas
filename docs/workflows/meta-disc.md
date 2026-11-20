@@ -61,12 +61,12 @@ for mastering into an ISO image.
 **Synopsis:**
 
 ```bash
-lcsas [--config lcsas.toml] [--db archive.db] meta build --output DIR \
+lcsas [--config lcsas.toml] [--catalog catalog.db] meta build --output DIR \
       [--project-root DIR] [--allow-no-zstd] \
       [--allow-no-dvdisaster-source] [--allow-incomplete]
 ```
 
-`--config` / `--db` are **global** flags and must come *before* the
+`--config` / `--catalog` are **global** flags and must come *before* the
 subcommand. `--output` / `-o` is required.
 
 **Prerequisites:**
@@ -79,7 +79,7 @@ subcommand. `--output` / `-o` is required.
   package.
 - Optional `--config TOML` so survivability fields populate
   `START_HERE.txt`, `PASSWORD_INFO.txt`, and `CONFIG_SUMMARY.txt`.
-- Optional `--db` (or `config.db_path`) to seed the repository metadata.
+- Optional `--catalog` (or `config.db_path`) to seed the repository metadata.
 - The cross-built recovery binaries under `recovery/bin/<arch>/` and the
   pinned upstream cache (run `make build-recovery` — which also runs the
   keyshare cross-builds — and `sh recovery/scripts/fetch_upstream.sh`) for a
@@ -238,7 +238,7 @@ The directory is ready to feed to `xorriso` for ISO mastering.
 - Contract gates: `tests/unit/test_doc_command_contract.py`
   (`test_meta_build_flags_in_docs_exist`) holds every doc-quoted
   `meta build` option to the real subparser.
-- Gap: no test that builds with `--db` populated and asserts
+- Gap: no test that builds with `--catalog` populated and asserts
   `metadata/<repo_id>/keys` is present.
 
 **Source refs:** `cmd_meta_build` (`src/lcsas/cli/commands/meta.py`);
@@ -622,8 +622,8 @@ newly-added repositories exist) updated repository metadata.
    inputs are healthy.
 2. Rebuild the recovery toolchain if it changed (`make build-recovery`,
    `make keyshare-arches`, `sh recovery/scripts/fetch_upstream.sh`).
-3. Run `lcsas [--config etc/lcsas.toml] [--db /var/lib/lcsas/archive.db]
-   meta build --output /tmp/meta-NEW` (`--config`/`--db` are global flags
+3. Run `lcsas [--config etc/lcsas.toml] [--catalog /var/lib/lcsas/catalog.db]
+   meta build --output /tmp/meta-NEW` (`--config`/`--catalog` are global flags
    and must come *before* the subcommand). The full pipeline regenerates
    `lcsas/src/` from the current project root and re-renders all in-source
    script constants. Then run `lcsas meta verify --strict /tmp/meta-NEW`,
@@ -679,7 +679,7 @@ catalog policy (no `catalog.db`).
 
 | Workflow | Unit | Integration | Gaps |
 |---|---|---|---|
-| `lcsas meta build` | `tests/unit/test_meta_builder.py::TestMetaVolumeBuilder`, `::TestBundleUpstreamBinaries` | `tests/integration/test_meta_volume_restore.py` | No `--db`-populated `metadata/` assertion. |
+| `lcsas meta build` | `tests/unit/test_meta_builder.py::TestMetaVolumeBuilder`, `::TestBundleUpstreamBinaries` | `tests/integration/test_meta_volume_restore.py` | No `--catalog`-populated `metadata/` assertion. |
 | `lcsas meta verify` | `tests/unit/test_meta_builder.py` (manifest + required-contents) | — | None significant. |
 | Meta disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `TestMovedRestoreScripts` (the two scripts under `recovery/scripts/` run from there, manifest rows), `TestMetaVolumeInfoTxt` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
 | Cross-platform bundling | `TestBundleUpstreamBinaries` (5 tests), `test_restore_sh_dispatcher.py` | — | Per-target restore exercised in recovery-toolchain CI. |

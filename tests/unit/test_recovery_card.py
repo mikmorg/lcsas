@@ -4,7 +4,7 @@ Drives the real CLI ``lcsas estate card`` entry point and the underlying
 ``_estate_card_text`` builder.  Covers:
 
   * split and non-split configs (K/N line presence),
-  * owner / key_storage_hints / repositories rendered from config,
+  * owner / password_hints / repositories rendered from config,
   * disc count from a catalog when present, fill-in blanks when absent,
   * the per-OS restore commands passing UX-02's restore.sh flag contract.
 
@@ -37,16 +37,16 @@ def _write_config(
         "[paths]",
         f'mirror_base = "{tmp_path / "mirror_base"}"',
         f'staging = "{tmp_path / "staging"}"',
-        f'database = "{tmp_path / "archive.db"}"',
+        f'catalog = "{tmp_path / "catalog.db"}"',
         "[defaults]",
         f"label_prefix = \"{label_prefix}\"",
-        f"key_split = {str(split).lower()}",
-        "key_threshold = 2",
-        "key_shares = 5",
+        f"split = {str(split).lower()}",
+        "split_threshold = 2",
+        "split_shares = 5",
         "[survivability]",
         'archive_owner = "Jane Smith"',
         'archive_description = "Family photos 2000-2025"',
-        'key_storage_hints = "Safe deposit box #1234; home safe"',
+        'password_hints = "Safe deposit box #1234; home safe"',
         'technical_contact = "Bob (bob@example.org)"',
     ]
     for r in repos:
@@ -86,7 +86,7 @@ def test_builder_split_shows_kn_and_combiner() -> None:
     assert "Home safe" in card
     assert "alpha, beta" in card
     assert "Any 2 of 5 share cards" in card
-    # On-disc combiner path, not the installed-lcsas `key combine`.
+    # On-disc combiner path, not the installed-lcsas `password combine`.
     assert "python3 combine_shares.py" in card
     assert "8 disc(s), labeled SMITH_*" in card
 
@@ -161,7 +161,7 @@ def test_cli_requires_config(capsys) -> None:
 
 def test_cli_disc_count_from_catalog(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path, split=False)
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
 
     from lcsas.constants import STATUS_BURNED, STATUS_STAGING, STATUS_VERIFIED
     from lcsas.db.connection import get_connection
@@ -213,7 +213,7 @@ def test_cli_disc_count_skips_superseded_destroyed_volumes(
     from lcsas.db.volumes import create_volume
 
     cfg = _write_config(tmp_path, split=False)
-    conn = get_connection(tmp_path / "archive.db")
+    conn = get_connection(tmp_path / "catalog.db")
     ensure_schema(conn)
     create_location(conn, "Home_Shelf")
     for i in range(1, 6):
@@ -244,7 +244,7 @@ def test_cli_ensure_schema_runs_under_the_catalog_lock(
     from lcsas.db.connection import get_connection
 
     cfg = _write_config(tmp_path, split=False)
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     conn = get_connection(db_path)
     schema_mod.ensure_schema(conn)
     conn.close()
@@ -304,7 +304,7 @@ def test_cli_no_burned_disc_leaves_the_count_blank(tmp_path: Path) -> None:
     from lcsas.db.volumes import create_volume
 
     cfg = _write_config(tmp_path, split=False)
-    conn = get_connection(tmp_path / "archive.db")
+    conn = get_connection(tmp_path / "catalog.db")
     ensure_schema(conn)
     create_volume(
         conn, "SMITH_001", "uuid-1", "BD25", 25_000_000_000,

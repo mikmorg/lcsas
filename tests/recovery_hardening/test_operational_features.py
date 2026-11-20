@@ -179,7 +179,7 @@ def _run_restore(recovery: Path, target_dir: Path, home: Path,
         "LCSAS_NO_RELOCATE": "1",
     }
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), snap],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir), str(recovery), snap],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -250,7 +250,7 @@ def test_session_log_skipped_when_home_unwritable(tmp_path: Path) -> None:
         "LCSAS_NO_RELOCATE": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

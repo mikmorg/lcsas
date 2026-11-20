@@ -30,8 +30,8 @@ Sibling restore routes (more capable, prefer them when available):
 1. [When to use Tier 3](#when-to-use-tier-3)
 2. [What every data disc contains](#what-every-data-disc-contains)
 3. [Workflow A — Mount a single data disc anywhere Python runs](#workflow-a--mount-a-single-data-disc-anywhere-python-runs)
-4. [Workflow B — Run `python_reader.py` from the disc](#workflow-b--run-standalone_restorerpy-from-the-disc)
-5. [Workflow C — `lcsas restore standalone` (convenience wrapper)](#workflow-c--lcsas-restore-standalone-convenience-wrapper)
+4. [Workflow B — Run `python_reader.py` from the disc](#workflow-b--run-python_readerpy-from-the-disc)
+5. [Workflow C — `lcsas restore from-disc` (convenience wrapper)](#workflow-c--lcsas-restore-standalone-convenience-wrapper)
 6. [Workflow D — Use the disc catalog](#workflow-d--use-the-disc-catalog)
 7. [Workflow E — AES-256-CTR + Poly1305 + zstd decrypt path](#workflow-e--aes-256-ctr--poly1305--zstd-decrypt-path)
 8. [Workflow F — Restore a single file vs a full snapshot](#workflow-f--restore-a-single-file-vs-a-full-snapshot)
@@ -308,11 +308,11 @@ effort (`PurePythonRestorer._restore_tree()` / `_apply_metadata()`).
 
 ---
 
-## Workflow C — `lcsas restore standalone` (convenience wrapper)
+## Workflow C — `lcsas restore from-disc` (convenience wrapper)
 
 **Purpose:** When LCSAS *is* installed (e.g., from the meta disc's
 source bundle) but no working `rustic`/`restic` binary is present, the
-`lcsas restore standalone` subcommand orchestrates Workflow B and
+`lcsas restore from-disc` subcommand orchestrates Workflow B and
 auto-falls-back to `PurePythonRestorer`.
 
 **Prerequisites:**
@@ -365,7 +365,7 @@ unless noted otherwise.
     (the `FileNotFoundError` handlers around the dry-run and
     `execute_restore()` calls).
 
-**Expected outcome:** Files restored to `target_path`, log line
+**Expected outcome:** Files restored to `restore_folder`, log line
 identifying the snapshot ID and hostname
 (the pure-Python success log in `_restore_with_python_reader()`).
 A partial pure-Python restore — some items not restored under
@@ -734,7 +734,7 @@ This path deliberately trades capability for portability. It **cannot**:
   per disc, or answer the interactive disc-swap prompt when a pack is
   not found (`_find_pack_path()`, added in #234). There is no
   automated pick-list orchestration like the rustic paths have; the
-  `lcsas restore standalone` wrapper likewise symlinks only the
+  `lcsas restore from-disc` wrapper likewise symlinks only the
   mounted disc's `data/` and tells the heir to merge other
   discs manually (`_restore_with_python_reader()` in
   `src/lcsas/restore/orchestrator.py`).

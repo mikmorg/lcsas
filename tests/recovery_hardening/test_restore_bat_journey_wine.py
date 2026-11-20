@@ -177,7 +177,7 @@ def fresh(wine: _Wine):
     """Each test starts with every drive letter empty, no tools folder,
     no launcher on the Desktop and no lcsas files in %TEMP%."""
     _harden_prefix_drives(wine.prefix)
-    for leftover in (wine.user_dir / "AppData" / "Local" / "LCSAS-restore",):
+    for leftover in (wine.user_dir / "AppData" / "Local" / "lcsas-tools",):
         shutil.rmtree(leftover, ignore_errors=True)
     for item in list(wine.desktop.glob("*")) + list(wine.temp.glob("lcsas-*")):
         if item.is_dir():
@@ -533,7 +533,7 @@ def test_newest_data_disc_first_on_one_drive(fresh: _Wine, tmp_path: Path) -> No
         _assert_clean(out)
         assert rc == 65, f"rc={rc}\n{out}"
         assert "Stopped; nothing was restored." in out, out
-        tools = wine.user_dir / "AppData" / "Local" / "LCSAS-restore"
+        tools = wine.user_dir / "AppData" / "Local" / "lcsas-tools"
         assert (tools / "recovery" / "scripts" / "restore.bat").is_file(), out
         assert "copied recovery files to" in step, step
         c7 = ("Take the META disc out and put in your NEWEST data disc: the one\r\n"
@@ -548,7 +548,7 @@ def test_newest_data_disc_first_on_one_drive(fresh: _Wine, tmp_path: Path) -> No
         # --- 2. the copy in the tools folder ------------------------------
         copy = tools / "recovery" / "scripts" / "restore.bat"
         assert copy.read_bytes() == RESTORE_BAT.read_bytes()
-        tools_win = f"C:\\users\\{wine.user}\\AppData\\Local\\LCSAS-restore"
+        tools_win = f"C:\\users\\{wine.user}\\AppData\\Local\\lcsas-tools"
         run = _Run(wine, f"{tools_win}\\recovery\\scripts\\restore.bat",
                    {"LCSAS_RELOCATED": "D:\\", "LCSAS_ANOTHER_SET": "0"})
         try:
@@ -1143,8 +1143,8 @@ def test_tools_folder_must_be_the_restores_own(fresh: _Wine, tmp_path: Path) -> 
     root_f = tmp_path / "drive_f"
     (root_f / "recovery").mkdir(parents=True)
     (root_f / "recovery" / "notes.txt").write_text("on the stick\n")
-    tools = wine.user_dir / "AppData" / "Local" / "LCSAS-restore"
-    tools_win = f"C:\\users\\{wine.user}\\AppData\\Local\\LCSAS-restore"
+    tools = wine.user_dir / "AppData" / "Local" / "lcsas-tools"
+    tools_win = f"C:\\users\\{wine.user}\\AppData\\Local\\lcsas-tools"
     _make_read_only(meta)
     try:
         _map_drive(wine.prefix, "d", meta)
@@ -1339,7 +1339,7 @@ def test_tools_folder_from_another_meta_disc_is_replaced(
     meta_a, meta_b = tmp_path / "meta_a", tmp_path / "meta_b"
     _write_meta(meta_a, [docs], created_at="2026-09-01T10:00:00.000000+00:00")
     _write_meta(meta_b, [docs, photos], created_at="2026-10-15T18:30:00.000000+00:00")
-    tools = wine.user_dir / "AppData" / "Local" / "LCSAS-restore"
+    tools = wine.user_dir / "AppData" / "Local" / "lcsas-tools"
     for meta in (meta_a, meta_b):
         _make_read_only(meta)
     try:

@@ -89,7 +89,7 @@ def _run_restore(recovery: Path, target_dir: Path, env: dict[str, str],
     stdin += password + "\n"
     full_env = {**os.environ, "LCSAS_MOUNT_DIRS": "", **env}
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir), str(recovery)],
         input=stdin, capture_output=True, text=True,
         env=full_env, timeout=15,
     )

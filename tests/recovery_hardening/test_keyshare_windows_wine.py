@@ -54,7 +54,7 @@ def cards(tmp_path_factory) -> list[Path]:
     base = tmp_path_factory.mktemp("ks_wine")
     out = base / "shares"
     out.mkdir()
-    # The cards are made from the library, not `lcsas key split`: since
+    # The cards are made from the library, not `lcsas password split`: since
     # #641 a password FILE gives only its first line (as rustic reads
     # it), and this password must keep its newline and CR to prove the
     # binary writes exact bytes.

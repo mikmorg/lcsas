@@ -132,7 +132,7 @@ def _run(tmp_path: Path, recovery: Path, set_name: str, *,
     if answer is not None:
         env["LCSAS_INTERACTIVE"] = "on"
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored")],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         input=(answer + "\n") if answer is not None else "",
         capture_output=True, text=True, env=env, timeout=60,
         start_new_session=True,

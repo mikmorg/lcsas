@@ -139,7 +139,7 @@ def test_tier3_non_interactive_raises_when_pack_missing(tmp_path: Path) -> None:
             sys.executable, str(script),
             "--repo", str(repo),
             "--password-file", str(pwfile),
-            "--target", str(target),
+            "--restore-folder", str(target),
             "--interactive", "off",
             # NOTE: no --mount-point for other_disc -- packs are unreachable.
         ],
@@ -196,7 +196,7 @@ def test_tier3_interactive_recovers_via_stdin_enter(tmp_path: Path) -> None:
             sys.executable, str(script),
             "--repo", str(repo),
             "--password-file", str(pwfile),
-            "--target", str(target),
+            "--restore-folder", str(target),
             "--interactive", "on",
             "--mount-point", str(other_disc),
         ],

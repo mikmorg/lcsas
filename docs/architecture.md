@@ -207,7 +207,7 @@ key_escrow (
 > a K-of-N SLIP-0039 set (and when) — it never stores the shares or the
 > password itself. Share words live only on the printed share cards. See the
 > share format spec ([docs/SHARE_FORMAT.md](SHARE_FORMAT.md))
-> and the `keyshare/` package. `lcsas key unsplit --repo R` removes the
+> and the `keyshare/` package. `lcsas password unsplit --repo R` removes the
 > record when a split is abandoned (#681).
 
 > Timestamps (#730): new rows are written in UTC ISO-8601 with an offset
@@ -596,7 +596,7 @@ lcsas/
 | **Hardlink staging** | Packs are hardlinked (not copied) from mirror for zero-cost staging on same filesystem |
 | **WAL mode** | SQLite uses WAL journal for safe concurrent reads |
 | **Locked connections** | Write operations use `locked_connection()` context manager for exclusive catalog access |
-| **XDG paths** | Default catalog path follows XDG Base Directory specification (`~/.local/share/lcsas/archive.db`) |
+| **XDG paths** | Default catalog path follows XDG Base Directory specification (`~/.local/share/lcsas/catalog.db`) |
 
 ---
 
@@ -697,7 +697,7 @@ representative, not exhaustive — run `lcsas --help` (or read
 `cli/parser.py`) for the authoritative, current command surface.
 
 ```
-lcsas init          [--db-path PATH]              Initialize the catalog
+lcsas init          [--catalog-path PATH]              Initialize the catalog
 lcsas repo add      NAME MIRROR_PATH               Register a repository
 lcsas repo list                                    List registered repositories
 lcsas repo remove   REPO_ID [--force]              Remove a repository and its packs
@@ -713,9 +713,9 @@ lcsas burn-iso      ISO_PATH [--device DEV]        Burn a pre-built ISO to disc
                     [--emit-receipt PATH]           (cross-machine workflow)
                     [--label LABEL --location LOC]
 lcsas restore plan  SNAPSHOT_ID --repo REPO        Generate restore pick list
-lcsas restore exec  SNAPSHOT_ID TARGET_DIR         Execute restore from discs
+lcsas restore exec  SNAPSHOT_ID RESTORE_FOLDER        Execute restore from discs
                     --repo REPO --password-file F
-lcsas consolidate   VOL_IDS... --target-media TYPE Plan/execute consolidation
+lcsas consolidate   VOL_IDS... --media-type TYPE Plan/execute consolidation
                     [--execute] [--deprecate]       (--deprecate deprecates sources
                                                     after a successful --execute)
 lcsas location add  NAME [--description DESC]      Register a location

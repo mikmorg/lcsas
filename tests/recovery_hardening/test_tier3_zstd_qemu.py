@@ -93,7 +93,7 @@ def test_zstd_restore_under_aarch64_qemu(tmp_path: Path) -> None:
         [_QEMU, str(_AARCH64_PY), str(script),
          "--repo", str(repo),
          "--password-file", str(pw),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--interactive", "off"],
         capture_output=True, text=True, timeout=600, env=env,
     )

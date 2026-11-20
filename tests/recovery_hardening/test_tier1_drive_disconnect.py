@@ -86,7 +86,7 @@ def test_source_pack_read_failure_reports_useful_error(tmp_path: Path) -> None:
     res = subprocess.run(
         [str(bin_path),
          "--repo", str(repo),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--password-file", str(pwfile),
          "--interactive", "off"],
         capture_output=True, text=True, timeout=120,

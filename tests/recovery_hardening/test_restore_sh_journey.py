@@ -73,7 +73,7 @@ needs_keyshare = pytest.mark.skipif(
 
 # The stub tier 1.  --help answers the pre-flight.  --list-snapshots is
 # the password check: 0 for GOOD_PW, else 77, as tier 1 does.  A restore
-# run logs its --repo, --target and password (and, on a line of its own,
+# run logs its --repo, --restore-folder and password (and, on a line of its own,
 # its pack cache, which it makes as tier 1 does) and exits 77 on a wrong
 # password, else $STUB_RC (default 0) after writing restored.txt.
 STUB = textwrap.dedent("""\
@@ -83,7 +83,7 @@ STUB = textwrap.dedent("""\
     for a in "$@"; do
         case "$prev" in
             --password-file) pw="$(cat "$a")" ;;
-            --target) target="$a" ;;
+            --restore-folder) target="$a" ;;
             --repo) repo="$a" ;;
         esac
         [ "$a" = "--list-snapshots" ] && list=1
@@ -208,7 +208,7 @@ def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
 def _run(recovery: Path, target: Path, env: dict[str, str], stdin: str = "",
          ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input=stdin, capture_output=True, text=True, env=env, timeout=30,
     )
 
@@ -303,7 +303,7 @@ def _shares(secret: bytes, k: int, n: int) -> tuple[list[str], str]:
 
 def _card(mnemonic: str) -> str:
     """A printed share card: prose around the words."""
-    return f"SHARE CARD\nRepository: invented\n\n{mnemonic}\n\nKeep this card safe.\n"
+    return f"SHARE CARD\nBackup set: invented\n\n{mnemonic}\n\nKeep this card safe.\n"
 
 
 # ── F4: names, not ids (#606) ────────────────────────────────────────
@@ -543,7 +543,7 @@ def test_the_newest_disc_step_waits_for_a_labelled_data_disc(tmp_path: Path) -> 
     media = tmp_path / "media"
     env = _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_RELOCATED=str(meta),
                LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS, STUB_RC="1")
-    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"], env)
+    s = _Session([str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)], env)
     s.expect("put in your NEWEST data disc")
     s.expect("ENTER, S or Q: ")
     # /mnt, not /media: mounting over /media hides /media/$USER/*, where a
@@ -781,7 +781,7 @@ def test_on_a_terminal_the_step_is_asked_and_the_password_is_hidden(tmp_path: Pa
     terminal's echo back on; a typed password is not echoed and is
     checked before tier 1 runs."""
     meta, recovery = _single_drive(tmp_path)
-    argv = [str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"]
+    argv = [str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)]
     rc, out, lflag = _pty_run(
         argv, _env(tmp_path, LCSAS_RELOCATED=str(meta), LCSAS_BACKUP_SET=DOCS),
         [("ENTER, S or Q: ", b"s\n"), ("Password: ", b"\x03")],
@@ -1265,7 +1265,7 @@ def test_ctrl_c_at_the_another_set_question_removes_the_tools(tmp_path: Path) ->
     """The set is restored; Ctrl-C at "another set?" leaves nothing to
     carry on: exit 130, no resume box, the tools folder goes."""
     recovery = _two_sets(tmp_path)
-    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+    s = _Session([str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)],
                  _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD=GOOD_PW,
                       LCSAS_BACKUP_SET=DOCS))
     s.expect("Restore another backup set from these discs? [y/N] ")
@@ -1282,7 +1282,7 @@ def test_ctrl_c_at_the_password_prompt_keeps_the_tools_and_says_how_to_resume(
     whose exit code would hide the trap's): exit 130, resume.sh kept.  The
     old INT trap ran the exit handler and carried on (here: 77)."""
     recovery = _two_sets(tmp_path)
-    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+    s = _Session([str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)],
                  _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=DOCS))
     s.expect("Password: ")
     s.proc.send_signal(signal.SIGINT)
@@ -1320,7 +1320,10 @@ def test_a_folder_holding_another_sets_restore_is_warned_about(tmp_path: Path) -
     res = _run(recovery, out, {**env, "LCSAS_BACKUP_SET": DOCS})
     assert res.returncode == 0, res.stderr
     assert "WARNING" not in res.stderr
-    res = _run(recovery, out, {**env, "LCSAS_BACKUP_SET": PHOTOS, "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1"})
+    res = _run(recovery, out, {
+        **env, "LCSAS_BACKUP_SET": PHOTOS,
+        "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1",
+    })
     assert res.returncode == 0, res.stderr
     assert (out / ".lcsas-restore-marker").read_text() == f"{DOCS_ID}\n{PHOTOS_ID}\n"
     # An empty marker (an older restore.sh, or restore.bat) names no set.

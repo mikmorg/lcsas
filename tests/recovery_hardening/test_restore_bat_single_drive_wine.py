@@ -68,7 +68,7 @@ FILES = {
     "a2.bin": bytes(range(256)) * 16,
     "a3.txt": b"file three\n" * 400,
 }
-# Stand-in for the tools folder (%LOCALAPPDATA%\LCSAS-restore) that
+# Stand-in for the tools folder (%LOCALAPPDATA%\lcsas-tools) that
 # holds the relocated copy.
 RELOC = "lcsas-restore-reloc"
 TARGET_WIN = "C:\\restored"

@@ -86,16 +86,16 @@ def _write_transcript(tmp_path: Path, commands: list[str]) -> Path:
 @pytest.mark.parametrize(
     "cmd",
     [
-        "lcsas-restore --repo alpha --target /tmp/x",
-        "sudo lcsas-restore --repo alpha --target /tmp/x",
+        "lcsas-restore --repo alpha --restore-folder /tmp/x",
+        "sudo lcsas-restore --repo alpha --restore-folder /tmp/x",
         "sh /mnt/lcsas-restore --repo alpha",
         "bash /mnt/lcsas-restore --repo alpha",
         "exec lcsas-restore --repo alpha",
         "sudo -E lcsas-restore --repo alpha",
-        "rustic restore latest --target /tmp/r",
-        "rustic-static restore latest --target /tmp/r",
-        "restic restore latest --target /tmp/r",
-        "python_reader.py --repo alpha --target /tmp/x",
+        "rustic restore latest --restore-folder /tmp/r",
+        "rustic-static restore latest --restore-folder /tmp/r",
+        "restic restore latest --restore-folder /tmp/r",
+        "python_reader.py --repo alpha --restore-folder /tmp/x",
     ],
     ids=[
         "bare-lcsas-restore",
@@ -125,11 +125,11 @@ def test_classic_bypass_shapes_flagged(check, cmd):
     "cmd",
     [
         "python3 /mnt/python_reader.py",
-        "python3 /mnt/python_reader.py --repo X --target Y",
-        "python3.12 /tmp/python_reader.py --repo X --target Y",
+        "python3 /mnt/python_reader.py --repo X --restore-folder Y",
+        "python3.12 /tmp/python_reader.py --repo X --restore-folder Y",
         "python /mnt/python_reader.py",
         "python -m standalone_restorer --repo X",
-        "python3 -m standalone_restorer --repo X --target Y",
+        "python3 -m standalone_restorer --repo X --restore-folder Y",
         "sudo python3 /mnt/python_reader.py",
         "sudo python3 -m standalone_restorer --repo X",
     ],
@@ -275,9 +275,9 @@ def test_compound_commands_flagged(check, cmd):
 @pytest.mark.parametrize(
     "cmd",
     [
-        '"$META/recovery/bin/lcsas-restore" restore --target /tmp/x',
+        '"$META/recovery/bin/lcsas-restore" restore --restore-folder /tmp/x',
         '"/media/LCSAS META/recovery/bin/rustic" restore latest',
-        "cd /tmp/work\nrustic restore latest --target /tmp/x",
+        "cd /tmp/work\nrustic restore latest --restore-folder /tmp/x",
         "SNAPS=$(rustic snapshots --json)",
         "RUSTIC_PASSWORD_FILE=/tmp/pw rustic restore latest",
         "sudo RUSTIC_PASSWORD_FILE=/tmp/pw rustic restore latest",
@@ -321,7 +321,7 @@ def test_scan_transcript_flags_python_bypass(check, tmp_path):
         [
             "ls /mnt",
             "python3 /mnt/python_reader.py --repo alpha "
-            "--target /tmp/out",
+            "--restore-folder /tmp/out",
         ],
     )
     hits = check.scan_transcript(str(transcript))

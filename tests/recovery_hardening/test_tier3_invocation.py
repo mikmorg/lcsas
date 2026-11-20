@@ -10,7 +10,7 @@ broken tier-3 invocation:
 
 …but `python_reader.py`'s CLI parser (defined in
 `src/lcsas/restore/standalone_builder.py:_cli_main`) requires
-`--repo`, `--target`, `--password-file` as named flags, not
+`--repo`, `--restore-folder`, `--password-file` as named flags, not
 positional.  Tier 3 silently errored out without restoring anything
 and the agent in the blind run was forced to improvise around it.
 
@@ -69,7 +69,7 @@ def _install_python_stub(bin_dir: Path) -> Path:
 
 def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
     """No tier-1/tier-2 binary → restore.sh execs python_reader.py
-    with --repo / --target / --password-file."""
+    with --repo / --restore-folder / --password-file."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
     # restore.sh's pattern-1 invocation requires bin/ to exist in the
@@ -101,7 +101,7 @@ def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
     }
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -122,8 +122,8 @@ def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
     assert args[args.index("--repo") + 1] == str(repo), (
         f"--repo arg points to wrong path: {args}"
     )
-    assert "--target" in args, f"--target missing: {args}"
-    assert args[args.index("--target") + 1] == str(target), args
+    assert "--restore-folder" in args, f"--restore-folder missing: {args}"
+    assert args[args.index("--restore-folder") + 1] == str(target), args
     assert "--password-file" in args, f"--password-file missing: {args}"
 
     # Positional REPO / TARGET (the legacy broken form) must NOT
@@ -170,7 +170,7 @@ def test_tier3_passes_snapshot_when_not_latest(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target),
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery),
          "deadbeefcafe1234"],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
@@ -203,7 +203,7 @@ def test_tier3_omits_snapshot_when_latest(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -249,7 +249,7 @@ def test_tier3_passes_interactive_on_and_mount_points(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -280,7 +280,7 @@ def test_standalone_restorer_cli_uses_named_flags() -> None:
     break — so we also pin the parser spec."""
     builder = REPO_ROOT / "src" / "lcsas" / "restore" / "standalone_builder.py"
     src = builder.read_text()
-    for flag in ("--repo", "--password-file", "--target"):
+    for flag in ("--repo", "--password-file", "--restore-folder"):
         assert re.search(
             rf'add_argument\(\s*[\'"]{re.escape(flag)}[\'"]', src
         ), (
@@ -311,7 +311,7 @@ def test_tier3_is_told_the_meta_disc(tmp_path: Path) -> None:
         "LCSAS_NO_RELOCATE": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"),
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery),
          "latest"],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,

@@ -1749,7 +1749,7 @@ function Invoke-HiddenPasswordLeg {
 # G3 (#607, F6): share cards typed into restore.bat on real Windows.
 # ---------------------------------------------------------------------
 
-# The share words of a printed card (`lcsas key split`'s -card.txt): the
+# The share words of a printed card (`lcsas password split`'s -card.txt): the
 # line after "THE SHARE WORDS".
 function Get-CardWords {
     param([string]$Path)

@@ -87,7 +87,7 @@ def test_all_tiers_missing_exits_with_documented_code(tmp_path: Path) -> None:
     # Intentionally do NOT feed stdin; if the guard fires correctly
     # the script exits before asking for a password.
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="", capture_output=True, text=True, env=env, timeout=15,
     )
     assert res.returncode == ScriptExit.NO_RECOVERY_BIN, (
@@ -138,7 +138,7 @@ def test_python_tier_disabled_treated_as_missing(tmp_path: Path) -> None:
         "LCSAS_ALLOW_PYTHON_TIER": "0",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="", capture_output=True, text=True, env=env, timeout=15,
     )
     assert res.returncode == ScriptExit.NO_RECOVERY_BIN, (
@@ -174,7 +174,7 @@ def test_guard_does_not_fire_when_tier3_is_available(tmp_path: Path) -> None:
         "LCSAS_PASSWORD": "stub",  # don't block on prompt
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="", capture_output=True, text=True, env=env, timeout=15,
     )
     assert res.returncode == 0, (

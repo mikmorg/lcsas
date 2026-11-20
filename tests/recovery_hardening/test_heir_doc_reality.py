@@ -5,8 +5,8 @@ FAILURE MODES CAUGHT
 The rc6 docs sweep was reviewed against the scripts and the tier-1
 binary, and these claims were wrong although every doc test was green:
 
-* ``--key repo.key`` and ``> repo.key``: restore.sh copies itself off the
-  META disc, runs ``cd /`` and re-runs itself, so a relative --key file is
+* ``--password-file repo.key`` and ``> repo.key``: restore.sh copies itself off the
+  META disc, runs ``cd /`` and re-runs itself, so a relative --password-file file is
   looked up as ``/repo.key`` and the run stops with exit 2; and a META
   disc is read-only, so ``> repo.key`` run there fails.  Give full paths.
 * ``metadata\\<name>`` and ``dir D:\\metadata`` in RESTORE_WINDOWS.txt:
@@ -45,15 +45,15 @@ WIN_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe
 _HEIR_TEXTS = (
     RECOVER,
     RECOVER_WIN,
-    REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py",
+    REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py",
     REPO_ROOT / "src" / "lcsas" / "staging" / "metadata.py",
     REPO_ROOT / "docs" / "RECOVERY_GUIDE.md",
     REPO_ROOT / "docs" / "guides" / "recovery-runbook.md",
 )
 
-# A bare relative file name (no / ~ $ < or drive) after --key, or as the
-# target of a > redirect: `--key repo.key`, `> repo.key`.
-_REL_KEY = re.compile(r"--key\s+([A-Za-z0-9_.-]+\.(?:key|txt))\b")
+# A bare relative file name (no / ~ $ < or drive) after --password-file, or as the
+# target of a > redirect: `--password-file repo.key`, `> repo.key`.
+_REL_KEY = re.compile(r"--password-file\s+([A-Za-z0-9_.-]+\.(?:key|txt))\b")
 _REL_REDIRECT = re.compile(r">\s*([A-Za-z0-9_.-]+\.key)\b")
 
 
@@ -84,7 +84,7 @@ def test_key_files_are_given_by_full_path(path: Path) -> None:
                 bad.append(f"{path.name}:{lineno}: {m.group(0)!r}")
     assert not bad, (
         "a password file given by a bare relative name: restore.sh runs "
-        "`cd /` before it reads --key, and a META disc cannot be written "
+        "`cd /` before it reads --password-file, and a META disc cannot be written "
         "to; use a full path such as ~/repo.key:\n" + "\n".join(bad)
     )
 
@@ -160,6 +160,6 @@ def test_recover_txt_does_not_restore_into_tmp() -> None:
         assert not re.search(r"restore\.sh\b.*\s/tmp/restored\b", line), (
             f"RESTORE.txt:{lineno}: restore into ~/restored, not /tmp: {line}"
         )
-        assert "--target /tmp/restored" not in line, (
+        assert "--restore-folder /tmp/restored" not in line, (
             f"RESTORE.txt:{lineno}: restore into ~/restored, not /tmp: {line}"
         )

@@ -86,7 +86,7 @@ def _run(meta: Path, tmp_path: Path, relocate_into: Path,
     for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC"):
         env.pop(k, None)
     return subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "out")],
         input="pw\n", capture_output=True, text=True, env=env, timeout=60,
     )
 
@@ -287,7 +287,8 @@ def test_run_from_recovery_scripts_copies_the_docs_and_root_metadata(
     for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC", "LCSAS_BACKUP_SET"):
         env.pop(k, None)
     res = subprocess.run(
-        ["sh", str(meta / "recovery" / "scripts" / "restore.sh"), str(tmp_path / "out")],
+        ["sh", str(meta / "recovery" / "scripts" / "restore.sh"),
+         "--restore-folder", str(tmp_path / "out")],
         input="pw\n", capture_output=True, text=True, env=env, timeout=60,
     )
     assert res.returncode == 1, res.stderr

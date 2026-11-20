@@ -71,7 +71,7 @@ def test_temp_password_file_is_shredded_after_restore(tmp_path: Path) -> None:
     }
     env.pop("LCSAS_PASSWORD_FILE", None)
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=30,
     )
     assert res.returncode == 0, (

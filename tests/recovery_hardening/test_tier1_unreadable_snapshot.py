@@ -85,7 +85,7 @@ def test_latest_with_unreadable_snapshot(tmp_path: Path) -> None:
 
     # 2. Nobody at the keyboard: stop, name the file and the choice.
     t = tmp_path / "t-off"
-    res = run("--target", str(t), "--interactive", "off")
+    res = run("--restore-folder", str(t), "--interactive", "off")
     assert res.returncode != 0, res.stderr
     assert newest_file.name in res.stderr
     assert f"--snapshot {older}" in res.stderr
@@ -93,7 +93,7 @@ def test_latest_with_unreadable_snapshot(tmp_path: Path) -> None:
 
     # 3. Someone answers "n": not restored.
     t = tmp_path / "t-no"
-    res = run("--target", str(t), "--interactive", "on", stdin="n\n")
+    res = run("--restore-folder", str(t), "--interactive", "on", stdin="n\n")
     assert res.returncode != 0, res.stderr
     assert "Not restoring." in res.stderr
     assert _files(t) == []
@@ -103,12 +103,12 @@ def test_latest_with_unreadable_snapshot(tmp_path: Path) -> None:
     # so the restore itself ends in an error; what matters here is that
     # the older snapshot was chosen and the walk began.)
     t = tmp_path / "t-yes"
-    res = run("--target", str(t), "--interactive", "on", stdin="y\n")
+    res = run("--restore-folder", str(t), "--interactive", "on", stdin="y\n")
     assert f"restoring snapshot {older}" in res.stderr, res.stderr
     assert "Not restoring." not in res.stderr
 
     # 5. An explicit snapshot id needs no answer.
     t = tmp_path / "t-id"
-    res = run("--target", str(t), "--interactive", "off", "--snapshot", older)
+    res = run("--restore-folder", str(t), "--interactive", "off", "--snapshot", older)
     assert f"restoring snapshot {older}" in res.stderr, res.stderr
     assert "could not be read" not in res.stderr.split("restoring")[1]

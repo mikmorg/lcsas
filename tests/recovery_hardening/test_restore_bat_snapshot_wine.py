@@ -68,7 +68,7 @@ def _built_meta(tmp_path: Path) -> tuple[dict[str, str], Path, str]:
 
 def test_snapshot_flag_restores_that_snapshot(tmp_path: Path) -> None:
     env, meta, snap = _built_meta(tmp_path)
-    res = _run(env, ["--snapshot", snap[:8]], "E:\\restored\n", LCSAS_PW="test")
+    res = _run(env, ["--snapshot", snap[:8]], "E:\\restored\n", LCSAS_PASSWORD="test")
     out = res.stdout + res.stderr
     assert res.returncode == 0, f"rc={res.returncode}\n{out}"
     assert "proof.txt" in {p.name for p in non_marker_files(meta / "restored")}, out
@@ -79,7 +79,7 @@ def test_snapshot_flag_reaches_tier_1(tmp_path: Path) -> None:
     fails, so the restore does not finish (with latest it would)."""
     env, meta, snap = _built_meta(tmp_path)
     assert not snap.startswith("0000aaaa")
-    res = _run(env, ["--snapshot", "0000aaaa"], "E:\\restored\n", LCSAS_PW="test")
+    res = _run(env, ["--snapshot", "0000aaaa"], "E:\\restored\n", LCSAS_PASSWORD="test")
     out = res.stdout + res.stderr
     assert "[tier 1] running" in out, out
     assert res.returncode != 0, out

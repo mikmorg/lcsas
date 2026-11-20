@@ -107,7 +107,7 @@ def test_no_scratch_dir_warns_and_restores_from_the_disc(tmp_path: Path) -> None
     for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE"):
         env.pop(k, None)
     res = subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "out")],
         input="pw\n", capture_output=True, text=True, env=env, timeout=60,
         cwd=meta,
     )

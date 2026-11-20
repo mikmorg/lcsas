@@ -70,7 +70,7 @@ This document provides a checklist and templates to make that possible.
   (The whole point of encryption is keeping the password and the data apart)
 
 - [ ] **Print a password card for each place you keep the password**:
-  - Generate one with `lcsas --config lcsas.toml key card --repo <name>`
+  - Generate one with `lcsas --config lcsas.toml password card --repo <name>`
     (the password is never printed; the card carries a transcription
     check code so a hand-copied password can be checked later), or
   - Fill in `docs/PASSWORD_CARD.txt` by hand.
@@ -89,7 +89,7 @@ theft.
 - [ ] **Split the password** once your archive is configured:
 
   ```
-  lcsas --config lcsas.toml key split --repo REPO
+  lcsas --config lcsas.toml password split --repo REPO
   ```
 
   This writes `N` share files plus a plain-language **share card** for each.
@@ -100,10 +100,10 @@ theft.
   catalog** so disc instructions can be derived from the split you actually
   performed (and the next-step reminder is printed).
   Register the repository with `lcsas repo add` first. If the catalog does
-  not list the repository, `key split` stops before it writes any share.
+  not list the repository, `password split` stops before it writes any share.
 
 - [ ] **Mark the password as split** so the discs print share instructions —
-  set `key_split = true` (and your `key_threshold` / `key_shares`) in
+  set `split = true` (and your `split_threshold` / `split_shares`) in
   `lcsas.toml` (see §4): under `[defaults]` when every repository's password
   is split, or in the repository's own `[repos.<name>]` table when only some
   are. One archive can hold split and ordinary passwords side by side
@@ -112,17 +112,17 @@ theft.
   normally**; in a mixed archive they name each split repository with its
   own K/N, and say which repositories have an ordinary password.
 
-  > **Drift guard (KEY-08).** `lcsas stage` aborts if a repository's `key_split` /
-  > `key_threshold` / `key_shares` in `lcsas.toml` (its own table, else
+  > **Drift guard (KEY-08).** `lcsas stage` aborts if a repository's `split` /
+  > `split_threshold` / `split_shares` in `lcsas.toml` (its own table, else
   > `[defaults]`) disagree with its recorded split — so discs
   > can never print instructions that contradict the real split (e.g. config
-  > says "any 2" while the split was 3-of-5, or `key_split=true` with no split
+  > says "any 2" while the split was 3-of-5, or `split=true` with no split
   > ever performed). The disc's K/N is taken from the recorded split when one
-  > exists. `--allow-escrow-drift` overrides the abort for multi-config edge
+  > exists. `--allow-split-drift` overrides the abort for multi-config edge
   > cases (logged as a volume event).
   >
   > If you abandon a split and go back to a single password, set
-  > `key_split = false` and run `lcsas --config ... key unsplit --repo R`.
+  > `split = false` and run `lcsas --config ... password unsplit --repo R`.
   > It asks first, clears the recorded split, and logs an `AUDIT` line
   > naming what it cleared (#681). It does not touch any card.
 
@@ -161,7 +161,7 @@ reconstruct the *old* password, which no longer unlocks the repository — and
 nothing in the cards themselves says so. A share holder cannot tell a current
 card from a void one by looking at it.
 
-`lcsas key split` defaults to checking the password against the repository's
+`lcsas password split` defaults to checking the password against the repository's
 real key files before writing any card, and re-checks the written cards
 round-trip, so it will refuse to split a password that does not unlock the
 repository. But that protects the *moment of splitting* — it cannot reach
@@ -169,11 +169,11 @@ cards already in the field after a later password change.
 
 Procedure after any password change:
 
-1. **Re-split** with the new password: `lcsas --config ... key split --repo R`.
+1. **Re-split** with the new password: `lcsas --config ... password split --repo R`.
    Each card is stamped with `Split on : <date>` and a `Split ID : NNNNN`
    (the SLIP-0039 identifier, shared by all cards of one split, different
    between splits) so you can tell card generations apart in the binder.
-   `key split` will not write into a folder that already holds
+   `password split` will not write into a folder that already holds
    `R-share-*` files: move the old cards into a dated subfolder first, or
    pass `--out` with an empty folder (#683). Cards of two splits never
    combine with each other.
@@ -182,11 +182,11 @@ Procedure after any password change:
    superseded `Split ID` in your estate notes so a stray old card is
    recognisable as void.
 4. **Confirm** the new cards work end-to-end:
-   `lcsas --config ... key verify --repo R --share-file CARD1 --share-file CARD2`
+   `lcsas --config ... password verify --repo R --share-file CARD1 --share-file CARD2`
    (any K). Exit 0 + an `OK:` line means the new split is good.
 
 The annual READINESS drill (`docs/development/recovery/READINESS_CHECKLIST.txt` in the source repository,
-"PASSWORD REDUNDANCY") runs that same `lcsas key verify` so a silent
+"PASSWORD REDUNDANCY") runs that same `lcsas password verify` so a silent
 rotation drift is caught within a year, not at restore time. It is part
 of the [owner schedule](workflows/verify-and-audit.md#owner-schedule).
 
@@ -244,17 +244,17 @@ With love,
 [survivability]
 archive_owner = "Your Full Name"
 archive_description = "Family photos, videos, and documents 2000-2025"
-# NOTE: key_storage_hints is printed VERBATIM on every disc. Write it to point
+# NOTE: password_hints is printed VERBATIM on every disc. Write it to point
 # an heir to the password WITHOUT handing it to a disc thief — name a custodian,
 # not a findable cache. See DISC_CONFIDENTIALITY.md §5.
-key_storage_hints = "Sealed envelope with the family attorney (see my will)"
+password_hints = "Sealed envelope with the family attorney (see my will)"
 technical_contact = "Jane Doe (jane@example.com) or any Linux IT professional"
 
 [defaults]
 # Only if you split the password into share cards (see §2):
-key_split = true       # mark this archive as split — prints share instructions
-key_threshold = 2      # K: share cards needed to reconstruct
-key_shares = 5         # N: share cards produced
+split = true       # mark this archive as split — prints share instructions
+split_threshold = 2      # K: share cards needed to reconstruct
+split_shares = 5         # N: share cards produced
 ```
 
 If only some repositories' passwords are split, leave `[defaults]` alone and
@@ -265,11 +265,11 @@ set there overrides `[defaults]` for that repository only:
 [repos.photos]
 mirror_path = "/mnt/mirror/photos"
 password_file = "/root/keys/photos.key"
-key_split = true       # only this repository's password is split
-key_threshold = 2
-key_shares = 3
+split = true       # only this repository's password is split
+split_threshold = 2
+split_shares = 3
 
-[repos.documents]      # no key_split: an ordinary password
+[repos.documents]      # no split: an ordinary password
 mirror_path = "/mnt/mirror/documents"
 password_file = "/root/keys/documents.key"
 ```
@@ -291,7 +291,7 @@ When a password is split, each disc's `START_HERE.txt` and
   [owner schedule](workflows/verify-and-audit.md#owner-schedule) in
   `docs/workflows/verify-and-audit.md`: it says how often to read discs
   back, when to re-burn, and when to run the test restore, the drill and
-  `lcsas key verify`, with the commands for each.
+  `lcsas password verify`, with the commands for each.
 - [ ] **Know the long-term schedule.** Whoever holds the archive after you
   follows the [long-term schedule](workflows/verify-and-audit.md#long-term-schedule).
   Every disc carries it in `DISC_CARE.txt`, so your heirs can read it
@@ -326,7 +326,7 @@ Why this is acceptable:
 - **Tier 2b is the hedge.** It restores with no LCSAS code at all. The
   steps are in `recovery/docs/RESTORE_STANDARD_TOOLS.txt`.
 - **The silent risk is the share code.** A bug there could write share
-  cards that do not rebuild the password. The yearly `lcsas key verify` in
+  cards that do not rebuild the password. The yearly `lcsas password verify` in
   the [owner schedule](workflows/verify-and-audit.md#owner-schedule) tests
   exactly that: it rebuilds the password from the cards and checks that it
   unlocks the repository.

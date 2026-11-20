@@ -166,7 +166,7 @@ def test_full_restore_byte_identical(tmp_path: Path) -> None:
     res = _run(
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=10,
     )
     assert res.returncode == 0, res.stderr
@@ -205,7 +205,7 @@ def test_wrong_password_fails_cleanly(tmp_path: Path) -> None:
     res = _run(
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=10,
     )
     # NOT SIGSEGV (-11/139) or SIGABRT (-6/134).
@@ -231,7 +231,7 @@ def test_keyshare_combines_split_byte_exact(tmp_path: Path) -> None:
     SLIP-0039 master-secret vectors in ``tests/fixtures/keyshare/
     vectors.json`` cannot be fed to it directly.  We therefore drive it
     the way it is actually used in recovery: split a known password into
-    a 2-of-5 set via ``lcsas key split`` and combine two cards back,
+    a 2-of-5 set via ``lcsas password split`` and combine two cards back,
     asserting the byte-exact password.  This mirrors
     ``test_keyshare_binary_cards.py`` but on the Mach-O combiner — which
     no test executes anywhere today (KEY-06 owns its deeper gates).

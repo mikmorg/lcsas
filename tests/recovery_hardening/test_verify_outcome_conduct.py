@@ -91,7 +91,7 @@ def _run_2521360() -> tuple[list[str], list[int]]:
     """rc9 sweep 1: read resume.sh, ran it, typed the loop inline."""
     commands = [
         *_OPENING,
-        "restore-shell start sh /media/restore.sh --key ~/alpha.key ~/restored latest",
+        "restore-shell start sh /media/restore.sh --password-file ~/alpha.key ~/restored latest",
         "restore-shell expect \".\" 30",
         "sudo umount /media && disc-loader eject",
         f"disc-loader insert {LABEL(5)} && sudo mount /dev/sr0 /media",
@@ -106,7 +106,7 @@ def _run_2521360() -> tuple[list[str], list[int]]:
         "sudo umount /media && disc-loader eject && disc-loader insert "
         f"{LABEL(5)} && sudo mount /dev/sr0 /media",
         f'echo -n "{PW_HEX}" > ~/.alpha.key.hex && restore-shell start sh '
-        "/home/lcsas-blind/lcsas-tools/resume.sh --key ~/.alpha.key.hex",
+        "/home/lcsas-blind/lcsas-tools/resume.sh --password-file ~/.alpha.key.hex",
         'restore-shell expect "error|wrong|password|Insert|restored|complete|progress" 60',
         INLINE_LOOP,
         "ls -la ~/restored/ && du -sh ~/restored/",
@@ -119,7 +119,7 @@ def _run_2623073() -> tuple[list[str], list[int]]:
     """rc9b: saved the loop to /tmp/handle_restore.sh, chmod +x, ran it."""
     commands = [
         *_OPENING,
-        "restore-shell start sh /media/restore.sh --key ~/alpha.key ~/restored latest",
+        "restore-shell start sh /media/restore.sh --password-file ~/alpha.key ~/restored latest",
         "restore-shell expect 'restore complete|newest|Insert|ERROR|error|Failure' 120",
         f"disc-loader eject && disc-loader insert {LABEL(5)}",
         'restore-shell send ""',

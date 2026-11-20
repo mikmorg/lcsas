@@ -86,7 +86,7 @@ def _run(recovery: Path, target_dir: Path, env_extra: dict[str, str],
         **env_extra,
     }
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -167,7 +167,7 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -218,7 +218,7 @@ def test_tier3_snap_args_non_latest(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "abc123snap"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery), "abc123snap"],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -256,7 +256,7 @@ def test_tier3_pack_search_converted_to_mount_args(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -293,7 +293,7 @@ def test_tier3_mount_dirs_appended_when_not_in_pack_search(tmp_path: Path) -> No
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -331,7 +331,7 @@ def test_tier3_pythonpath_set_from_bundled_zstandard(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
@@ -368,7 +368,7 @@ def test_tier3_failure_stderr_replayed(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )

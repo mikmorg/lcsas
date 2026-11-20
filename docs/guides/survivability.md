@@ -17,7 +17,7 @@ Everything in this document is evaluated against that single objective.
 > opposite concern — what a thief who steals a single disc gets, and the
 > password entropy that is the only thing protecting your data — is documented
 > in [DISC_CONFIDENTIALITY.md](../DISC_CONFIDENTIALITY.md). The hint examples
-> below predate that threat model; write `key_storage_hints` to name a
+> below predate that threat model; write `password_hints` to name a
 > custodian, not a findable cache (DISC_CONFIDENTIALITY.md §5).
 
 ---
@@ -46,7 +46,7 @@ meta) written in plain English:
 - Contact info for someone who can help
 
 Requires: new config fields `archive_owner`, `archive_description`,
-`key_storage_hints`, `technical_contact` on `LCSASConfig`.
+`password_hints`, `technical_contact` on `LCSASConfig`.
 
 ### 1.2 No "what is this data" description — P0 ✅ (resolved)
 
@@ -63,7 +63,7 @@ and `volume_info.json`.
 stored on any disc for security"* but never says WHERE the owner
 put it.  Password storage strategy exists only in the owner's head.
 
-**Fix:** Add `key_storage_hints` to config (e.g. "Paper copy in the
+**Fix:** Add `password_hints` to config (e.g. "Paper copy in the
 home safe, USB copy in safe deposit box #1234 at First National Bank").
 Embed in `START_HERE.txt`.
 
@@ -344,7 +344,7 @@ advice.  Included on both data volumes and the meta disc.
 |---|---------|----------|--------|
 | 1.1 | START_HERE.txt on every disc | P0 | ✅ Done |
 | 1.2 | Archive description field | P0 | ✅ Done (config.archive_description) |
-| 1.3 | Password storage hints on disc | P0 | ✅ Done (config.key_storage_hints) |
+| 1.3 | Password storage hints on disc | P0 | ✅ Done (config.password_hints) |
 | 1.4 | "Get a tech person" advice | P1 | ✅ Done (in START_HERE + RESTORE_INSTRUCTIONS) |
 | 1.5 | Password-to-repository mapping (PASSWORD_INFO.txt) | P1 | ✅ Done |
 | 1.6 | Fix placeholder URL | P1 | ✅ Done (removed placeholder) |

@@ -165,7 +165,7 @@ layout) or several.
    does not change the console's settings. The relocated copy does not
    say it again.
 4. **The tools folder** (section "The tools folder", #609). `TOOLS` is
-   `%LOCALAPPDATA%\LCSAS-restore` (or `LCSAS_TOOLS_DIR`). Because the
+   `%LOCALAPPDATA%\lcsas-tools` (or `LCSAS_TOOLS_DIR`). Because the
    folder is deleted at the end, the script uses only a folder that is
    absent, empty, or holds `.lcsas-tools`, the marker it writes there
    first (`:claim_tools`). Any other folder, and a whole drive such as
@@ -710,7 +710,7 @@ owner's #627 decisions):
     one mounted disc holds packs and none holds them all.
   - *Relocation leg — restore.bat at the disc root (the heir's
     double-click)* and *Relocation leg — `recovery\scripts\restore.bat`
-    layout*: the copy into `%LOCALAPPDATA%\LCSAS-restore`, tier 1 run
+    layout*: the copy into `%LOCALAPPDATA%\lcsas-tools`, tier 1 run
     from it, exit 0, a byte-exact tree, no password file and no tools
     folder left, and no "Access is denied." (#611).
   - *Negative case — wrong password fails cleanly* and *Relocated wrong

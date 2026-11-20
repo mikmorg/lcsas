@@ -176,7 +176,7 @@ def test_tier1_missing_multidisc_falls_to_tier3_byte_identical(
         "LCSAS_PACK_CACHE_DIR": "",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=120,
     )
     assert res.returncode == 0, (
@@ -238,7 +238,7 @@ def test_tier3_under_restore_sh_uses_the_pack_cache(tmp_path: Path) -> None:
         "LCSAS_PACK_CACHE_DIR": str(cache),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=120,
     )
     assert res.returncode == 0, (

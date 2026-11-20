@@ -522,7 +522,7 @@ def mismatches(want: ScriptOutcome, got: ScriptOutcome) -> list[str]:
 _SH_ARGS = """\
 target=""
 while [ $# -gt 0 ]; do
-    case "$1" in --target) target="$2"; shift ;; esac
+    case "$1" in --restore-folder) target="$2"; shift ;; esac
     shift
 done
 """
@@ -636,9 +636,9 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
         img.write_bytes(b"\0" * 2048)
         argv = ["--check-disc", str(img), str(recovery)]
     elif case.usage_error:
-        argv = ["--bogus", str(recovery), str(target)]
+        argv = ["--bogus", str(recovery)]
     else:
-        argv = [str(recovery), str(target), "latest"]
+        argv = ["--restore-folder", str(target), str(recovery)]
     # Not a terminal: the overwrite question is then refused, not asked.
     res = subprocess.run(["sh", str(RESTORE_SH), *argv], stdin=subprocess.DEVNULL,
                          capture_output=True, text=True, env=env, timeout=60)
@@ -664,7 +664,7 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
 #: One stub for every program restore.bat runs (lcsas-restore.exe,
 #: rustic-static.exe, lcsas-ecc.exe).  ``--help`` and ``--list-*`` (the
 #: password check, the size of the set) exit 0.  Any other call prints
-#: <name>.say, writes <name>.failures to <--target>\RESTORE_FAILURES.txt
+#: <name>.say, writes <name>.failures to <--restore-folder>\RESTORE_FAILURES.txt
 #: and exits with the number in <name>.rc (files beside the .exe).
 STUB_C = r"""
 #include <stdio.h>
@@ -687,7 +687,7 @@ int main(int argc, char **argv) {
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strncmp(argv[i], "--list-", 7))
             return 0;
-        if (!strcmp(argv[i], "--target") && i + 1 < argc) target = argv[i + 1];
+        if (!strcmp(argv[i], "--restore-folder") && i + 1 < argc) target = argv[i + 1];
     }
     if (!GetModuleFileNameA(NULL, self, MAX_PATH)) return 99;
     dot = strrchr(self, '.');
@@ -815,11 +815,11 @@ def run_restore_bat(case: ScriptCase, work: Path, rig: WineRig) -> ScriptOutcome
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         "LCSAS_TOOLS_DIR": f"C:\\{tools_name}",
         "LCSAS_BACKUP_SET": SET,
-        "LCSAS_PW": PASSWORD,
+        "LCSAS_PASSWORD": PASSWORD,
         "LCSAS_INTERACTIVE": "off",
         "LCSAS_SKIP_SPACE_CHECK": "1",
     }
-    for name in ("LCSAS_PASSWORD_FILE", "LCSAS_PASSWORD", "LCSAS_SHARES_DIR",
+    for name in ("LCSAS_PASSWORD_FILE", "LCSAS_SHARES_DIR",
                  "LCSAS_ANOTHER_SET", "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER",
                  "LCSAS_PACK_CACHE_DIR", "LCSAS_TIER_FALLBACK"):
         env.pop(name, None)

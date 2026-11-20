@@ -61,7 +61,7 @@ def _install_restic_stub(recovery: Path, target: str = HOST_TARGET) -> Path:
 def _run(recovery: Path, target_dir: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
     full_env = {**os.environ, "LCSAS_MOUNT_DIRS": "", **env}
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=full_env, timeout=20,
     )

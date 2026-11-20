@@ -112,7 +112,7 @@ _INVOKE = re.compile(r"\b(?:python3?|py)(?:\.exe)?\s+\S*standalone_restorer\.py"
 _VALUE_FLAGS = {
     "--repo",
     "--password-file",
-    "--target",
+    "--restore-folder",
     "--snapshot",
     "--mount-point",
     "--interactive",
@@ -164,7 +164,7 @@ def _extract_invocations(text: str) -> list[tuple[int, str]]:
 def test_standalone_restorer_invocations_use_real_flags() -> None:
     """Every doc-quoted python_reader.py command must use the
     script's real interface: ``--repo``, ``--password-file`` and
-    ``--target`` are all ``required=True`` and there are NO positional
+    ``--restore-folder`` are all ``required=True`` and there are NO positional
     arguments, so a positional invocation makes argparse error out.
     ``--help``-style mentions are exempt.
     """
@@ -183,7 +183,7 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
             # an heir would copy verbatim.
             if not args or "--help" in args:
                 continue
-            for flag in ("--repo", "--password-file", "--target"):
+            for flag in ("--repo", "--password-file", "--restore-folder"):
                 if flag not in args:
                     problems.append(f"{where}: missing {flag} in: {cmd}")
             idx = 0
@@ -207,7 +207,7 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
 def _meta_build_parser_flags() -> set[str]:
     """Option strings the real ``lcsas meta build`` subparser accepts.
 
-    Root-parser flags (``--config``, ``--db``, ...) are deliberately
+    Root-parser flags (``--config``, ``--catalog``, ...) are deliberately
     NOT included: argparse rejects them after the subcommand, so a doc
     quoting ``lcsas meta build --config ...`` sends the operator to an
     ``unrecognized arguments`` error.
@@ -447,7 +447,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
     parser accepts (UX-02).
 
     This is the gate that kills the phantom-flag class of failure:
-    PASSWORD_INFO.txt shipped ``./restore.sh --target ~/restored`` for a
+    PASSWORD_INFO.txt shipped ``./restore.sh --restore-folder ~/restored`` for a
     long time while restore.sh accepted no such flag, dead-ending the
     heir right after the hardest step (password reconstruction).
     """
@@ -457,7 +457,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
         str(doc.relative_to(REPO_ROOT)): doc.read_text()
         for doc in (
             *_all_docs(),
-            REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py",
+            REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py",
         )
     }
     corpus.update(_rendered_heir_docs(tmp_path))
@@ -480,7 +480,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
                         f"{flag}: restore.sh {cmd}"
                     )
     # Extractor self-check: the corpus is known to contain flagged
-    # restore.sh commands (e.g. PASSWORD_INFO's --target STEP 2); a count
+    # restore.sh commands (e.g. PASSWORD_INFO's --restore-folder STEP 2); a count
     # of zero means the scanner broke, not that the docs are clean.
     assert flagged_commands >= 3, (
         f"extractor self-check: only {flagged_commands} restore.sh "
@@ -575,16 +575,16 @@ def test_lcsas_cli_flags_in_recovery_docs_exist() -> None:
     generalizes the UX-03 ``meta build`` gate to every subcommand).
 
     Red-first catch: PHYSICAL_DISC_VALIDATION.txt quoted
-    ``lcsas burn --media ... --db <catalog>``, but ``--db`` is a
+    ``lcsas burn --media ... --catalog <catalog>``, but ``--catalog`` is a
     root-parser flag that argparse rejects after the subcommand.
     """
     # Walker self-checks against known shapes so a silent breakage of
     # the walker cannot turn the gate into a no-op.
-    assert _lcsas_parser_walk(["burn", "--db", "x"]), (
-        "walker self-check: --db after the burn subcommand must be "
+    assert _lcsas_parser_walk(["burn", "--catalog", "x"]), (
+        "walker self-check: --catalog after the burn subcommand must be "
         "rejected (root flags are invalid post-subcommand)"
     )
-    assert not _lcsas_parser_walk(["--db", "x", "burn", "--media", "BD25"])
+    assert not _lcsas_parser_walk(["--catalog", "x", "burn", "--media", "BD25"])
 
     problems = []
     for doc in _recovery_docs():
@@ -877,7 +877,7 @@ def test_lcsas_commands_in_cli_help_and_messages_exist() -> None:
     real subcommands, with each flag accepted where it stands.
 
     Red-first catches: a failed disc read told owners to run
-    ``lcsas catalog locations <label>`` (no such subcommand); a key split
+    ``lcsas catalog locations <label>`` (no such subcommand); a password split
     warning said ``lcsas migrate``; DISC_CARE.txt, burned on every disc,
     quoted ``lcsas verify --isos`` (no such flag); and two key messages put
     ``--config`` after the subcommand, which argparse rejects.  Docstrings

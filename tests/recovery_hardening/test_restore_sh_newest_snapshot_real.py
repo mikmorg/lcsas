@@ -133,7 +133,7 @@ def test_latest_is_the_newest_data_discs_snapshot(tmp_path: Path, run: str) -> N
     if run == "relocated":
         env["LCSAS_RELOCATED"] = str(recovery.parent)
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
         timeout=180,
     )

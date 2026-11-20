@@ -93,8 +93,8 @@ jobs:
       # builds this same fixture on every PR (make test-integration).
       #
       # Split password (#607): "Work documents" has its password split
-      # 2-of-3 the way an owner does it (key_split in its config, then
-      # `lcsas key split`, which records the split in the catalog), so
+      # 2-of-3 the way an owner does it (split in its config, then
+      # `lcsas password split`, which records the split in the catalog), so
       # every disc's marker says split=2-of-3.  Its three printed cards
       # (invented, new every run) go into the artifact's cards/, and its
       # tree into manifest-other1.json, for the split-cards leg.
@@ -297,7 +297,7 @@ jobs:
       # Same restore, but WITHOUT LCSAS_NO_RELOCATE, so the "Single-drive
       # guard" block runs: it probes the (read-only) ISO, copies the script
       # and this computer's programs into the tools folder,
-      # %LOCALAPPDATA%\LCSAS-restore (#609, #612), re-execs the copy and
+      # %LOCALAPPDATA%\lcsas-tools (#609, #612), re-execs the copy and
       # sets LCSAS_RELOCATED, so tier 1 skips the meta drive while the meta
       # disc is in it (and searches it once a data disc is, #604).  Started
       # with cwd on the disc, like a double-click.  The nested-layout run

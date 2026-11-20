@@ -102,7 +102,7 @@ def test_tier3_failure_captures_and_echoes_stderr(tmp_path: Path) -> None:
     }
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -195,7 +195,7 @@ def test_tier3_success_does_not_emit_failure_label(tmp_path: Path) -> None:
     }
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

@@ -118,7 +118,7 @@ def test_tmpfs_target_warns_and_prompts(tmp_path: Path) -> None:
     master, slave = pty.openpty()
     try:
         proc = subprocess.Popen(
-            ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored")],
+            ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
             stdin=slave,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -157,7 +157,7 @@ def test_tmpfs_target_noninteractive_warns_continues(tmp_path: Path) -> None:
     target = tmp_path / "restored"
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=_env(stubs), timeout=30,
@@ -195,7 +195,7 @@ def test_forbid_env_blocks(tmp_path: Path) -> None:
     env["LCSAS_FORBID_TMPFS_RESTORE_FOLDER"] = "1"
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored")],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=env, timeout=30,
@@ -228,7 +228,7 @@ def test_disk_target_silent(tmp_path: Path) -> None:
     target = tmp_path / "restored"
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=_env(stubs), timeout=30,
@@ -266,7 +266,7 @@ def test_proc_mounts_fallback(tmp_path: Path) -> None:
     env["LCSAS_PROC_MOUNTS"] = str(mounts)
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=env, timeout=30,

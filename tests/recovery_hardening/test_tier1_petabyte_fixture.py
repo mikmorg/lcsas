@@ -110,7 +110,7 @@ def test_repo_with_300_key_files_does_not_crash(tmp_path: Path) -> None:
     res = _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=30,
     )
@@ -166,7 +166,7 @@ def test_repo_with_3000_index_files_does_not_crash(tmp_path: Path) -> None:
     res = _run(
         bin_path,
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=30,
     )
@@ -193,7 +193,7 @@ def test_petabyte_scale_restore_stays_under_rss_budget(tmp_path: Path) -> None:
 
     Pipeline:
       1. gen_fixture.py --stress 1000000 1000 5 → /scratch/lcsas_petabyte/
-      2. /usr/bin/time -v lcsas-restore --repo ... --target ... --password-file ...
+      2. /usr/bin/time -v lcsas-restore --repo ... --restore-folder ... --password-file ...
       3. Parse peak RSS (Maximum resident set size) and wall-clock from
          /usr/bin/time stderr
       4. Assert: rc == 0, RSS < 1.5 GiB, wall < 600 s, file count == 1000
@@ -249,7 +249,7 @@ def test_petabyte_scale_restore_stays_under_rss_budget(tmp_path: Path) -> None:
          str(bin_path),
          "--repo", str(fixture),
          "--password-file", str(pwfile),
-         "--target", str(target)],
+         "--restore-folder", str(target)],
         capture_output=True, text=True, timeout=1800,
     )
 

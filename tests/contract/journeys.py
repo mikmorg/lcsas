@@ -255,7 +255,7 @@ DIFFERENCES: dict[str, Difference] = {
     "folder question": Difference(
         what=("restore.bat asks 'Restore to which folder?' before the "
               "password; restore.sh takes the folder on its command line "
-              "(--target, or the default) and asks nothing"),
+              "(--restore-folder, or the default) and asks nothing"),
         why=("not in #895's list of deliberate differences.  Probably by "
              "design (restore.bat is started by a double-click and has no "
              "command line), but no issue records the decision"),
@@ -751,7 +751,7 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
             untyped=len(typed) - over[0], seconds=time.monotonic() - t0, output=out,
         )
 
-    result = leg(["sh", str(archive.meta / "restore.sh"), "--target", str(target),
+    result = leg(["sh", str(archive.meta / "restore.sh"), "--restore-folder", str(target),
                   *(arg_text(a, archive) for a in journey.args)],
                  journey.typed_for("sh"), journey.quit_at_disc)
     if journey.then is not None and (tools / "resume.sh").is_file():
@@ -868,7 +868,7 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
         )
 
     # One argv entry each (see _Run): inside one string, wine would pass
-    # a '"' to cmd as \", and restore.bat would see \--repo\.
+    # a '"' to cmd as \", and restore.bat would see \--backup-set\.
     result = leg([f"C:\\{name}\\recovery\\scripts\\restore.bat",
                   *(arg_text(a, archive) for a in journey.args)],
                  {"LCSAS_RELOCATED": "D:\\", **journey.env},
@@ -990,17 +990,17 @@ JOURNEYS: tuple[Journey, ...] = (
                                 asked=("newest data disc", "folder", "password"))},
     ),
     Journey(
-        name="--repo with an unknown name",
+        name="--backup-set with an unknown name",
         archive="one set",
-        args=("--repo", UNKNOWN_SET),
+        args=("--backup-set", UNKNOWN_SET),
         typed=(NEWEST,),
         expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
                       says=(r"not among", re.escape(PHOTOS))),
     ),
     Journey(
-        name="--repo picks a set by name",
+        name="--backup-set picks a set by name",
         archive="two sets",
-        args=("--repo", PHOTOS),
+        args=("--backup-set", PHOTOS),
         typed=(NEWEST, Password(PHOTOS), "n"),
         expect=Expect(exit=ScriptExit.OK,
                       asked=("newest data disc", "password", "another set"),
@@ -1015,6 +1015,38 @@ JOURNEYS: tuple[Journey, ...] = (
         args=("--bogus",),
         typed=(),
         expect=Expect(exit=ScriptExit.USAGE, asked=(), says=(r"--bogus",)),
+    ),
+    Journey(
+        name="--repo was renamed (#934)",
+        archive="one set",
+        args=("--repo", PHOTOS),
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"--repo was renamed: use --backup-set",)),
+    ),
+    Journey(
+        name="--target was renamed (#934)",
+        archive="one set",
+        args=("--target", "restored"),
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"--target was renamed: use --restore-folder",)),
+    ),
+    Journey(
+        name="LCSAS_REPO was renamed (#934)",
+        archive="one set",
+        env={"LCSAS_REPO": PHOTOS},
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"LCSAS_REPO was renamed: use LCSAS_BACKUP_SET",)),
+    ),
+    Journey(
+        name="LCSAS_PWFILE was renamed (#934)",
+        archive="one set",
+        env={"LCSAS_PWFILE": "pw.txt"},
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"LCSAS_PWFILE was renamed: use LCSAS_PASSWORD_FILE",)),
     ),
     Journey(
         name="LCSAS_BACKUP_SET with an unknown name",

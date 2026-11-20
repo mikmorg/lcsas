@@ -369,7 +369,7 @@ LCSAS_ANOTHER_SET
 
 LCSAS_TOOLS_DIR
   Default:  unset → $HOME/lcsas-tools; on Windows
-            %LOCALAPPDATA%\LCSAS-restore  (opt-out / default ON)
+            %LOCALAPPDATA%\lcsas-tools  (opt-out / default ON)
   Since:    rc6 (#609)
   Read by:  restore.sh, restore.bat and restore_auto.sh
   What:     The tools folder restore.sh keeps a restore's own files in.

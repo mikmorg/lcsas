@@ -6,9 +6,9 @@ Hardening for #800, #625, #807, #802 and #806.
   ``--check-disc IMAGE`` copied about 130 MB of tools first and left the
   tools folder behind; ``--check-disc`` with a relative image path then
   failed, because the copy starts in ``/``.
-* #625: a relative restore folder (and a relative ``--key FILE``) typed
+* #625: a relative restore folder (and a relative ``--password-file FILE``) typed
   from the META disc landed under ``/`` for the same reason.
-* #807: ``--target DIR`` could not be combined with a snapshot:
+* #807: ``--restore-folder DIR`` could not be combined with a snapshot:
   ``--snapshot ID`` is the way now.
 * #802: with one backup set on the discs, ``--repo NAME`` restored that
   set whatever NAME was.
@@ -41,7 +41,7 @@ from .test_restore_sh_tools_folder import (
 )
 
 # The stub tier 1 of test_restore_sh_tools_folder, and it also checks
-# that the password file it is given can be read (a relative --key FILE
+# that the password file it is given can be read (a relative --password-file FILE
 # read from / could not be).
 STUB = textwrap.dedent("""\
     #!/bin/sh
@@ -51,7 +51,7 @@ STUB = textwrap.dedent("""\
     prev=""
     for a in "$@"; do
         printf 'ARG: %s\\n' "$a"
-        [ "$prev" = "--target" ] && target="$a"
+        [ "$prev" = "--restore-folder" ] && target="$a"
         [ "$prev" = "--password-file" ] && pwfile="$a"
         prev="$a"
     done
@@ -213,19 +213,19 @@ def test_a_relative_target_off_the_meta_disc_lands_under_the_starting_folder(
     real = _workdir(tmp_path)
     link = tmp_path / "start-link"
     link.symlink_to(real)
-    args = ["restored"] if form == "positional" else ["--target", "restored"]
+    args = ["restored"] if form == "positional" else ["--restore-folder", "restored"]
     env = {**_private(tmp_path), "PWD": str(link)}
     res = _run_meta(meta, args, env, link)
     assert res.returncode == 0, res.stderr
     assert "copied recovery binaries to" in res.stderr, "the run must relocate"
-    assert _arg(res.stdout, "--target") == f"{link}/restored"
+    assert _arg(res.stdout, "--restore-folder") == f"{link}/restored"
     assert (real / "restored" / "restored.txt").read_text() == "restored\n"
 
 
 def test_a_relative_key_file_and_snapshot_off_the_meta_disc(
     tmp_path: Path, readonly: Callable[[Path], None],
 ) -> None:
-    """--key FILE relative to the starting folder is read after the
+    """--password-file FILE relative to the starting folder is read after the
     relocation, and --snapshot reaches tier 1 through it (#807)."""
     meta = _meta(tmp_path)
     readonly(meta)
@@ -234,13 +234,13 @@ def test_a_relative_key_file_and_snapshot_off_the_meta_disc(
     env = _private(tmp_path)
     env.pop("LCSAS_PASSWORD")
     res = _run_meta(
-        meta, ["--key", "pw.txt", "--target", "./out", "--snapshot", "a1b2c3d4"],
+        meta, ["--password-file", "pw.txt", "--restore-folder", "./out", "--snapshot", "a1b2c3d4"],
         env, work,
     )
     assert res.returncode == 0, res.stderr
     assert "copied recovery binaries to" in res.stderr, "the run must relocate"
     assert _arg(res.stdout, "--snapshot") == "a1b2c3d4"
-    assert _arg(res.stdout, "--target") == f"{work}/out"
+    assert _arg(res.stdout, "--restore-folder") == f"{work}/out"
     assert (work / "out" / "restored.txt").exists()
 
 
@@ -255,7 +255,7 @@ def test_a_relative_recovery_root_off_the_meta_disc(
                     _private(tmp_path), tmp_path)
     assert res.returncode == 0, res.stderr
     assert "copied recovery binaries to" in res.stderr, "the run must relocate"
-    assert _arg(res.stdout, "--target") == f"{tmp_path}/out"
+    assert _arg(res.stdout, "--restore-folder") == f"{tmp_path}/out"
     assert (tmp_path / "out" / "restored.txt").exists()
 
 
@@ -273,17 +273,17 @@ def _in_place(tmp_path: Path, args: list[str], **extra: str) -> subprocess.Compl
 
 
 @pytest.mark.parametrize("args", [
-    ["--target", "@OUT", "--snapshot", "a1b2c3d4", "@REC"],
+    ["--restore-folder", "@OUT", "--snapshot", "a1b2c3d4", "@REC"],
     ["--snapshot", "a1b2c3d4", "@REC", "@OUT"],
     ["--snapshot", "a1b2c3d4", "@REC", "@OUT", "a1b2c3d4"],
-    ["--target", "@OUT", "--snapshot", "a1b2c3d4", "--", "@REC"],
+    ["--restore-folder", "@OUT", "--snapshot", "a1b2c3d4", "--", "@REC"],
 ])
 def test_snapshot_flag_reaches_tier_1(tmp_path: Path, args: list[str]) -> None:
     out = str(tmp_path / "out")
     res = _in_place(tmp_path, [out if a == "@OUT" else a for a in args])
     assert res.returncode == 0, res.stderr
     assert _arg(res.stdout, "--snapshot") == "a1b2c3d4"
-    assert _arg(res.stdout, "--target") == out
+    assert _arg(res.stdout, "--restore-folder") == out
 
 
 def test_two_different_snapshots_exit_2(tmp_path: Path) -> None:
@@ -296,10 +296,10 @@ def test_two_different_snapshots_exit_2(tmp_path: Path) -> None:
 def test_target_flag_with_a_positional_snapshot_points_at_snapshot_flag(
     tmp_path: Path,
 ) -> None:
-    """The reviewer's `--target DIR latest`: still refused (latest could
+    """The reviewer's `--restore-folder DIR latest`: still refused (latest could
     be a folder), and the message says how to name the snapshot."""
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--target", str(tmp_path / "o"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "o"), "latest"],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
         env=_private(tmp_path),
     )
@@ -317,8 +317,8 @@ def test_snapshot_flag_needs_a_value() -> None:
 
 @pytest.mark.parametrize("shell", ["dash", "bash"])
 @pytest.mark.parametrize("args", [
-    ["--repo"], ["--target"], ["--snapshot", ""], ["--key"],
-    ["--check-disc"], ["--key", "/nonexistent/lcsas-key"],
+    ["--repo"], ["--restore-folder"], ["--snapshot", ""], ["--password-file"],
+    ["--check-disc"], ["--password-file", "/nonexistent/lcsas-key"],
 ])
 def test_a_flag_without_its_value_is_a_usage_error(shell: str,
                                                    args: list[str]) -> None:

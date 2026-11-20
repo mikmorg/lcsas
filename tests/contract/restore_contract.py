@@ -160,7 +160,7 @@ class Faults:
     answers: bytes | None = None
     #: The target is a 1 MiB tmpfs (needs passwordless ``sudo mount``).
     target_full: bool = False
-    #: Leave ``--target`` off the command line.
+    #: Leave ``--restore-folder`` off the command line.
     usage_error: bool = False
     #: Repository files (relative paths) emptied before the judged run:
     #: a folder loses what is in it, a file is removed.
@@ -921,7 +921,7 @@ def _command(reader: str, repo: Path, target: Path, pwfile: Path,
     if snapshot:
         cmd += ["--snapshot", snapshot]
     if not faults.usage_error:
-        cmd += ["--target", str(target)]
+        cmd += ["--restore-folder", str(target)]
     return cmd
 
 

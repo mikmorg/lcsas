@@ -1,17 +1,17 @@
-"""Hardening tests: --target / --key flags on restore.sh [KEY-02].
+"""Hardening tests: --restore-folder / --password-file flags on restore.sh [KEY-02].
 
 The split-key instructions burned onto every disc tell the heir to run
-``sh /mnt/restore.sh --target ~/restored`` and optionally ``--key
+``sh /mnt/restore.sh --restore-folder ~/restored`` and optionally ``--password-file
 repo.key``.  These tests pin that contract:
 
-* ``--target DIR`` sets the restore target (never misparsed as a
+* ``--restore-folder DIR`` sets the restore target (never misparsed as a
   positional RECOVERY_ROOT/SNAPSHOT pair);
-* ``--key FILE`` feeds the password file (skips the Password: prompt)
+* ``--password-file FILE`` feeds the password file (skips the Password: prompt)
   and fails fast on an unreadable path;
 * any unknown ``-*`` flag exits 2 listing the valid flags — the
   silent-misparse class that produced uninterpretable
   snapshot-not-found errors is dead;
-* ``--target DIR`` plus a positional TARGET_DIR is ambiguous → exit 2.
+* ``--restore-folder DIR`` plus a positional TARGET_DIR is ambiguous → exit 2.
 """
 
 from __future__ import annotations
@@ -91,11 +91,11 @@ _BASE_ENV = {
 }
 
 
-# ── --target / --key appear in --help ─────────────────────────────────
+# ── --restore-folder / --password-file appear in --help ─────────────────────────────────
 
 
 def test_target_and_key_flags_in_help() -> None:
-    """``sh restore.sh --help`` output must document --target and --key."""
+    """``sh restore.sh --help`` output must document --restore-folder and --password-file."""
     res = subprocess.run(
         ["sh", str(RESTORE_SH), "--help"],
         capture_output=True, text=True, timeout=10,
@@ -103,26 +103,26 @@ def test_target_and_key_flags_in_help() -> None:
     assert res.returncode == 0, (
         f"--help exited {res.returncode}.\nstderr:\n{res.stderr}"
     )
-    assert "--target" in res.stdout, (
-        f"--help must document the --target flag; got:\n{res.stdout}"
+    assert "--restore-folder" in res.stdout, (
+        f"--help must document the --restore-folder flag; got:\n{res.stdout}"
     )
-    assert "--key" in res.stdout, (
-        f"--help must document the --key flag; got:\n{res.stdout}"
+    assert "--password-file" in res.stdout, (
+        f"--help must document the --password-file flag; got:\n{res.stdout}"
     )
 
 
-# ── --target sets TARGET (and is never a positional misparse) ─────────
+# ── --restore-folder sets TARGET (and is never a positional misparse) ─────────
 
 
 def test_target_flag_sets_target_dir(tmp_path: Path) -> None:
-    """``--target DIR RECOVERY`` passes DIR as the tier-1 --target."""
+    """``--restore-folder DIR RECOVERY`` passes DIR as the tier-1 --restore-folder."""
     recovery = _recovery_fixture(tmp_path)
     target = tmp_path / "restored"
 
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
-            "--target", str(target),
+            "--restore-folder", str(target),
             str(recovery),
         ],
         input="stub-pw\n",
@@ -130,27 +130,27 @@ def test_target_flag_sets_target_dir(tmp_path: Path) -> None:
         env={**os.environ, **_BASE_ENV}, timeout=15,
     )
     assert res.returncode == 0, (
-        f"restore.sh --target failed.\n"
+        f"restore.sh --restore-folder failed.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     args = _stub_args(res.stdout)
-    assert _arg_value(args, "--target") == str(target), (
-        f"--target {target} should reach the binary as --target; got "
-        f"{_arg_value(args, '--target')!r}.  full argv: {args}"
+    assert _arg_value(args, "--restore-folder") == str(target), (
+        f"--restore-folder {target} should reach the binary as --restore-folder; got "
+        f"{_arg_value(args, '--restore-folder')!r}.  full argv: {args}"
     )
-    # The misparse class: a literal './--target' directory was the old
+    # The misparse class: a literal './--restore-folder' directory was the old
     # failure mode.  It must never exist.
-    assert not Path("./--target").exists()
+    assert not Path("./--restore-folder").exists()
     assert _arg_value(args, "--snapshot") == "latest", (
         f"the target dir must not be misparsed as SNAPSHOT_ID; argv: {args}"
     )
 
 
-# ── --key feeds the password file and skips the prompt ───────────────
+# ── --password-file feeds the password file and skips the prompt ───────────────
 
 
 def test_key_flag_skips_password_prompt(tmp_path: Path) -> None:
-    """``--key FILE`` exports LCSAS_PASSWORD_FILE; no Password: prompt fires."""
+    """``--password-file FILE`` exports LCSAS_PASSWORD_FILE; no Password: prompt fires."""
     recovery = _recovery_fixture(tmp_path)
     target = tmp_path / "restored"
     pwfile = tmp_path / "repo.key"
@@ -162,8 +162,8 @@ def test_key_flag_skips_password_prompt(tmp_path: Path) -> None:
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
-            "--target", str(target),
-            "--key", str(pwfile),
+            "--restore-folder", str(target),
+            "--password-file", str(pwfile),
             str(recovery),
         ],
         stdin=subprocess.DEVNULL,  # a prompt would read empty, not hang
@@ -171,32 +171,32 @@ def test_key_flag_skips_password_prompt(tmp_path: Path) -> None:
         env=env, timeout=15,
     )
     assert res.returncode == 0, (
-        f"restore.sh --key failed.\n"
+        f"restore.sh --password-file failed.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     assert "Password:" not in res.stderr, (
-        f"--key must skip the Password: prompt.\nstderr:\n{res.stderr}"
+        f"--password-file must skip the Password: prompt.\nstderr:\n{res.stderr}"
     )
     args = _stub_args(res.stdout)
     assert _arg_value(args, "--password-file") == str(pwfile), (
-        f"--key {pwfile} should reach the binary as --password-file; got "
+        f"--password-file {pwfile} should reach the binary as --password-file; got "
         f"{_arg_value(args, '--password-file')!r}.  full argv: {args}"
     )
-    assert _arg_value(args, "--target") == str(target)
+    assert _arg_value(args, "--restore-folder") == str(target)
 
 
-# ── --key with an unreadable path fails fast ──────────────────────────
+# ── --password-file with an unreadable path fails fast ──────────────────────────
 
 
 def test_key_flag_unreadable_path_exits_2(tmp_path: Path) -> None:
-    """``--key /nonexistent`` → rc 2, message names the path, no prompts."""
+    """``--password-file /nonexistent`` → rc 2, message names the path, no prompts."""
     recovery = _recovery_fixture(tmp_path)
     missing = tmp_path / "no-such.key"
 
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
-            "--key", str(missing),
+            "--password-file", str(missing),
             str(recovery), str(tmp_path / "restored"),
         ],
         stdin=subprocess.DEVNULL,
@@ -204,7 +204,7 @@ def test_key_flag_unreadable_path_exits_2(tmp_path: Path) -> None:
         env={**os.environ, **_BASE_ENV}, timeout=10,
     )
     assert res.returncode == 2, (
-        f"--key with unreadable path should exit 2; got {res.returncode}.\n"
+        f"--password-file with unreadable path should exit 2; got {res.returncode}.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     assert str(missing) in res.stderr, (
@@ -236,7 +236,7 @@ def test_unknown_flag_exits_2_listing_valid_flags(tmp_path: Path) -> None:
     assert "--bogus" in res.stderr, (
         f"error must name the offending flag.\nstderr:\n{res.stderr}"
     )
-    for known in ("--repo", "--target", "--key", "--version", "--help"):
+    for known in ("--repo", "--restore-folder", "--password-file", "--version", "--help"):
         assert known in res.stderr, (
             f"error must list valid flag {known}.\nstderr:\n{res.stderr}"
         )
@@ -248,17 +248,17 @@ def test_unknown_flag_exits_2_listing_valid_flags(tmp_path: Path) -> None:
     assert not Path("./--bogus").exists()
 
 
-# ── --target + positional TARGET_DIR is ambiguous ─────────────────────
+# ── --restore-folder + positional TARGET_DIR is ambiguous ─────────────────────
 
 
 def test_target_flag_plus_positional_target_exits_2(tmp_path: Path) -> None:
-    """``--target X RECOVERY Y`` → rc 2 ('give the target once')."""
+    """``--restore-folder X RECOVERY Y`` → rc 2 ('give the target once')."""
     recovery = _recovery_fixture(tmp_path)
 
     res = subprocess.run(
         [
             "sh", str(RESTORE_SH),
-            "--target", str(tmp_path / "a"),
+            "--restore-folder", str(tmp_path / "a"),
             str(recovery), str(tmp_path / "b"),
         ],
         stdin=subprocess.DEVNULL,
@@ -266,7 +266,7 @@ def test_target_flag_plus_positional_target_exits_2(tmp_path: Path) -> None:
         env={**os.environ, **_BASE_ENV}, timeout=10,
     )
     assert res.returncode == 2, (
-        f"--target plus positional TARGET_DIR should exit 2; got "
+        f"--restore-folder plus positional TARGET_DIR should exit 2; got "
         f"{res.returncode}.\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     assert "give the target once" in res.stderr, (
@@ -298,35 +298,35 @@ def test_double_dash_ends_flag_parsing(tmp_path: Path) -> None:
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     args = _stub_args(res.stdout)
-    assert _arg_value(args, "--target") == str(target), (
+    assert _arg_value(args, "--restore-folder") == str(target), (
         f"positional TARGET after -- should reach the binary; argv: {args}"
     )
 
 
-# ── --target / --key with no argument exit non-zero ───────────────────
+# ── --restore-folder / --password-file with no argument exit non-zero ───────────────────
 
 
 def test_target_flag_missing_arg_exits_nonzero() -> None:
-    """``sh restore.sh --target`` with no DIR following exits non-zero."""
+    """``sh restore.sh --restore-folder`` with no DIR following exits non-zero."""
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--target"],
+        ["sh", str(RESTORE_SH), "--restore-folder"],
         capture_output=True, text=True,
         env={**os.environ, "LCSAS_NO_RELOCATE": "1"}, timeout=10,
     )
     assert res.returncode != 0, (
-        f"restore.sh --target (no argument) should exit non-zero; got 0.\n"
+        f"restore.sh --restore-folder (no argument) should exit non-zero; got 0.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
 
 
 def test_key_flag_missing_arg_exits_nonzero() -> None:
-    """``sh restore.sh --key`` with no FILE following exits non-zero."""
+    """``sh restore.sh --password-file`` with no FILE following exits non-zero."""
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--key"],
+        ["sh", str(RESTORE_SH), "--password-file"],
         capture_output=True, text=True,
         env={**os.environ, "LCSAS_NO_RELOCATE": "1"}, timeout=10,
     )
     assert res.returncode != 0, (
-        f"restore.sh --key (no argument) should exit non-zero; got 0.\n"
+        f"restore.sh --password-file (no argument) should exit non-zero; got 0.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )

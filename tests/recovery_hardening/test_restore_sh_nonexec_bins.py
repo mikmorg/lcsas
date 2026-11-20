@@ -69,7 +69,7 @@ def test_no_runnable_copy_says_the_disc_is_fine(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)],
         input="", capture_output=True, text=True, env=env, timeout=30,
     )
     assert res.returncode == ScriptExit.NO_RECOVERY_BIN, res.stderr
@@ -95,7 +95,7 @@ def test_tier1_present_but_not_runnable_is_named(tmp_path: Path) -> None:
         "LCSAS_SKIP_SPACE_CHECK": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)],
         input="pw\n", capture_output=True, text=True, env=env, timeout=30,
     )
     assert "present but this computer will not run it" in res.stderr, res.stderr
@@ -126,7 +126,7 @@ def test_unexecutable_bins_trigger_relocation_and_run(tmp_path: Path) -> None:
     env.pop("LCSAS_NO_RELOCATE", None)
     env.pop("LCSAS_META_DISC", None)
     res = subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "out")],
         input="pw\n", capture_output=True, text=True, env=env, timeout=60,
     )
     # Where it lands depends on the host: a TMPDIR on the same filesystem
@@ -188,7 +188,7 @@ def test_too_small_candidate_is_skipped(tmp_path: Path) -> None:
                   "LCSAS_TOOLS_DIR"):
             env.pop(k, None)
         res = subprocess.run(
-            ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+            ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "out")],
             input="pw\n", capture_output=True, text=True, env=env, timeout=60,
         )
         assert f"{small} has 1 KB free" in res.stderr, res.stderr

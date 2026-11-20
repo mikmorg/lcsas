@@ -38,7 +38,7 @@ can reference it via foreign key.
 - `--config` pointing at a valid LCSAS config (the command refuses to run
   without it — the config check at the top of `cmd_location()`,
   `src/lcsas/cli/commands/location.py`).
-- Writable catalog at `config.db_path` (or `--db` override).
+- Writable catalog at `config.db_path` (or `--catalog` override).
 
 **Steps:**
 1. Argparse defines the `location add <name> [--description …]` subcommand

@@ -68,7 +68,7 @@ def _run_pipe(recovery: Path, target: Path, env: dict[str, str],
               stdin_text: str) -> subprocess.CompletedProcess[str]:
     """Run with stdin as a pipe (NOT a tty)."""
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=30,
         input=stdin_text,
     )
@@ -84,7 +84,7 @@ def _run_pty(recovery: Path, target: Path, env: dict[str, str],
 
     master, slave = pty.openpty()
     proc = subprocess.Popen(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=slave, stdout=slave, stderr=slave, env=env,
         close_fds=True,
     )

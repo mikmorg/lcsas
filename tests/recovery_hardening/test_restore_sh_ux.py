@@ -107,7 +107,7 @@ def test_hard_error_when_no_data_discs_discovered(tmp_path: Path) -> None:
 
     full_env = {**os.environ, "LCSAS_MOUNT_DIRS": ""}
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=full_env, timeout=15,
         # Password is still prompted before the discovery gate fires;
         # feed a stub so the read doesn't EOF and confuse the test.
@@ -139,7 +139,7 @@ def test_lcsas_allow_no_pack_search_bypasses_check(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=full_env, timeout=15,
         input="stub-pw\n",
     )
@@ -252,7 +252,7 @@ def test_meta_disc_set_bypasses_hard_error(tmp_path: Path) -> None:
         "LCSAS_RELOCATED": str(recovery),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=full_env, timeout=15,
         input="stub-pw\n",
     )
@@ -280,7 +280,7 @@ def test_numbered_repo_prompt_accepts_number(tmp_path: Path) -> None:
     full_env = {**os.environ, "LCSAS_MOUNT_DIRS": ""}
     # Feed the menu number, then a stub password.
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=full_env, timeout=15,
         input="1\nstub-pw\n",
     )
@@ -314,7 +314,7 @@ def test_interactive_bad_name_exits_1(tmp_path: Path) -> None:
 
     full_env = {**os.environ, "LCSAS_MOUNT_DIRS": ""}
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=full_env, timeout=15,
         input="nonexistent_repo\nstub-pw\n",
     )
@@ -388,7 +388,7 @@ def test_auto_recovery_from_meta_toplevel_one_arg(tmp_path: Path) -> None:
         "LCSAS_MOUNT_DIRS": "",
     }
     res = subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(target)],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(target)],
         capture_output=True, text=True, env=env, timeout=15,
         input="stub-pw\n",
     )
@@ -464,7 +464,7 @@ def test_pack_search_skips_meta_disc_path(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         capture_output=True, text=True, env=env, timeout=15,
         input="stub-pw\n",
     )
@@ -494,7 +494,7 @@ def test_pack_search_uses_the_meta_mount_point_once_the_disc_is_out(
         "LCSAS_MOUNT_DIRS": str(mounts_root),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         capture_output=True, text=True, env=env, timeout=15, input="stub-pw\n",
     )
     args = _stub_args(res.stdout)
@@ -561,7 +561,7 @@ def test_pack_search_repo_data_subdir(tmp_path: Path) -> None:
         "LCSAS_MOUNT_DIRS": str(mounts_root),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         capture_output=True, text=True, env=env, timeout=15,
         input="stub-pw\n",
     )

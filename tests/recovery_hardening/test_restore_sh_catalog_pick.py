@@ -88,7 +88,7 @@ def _run(
     for var in ("LCSAS_BACKUP_SET", "LCSAS_PASSWORD_FILE", "LCSAS_PACK_CACHE_DIR"):
         env.pop(var, None)
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub\n", capture_output=True, text=True, env=env, timeout=30,
     )
     args = [ln.removeprefix("ARG: ") for ln in res.stdout.splitlines() if ln.startswith("ARG: ")]

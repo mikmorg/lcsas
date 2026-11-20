@@ -58,7 +58,7 @@ Why this is acceptable:
 - **Tier 2b is the hedge.** It restores with no LCSAS code at all. The steps
   are in [`recovery/docs/RESTORE_STANDARD_TOOLS.txt`](recovery/docs/RESTORE_STANDARD_TOOLS.txt).
 - **The silent risk is the share code.** A bug there could write share cards
-  that do not rebuild the password. The yearly `lcsas key verify` in the
+  that do not rebuild the password. The yearly `lcsas password verify` in the
   [owner schedule](docs/workflows/verify-and-audit.md#owner-schedule) tests
   exactly that: it rebuilds the password from the cards and checks that it
   unlocks the repository.
@@ -107,7 +107,7 @@ Both repositories write to 100 GB M-Discs. Each burn cycle produces two discs of
 pip install -e .
 
 # Initialize the master catalog
-lcsas init --db-path /var/lib/lcsas/archive.db
+lcsas init --catalog-path /var/lib/lcsas/catalog.db
 ```
 
 ### 2. Create Password Files
@@ -162,7 +162,7 @@ Create `/etc/lcsas/config.toml`:
 [paths]
 mirror_base = "/mnt/mirror"
 staging     = "/mnt/staging"
-database    = "/var/lib/lcsas/archive.db"
+catalog     = "/var/lib/lcsas/catalog.db"
 
 [defaults]
 media_type         = "MDISC100"
@@ -833,7 +833,7 @@ resolve somewhere predictable. Override with `LCSAS_IMAGE`, `LCSAS_ROOT`,
 `LCSAS_CONFIG`, `LCSAS_SRC` (rustic-c source mounts, read-only) and
 `LCSAS_EXTRA` (lcsas restore targets).
 
-`[paths].database` may point anywhere under `LCSAS_ROOT`; every command
+`[paths].catalog` may point anywhere under `LCSAS_ROOT`; every command
 honours it, and `LCSAS_CONFIG` is injected automatically.
 
 The image bakes in `src/`, so rebuild it after changing LCSAS source.

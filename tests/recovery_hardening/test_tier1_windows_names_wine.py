@@ -183,7 +183,7 @@ def restored(tmp_path_factory):
     try:
         res = subprocess.run(
             ["wine", str(exe), "--repo", _win(repo),
-             "--password-file", _win(pw), "--target", _win(target),
+             "--password-file", _win(pw), "--restore-folder", _win(target),
              "--interactive", "off"],
             env={**env, "LCSAS_PACK_CACHE_DIR": _win(cache)},
             capture_output=True, timeout=600,

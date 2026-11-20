@@ -129,7 +129,7 @@ def _restore(bin_path: Path, repo: Path, target: Path, pwfile: Path,
     return subprocess.run(
         [str(bin_path),
          "--repo", str(repo),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--password-file", str(pwfile)],
         capture_output=True, text=True, timeout=300,
         env=full_env, preexec_fn=preexec,

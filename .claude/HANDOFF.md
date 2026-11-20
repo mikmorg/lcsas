@@ -71,7 +71,7 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 3. **Don't land restore-path changes.** The restore path is everything
    that ends up on a disc or a printed card: all of `recovery/`,
    `src/lcsas/restore`, `src/lcsas/meta`, `src/lcsas/staging`, and the
-   card text (`lcsas estate card`, `lcsas key card`, `lcsas key split`,
+   card text (`lcsas estate card`, `lcsas password card`, `lcsas password split`,
    and the `docs/PASSWORD_CARD.txt` template).
    A change there needs a haiku blind-restore run, and `recovery/src` also
    needs its committed binaries rebuilt (the bin-parity recipe). Only the
@@ -104,7 +104,7 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 - **Drill discs hold test data only.** No real data is burned until
   v1.0.0 final (owner, 2026-10-30). Burn drill discs from a test corpus
   with nothing personal in it, using a separate drill config and catalog
-  (`lcsas --config <drill.toml> --db <drill.db> …`), never the real ones,
+  (`lcsas --config <drill.toml> --catalog <drill.db> …`), never the real ones,
   so no drill volume lands in the master catalog.
 - **#473 (physical disc):** follow `recovery/docs/PHYSICAL_DISC_VALIDATION.txt`,
   steps 1–5:
@@ -168,7 +168,7 @@ from the catalog, use `burn-iso-portable.md`.
 
 Things the docs state, but that cost real time to learn:
 
-- `--config`, `--db`, `--lock-timeout` and `--verbose` are **global**:
+- `--config`, `--catalog`, `--lock-timeout` and `--verbose` are **global**:
   they go *before* the subcommand (`lcsas --config X burn …`).
 - **Media type:** use the real one (BD25, BD50, BDXL100, MDISC25/50/100).
   M-DISC and BD-R of the same size are separate types. TEST_TINY is for
@@ -184,13 +184,13 @@ Things the docs state, but that cost real time to learn:
 - **`optical_device`** isn't checked by `config check`. A typo shows up
   only at burn time.
 - **Passwords and shares:**
-  - `lcsas key split` splits a password into SLIP-0039 share cards; run
-    `lcsas key verify` each year.
-  - `key_storage_hints` is printed **verbatim on every disc**, so it says
+  - `lcsas password split` splits a password into SLIP-0039 share cards; run
+    `lcsas password verify` each year.
+  - `password_hints` is printed **verbatim on every disc**, so it says
     who keeps the password, never the password itself (ESTATE_PLANNING.md).
   - Share cards and passwords never go into the repo or into an issue.
 - **Cards:** `lcsas estate card` prints the estate card (the whole archive,
-  no secret, kept with the discs); `lcsas key card` prints a password card
+  no secret, kept with the discs); `lcsas password card` prints a password card
   for a password that is not split (never kept with the discs).
 
 ### The owner's meta disc (after final)

@@ -101,7 +101,7 @@ def test_fat32_target_completes_with_symlink_warning(tmp_path: Path) -> None:
         res = subprocess.run(
             [str(bin_path),
              "--repo", str(repo),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--password-file", str(pwfile)],
             capture_output=True, text=True, timeout=120,
         )

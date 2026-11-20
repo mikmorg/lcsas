@@ -163,17 +163,17 @@ MITIGATION (organizational, not technical):
     document, or split into Shamir shares held by several people).
   * IMPLEMENTED (KEY-09): paper-printable "Password Card" shipped as
     docs/PASSWORD_CARD.txt (static fill-in template) plus a generator
-    `lcsas --config lcsas.toml key card --repo R` that renders the card
+    `lcsas --config lcsas.toml password card --repo R` that renders the card
     with a transcription CHECK CODE (first 4 hex of SHA-256(password);
     the password itself is never printed). An owner/heir checks a
-    hand-copied password with `lcsas key card --check FILE --code CODE`
+    hand-copied password with `lcsas password card --check FILE --code CODE`
     (MATCH/MISMATCH). The card is an off-disc artifact by design.
   * IMPLEMENTED (UX-09): whole-archive starting sheet generator
     `lcsas --config lcsas.toml estate card --output card.txt` — one page
     covering owner, repositories, disc count (from the catalog when
     reachable, else fill-in blanks), the K-of-N share scheme when split,
     and the literal first command an heir runs per OS. Complements the
-    per-repository `key card` (which records one password); the estate
+    per-repository `password card` (which records one password); the estate
     card is the heir's entry point and is stored WITH the discs (no
     secret on it).
   * Optionally: support a secondary password, held by someone

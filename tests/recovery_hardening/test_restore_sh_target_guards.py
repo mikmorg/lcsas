@@ -104,7 +104,7 @@ def _run_pipe(recovery: Path, target: Path, env: dict[str, str],
     """Run with stdin as a pipe (NOT a tty).  Goes through
     ``subprocess.run`` so the gate's trace wrapper applies."""
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=30,
         input=stdin_text,
     )
@@ -150,14 +150,14 @@ def _run_pty(recovery: Path, target: Path, env: dict[str, str],
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
         proc = subprocess.Popen(
-            [interp, str(RESTORE_SH), str(recovery), str(target), "latest"],
+            [interp, str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
             stdin=stdin_r, stdout=slave, stderr=slave, env=env,
             close_fds=True, preexec_fn=_make_ctty,
         )
         os.close(stdin_r)
     else:
         proc = subprocess.Popen(
-            [interp, str(RESTORE_SH), str(recovery), str(target), "latest"],
+            [interp, str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
             stdin=slave, stdout=slave, stderr=slave, env=env,
             close_fds=True,
         )

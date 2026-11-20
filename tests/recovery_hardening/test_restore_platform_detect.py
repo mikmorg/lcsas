@@ -82,7 +82,7 @@ def _run(
         "PATH": str(uname_dir) + ":" + os.environ.get("PATH", ""),
     }
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir), str(recovery)],
         input="testpassword\n",
         capture_output=True,
         text=True,
@@ -188,7 +188,7 @@ def test_lcsas_target_overrides_uname(tmp_path: Path) -> None:
         "PATH": str(uname_dir) + ":" + os.environ.get("PATH", ""),
     }
     result = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         input="testpassword\n",
         capture_output=True,
         text=True,

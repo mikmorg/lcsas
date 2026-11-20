@@ -95,7 +95,7 @@ def test_standalone_does_not_crash_when_zstandard_missing(tmp_path: Path) -> Non
          "--info",
          "--repo", str(repo),
          "--password-file", str(pw),
-         "--target", str(target)],
+         "--restore-folder", str(target)],
         capture_output=True, text=True, timeout=30, env=env,
     )
 
@@ -149,7 +149,7 @@ def test_standalone_reports_zstd_dependency_only_on_decompress(
          "--info",
          "--repo", str(repo),
          "--password-file", str(pw),
-         "--target", str(target)],
+         "--restore-folder", str(target)],
         capture_output=True, text=True, timeout=30, env=env,
     )
     combined = res.stdout + res.stderr

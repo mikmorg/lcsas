@@ -48,7 +48,7 @@ SECRET = "not-a-real-password-3141"
 # The stub tier 1: prints its argv and pack cache; exits with the rc in
 # $STUB_ONCE_RC_FILE (then deletes it), else $STUB_RC, else 0.  With
 # $STUB_SLEEP_FLAG it touches that file and sleeps.  On success it
-# writes restored.txt into --target, as a restore would.  restore.sh's
+# writes restored.txt into --restore-folder, as a restore would.  restore.sh's
 # `--help` pre-flight (#223) is answered without touching any of that.
 STUB = textwrap.dedent("""\
     #!/bin/sh
@@ -57,7 +57,7 @@ STUB = textwrap.dedent("""\
     prev=""
     for a in "$@"; do
         printf 'ARG: %s\\n' "$a"
-        [ "$prev" = "--target" ] && target="$a"
+        [ "$prev" = "--restore-folder" ] && target="$a"
         prev="$a"
     done
     printf 'CACHE: %s\\n' "${LCSAS_PACK_CACHE_DIR-<unset>}"
@@ -126,7 +126,7 @@ def _tmpdir(tmp_path: Path) -> Path:
 
 def _run(recovery: Path, target: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
         timeout=30,
     )
@@ -248,7 +248,7 @@ def test_a_folder_with_other_files_is_never_used(tmp_path: Path, run: str) -> No
         meta = tmp_path / "meta"
         _meta_disc(meta, script=True)
         res = subprocess.run(
-            ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
+            ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "out")],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
             env=_env(tmp_path, LCSAS_TOOLS_DIR=str(mine), LCSAS_META_DISC=str(meta)),
         )
@@ -299,7 +299,7 @@ def _interrupt(tmp_path: Path, sig: signal.Signals) -> tuple[int, str, Path]:
     tools = tmp_path / "tools"
     flag = tmp_path / "tier1-started"
     argv, env = _traced(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(recovery)],
         _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_SLEEP_FLAG=str(flag)),
     )
     proc = subprocess.Popen(
@@ -360,7 +360,7 @@ def test_resume_sh_finishes_after_q_with_the_meta_disc_gone(
         LCSAS_MOUNT_DIRS=str(tmp_path / "mounts"), STUB_ONCE_RC_FILE=str(once),
     )
     first = subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(target)],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(target)],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
         timeout=60,
     )
@@ -378,7 +378,7 @@ def test_resume_sh_finishes_after_q_with_the_meta_disc_gone(
     assert second.returncode == 0, second.stdout + second.stderr
     assert (target / "restored.txt").read_text() == "restored\n"
     assert _arg(second.stdout, "--repo") == f"{tools}/metadata/{SET_ID}"
-    assert _arg(second.stdout, "--target") == str(target)
+    assert _arg(second.stdout, "--restore-folder") == str(target)
     assert "Choose a repository" not in second.stderr
     assert not tools.exists(), "the tools folder must go after the resumed success"
 
@@ -458,7 +458,7 @@ def test_read_only_discs_are_merged_and_the_tools_go_after_success(
     tools = tmp_path / "tools"
     target = tmp_path / "restored"
     res = subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(target)],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(target)],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
         env=_env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_META_DISC=str(meta),
                  LCSAS_MOUNT_DIRS=str(media)),
@@ -549,7 +549,7 @@ def test_resume_keeps_the_copy_the_stopped_run_used(tmp_path: Path) -> None:
     env = _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_META_DISC=str(meta),
                LCSAS_MOUNT_DIRS=str(media), STUB_ONCE_RC_FILE=str(once))
     first = subprocess.run(
-        ["sh", str(meta / "restore.sh"), str(tmp_path / "restored")],
+        ["sh", str(meta / "restore.sh"), "--restore-folder", str(tmp_path / "restored")],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=60,
     )
     assert first.returncode == 75, first.stderr
@@ -616,7 +616,7 @@ def test_a_copy_that_did_not_finish_is_made_again(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
     target = tmp_path / "restored"
     env = _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_META_DISC=str(meta))
-    argv = ["sh", str(meta / "restore.sh"), str(target)]
+    argv = ["sh", str(meta / "restore.sh"), "--restore-folder", str(target)]
     try:
         first = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
                                text=True, env=env, timeout=60)

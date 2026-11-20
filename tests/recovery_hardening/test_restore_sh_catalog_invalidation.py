@@ -75,7 +75,7 @@ def test_stale_locator_cache_deleted_when_catalog_newer(tmp_path: Path) -> None:
     rec, cache, loc, env = _make_env(tmp_path, catalog_newer=True)
 
     result = subprocess.run(
-        ["sh", str(RESTORE_SH), str(rec), str(tmp_path / "out"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(rec)],
         capture_output=True, text=True, env=env, timeout=15,
     )
 
@@ -94,7 +94,7 @@ def test_fresh_locator_cache_not_deleted_when_catalog_older(tmp_path: Path) -> N
     rec, cache, loc, env = _make_env(tmp_path, catalog_newer=False)
 
     result = subprocess.run(
-        ["sh", str(RESTORE_SH), str(rec), str(tmp_path / "out"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(rec)],
         capture_output=True, text=True, env=env, timeout=15,
     )
 
@@ -118,7 +118,7 @@ def test_no_locator_cache_no_error(tmp_path: Path) -> None:
     assert not loc.exists()
 
     result = subprocess.run(
-        ["sh", str(RESTORE_SH), str(rec), str(tmp_path / "out"), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "out"), str(rec)],
         capture_output=True, text=True, env=env, timeout=15,
     )
 

@@ -342,14 +342,14 @@ class TestSetsOnMountedDiscs:
 
 # Tier 1 stub: exits with $STUB_RC_<id> (dashes as underscores) for the
 # set named by --repo, after printing $STUB_MSG_<id> to stderr; on
-# success writes restored.txt into --target.
+# success writes restored.txt into --restore-folder.
 TIER1 = textwrap.dedent("""\
     #!/bin/sh
     [ "${1:-}" = "--help" ] && exit 0
     repo="" target="" prev=""
     for a in "$@"; do
         [ "$prev" = "--repo" ] && repo="$a"
-        [ "$prev" = "--target" ] && target="$a"
+        [ "$prev" = "--restore-folder" ] && target="$a"
         prev="$a"
     done
     id="$(basename "$repo" | tr - _)"

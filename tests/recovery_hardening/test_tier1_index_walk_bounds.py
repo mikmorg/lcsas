@@ -69,7 +69,7 @@ def test_odd_index_elements_are_ignored(tmp_path: Path, extra_index: dict) -> No
 
     proc = subprocess.run(
         [str(BINARY), "--repo", str(repo), "--password-file", str(pw),
-         "--target", str(target), "--snapshot", "latest",
+         "--restore-folder", str(target), "--snapshot", "latest",
          "--interactive", "off"],
         capture_output=True, text=True, timeout=120,
     )

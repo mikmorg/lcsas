@@ -75,7 +75,7 @@ ARGS = """\
 target=""; pwfile=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --target) target="$2"; shift ;;
+        --restore-folder) target="$2"; shift ;;
         --password-file) pwfile="$2"; shift ;;
     esac
     shift
@@ -121,7 +121,7 @@ def _run(recovery: Path, tmp_path: Path, stdin: str = "pw\n",
     env.update(extra)
     env = {k: v for k, v in env.items() if v != "<unset>"}
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"),
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery),
          "latest"],
         input=stdin, capture_output=True, text=True, env=env, timeout=60,
     )

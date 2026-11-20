@@ -271,7 +271,7 @@ def test_cache_reduces_swap_count(tmp_path: Path) -> None:
             [
                 str(restore_bin),
                 "--repo", str(repo),
-                "--target", str(target),
+                "--restore-folder", str(target),
                 "--password-file", str(pwfile),
                 "--pack-search", str(disc),
                 "--interactive", "off",
