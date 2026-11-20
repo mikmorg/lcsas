@@ -51,7 +51,7 @@
 #        repair (lcsas-ecc verify's own code for that is 2; #887)
 #   64   no recovery binary available at any tier (issue #225)
 #   65   the reader stopped at a question this script asked
-#   74   the disk filled up; free some space, then carry on with resume.sh
+#   74   the disk is full; free some space, then carry on with resume.sh
 #   75   the reader typed q at the disc prompt of tier 1 (#615) or tier 3
 #   77   a repository key rejected the password (any tier, #805), or the
 #        reader stopped at the password or share card prompt

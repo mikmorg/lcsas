@@ -393,13 +393,17 @@ layout) or several.
     lines show only while the META disc is still in its drive. On
     Windows the box always waits for ENTER. Exit codes:
     - 0: `:restore_done`.
+    - 4 (finished, some items not restored): `:restore_partial`, then
+      the questions of a finished set and exit 4; with a "pack not
+      found" row, `:restore_discs_missing`, and the tools folder stays.
     - 77 (wrong password): the "could not decrypt the repository" box,
       then exit 77 from top level (`:wrong_password`; an `exit /b`
       inside a bracketed block does not reach `cmd /c`, #384).
-    - 75 (`q` at the disc box) and any other exit for a set with no
-      `data\`: `:tier1_stopped` prints `The restore stopped before it
-      finished (code N).`, where the files are, and how to carry on,
-      then exits with that code. The tools folder stays.
+    - 75 (`q` at the disc box), 74 (the disk is full) and any other
+      exit for a set with no `data\`: `:tier1_stopped` prints `The
+      restore stopped before it finished (code N).`, where the files
+      are, and how to carry on, then exits with that code (tier 1's 2
+      as 1). The tools folder stays.
     - any other exit for a set with its own `data\`: tier 2.
 15. **Another set** (section "The restore has finished"). After
     `Restore complete.  Files restored to: <folder>`, an archive with
@@ -476,7 +480,13 @@ passed too, and searched once the META disc is out.
 |------|---------|
 | 0  | The restore finished: every backup set the reader chose. |
 | 1  | A failure: unsupported processor, a tools folder that is not the restore's own, no backup set found, `LCSAS_REPO` matches nothing, the target cannot be made, or no tier works. The message says which. |
+| 2  | `--snapshot` without an ID, or with something that is not one. |
+| 3  | `--check-disc` only: no image, no `lcsas-ecc.exe`, or a read error. |
+| 4  | The restore finished, but some items could not be restored: they are listed in `RESTORE_FAILURES.txt` in the restore folder. |
+| 5  | `--check-disc` only: the image has no ECC data (no RS03 layer). |
+| 64 | `lcsas-restore.exe` is missing, so a set with no `data\` cannot be read from the discs. |
 | 65 | The reader typed Q at a question `restore.bat` asked (the newest data disc, the backup set, the folder), or did not type YES at the non-empty-folder warning. |
+| 74 | The disk is full. Free some space, then carry on with the launcher. |
 | 75 | The reader typed q at tier 1's disc box. Carry on with the launcher. |
 | 77 | Wrong password, or Q (or three empty answers) at the password or a share card. |
 | other | The code tier 1 stopped with, for a set read from the discs. |
@@ -651,7 +661,7 @@ Windows workflow inherits. Source refs in parentheses.
 
 ## Where restore.bat and restore.sh differ
 
-Both scripts agree on the exit codes 0/64/65/75/77, the newest-disc
+Both scripts agree on the exit codes 0/4/5/64/65/74/75/77, the newest-disc
 merge rule (also from a writable META copy), the catalog copy passed as
 `--catalog`, the marker names and the "carry on with the same snapshot"
 rule. Since rc10 (#627) they also agree on a wrong `LCSAS_PASSWORD` /
