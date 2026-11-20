@@ -3560,7 +3560,7 @@ offer_another_set() {
     fi
     printf '[restore.sh] starting again for the next backup set\n' >&2
     cd / 2>/dev/null || true
-    exec sh "$SCRIPT" "$RECOVERY" "$_os_dir" latest
+    exec sh "$SCRIPT" --restore-folder "$_os_dir" --snapshot latest -- "$RECOVERY"
 }
 
 # restore_done: the set is restored.  resume.sh would carry on a
