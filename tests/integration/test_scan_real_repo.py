@@ -50,7 +50,7 @@ class _World:
         self.src = root / "source"
         self.mirror = root / "mirror" / _REPO_NAME
         self.password_file = root / "family.key"
-        self.db = root / "archive.db"
+        self.db = root / "catalog.db"
         self.config = root / "config.toml"
         self.rng = random.Random(517)
         self._backups = 0
@@ -62,7 +62,7 @@ class _World:
         self.config.write_text(
             f'[paths]\nmirror_base = "{root / "mirror"}"\n'
             f'staging = "{root / "staging"}"\n'
-            f'database = "{self.db}"\n'
+            f'catalog = "{self.db}"\n'
             "\n[defaults]\n"
             'media_type = "TEST_TINY"\n'
             "ecc_redundancy_pct = 0\n"

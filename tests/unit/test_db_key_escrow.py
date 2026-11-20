@@ -106,7 +106,7 @@ def test_drift_config_true_no_record(conn):
         config_threshold=2, config_shares=5,
     )
     assert msg is not None
-    assert "key_split=true" in msg and "no split" in msg
+    assert "split=true" in msg and "no split" in msg
 
 
 def test_drift_kn_mismatch(conn):
@@ -126,7 +126,7 @@ def test_drift_record_but_config_false(conn):
         config_threshold=2, config_shares=5,
     )
     assert msg is not None
-    assert "key_split=false" in msg and "3-of-5" in msg
+    assert "split=false" in msg and "3-of-5" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ def test_drift_honours_legacy_name_keyed_record(uuid_conn):
         config_threshold=2, config_shares=5,
     )
     assert msg is not None
-    assert "key_split=false" in msg and "3-of-5" in msg
+    assert "split=false" in msg and "3-of-5" in msg
 
 
 def test_drift_names_repository_by_name_not_uuid(uuid_conn):
@@ -199,7 +199,7 @@ def test_drift_names_repository_by_name_not_uuid(uuid_conn):
     )
     assert msg is not None
     assert msg.startswith("password split drift for repository 'family':")
-    assert "'lcsas --config ... key split --repo family'" in msg
+    assert "'lcsas --config ... password split --repo family'" in msg
     assert FAMILY_ID not in msg
 
     record_split(uuid_conn, FAMILY_ID, 3, 5, 1)

@@ -27,7 +27,7 @@ _ID_ONLY = {
     ("lcsas session abort", "ref"): "burn sessions have no name ('latest' works)",
     ("lcsas restore plan", "snapshot_id"): "Rustic snapshots have no name",
     ("lcsas restore exec", "snapshot_id"): "Rustic snapshots have no name",
-    ("lcsas restore standalone", "--snapshot"): "Rustic snapshots have no name",
+    ("lcsas restore from-disc", "--snapshot"): "Rustic snapshots have no name",
     ("lcsas catalog validate", "--content"): "not an identifier: checks pack IDs",
 }
 
@@ -69,8 +69,8 @@ def test_the_id_only_list_has_no_stale_entries() -> None:
 
 def _catalog(tmp_path: Path) -> tuple[Path, str]:
     db = tmp_path / "test.db"
-    assert main(["init", "--db-path", str(db)]) == 0
-    assert main(["--db", str(db), "repo", "add", "Family", "/mnt/family"]) == 0
+    assert main(["init", "--catalog-path", str(db)]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "Family", "/mnt/family"]) == 0
     conn = get_connection(db)
     repo_id = next(r.repo_id for r in list_repos(conn) if r.name == "Family")
     conn.close()
@@ -88,17 +88,17 @@ def _status(db: Path, repo_id: str) -> str:
 
 def test_repo_retire_and_activate_take_the_name(tmp_path: Path) -> None:
     db, repo_id = _catalog(tmp_path)
-    assert main(["--db", str(db), "repo", "retire", "Family"]) == 0
+    assert main(["--catalog", str(db), "repo", "retire", "Family"]) == 0
     assert _status(db, repo_id) == "retired"
-    assert main(["--db", str(db), "repo", "activate", "family"]) == 0  # any case
+    assert main(["--catalog", str(db), "repo", "activate", "family"]) == 0  # any case
     assert _status(db, repo_id) == "active"
-    assert main(["--db", str(db), "repo", "retire", repo_id]) == 0  # IDs still work
-    assert main(["--db", str(db), "repo", "retire", "Nobody"]) == 1
+    assert main(["--catalog", str(db), "repo", "retire", repo_id]) == 0  # IDs still work
+    assert main(["--catalog", str(db), "repo", "retire", "Nobody"]) == 1
 
 
 def test_repo_remove_takes_the_name(tmp_path: Path, capsys) -> None:
     db, _ = _catalog(tmp_path)
-    assert main(["--db", str(db), "repo", "remove", "Family"]) == 0
+    assert main(["--catalog", str(db), "repo", "remove", "Family"]) == 0
     assert "Removed repository 'Family'" in capsys.readouterr().out
     conn = get_connection(db)
     assert list_repos(conn) == []
@@ -107,9 +107,9 @@ def test_repo_remove_takes_the_name(tmp_path: Path, capsys) -> None:
 
 def test_ambiguous_name_asks_for_the_id(tmp_path: Path, capsys) -> None:
     db, _ = _catalog(tmp_path)
-    assert main(["--db", str(db), "repo", "add", "family", "/mnt/other"]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "family", "/mnt/other"]) == 0
     # "FAMILY" matches both case-insensitively.
-    assert main(["--db", str(db), "repo", "retire", "FAMILY"]) == 1
+    assert main(["--catalog", str(db), "repo", "retire", "FAMILY"]) == 1
     assert "matches 2 repositories" in capsys.readouterr().out
 
 
@@ -125,8 +125,8 @@ def test_consolidate_takes_labels(tmp_path: Path, capsys) -> None:
     conn.commit()
     conn.close()
     # A label resolves; an unknown label is a clean error, not a traceback.
-    rc_label = main(["--db", str(db), "consolidate", "LCSAS_BD25_2026_0001"])
-    rc_id = main(["--db", str(db), "consolidate", str(vol.volume_id)])
+    rc_label = main(["--catalog", str(db), "consolidate", "LCSAS_BD25_2026_0001"])
+    rc_id = main(["--catalog", str(db), "consolidate", str(vol.volume_id)])
     assert rc_label == rc_id
-    assert main(["--db", str(db), "consolidate", "LCSAS_NOPE_0001"]) == 1
+    assert main(["--catalog", str(db), "consolidate", "LCSAS_NOPE_0001"]) == 1
     assert "Volume 'LCSAS_NOPE_0001' not found" in capsys.readouterr().out

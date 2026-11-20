@@ -188,7 +188,7 @@ class TestFastAesInStandalone:
         self, standalone_text, tmp_path, monkeypatch,
     ):
         """Exec the generated text and drive the selector inside it."""
-        script = tmp_path / "standalone_restorer.py"
+        script = tmp_path / "python_reader.py"
         script.write_text(standalone_text)
         ns = runpy.run_path(str(script), run_name="lcsas_standalone_probe")
         monkeypatch.setenv("LCSAS_TIER3_AES", "pure")

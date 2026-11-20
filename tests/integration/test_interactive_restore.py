@@ -262,7 +262,7 @@ class TestInteractiveRestore:
         # work folder (LCSAS_TOOLS_DIR).
         self.mount_dir = tmp_path / "mnt"
         self.mount_dir.mkdir()
-        self.tools_dir = tmp_path / "lcsas-restore-tools"
+        self.tools_dir = tmp_path / "lcsas-tools"
 
         self.all_isos = sorted(self.iso_dir.glob("*.iso"))
 

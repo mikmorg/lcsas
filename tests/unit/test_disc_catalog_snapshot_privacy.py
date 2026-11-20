@@ -46,7 +46,7 @@ MARKERS = (b"zz-private-folder-733", b"zz-private-tag-733",
 
 def _master(tmp_path: Path, mirror: Path) -> Path:
     """A WAL master catalog with two snapshots carrying private values."""
-    db = tmp_path / "master" / "archive.db"
+    db = tmp_path / "master" / "catalog.db"
     db.parent.mkdir()
     conn = get_connection(db)
     # Debian/Ubuntu build SQLite with secure_delete on; most others do not.
@@ -173,7 +173,7 @@ def test_rebuild_from_blanked_disc_then_scan_refills(tmp_path: Path) -> None:
     cfg.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\n'
-        f'database = "{rebuilt}"\n'
+        f'catalog = "{rebuilt}"\n'
         "\n[defaults]\n"
         'media_type = "TEST_TINY"\n'
         "ecc_redundancy_pct = 0\n"
@@ -193,7 +193,7 @@ def test_rebuild_from_blanked_disc_then_scan_refills(tmp_path: Path) -> None:
     with patch("lcsas.rustic.wrapper.SubprocessRusticRunner") as runner_cls, \
             patch("lcsas.utils.subprocess.check_binary_version"):
         runner_cls.return_value.snapshots.return_value = snaps
-        assert main(["--config", str(cfg), "--db", str(rebuilt), "scan"]) == 0
+        assert main(["--config", str(cfg), "--catalog", str(rebuilt), "scan"]) == 0
 
     conn = get_connection(rebuilt)
     try:

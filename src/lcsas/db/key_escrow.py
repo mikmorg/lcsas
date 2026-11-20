@@ -193,7 +193,7 @@ def get_split_for_repo(
 
     Looks under *repo_id* first.  If nothing is there, looks under the
     repository's name: builds before #571 recorded the split under the
-    name given to ``key split --repo``.  Every reader of a split uses this,
+    name given to ``password split --repo``.  Every reader of a split uses this,
     never :func:`get_split` with a bare ID.
     """
     record = get_split(conn, repo_id)
@@ -269,7 +269,7 @@ def detect_escrow_drift(
                     f"split=true {threshold}-of-{shares} but "
                     f"the catalog records no split for this repository. Discs would "
                     f"print instructions to gather share cards that were never "
-                    f"made. Re-run 'lcsas --config ... key split --repo "
+                    f"made. Re-run 'lcsas --config ... password split --repo "
                     f"{name}' or set split=false under {where}."
                 )
             if (record.threshold, record.shares) != (threshold, shares):
@@ -291,7 +291,7 @@ def detect_escrow_drift(
                     f"single password that was superseded by that split. Set "
                     f"split=true (split_threshold={record.threshold}, "
                     f"split_shares={record.shares}) under {where}, or, if the "
-                    f"split was abandoned, run 'lcsas --config ... key "
+                    f"split was abandoned, run 'lcsas --config ... password "
                     f"unsplit --repo {name}' to clear the recorded split."
                 )
     return None

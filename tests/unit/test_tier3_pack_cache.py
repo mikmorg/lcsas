@@ -207,14 +207,14 @@ def _run_script(
     (repo / "data").mkdir()
     pw = tmp_path / "pw"
     pw.write_bytes(PASSWORD + b"\n")
-    script = tmp_path / "standalone_restorer.py"
+    script = tmp_path / "python_reader.py"
     script.write_text(build_standalone())
     env = {k: v for k, v in os.environ.items() if k != "LCSAS_PACK_CACHE_DIR"}
     if env_cache is not None:
         env["LCSAS_PACK_CACHE_DIR"] = env_cache
     proc = subprocess.run(
         [sys.executable, "-I", str(script), "--repo", str(repo),
-         "--password-file", str(pw), "--target", str(tmp_path / "out"),
+         "--password-file", str(pw), "--restore-folder", str(tmp_path / "out"),
          "--mount-point", str(disc), "--interactive", "off"],
         capture_output=True, text=True, timeout=120, env=env,
         stdin=subprocess.DEVNULL,

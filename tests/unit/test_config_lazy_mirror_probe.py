@@ -72,14 +72,14 @@ def _write_config(
     tmp_path, mirror_path: str, *, password_file: str | None = None
 ) -> Path:
     """Write a config whose single repo points at *mirror_path*."""
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     staging = tmp_path / "staging"
     staging.mkdir(exist_ok=True)
     body = textwrap.dedent(f"""\
         [paths]
         mirror_base = "{tmp_path}"
         staging = "{staging}"
-        database = "{db}"
+        catalog = "{db}"
 
         [defaults]
         media_type = "CD700"

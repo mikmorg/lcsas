@@ -134,13 +134,13 @@ def test_pruned_and_staging_only_packs_are_neither_held_nor_missing(conn):
 
 
 def test_location_list_does_not_call_an_empty_location_current(tmp_path, capsys):
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(
         f'[paths]\nmirror_base = "{tmp_path}"\nstaging = "{tmp_path}"\n'
-        f'database = "{db_path}"\n'
+        f'catalog = "{db_path}"\n'
     )
-    main(["init", "--db-path", str(db_path)])
+    main(["init", "--catalog-path", str(db_path)])
     c = get_connection(db_path)
     create_all(c)
     register_repo(c, "family", "family", "/mnt/mirror/family")

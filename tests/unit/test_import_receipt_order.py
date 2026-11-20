@@ -38,7 +38,7 @@ def _two_receipts(env) -> tuple[Path, Path]:  # noqa: F811
 
 def _rebuilt(env, tmp_path: Path) -> Path:  # noqa: F811
     """A catalog rebuilt from the volume's own disc: no disc record."""
-    rebuilt = tmp_path / "rebuilt" / "archive.db"
+    rebuilt = tmp_path / "rebuilt" / "catalog.db"
     rebuilt.parent.mkdir()
     assert main(["catalog", "rebuild", str(env["tree"]),
                  "--output", str(rebuilt)]) == 0
@@ -70,7 +70,7 @@ def _disc(db: Path, label: str) -> tuple:
 
 
 def _db(cfg: Path) -> Path:
-    return cfg.parent / "rebuilt" / "archive.db"
+    return cfg.parent / "rebuilt" / "catalog.db"
 
 
 def _expected(receipt: Path) -> tuple:
@@ -162,7 +162,7 @@ def test_receipt_fills_the_hash_of_a_disc_recorded_by_verify(
         patch("lcsas.cli.commands.verify._verify_disc_against_recorded_hash",
               return_value=True),
     ):
-        assert main(["--db", str(db), "verify", label, "--disc",
+        assert main(["--catalog", str(db), "verify", label, "--disc",
                      "--device", "/dev/null", "--location",
                      "Home_Shelf"]) == 0, caplog.text
     status, burn_date, verified_at, iso_hash, size, vstatus = _disc(db, label)

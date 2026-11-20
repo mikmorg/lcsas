@@ -48,7 +48,7 @@ def _verify_disc(db, label: str, *extra: str, ok: bool = True) -> int:
               side_effect=lambda device, n:
               hashlib.sha256(b"\x00" * n).hexdigest()),
     ):
-        return main(["--db", str(db), "verify", label, "--disc",
+        return main(["--catalog", str(db), "verify", label, "--disc",
                      "--device", "/dev/null", *extra])
 
 

@@ -20,7 +20,7 @@ You have one optical drive and a stack of discs. On Linux:
 
 ```sh
 sudo mount /dev/sr0 /mnt
-sh /mnt/restore.sh ~/restored latest
+sh /mnt/restore.sh --restore-folder ~/restored --snapshot latest
 ```
 
 `restore.sh` asks for your newest data disc, the backup set and the
@@ -55,7 +55,7 @@ password in a file:
 
 ```sh
 LCSAS_PASSWORD_FILE=/full/path/to/password.txt \
-    sh /mnt/recovery/scripts/restore_auto.sh /mnt/recovery ~/restored
+    sh /mnt/recovery/scripts/restore_auto.sh /mnt/recovery --restore-folder ~/restored
 ```
 
 Each backup set goes into its own folder under `~/restored`. Mount your

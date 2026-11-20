@@ -1,14 +1,14 @@
 ===== lcsas --help =====
-usage: lcsas [-h] [--version] [--config CONFIG] [--db DB] [--verbose]
+usage: lcsas [-h] [--version] [--config CONFIG] [--catalog DB] [--verbose]
              [--lock-timeout LOCK_TIMEOUT]
-             {init,repo,scan,pack,status,burn,stage,burn-iso,staging,location,copy,volume,catalog,restore,consolidate,verify,session,config,meta,recovery,key,estate}
+             {init,repo,scan,pack,status,burn,stage,burn-iso,staging,location,copy,volume,catalog,restore,consolidate,verify,session,config,meta,recovery,password,estate}
              ...
 
 Linux Cold Storage Archival Suite — orchestrates Rustic, Xorriso, and
 DVDisaster for optical archival.
 
 positional arguments:
-  {init,repo,scan,pack,status,burn,stage,burn-iso,staging,location,copy,volume,catalog,restore,consolidate,verify,session,config,meta,recovery,key,estate}
+  {init,repo,scan,pack,status,burn,stage,burn-iso,staging,location,copy,volume,catalog,restore,consolidate,verify,session,config,meta,recovery,password,estate}
                         Available commands
     init                Initialize the LCSAS catalog and config.
     repo                Manage backup repositories.
@@ -33,7 +33,7 @@ positional arguments:
     meta                Build a self-contained meta disc (recovery tools +
                         source).
     recovery            Build / verify the C89 + POSIX-sh recovery toolchain.
-    key                 Split a repository password into SLIP-0039 shares, or
+    password            Split a repository password into SLIP-0039 shares, or
                         combine them.
     estate              Estate-planning artifacts (the whole-archive estate
                         card).
@@ -42,19 +42,20 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
   --config CONFIG       Path to TOML configuration file.
-  --db DB               Path to SQLite archive catalog (overrides config).
+  --catalog DB          Path to the master catalog (overrides config).
   --verbose, -v         Show full tracebacks on errors.
   --lock-timeout LOCK_TIMEOUT
                         Seconds to wait for the catalog lock before failing
                         with exit code 75 (default: wait forever). Overrides
                         LCSAS_LOCK_TIMEOUT.
 ===== lcsas init --help =====
-usage: lcsas init [-h] [--db-path DB_PATH]
+usage: lcsas init [-h] [--catalog-path DB_PATH]
 
 options:
-  -h, --help         show this help message and exit
-  --db-path DB_PATH  Path for the SQLite catalog file. Overrides --config's
-                     [paths].database when set.
+  -h, --help            show this help message and exit
+  --catalog-path DB_PATH
+                        Path for the SQLite catalog file. Overrides --config's
+                        [paths].catalog when set.
 ===== lcsas repo --help =====
 usage: lcsas repo [-h] {add,list,remove,retire,activate} ...
 
@@ -193,7 +194,7 @@ options:
 usage: lcsas stage [-h] [--media MEDIA] [--for-location FOR_LOCATION]
                    [--repo [REPO ...]] [--collection NAME] [--min-fill PCT]
                    [--partial] [--clean] [--force] [--session SESSION]
-                   [--dry-run] [--allow-escrow-drift] [--allow-low-redundancy]
+                   [--dry-run] [--allow-split-drift] [--allow-low-redundancy]
 
 options:
   -h, --help            show this help message and exit
@@ -218,11 +219,10 @@ options:
   --session SESSION     Session ID (for --clean).
   --dry-run, -n         Show staging plan without creating ISOs or catalog
                         rows.
-  --allow-escrow-drift  Proceed even if lcsas.toml's key_split/K/N disagrees
-                        with the recorded split (KEY-08). Logged as a volume
-                        event. For multi-config edge cases only — discs may
-                        print share instructions that do not match the real
-                        split.
+  --allow-split-drift   Proceed even if lcsas.toml's split/K/N disagrees with
+                        the recorded split (KEY-08). Logged as a volume event.
+                        For multi-config edge cases only — discs may print
+                        share instructions that do not match the real split.
   --allow-low-redundancy
                         Stage a volume even if its RS03 error correction would
                         be below the 5% floor, or its content exceeds the
@@ -481,14 +481,14 @@ options:
   --output OUTPUT  Path for the rebuilt master catalog (created or merged
                    into).
 ===== lcsas restore --help =====
-usage: lcsas restore [-h] {plan,exec,standalone} ...
+usage: lcsas restore [-h] {plan,exec,from-disc} ...
 
 positional arguments:
-  {plan,exec,standalone}
+  {plan,exec,from-disc}
     plan                Generate a restore pick list.
     exec                Execute a restore (requires live mirrors and config
                         file).
-    standalone          Restore directly from disc — no config file or mirror
+    from-disc           Restore directly from disc — no config file or mirror
                         needed.
 
 options:
@@ -506,15 +506,15 @@ options:
 usage: lcsas restore exec [-h] --repo REPO --password-file PASSWORD_FILE
                           [--cache-dir CACHE_DIR] [--volume-dir VOLUME_DIR]
                           [--iso-dir ISO_DIR] [--skip-verify]
-                          snapshot_id target_path
+                          snapshot_id restore_folder
 
 Restore a snapshot using the live rustic mirror and LCSAS config. Requires
 --repo and --password-file. For offline disc-only restore (no mirrors or
-config needed), use: lcsas restore standalone
+config needed), use: lcsas restore from-disc
 
 positional arguments:
   snapshot_id           Rustic snapshot ID to restore.
-  target_path           Target directory for restored files.
+  restore_folder        The restore folder: where the restored files go.
 
 options:
   -h, --help            show this help message and exit
@@ -532,12 +532,12 @@ options:
                         are read. Phase 21.9 — applies to interactive restore
                         where --volume-dir is not used.
   --skip-verify         Skip SHA-256 verification of ingested packs.
-===== lcsas restore standalone --help =====
-usage: lcsas restore standalone [-h] --password-file PASSWORD_FILE
-                                [--repo REPO] [--snapshot SNAPSHOT]
-                                [--volume-dir VOLUME_DIR] [--catalog CATALOG]
-                                [--cache-dir CACHE_DIR] [--skip-verify]
-                                disc target_path
+===== lcsas restore from-disc --help =====
+usage: lcsas restore from-disc [-h] --password-file PASSWORD_FILE
+                               [--repo REPO] [--snapshot SNAPSHOT]
+                               [--volume-dir VOLUME_DIR] [--catalog CATALOG]
+                               [--cache-dir CACHE_DIR] [--skip-verify]
+                               disc restore_folder
 
 Restore from a mounted or extracted LCSAS disc without any config file or live
 mirror. Works offline from any disc that contains catalog.db and the
@@ -547,7 +547,7 @@ available.
 positional arguments:
   disc                  Path to a mounted or extracted LCSAS disc (must
                         contain catalog.db).
-  target_path           Directory to restore files into.
+  restore_folder        The restore folder: where the restored files go.
 
 options:
   -h, --help            show this help message and exit
@@ -566,7 +566,7 @@ options:
                         temp dir.
   --skip-verify         Skip SHA-256 verification of ingested packs.
 ===== lcsas consolidate --help =====
-usage: lcsas consolidate [-h] [--target-media TARGET_MEDIA] [--execute]
+usage: lcsas consolidate [-h] [--media-type TARGET_MEDIA] [--execute]
                          [--deprecate] [--location LOCATION]
                          VOLUME [VOLUME ...]
 
@@ -575,8 +575,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --target-media TARGET_MEDIA
-                        Target media type for consolidated volume.
+  --media-type TARGET_MEDIA
+                        Media type for consolidated volume.
   --execute             Stage active packs (without deprecating source
                         volumes).
   --deprecate           Mark source volumes as DEPRECATED (run after --execute
@@ -777,8 +777,8 @@ usage: lcsas recovery verify [-h]
 
 options:
   -h, --help  show this help message and exit
-===== lcsas key --help =====
-usage: lcsas key [-h] {split,verify,combine,unsplit,card} ...
+===== lcsas password --help =====
+usage: lcsas password [-h] {split,verify,combine,unsplit,card} ...
 
 positional arguments:
   {split,verify,combine,unsplit,card}
@@ -794,32 +794,32 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-===== lcsas key split --help =====
-usage: lcsas key split [-h] --repo REPO [--threshold THRESHOLD]
-                       [--shares SHARES] [--password-file PASSWORD_FILE]
-                       [--out OUT] [--no-verify-repo]
+===== lcsas password split --help =====
+usage: lcsas password split [-h] --repo REPO [--threshold THRESHOLD]
+                            [--shares SHARES] [--password-file PASSWORD_FILE]
+                            [--out OUT] [--no-verify-repo]
 
 options:
   -h, --help            show this help message and exit
   --repo REPO           Repository name whose password to split.
   --threshold THRESHOLD, -k THRESHOLD
                         K: shares required to reconstruct (default: config
-                        key_threshold).
+                        split_threshold).
   --shares SHARES, -n SHARES
                         N: total shares to produce (default: config
-                        key_shares).
+                        split_shares).
   --password-file PASSWORD_FILE
                         Read the password from this file instead of the
                         repository's configured password_file.
   --out OUT             Output directory for share files (default:
-                        ./keyshares-<repo>/).
+                        ./shares-<repository>/).
   --no-verify-repo      Skip checking that the password actually unlocks the
                         repository's key files. Splitting an unchecked
                         password is dangerous; use only when the mirror's
                         keys/ is unavailable at split time.
-===== lcsas key verify --help =====
-usage: lcsas key verify [-h] --repo REPO [--share-file SHARE_FILES]
-                        [--password-file PASSWORD_FILE]
+===== lcsas password verify --help =====
+usage: lcsas password verify [-h] --repo REPO [--share-file SHARE_FILES]
+                             [--password-file PASSWORD_FILE]
 
 options:
   -h, --help            show this help message and exit
@@ -830,8 +830,8 @@ options:
   --password-file PASSWORD_FILE
                         Verify this password file directly instead of
                         reconstructing from shares.
-===== lcsas key combine --help =====
-usage: lcsas key combine [-h] [--share-file SHARE_FILES] [--out OUT]
+===== lcsas password combine --help =====
+usage: lcsas password combine [-h] [--share-file SHARE_FILES] [--out OUT]
 
 options:
   -h, --help            show this help message and exit
@@ -840,21 +840,21 @@ options:
                         omitted, shares are read from stdin, one per line.
   --out OUT             Write the reconstructed password here (default:
                         stdout).
-===== lcsas key unsplit --help =====
-usage: lcsas key unsplit [-h] --repo REPO [--yes]
+===== lcsas password unsplit --help =====
+usage: lcsas password unsplit [-h] --repo REPO [--yes]
 
 Remove the recorded K-of-N split for one repository from the catalog, so
 burned discs stop telling the heir to gather share cards. It does not touch
-any share card or the password. Use it when the split was abandoned and
-key_split is false for the repository.
+any share card or the password. Use it when the split was abandoned and split
+is false for the repository.
 
 options:
   -h, --help   show this help message and exit
   --repo REPO  Repository whose recorded split to clear.
   --yes        Do not ask for confirmation.
-===== lcsas key card --help =====
-usage: lcsas key card [-h] [--repo REPO] [--out OUT] [--no-check-code]
-                      [--check PASSWORD_FILE] [--code CODE]
+===== lcsas password card --help =====
+usage: lcsas password card [-h] [--repo REPO] [--out OUT] [--no-check-code]
+                           [--check PASSWORD_FILE] [--code CODE]
 
 options:
   -h, --help            show this help message and exit

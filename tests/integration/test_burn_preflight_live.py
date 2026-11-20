@@ -78,7 +78,7 @@ def test_stage_passes_format_preflight_real_rustic(tmp_path):
     repo.mkdir(parents=True)
     staging = tmp_path / "staging"
     staging.mkdir()
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
 
     key = tmp_path / "key.txt"
     key.write_text("integration-preflight-password\n")

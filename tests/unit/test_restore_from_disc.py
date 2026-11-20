@@ -1,4 +1,4 @@
-"""Tests for the 'lcsas restore standalone' CLI command."""
+"""Tests for the 'lcsas restore from-disc' CLI command."""
 
 from __future__ import annotations
 
@@ -23,12 +23,12 @@ from lcsas.utils.labels import generate_uuid
 
 
 def _make_disc_args(**kwargs) -> argparse.Namespace:
-    """Build a Namespace mimicking parsed 'restore standalone' args."""
+    """Build a Namespace mimicking parsed 'restore from-disc' args."""
     defaults = {
         "command": "restore",
-        "restore_command": "standalone",
+        "restore_command": "from-disc",
         "disc": Path("/mnt/disc1"),
-        "target_path": Path("/tmp/restored"),
+        "restore_folder": Path("/tmp/restored"),
         "password_file": Path("/home/user/secret.key"),
         "repo": None,
         "snapshot": "latest",
@@ -158,24 +158,24 @@ def _write_disc_metadata(meta_dir: Path) -> None:
 
 class TestFromDiscParser:
     def test_from_disc_subcommand_registered(self):
-        """Parser accepts 'restore standalone' without error."""
+        """Parser accepts 'restore from-disc' without error."""
         parser = build_parser()
         args = parser.parse_args([
-            "restore", "standalone",
+            "restore", "from-disc",
             "/mnt/disc1", "/tmp/out",
             "--password-file", "/home/user/secret.key",
         ])
         assert args.command == "restore"
-        assert args.restore_command == "standalone"
+        assert args.restore_command == "from-disc"
         assert args.disc == Path("/mnt/disc1")
-        assert args.target_path == Path("/tmp/out")
+        assert args.restore_folder == Path("/tmp/out")
         assert args.password_file == Path("/home/user/secret.key")
 
     def test_from_disc_snapshot_default(self):
         """--snapshot defaults to 'latest'."""
         parser = build_parser()
         args = parser.parse_args([
-            "restore", "standalone",
+            "restore", "from-disc",
             "/mnt/disc1", "/tmp/out",
             "--password-file", "/home/user/secret.key",
         ])
@@ -185,7 +185,7 @@ class TestFromDiscParser:
         """All optional flags are accepted."""
         parser = build_parser()
         args = parser.parse_args([
-            "restore", "standalone",
+            "restore", "from-disc",
             "/mnt/disc1", "/tmp/out",
             "--password-file", "/home/user/secret.key",
             "--repo", "family",
@@ -392,7 +392,7 @@ class TestFromDiscBatchMode:
 
         args = _make_disc_args(
             disc=disc,
-            target_path=target,
+            restore_folder=target,
             volume_dir=vol_dir,
             skip_verify=True,
             password_file=key_file,
@@ -445,7 +445,7 @@ class TestFromDiscBatchMode:
 
         args = _make_disc_args(
             disc=disc,
-            target_path=tmp_path / "restored",
+            restore_folder=tmp_path / "restored",
             volume_dir=vol_dir,
             skip_verify=True,
             password_file=key_file,
@@ -494,7 +494,7 @@ class TestFromDiscBatchMode:
 
         args = _make_disc_args(
             disc=disc,
-            target_path=tmp_path / "restored",
+            restore_folder=tmp_path / "restored",
             volume_dir=vol_dir,
             skip_verify=True,
             password_file=key_file,
@@ -542,7 +542,7 @@ class TestFromDiscBatchMode:
 
         args = _make_disc_args(
             disc=disc,
-            target_path=tmp_path / "restored",
+            restore_folder=tmp_path / "restored",
             volume_dir=None,  # interactive
             skip_verify=True,
             password_file=key_file,
@@ -600,7 +600,7 @@ class TestFromDiscBatchMode:
         mock_runner.restore_dry_run.return_value = mock_plan
 
         args = _make_disc_args(
-            disc=disc, target_path=tmp_path / "restored",
+            disc=disc, restore_folder=tmp_path / "restored",
             volume_dir=None, skip_verify=True, password_file=key_file,
         )
 
@@ -649,7 +649,7 @@ class TestFromDiscBatchMode:
         mock_runner.restore_dry_run.return_value = mock_plan
 
         args = _make_disc_args(
-            disc=disc, target_path=tmp_path / "restored",
+            disc=disc, restore_folder=tmp_path / "restored",
             volume_dir=None, skip_verify=True, password_file=key_file,
         )
 
@@ -707,7 +707,7 @@ class TestFromDiscBatchMode:
 
         args = _make_disc_args(
             disc=disc,
-            target_path=tmp_path / "restored",
+            restore_folder=tmp_path / "restored",
             volume_dir=vol_dir,
             skip_verify=True,
             password_file=key_file,
@@ -818,8 +818,8 @@ class TestFromDiscBatchMode:
 
 
 class TestFromDiscPythonReader:
-    """With no rustic, 'restore standalone' runs the Python reader.  Its
-    exit codes match the bundled standalone_restorer.py (#658, #740): 75
+    """With no rustic, 'restore from-disc' runs the Python reader.  Its
+    exit codes match the bundled python_reader.py (#658, #740): 75
     when the reader typed q (or input ended) at the disc prompt, 1 for a
     full disk or a restore that could not start."""
 
@@ -836,7 +836,7 @@ class TestFromDiscPythonReader:
         password = tmp_path / "password"
         password.write_text("pw\n")
         args = _make_disc_args(
-            disc=disc, target_path=tmp_path / "out",
+            disc=disc, restore_folder=tmp_path / "out",
             cache_dir=tmp_path / "cache", password_file=password,
         )
         with (
@@ -905,7 +905,7 @@ def test_latest_is_the_later_instant_across_utc_offsets(tmp_path):
     key_file.write_bytes(b"password")
 
     args = _make_disc_args(
-        disc=disc, target_path=tmp_path / "restored", volume_dir=vol_dir,
+        disc=disc, restore_folder=tmp_path / "restored", volume_dir=vol_dir,
         skip_verify=True, password_file=key_file, snapshot="latest",
     )
     with (

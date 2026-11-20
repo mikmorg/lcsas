@@ -3,11 +3,11 @@
 - #685: ``repo add`` refuses a duplicate name or mirror path, and
   ``_resolve_repo_names_to_ids`` refuses an ambiguous name.
 - #687: one resolver (mirror path, then name) for every ``--repo``; a
-  repository renamed in the config resolves the same in ``key split`` and
+  repository renamed in the config resolves the same in ``password split`` and
   ``stage``.
-- #683: ``key split`` refuses a folder that already holds share files for
+- #683: ``password split`` refuses a folder that already holds share files for
   the repository.
-- #681: ``key unsplit`` clears a recorded split; the drift error names it.
+- #681: ``password unsplit`` clears a recorded split; the drift error names it.
 """
 
 from __future__ import annotations
@@ -38,11 +38,11 @@ from tests.unit.test_cli_key import PASSWORD, _make_key_file, _write_pw_file
 
 def _repo_add(db: Path, name: str, mirror: Path) -> int:
     mirror.mkdir(parents=True, exist_ok=True)
-    return main(["--db", str(db), "repo", "add", name, str(mirror)])
+    return main(["--catalog", str(db), "repo", "add", name, str(mirror)])
 
 
 def test_repo_add_refuses_an_existing_name(tmp_path, capsys):
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     assert _repo_add(db, "photos", tmp_path / "m1") == 0
     capsys.readouterr()
 
@@ -57,7 +57,7 @@ def test_repo_add_refuses_an_existing_name(tmp_path, capsys):
 
 
 def test_repo_add_refuses_an_existing_mirror_path(tmp_path, capsys):
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     assert _repo_add(db, "photos", tmp_path / "m1") == 0
     capsys.readouterr()
 
@@ -115,15 +115,15 @@ def _renamed_setup(tmp_path: Path) -> tuple[Path, Path, str]:
     _make_key_file(mirror / "keys", PASSWORD)
     pw = _write_pw_file(tmp_path / "photos.pw")
     (tmp_path / "staging").mkdir()
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
-        f'staging = "{tmp_path / "staging"}"\ndatabase = "{db}"\n'
+        f'staging = "{tmp_path / "staging"}"\ncatalog = "{db}"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
         f'[repos.pics]\nmirror_path = "{mirror}"\npassword_file = "{pw}"\n'
     )
-    assert main(["--db", str(db), "repo", "add", "photos", str(mirror)]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "photos", str(mirror)]) == 0
     conn = get_connection(db)
     repo_id = list_repos(conn)[0].repo_id
     register_pack(conn, "a" * 64, 1000, repo_id)
@@ -137,8 +137,8 @@ def test_renamed_repository_resolves_the_same_in_key_split_and_stage(
     cfg, db, repo_id = _renamed_setup(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    # key split --repo pics records the split under photos' repo_id.
-    assert main(["--config", str(cfg), "key", "split", "--repo", "pics",
+    # password split --repo pics records the split under photos' repo_id.
+    assert main(["--config", str(cfg), "password", "split", "--repo", "pics",
                  "-k", "2", "-n", "3", "--out", str(tmp_path / "cards")]) == 0
     conn = get_connection(db)
     record = get_split(conn, repo_id)
@@ -149,7 +149,7 @@ def test_renamed_repository_resolves_the_same_in_key_split_and_stage(
     conn.close()
     capsys.readouterr()
     assert main(["--config", str(cfg), "stage", "--repo", "pics", "--dry-run",
-                 "--allow-escrow-drift"]) == 0
+                 "--allow-split-drift"]) == 0
     out = capsys.readouterr().out
     assert "not registered" not in out
     assert "[DRY RUN] 1 volume(s) planned" in out
@@ -163,7 +163,7 @@ def test_renamed_repository_resolves_the_same_in_key_split_and_stage(
 def test_second_split_into_a_folder_with_old_cards_is_refused(tmp_path, capsys):
     pw = _write_pw_file(tmp_path / "alpha.pw")
     out = tmp_path / "cards"
-    base = ["key", "split", "--repo", "alpha", "--password-file", str(pw),
+    base = ["password", "split", "--repo", "alpha", "--password-file", str(pw),
             "--no-verify-repo", "--out", str(out), "-k", "3"]
     assert main([*base, "-n", "5"]) == 0
     before = sorted(p.name for p in out.iterdir())
@@ -182,12 +182,12 @@ def test_other_repositorys_cards_do_not_block_a_split(tmp_path):
     out = tmp_path / "cards"
     out.mkdir()
     (out / "beta-share-1.txt").write_text("x\n")
-    assert main(["key", "split", "--repo", "alpha", "--password-file", str(pw),
+    assert main(["password", "split", "--repo", "alpha", "--password-file", str(pw),
                  "--no-verify-repo", "--out", str(out), "-k", "2", "-n", "3"]) == 0
 
 
 # --------------------------------------------------------------------------
-# #681: key unsplit
+# #681: password unsplit
 # --------------------------------------------------------------------------
 
 
@@ -203,11 +203,11 @@ def test_unsplit_clears_the_record_and_writes_an_audit_line(tmp_path, capsys):
     cfg, db, repo_id = _split_recorded(tmp_path)
     capsys.readouterr()
 
-    assert main(["--config", str(cfg), "key", "unsplit", "--repo", "pics",
+    assert main(["--config", str(cfg), "password", "unsplit", "--repo", "pics",
                  "--yes"]) == 0
 
     out = capsys.readouterr().out
-    assert "AUDIT" in out and "key unsplit" in out and "2-of-3" in out
+    assert "AUDIT" in out and "password unsplit" in out and "2-of-3" in out
     assert repo_id in out
     conn = get_connection(db)
     assert get_split_for_repo(conn, repo_id) is None
@@ -223,7 +223,7 @@ def test_unsplit_asks_first(tmp_path, monkeypatch):
     cfg, db, repo_id = _split_recorded(tmp_path)
     monkeypatch.setattr("builtins.input", lambda _prompt: "no")
 
-    assert main(["--config", str(cfg), "key", "unsplit", "--repo", "pics"]) == 0
+    assert main(["--config", str(cfg), "password", "unsplit", "--repo", "pics"]) == 0
 
     conn = get_connection(db)
     assert get_split_for_repo(conn, repo_id) is not None
@@ -237,7 +237,7 @@ def test_unsplit_also_clears_a_record_kept_under_the_name(tmp_path):
     record_split(conn, "photos", 2, 3, 1)
     conn.close()
 
-    assert main(["--config", str(cfg), "key", "unsplit", "--repo", "photos",
+    assert main(["--config", str(cfg), "password", "unsplit", "--repo", "photos",
                  "--yes"]) == 0
 
     conn = get_connection(db)
@@ -247,7 +247,7 @@ def test_unsplit_also_clears_a_record_kept_under_the_name(tmp_path):
 
 def test_unsplit_with_no_record_is_a_no_op(tmp_path, capsys):
     cfg, _db, _ = _renamed_setup(tmp_path)
-    assert main(["--config", str(cfg), "key", "unsplit", "--repo", "pics",
+    assert main(["--config", str(cfg), "password", "unsplit", "--repo", "pics",
                  "--yes"]) == 0
     assert "Nothing to clear" in capsys.readouterr().out
 
@@ -263,6 +263,6 @@ def test_drift_message_names_key_unsplit():
     )
 
     assert msg is not None
-    assert "key unsplit --repo photos" in msg
-    assert "key combine" not in msg
+    assert "password unsplit --repo photos" in msg
+    assert "password combine" not in msg
     conn.close()

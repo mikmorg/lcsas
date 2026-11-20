@@ -961,7 +961,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Split a repository password into SLIP-0039 shares, or combine them.",
     )
     key_p.set_defaults(func=_usage("Usage: lcsas password {split,unsplit,combine,verify,card}"))
-    key_sub = key_p.add_subparsers(dest="key_command")
+    key_sub = key_p.add_subparsers(dest="password_command")
 
     key_split = key_sub.add_parser(
         "split",

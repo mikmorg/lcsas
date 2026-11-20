@@ -321,11 +321,11 @@ def restore_env(
 ) -> dict[str, str]:
     """The environment an heir has, plus the password.  Everything LCSAS_* from
     the CI environment is dropped, in particular LCSAS_NO_RELOCATE.  ``repo``
-    sets LCSAS_REPO (see the repo-picker note on ``case_happy``)."""
+    sets LCSAS_BACKUP_SET (see the repo-picker note on ``case_happy``)."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("LCSAS_")}
     env["LCSAS_PASSWORD"] = password
     if repo:
-        env["LCSAS_REPO"] = repo
+        env["LCSAS_BACKUP_SET"] = repo
     if mount_root != Path("/Volumes"):
         env["LCSAS_MOUNT_DIRS"] = str(mount_root)  # dry-run on Linux only
     return env
@@ -343,7 +343,7 @@ def expected_triple() -> str:
 
 def restore_cmd(meta_mp: Path, target: Path) -> list[str]:
     # The heir's invocation: `sh /Volumes/LCSAS_META/restore.sh ...`.
-    return ["sh", str(meta_mp / "restore.sh"), "--target", str(target)]
+    return ["sh", str(meta_mp / "restore.sh"), "--restore-folder", str(target)]
 
 
 def run_noninteractive(
@@ -786,7 +786,8 @@ def main(argv: list[str]) -> int:
             p.add_argument("--work", help="scratch directory (default: a fresh temp dir)")
             p.add_argument("--timeout", type=int, default=300, help="seconds for restore.sh")
             p.add_argument(
-                "--repo", help="set LCSAS_REPO (the fixture's sets.json has the set's name and id)"
+                "--repo",
+                help="set LCSAS_BACKUP_SET (the fixture's sets.json has the set's name and id)",
             )
             p.set_defaults(func=cmd_case)
         else:

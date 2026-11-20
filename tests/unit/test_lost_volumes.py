@@ -325,7 +325,7 @@ class TestCopyCommandWarnings:
     def test_last_disc_lost_warns_mirror_only_and_pruned(self, tmp_path, capsys):
         db = tmp_path / "test.db"
         _cli_catalog(db)
-        assert main(["--db", str(db), "copy", "destroy", "--lost",
+        assert main(["--catalog", str(db), "copy", "destroy", "--lost",
                      "LOST_ME", "Home_Shelf"]) == 0
         out = _out(capsys)
 
@@ -354,7 +354,7 @@ class TestCopyCommandWarnings:
     ):
         db = tmp_path / "test.db"
         _cli_catalog(db)
-        assert main(["--db", str(db), "copy", "destroy",
+        assert main(["--catalog", str(db), "copy", "destroy",
                      "LOST_ME", "Home_Shelf"]) == 0
         out = _out(capsys)
         assert "as DESTROYED." in out
@@ -366,7 +366,7 @@ class TestCopyCommandWarnings:
         may be in a stranger's hands) but the volume is not lost."""
         db = tmp_path / "test.db"
         _cli_catalog(db, discs=("Home_Shelf", "Offsite_Safe"))
-        assert main(["--db", str(db), "copy", "destroy", "--lost",
+        assert main(["--catalog", str(db), "copy", "destroy", "--lost",
                      "LOST_ME", "Offsite_Safe"]) == 0
         out = _out(capsys)
         assert "stranger's hands" in out
@@ -389,7 +389,7 @@ class TestCopyCommandWarnings:
             bulk_link_packs(conn, b.volume_id, [p.pack_id])
         finally:
             conn.close()
-        assert main(["--db", str(db), "copy", "deprecate", "A", "Home_Shelf"]) == 0
+        assert main(["--catalog", str(db), "copy", "deprecate", "A", "Home_Shelf"]) == 0
         out = _out(capsys)
         assert "A is now a lost volume" in out
         assert "nothing needs burning again" in out
@@ -399,7 +399,7 @@ class TestCopyCommandWarnings:
         db = tmp_path / "test.db"
         _cli_catalog(db)
         with pytest.raises(SystemExit):
-            main(["--db", str(db), "copy", "deprecate", "--lost",
+            main(["--catalog", str(db), "copy", "deprecate", "--lost",
                   "LOST_ME", "Home_Shelf"])
 
 
@@ -431,7 +431,7 @@ class TestDisplays:
     def test_status_shows_lost(self, tmp_path, capsys):
         db = tmp_path / "test.db"
         _display_catalog(db)
-        assert main(["--db", str(db), "status"]) == 0
+        assert main(["--catalog", str(db), "status"]) == 0
         out = _out(capsys)
         assert "Volumes: 3 total (1 lost)" in out
         assert "LOST" in _row(out, "LOST_ME")
@@ -445,7 +445,7 @@ class TestDisplays:
     def test_status_redundancy_never_lists_lost_volume(self, tmp_path, capsys):
         db = tmp_path / "test.db"
         _display_catalog(db)
-        assert main(["--db", str(db), "status", "--redundancy"]) == 0
+        assert main(["--catalog", str(db), "status", "--redundancy"]) == 0
         out = _out(capsys)
         assert "LOST_ME" not in out
         assert "on NO disc at all" in out
@@ -453,7 +453,7 @@ class TestDisplays:
     def test_volume_impact_on_lost_volume(self, tmp_path, capsys):
         db = tmp_path / "test.db"
         _display_catalog(db)
-        assert main(["--db", str(db), "volume", "impact", "LOST_ME"]) == 0
+        assert main(["--catalog", str(db), "volume", "impact", "LOST_ME"]) == 0
         out = _out(capsys)
         assert "Volume LOST_ME  [LOST]" in out
         assert "it is a lost volume (recorded as DEPRECATED)" in out
@@ -465,7 +465,7 @@ class TestDisplays:
     def test_volume_impact_on_consolidated_volume(self, tmp_path, capsys):
         db = tmp_path / "test.db"
         _display_catalog(db)
-        assert main(["--db", str(db), "volume", "impact", "OLD"]) == 0
+        assert main(["--catalog", str(db), "volume", "impact", "OLD"]) == 0
         out = _out(capsys)
         assert "Volume OLD  [DEPRECATED]" in out
         assert "No disc of this volume is left in service." in out
@@ -486,18 +486,18 @@ class TestDisplays:
             conn.commit()
         finally:
             conn.close()
-        assert main(["--db", str(db), "catalog", "reconcile"]) == 0
+        assert main(["--catalog", str(db), "catalog", "reconcile"]) == 0
         out = _out(capsys)
         assert "DRIFT  status=LOST (recorded as BURNED)" in out
 
     def test_mark_verified_refusal_says_lost(self, tmp_path, capsys):
         db = tmp_path / "test.db"
         _display_catalog(db)
-        assert main(["--db", str(db), "verify", "LOST_ME", "--mark-verified"]) == 1
+        assert main(["--catalog", str(db), "verify", "LOST_ME", "--mark-verified"]) == 1
         assert "status is LOST" in _out(capsys)
 
     def test_estate_card_skips_lost_volumes(self, tmp_path):
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         _display_catalog(db)
         conn = get_connection(str(db))
         try:
@@ -514,7 +514,7 @@ class TestDisplays:
             "[paths]",
             f'mirror_base = "{tmp_path / "mirror_base"}"',
             f'staging = "{tmp_path / "staging"}"',
-            f'database = "{db}"',
+            f'catalog = "{db}"',
             "[defaults]",
             'label_prefix = "SMITH"',
             "[repos.alpha]",
@@ -532,7 +532,7 @@ class TestDisplays:
     def test_burn_dry_run_shows_lost(self, tmp_path, capsys):
         from lcsas.db.sessions import add_session_volume, create_session
 
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         _display_catalog(db)
         conn = get_connection(str(db))
         try:
@@ -551,7 +551,7 @@ class TestDisplays:
             "[paths]",
             f'mirror_base = "{tmp_path / "mirror_base"}"',
             f'staging = "{tmp_path / "staging"}"',
-            f'database = "{db}"',
+            f'catalog = "{db}"',
         ]) + "\n")
         assert main(["--config", str(cfg), "burn", "--session",
                      sess.session_id, "--dry-run"]) == 0
@@ -575,7 +575,7 @@ class TestRegainedThenLostAgain:
             assert vols["LOST_ME"] not in get_lost_volume_ids(conn)
         finally:
             conn.close()
-        assert main(["--db", str(db), "copy", "destroy",
+        assert main(["--catalog", str(db), "copy", "destroy",
                      "LOST_ME", "Offsite_Safe"]) == 0
         out = _out(capsys)
         assert "LOST_ME is now a lost volume" in out
@@ -593,5 +593,5 @@ class TestRegainedThenLostAgain:
             update_status(conn, old.volume_id, "DEPRECATED")
         finally:
             conn.close()
-        assert main(["--db", str(db), "copy", "destroy", "OLD", "Home_Shelf"]) == 0
+        assert main(["--catalog", str(db), "copy", "destroy", "OLD", "Home_Shelf"]) == 0
         assert "now a lost volume" not in _out(capsys)

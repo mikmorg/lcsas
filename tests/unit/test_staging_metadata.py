@@ -1,9 +1,9 @@
 """Split-key heir docs must name the C combiner first [KEY-05].
 
-Phase 5 shipped a tier-1-grade static combiner (``lcsas-keyshare``)
+Phase 5 shipped a tier-1-grade static combiner (``lcsas-shares``)
 on all six targets precisely so split-key reconstruction needs no
 Python — but the rendered heir docs (START_HERE.txt, PASSWORD_INFO.txt)
-named only ``python3 keyshare_combine.py``.  If python3 won't run —
+named only ``python3 combine_shares.py``.  If python3 won't run —
 the very scenario the tier-1 design exists for — the heir had no
 documented fallback.  These tests pin the tier ordering: the static
 binary is the primary documented path; python3 appears only after it,
@@ -52,20 +52,20 @@ def _render(tmp_path: Path, *, key_split: bool) -> dict[str, str]:
 
 
 def test_split_block_names_c_combiner(tmp_path: Path) -> None:
-    """key_split=True renders must present lcsas-keyshare (with its
+    """split=True renders must present lcsas-shares (with its
     recovery/bin on-disc path) BEFORE any python3 mention."""
     for name, text in _render(tmp_path, key_split=True).items():
         assert "recovery/bin" in text, (
             f"{name}: missing the recovery/bin on-disc combiner path"
         )
-        c_idx = text.find("lcsas-keyshare")
+        c_idx = text.find("lcsas-shares")
         assert c_idx != -1, (
-            f"{name}: the tier-1 static combiner lcsas-keyshare is not named"
+            f"{name}: the tier-1 static combiner lcsas-shares is not named"
         )
         py_idx = text.find("python3")
         assert py_idx != -1, f"{name}: the python3 fallback is missing"
         assert c_idx < py_idx, (
-            f"{name}: python3 appears before lcsas-keyshare — the static C "
+            f"{name}: python3 appears before lcsas-shares — the static C "
             "combiner must be the primary documented path (python3 is the "
             "fallback for when the binary will not run)"
         )
@@ -74,7 +74,7 @@ def test_split_block_names_c_combiner(tmp_path: Path) -> None:
 def test_split_block_offers_bundled_python_fallback(tmp_path: Path) -> None:
     """A host with no python3 at all must still have a documented path
     to the combiner pre-step: the per-target CPython bundled on the
-    META disc (UX-02).  Chain: lcsas-keyshare → python3 → bundled
+    META disc (UX-02).  Chain: lcsas-shares → python3 → bundled
     recovery/bin/<platform>/python/bin/python3."""
     fallback = "recovery/bin/<platform>/python/bin/python3"
     for name, text in _render(tmp_path, key_split=True).items():
@@ -82,19 +82,19 @@ def test_split_block_offers_bundled_python_fallback(tmp_path: Path) -> None:
         assert idx != -1, (
             f"{name}: no bundled-python fallback for the combiner pre-step"
         )
-        assert "keyshare_combine.py" in text[idx : idx + 200], (
-            f"{name}: the bundled-python fallback must run keyshare_combine.py"
+        assert "combine_shares.py" in text[idx : idx + 200], (
+            f"{name}: the bundled-python fallback must run combine_shares.py"
         )
 
 
 def test_single_key_render_has_no_share_instructions(tmp_path: Path) -> None:
     """Single-key archives must not mention any combiner at all."""
     for name, text in _render(tmp_path, key_split=False).items():
-        assert "lcsas-keyshare" not in text, (
+        assert "lcsas-shares" not in text, (
             f"{name}: share-combiner instructions leaked into a "
             "single-key render"
         )
-        assert "keyshare_combine" not in text, (
+        assert "combine_shares" not in text, (
             f"{name}: share-combiner instructions leaked into a "
             "single-key render"
         )
@@ -168,7 +168,7 @@ def test_split_blocks_name_the_disc_folders_and_the_card_prompt(
             f"{name}: a newer script asks for the cards itself"
         )
         assert "type P" in text, f"{name}: no word on P for a rebuilt password"
-        assert "/mnt/recovery/bin/<machine>/lcsas-keyshare" in text, (
+        assert "/mnt/recovery/bin/<machine>/lcsas-shares" in text, (
             f"{name}: the combiner must be given by its full path"
         )
 
@@ -186,7 +186,7 @@ def test_restore_instructions_follow_the_rc6_journey(tmp_path: Path) -> None:
     assert "[lcsas-restore] restore complete" in text
     assert "NEWEST data disc" in text
     assert "share cards" in text
-    assert "~/lcsas-restore-tools/resume.sh" in text
+    assert "~/lcsas-tools/resume.sh" in text
 
 
 def test_lcsas_source_on_disc_has_no_bytecode(tmp_path: Path, monkeypatch) -> None:
@@ -264,5 +264,6 @@ def test_share_card_steps_have_one_source(tmp_path: Path) -> None:
         info = _share_section(texts["PASSWORD_INFO.txt"], info_heading)
         assert start == info, kind
         joined = "\n".join(info)
-        assert "sh /mnt/restore.sh --key ~/repo.key --target ~/restored" in joined
+        assert "sh /mnt/restore.sh --password-file ~/repo.key" in joined
+        assert "--restore-folder ~/restored" in joined
         assert "not found" not in joined, kind

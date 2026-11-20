@@ -1132,8 +1132,8 @@ def test_repo_remove_drops_its_split_record(tmp_path: Path, capsys) -> None:
     from lcsas.db.repos import list_repos
 
     db = tmp_path / "test.db"
-    assert main(["init", "--db-path", str(db)]) == 0
-    assert main(["--db", str(db), "repo", "add", "photos", "/mnt/photos"]) == 0
+    assert main(["init", "--catalog-path", str(db)]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "photos", "/mnt/photos"]) == 0
     conn = get_connection(db)
     repo_id = next(r.repo_id for r in list_repos(conn) if r.name == "photos")
     record_split(conn, repo_id, 2, 3, 7)
@@ -1141,7 +1141,7 @@ def test_repo_remove_drops_its_split_record(tmp_path: Path, capsys) -> None:
     record_split(conn, "other", 2, 5, 8)
     conn.close()
 
-    assert main(["--db", str(db), "repo", "remove", repo_id]) == 0
+    assert main(["--catalog", str(db), "repo", "remove", repo_id]) == 0
     conn = get_connection(db)
     assert get_split(conn, repo_id) is None
     assert get_split(conn, "photos") is None

@@ -4,7 +4,7 @@
 ``src/lcsas/meta/builder.py``; #689 moved it to ``src/lcsas/meta/assets/``.
 Step 2 of #689 retired the two bash drivers that lived there
 (``restore_legacy.sh``, ``restore-auto.sh``) and cut the README down to a
-pointer to ``recovery/docs/RECOVER.txt``.  The SHA-256 values below pin
+pointer to ``recovery/docs/RESTORE.txt``.  The SHA-256 values below pin
 the README as the builder writes it, so a change can not alter what lands
 on a disc without someone noticing.
 
@@ -29,8 +29,8 @@ from lcsas.meta.builder import (
 
 _ASSETS = Path(__file__).resolve().parents[2] / "src" / "lcsas" / "meta" / "assets"
 
-_README_MD = "aa3b75f028ecdc9360695c8f3f1d21fb974379893599d17c89a22c4114a80f91"
-_README_TXT = "7b00d8d145343badb819da833889b621aff088b4070a1125b7b82aa692da4fae"
+_README_MD = "15032bebf4b1ffa5c299b01d02562c8acde7f31d85610cc38eb0f9aed39aac9d"
+_README_TXT = "08025df78319a2b236589e64f184f48327b5b811219109e99f9ead6c69b980db"
 
 # The asset files themselves: README_RESTORE.md is the only one left.
 _GOLDEN_ASSETS = {"README_RESTORE.md": _README_MD}

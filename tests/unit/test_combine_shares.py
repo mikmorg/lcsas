@@ -1,7 +1,7 @@
 """Phase 2 (K2.4) tests for the standalone share combiner.
 
 Covers:
-  (a) the standalone ``keyshare_combine.py`` reconstructs a real 2-of-5
+  (a) the standalone ``combine_shares.py`` reconstructs a real 2-of-5
       password — both in-process (for line coverage) and as a subprocess
       whose ONLY importable LCSAS surface is the keyshare package (proving
       the survives-even-if-the-rest-is-broken contract);
@@ -10,7 +10,7 @@ Covers:
   (c) PASSWORD_INFO / START_HERE show the split-password pre-step for a
       split archive and hide it for an archive whose password is not split.
 
-Targets 100% line coverage of ``lcsas.meta.keyshare_combine`` and the new
+Targets 100% line coverage of ``lcsas.meta.combine_shares`` and the new
 ``_bundle_keyshare_combiner`` / ``share_recovery_lines`` / split-gating
 branches.
 """
@@ -29,13 +29,13 @@ import pytest
 import lcsas.keyshare as _ks_pkg
 from lcsas.config.settings import LCSASConfig, RepositoryConfig, load_config
 from lcsas.keyshare import encode_master_secret, split_secret
-from lcsas.meta import keyshare_combine
+from lcsas.meta import combine_shares
 from lcsas.staging.metadata import HolographicInjector
 
 # A password with an interior byte that is not a trailing newline.
 _PASSWORD = b"correct horse battery staple\x01"
 
-_COMBINER_SRC = Path(keyshare_combine.__file__)
+_COMBINER_SRC = Path(combine_shares.__file__)
 
 
 def _make_2of5() -> list[str]:
@@ -58,7 +58,7 @@ def _base_config(tmp_path: Path, **kw: Any) -> LCSASConfig:
 
 
 class TestCombinerInProcess:
-    """Drive ``keyshare_combine.main`` directly for coverage of every branch."""
+    """Drive ``combine_shares.main`` directly for coverage of every branch."""
 
     def test_reconstructs_from_files(self, tmp_path, capsysbinary):
         mns = _make_2of5()
@@ -67,7 +67,7 @@ class TestCombinerInProcess:
         f1.write_text(mns[0] + "\n")
         f4.write_text(mns[3] + "\n")
 
-        rc = keyshare_combine.main([str(f1), str(f4)])
+        rc = combine_shares.main([str(f1), str(f4)])
 
         assert rc == 0
         out = capsysbinary.readouterr().out
@@ -81,28 +81,28 @@ class TestCombinerInProcess:
         stdin_text = f"# header comment\n{mns[1]}\n\n{mns[2]}\n"
         monkeypatch.setattr("sys.stdin", io.StringIO(stdin_text))
 
-        rc = keyshare_combine.main([])
+        rc = combine_shares.main([])
 
         assert rc == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
     def test_help(self, capsys):
-        rc = keyshare_combine.main(["--help"])
+        rc = combine_shares.main(["--help"])
         assert rc == 0
         err = capsys.readouterr().err
-        assert "keyshare_combine.py" in err
+        assert "combine_shares.py" in err
 
     def test_no_shares_errors(self, monkeypatch, capsys):
         import io
 
         # Empty stdin and no file args -> no mnemonics.
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
-        rc = keyshare_combine.main([])
+        rc = combine_shares.main([])
         assert rc == 2
         assert "no share mnemonics" in capsys.readouterr().err
 
     def test_unreadable_file_errors(self, tmp_path, capsys):
-        rc = keyshare_combine.main([str(tmp_path / "does-not-exist.txt")])
+        rc = combine_shares.main([str(tmp_path / "does-not-exist.txt")])
         assert rc == 2
         assert "could not read share file" in capsys.readouterr().err
 
@@ -111,7 +111,7 @@ class TestCombinerInProcess:
         f1 = tmp_path / "only.txt"
         f1.write_text(mns[0] + "\n")
 
-        rc = keyshare_combine.main([str(f1)])
+        rc = combine_shares.main([str(f1)])
 
         assert rc == 1
         assert "could not rebuild the password" in capsys.readouterr().err
@@ -121,16 +121,16 @@ class TestCombinerInProcess:
         import io
 
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
-        monkeypatch.setattr("sys.argv", ["keyshare_combine.py"])
-        rc = keyshare_combine.main()  # argv defaults to None
+        monkeypatch.setattr("sys.argv", ["combine_shares.py"])
+        rc = combine_shares.main()  # argv defaults to None
         assert rc == 2
         assert "no share mnemonics" in capsys.readouterr().err
 
     def test_combine_accepts_real_card_files(self, tmp_path, capsysbinary):
         """KEY-01: the heir-facing -card.txt artifacts reconstruct.
 
-        Generates real cards via ``lcsas key split`` (the exact artifact a
-        share holder is handed and told to pass to ``keyshare_combine.py``) and
+        Generates real cards via ``lcsas password split`` (the exact artifact a
+        share holder is handed and told to pass to ``combine_shares.py``) and
         feeds the cards — not the bare share files — to the combiner.
         """
         from lcsas.cli.main import main as cli_main
@@ -139,7 +139,7 @@ class TestCombinerInProcess:
         pw_file.write_bytes(_PASSWORD)
         out = tmp_path / "shares"
         assert cli_main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--threshold", "2", "--shares", "5",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
@@ -147,7 +147,7 @@ class TestCombinerInProcess:
 
         cards = sorted(out.glob("alpha-share-*-card.txt"))
         assert len(cards) == 5
-        rc = keyshare_combine.main([str(cards[0]), str(cards[3])])
+        rc = combine_shares.main([str(cards[0]), str(cards[3])])
         assert rc == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
@@ -161,7 +161,7 @@ class TestCombinerInProcess:
         pw_file.write_bytes(_PASSWORD)
         out = tmp_path / "shares"
         assert cli_main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
         capsysbinary.readouterr()
@@ -169,7 +169,7 @@ class TestCombinerInProcess:
         cards = sorted(out.glob("alpha-share-*-card.txt"))
         piped = cards[0].read_text() + cards[1].read_text()
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        rc = keyshare_combine.main([])
+        rc = combine_shares.main([])
         assert rc == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
@@ -182,7 +182,7 @@ class TestCombinerInProcess:
         pw_file.write_bytes(_PASSWORD)
         out = tmp_path / "shares"
         assert cli_main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
         capsys.readouterr()
@@ -196,8 +196,8 @@ class TestCombinerInProcess:
             if not is_mnemonic_line(ln)
         ]
         trunc.write_text("\n".join(kept) + "\n")
-        rc = keyshare_combine.main([str(trunc), str(cards[1])])
-        assert rc == keyshare_combine.EXIT_BAD_SHARE == 3
+        rc = combine_shares.main([str(trunc), str(cards[1])])
+        assert rc == combine_shares.EXIT_BAD_SHARE == 3
         err = capsys.readouterr().err
         assert "trunc-card.txt" in err
         assert "share words" in err
@@ -211,12 +211,12 @@ class TestCombinerIsolation:
     """The combiner reconstructs with ONLY the keyshare package importable.
 
     Replicates the EXACT meta disc layout the builder produces:
-    ``keyshare_combine.py`` at the meta disc root and the bundled
+    ``combine_shares.py`` at the meta disc root and the bundled
     ``keyshare`` package under ``tools/lib/pythonX.Y/`` (where
     ``bundle_python_package`` lands it).  The script is run as a
     subprocess with NO PYTHONPATH and ``lcsas`` actively blocked, so it
     MUST discover the bundled package via its own sys.path bootstrap —
-    proving the documented bare ``python3 keyshare_combine.py`` heir
+    proving the documented bare ``python3 combine_shares.py`` heir
     invocation works even when the rest of LCSAS is absent/broken.
     """
 
@@ -240,7 +240,7 @@ class TestCombinerIsolation:
             lib_dir / "keyshare",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
-        shutil.copy(_COMBINER_SRC, sandbox / "keyshare_combine.py")
+        shutil.copy(_COMBINER_SRC, sandbox / "combine_shares.py")
         return sandbox
 
     def test_wordlist_present_in_layout(self, tmp_path):
@@ -275,8 +275,8 @@ class TestCombinerIsolation:
                 sys.meta_path.insert(0, _Blocker())
                 import runpy
 
-                sys.argv = ["keyshare_combine.py", "a.txt", "b.txt"]
-                runpy.run_path("keyshare_combine.py", run_name="__main__")
+                sys.argv = ["combine_shares.py", "a.txt", "b.txt"]
+                runpy.run_path("combine_shares.py", run_name="__main__")
                 """
             )
         )
@@ -339,7 +339,7 @@ class TestBundlerShipsKeyshare:
         builder = MetaVolumeBuilder(out)
         builder._bundle_keyshare_combiner()
 
-        dst = out / "keyshare_combine.py"
+        dst = out / "combine_shares.py"
         assert dst.is_file()
         content = dst.read_text()
         assert "recover_secret" in content
@@ -353,11 +353,11 @@ class TestBundlerShipsKeyshare:
         out.mkdir()
         builder = MetaVolumeBuilder(out)
 
-        # Point __file__ resolution at a dir with no keyshare_combine.py.
+        # Point __file__ resolution at a dir with no combine_shares.py.
         empty = tmp_path / "empty_pkg"
         empty.mkdir()
         monkeypatch.setattr(builder_mod, "__file__", str(empty / "builder.py"))
-        with pytest.raises(FileNotFoundError, match="keyshare_combine.py missing"):
+        with pytest.raises(FileNotFoundError, match="combine_shares.py missing"):
             builder._bundle_keyshare_combiner()
 
     def test_bundler_allows_keyshare_package(self):
@@ -411,7 +411,7 @@ class TestHeirDocGating:
         HolographicInjector(root).write_key_info(config)
         txt = (root / "PASSWORD_INFO.txt").read_text()
         assert "SPLIT PASSWORD" in txt
-        assert "keyshare_combine.py" in txt
+        assert "combine_shares.py" in txt
         assert "any 2" in txt
         assert "5 share cards" in txt
         assert "docs/SHARE_FORMAT.md" in txt
@@ -432,7 +432,7 @@ class TestHeirDocGating:
         HolographicInjector(root).write_key_info(config)
         txt = (root / "PASSWORD_INFO.txt").read_text()
         assert "SPLIT PASSWORD" not in txt
-        assert "keyshare_combine.py" not in txt
+        assert "combine_shares.py" not in txt
 
     def test_start_here_split_shows_prestep(self, tmp_path):
         config = _base_config(
@@ -447,7 +447,7 @@ class TestHeirDocGating:
         HolographicInjector(root).write_start_here(config)
         txt = (root / "START_HERE.txt").read_text()
         assert "SPLIT INTO 5 SHARE CARDS" in txt
-        assert "keyshare_combine.py" in txt
+        assert "combine_shares.py" in txt
         assert "Password:" in txt
         # No leftover template placeholder.
         assert "SPLIT_BLOCK" not in txt
@@ -459,7 +459,7 @@ class TestHeirDocGating:
         HolographicInjector(root).write_start_here(config)
         txt = (root / "START_HERE.txt").read_text()
         assert "SHARE CARDS" not in txt
-        assert "keyshare_combine.py" not in txt
+        assert "combine_shares.py" not in txt
         assert "SPLIT_BLOCK" not in txt
         # The normal content for an unsplit password is intact and not mangled.
         assert "HOW TO GET YOUR FILES BACK" in txt
@@ -481,12 +481,12 @@ class TestConfigKeySplit:
                 [paths]
                 mirror_base = "mirror"
                 staging = "staging"
-                database = "db.db"
+                catalog = "db.db"
 
                 [defaults]
-                key_split = true
-                key_threshold = 3
-                key_shares = 7
+                split = true
+                split_threshold = 3
+                split_shares = 7
                 """
             )
         )
@@ -503,7 +503,7 @@ class TestConfigKeySplit:
                 [paths]
                 mirror_base = "mirror"
                 staging = "staging"
-                database = "db.db"
+                catalog = "db.db"
                 """
             )
         )
@@ -520,7 +520,7 @@ class TestCombinerPerShareValidation:
         # is broken -> _read_mnemonics accepts it, but the per-share
         # check_share pre-pass returns a reason, so main() prints a named
         # verdict and aborts with the aggregate error before reconstruction
-        # (keyshare_combine.py:158-159, 161-165).
+        # (combine_shares.py:158-159, 161-165).
         mns = _make_2of5()
         words = mns[0].split()
         i, j = 4, 5
@@ -530,7 +530,7 @@ class TestCombinerPerShareValidation:
         bad = tmp_path / "bad-card.txt"
         bad.write_text(" ".join(words) + "\n")
 
-        rc = keyshare_combine.main([str(bad)])
+        rc = combine_shares.main([str(bad)])
 
         # rc6: a share that is not valid is exit 3 (it was 1, the same as
         # "cannot combine"), so a script can ask for that card again.
@@ -548,14 +548,14 @@ class TestCombinerPerShareValidation:
             f = tmp_path / f"s{i}.txt"
             f.write_text(m + "\n")
             files.append(str(f))
-        assert keyshare_combine.main(files) == 0
+        assert combine_shares.main(files) == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
     def test_too_few_shares_is_exit_1(self, tmp_path, capsys):
         mns = _make_2of5()
         f = tmp_path / "one.txt"
         f.write_text(mns[3] + "\n")
-        assert keyshare_combine.main([str(f)]) == keyshare_combine.EXIT_CANNOT_COMBINE == 1
+        assert combine_shares.main([str(f)]) == combine_shares.EXIT_CANNOT_COMBINE == 1
         assert "at least 2" in capsys.readouterr().err
 
     def test_stdin_typo_is_named_not_skipped(self, monkeypatch, capsys):
@@ -570,9 +570,9 @@ class TestCombinerPerShareValidation:
         piped = "Tip: you may type just the first 4 letters of each word -- the\n"
         piped += " ".join(words) + "\n" + mns[1] + "\n"
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        rc = keyshare_combine.main([])
+        rc = combine_shares.main([])
         err = capsys.readouterr().err
-        assert rc == keyshare_combine.EXIT_BAD_SHARE, err
+        assert rc == combine_shares.EXIT_BAD_SHARE, err
         assert "stdin line 2" in err
         assert "word 7 'buidling'" in err
         assert "stdin line 1" not in err  # card prose is still skipped
@@ -584,7 +584,7 @@ class TestCombinerPerShareValidation:
         mns = _make_2of5()
         prefixed = " ".join(w[:4] for w in mns[3].split())
         monkeypatch.setattr("sys.stdin", io.StringIO(prefixed + "\n" + mns[4] + "\n"))
-        assert keyshare_combine.main([]) == 0
+        assert combine_shares.main([]) == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
     def test_prefix_typed_card_files_rebuild(self, tmp_path, capsysbinary):
@@ -602,7 +602,7 @@ class TestCombinerPerShareValidation:
             f = tmp_path / f"card{i}.txt"
             f.write_text(_share_card_text("alpha", i, 2, 5, words, "2026-01-01", 1))
             files.append(str(f))
-        assert keyshare_combine.main(files) == 0
+        assert combine_shares.main(files) == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
     def test_file_typo_is_named_not_word_count(self, tmp_path, capsys):
@@ -617,9 +617,9 @@ class TestCombinerPerShareValidation:
         bad.write_text(_share_card_text("alpha", 1, 2, 5, " ".join(words), "2026-01-01", 1))
         good = tmp_path / "card2.txt"
         good.write_text(mns[1] + "\n")
-        rc = keyshare_combine.main([str(bad), str(good)])
+        rc = combine_shares.main([str(bad), str(good)])
         err = capsys.readouterr().err
-        assert rc == keyshare_combine.EXIT_BAD_SHARE, err
+        assert rc == combine_shares.EXIT_BAD_SHARE, err
         assert f"share ({bad}): word 7 'qqqq' is not a share word" in err
         assert f"share ({good}): OK" in err
 
@@ -631,7 +631,7 @@ class TestCombinerPerShareValidation:
         mns = _make_2of5()
         piped = "that\n" + " ".join(mns[0].split()[:5]) + "\n" + mns[1] + "\n" + mns[2] + "\n"
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        assert keyshare_combine.main([]) == 0
+        assert combine_shares.main([]) == 0
         assert capsysbinary.readouterr().out == _PASSWORD
 
     def test_card_with_no_share_line_says_so(self, tmp_path, capsys):
@@ -644,9 +644,9 @@ class TestCombinerPerShareValidation:
         lines = [ln for ln in card.splitlines() if mns[0] not in ln]
         bad = tmp_path / "card1.txt"
         bad.write_text("\n".join(lines) + "\n")
-        rc = keyshare_combine.main([str(bad)])
+        rc = combine_shares.main([str(bad)])
         err = capsys.readouterr().err
-        assert rc == keyshare_combine.EXIT_BAD_SHARE, err
+        assert rc == combine_shares.EXIT_BAD_SHARE, err
         assert "no share words were found in this file" in err
         assert "is not a share word" not in err
 
@@ -664,9 +664,9 @@ class TestCombinerPerShareValidation:
         piped = (" ".join(chunks[0]) + "\n\n" + " ".join(chunks[1]) + "\n"
                  + " ".join(chunks[2]) + "\n" + mns[1] + "\n")
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        rc = keyshare_combine.main([])
+        rc = combine_shares.main([])
         err = capsys.readouterr().err
-        assert rc == keyshare_combine.EXIT_CANNOT_COMBINE, err
+        assert rc == combine_shares.EXIT_CANNOT_COMBINE, err
         assert "3 line(s) of input were not read as shares" in err
         assert "on ONE line" in err
 
@@ -679,18 +679,18 @@ class TestCombinerPerShareValidation:
             " ".join(words[i:i + 11]) + "\n" for i in range(0, len(words), 11)
         )
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        assert keyshare_combine.main([]) == keyshare_combine.EXIT_USAGE
+        assert combine_shares.main([]) == combine_shares.EXIT_USAGE
         assert "3 line(s) of input were not read" in capsys.readouterr().err
 
     def test_stdin_blank_lines_only_no_hint(self, monkeypatch, capsys):
         import io
 
         monkeypatch.setattr("sys.stdin", io.StringIO("\n  \n"))
-        assert keyshare_combine.main([]) == keyshare_combine.EXIT_USAGE
+        assert combine_shares.main([]) == combine_shares.EXIT_USAGE
         assert "were not read as shares" not in capsys.readouterr().err
 
     def test_help_documents_exit_status(self, capsys):
-        assert keyshare_combine.main(["--help"]) == 0
+        assert combine_shares.main(["--help"]) == 0
         err = capsys.readouterr().err
         for code in ("  0  ", "  1  ", "  2  ", "  3  "):
             assert code in err

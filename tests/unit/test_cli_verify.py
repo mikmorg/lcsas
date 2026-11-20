@@ -18,7 +18,7 @@ class TestCmdVerify:
         create_all(conn)
         conn.close()
 
-        result = main(["--db", str(db), "verify", "NONEXIST"])
+        result = main(["--catalog", str(db), "verify", "NONEXIST"])
         assert result == 1
         out = capsys.readouterr().out
         assert "not found" in out.lower()
@@ -41,7 +41,7 @@ class TestCmdVerify:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
                   return_value="VOL_001"),
         ):
-            result = main(["--db", str(db), "verify", "VOL_001", "--disc"])
+            result = main(["--catalog", str(db), "verify", "VOL_001", "--disc"])
 
         assert result == 0
         mock_verify.assert_called_once()
@@ -55,7 +55,7 @@ class TestCmdVerify:
         conn.close()
 
         # #673: the volume has no disc recorded, so --location is needed.
-        result = main(["--db", str(db), "verify", "VOL_MV",
+        result = main(["--catalog", str(db), "verify", "VOL_MV",
                         "--mark-verified", "--detail", "Verified on remote machine",
                         "--location", "Home"])
         assert result == 0
@@ -80,7 +80,7 @@ class TestCmdVerify:
         create_volume(conn, "VOL_MF", "u1", "BD25", 25e9, "Home", "VERIFIED")
         conn.close()
 
-        result = main(["--db", str(db), "verify", "VOL_MF",
+        result = main(["--catalog", str(db), "verify", "VOL_MF",
                         "--mark-failed", "--detail", "Sector errors at offset 0x400"])
         assert result == 0
 
@@ -100,7 +100,7 @@ class TestCmdVerify:
         create_all(conn)
         conn.close()
 
-        result = main(["--db", str(db), "verify"])
+        result = main(["--catalog", str(db), "verify"])
         assert result == 1
 
     def test_verify_all_skipped_returns_error(self, tmp_path, capsys):
@@ -120,7 +120,7 @@ class TestCmdVerify:
                            iso_sha256="")
         conn.close()
 
-        result = main(["--db", str(db), "verify", "--all"])
+        result = main(["--catalog", str(db), "verify", "--all"])
         assert result == 1
         out = capsys.readouterr().out
         assert "skipped" in out.lower() or "No volumes" in out
@@ -191,7 +191,7 @@ class TestCmdVerify:
             fake_verify_iso,
         ):
             result = main(
-                ["--db", str(db), "verify", "--all", "--location", "A"],
+                ["--catalog", str(db), "verify", "--all", "--location", "A"],
             )
 
         assert result == 0
@@ -275,7 +275,7 @@ class TestVerifyAllShaFallback:
                 else "/usr/bin/" + name
             ),
         ):
-            result = main(["--db", str(db), "verify", "--all"])
+            result = main(["--catalog", str(db), "verify", "--all"])
 
         # SHA matched → exit 0 with PASS.
         assert result == 0
@@ -304,7 +304,7 @@ class TestVerifyAllShaFallback:
                 else "/usr/bin/" + name
             ),
         ):
-            result = main(["--db", str(db), "verify", "--all"])
+            result = main(["--catalog", str(db), "verify", "--all"])
 
         # No verifications performed → "all skipped" exit path (rc=1
         # so operators notice).
@@ -365,7 +365,7 @@ class TestCmdVerifyShaFallback:
             "lcsas.ecc.dvdisaster.SubprocessDVDisasterRunner.verify_iso",
             side_effect=FileNotFoundError("dvdisaster not installed"),
         ):
-            result = main(["--db", str(db), "verify", "VOL_SHA"])
+            result = main(["--catalog", str(db), "verify", "VOL_SHA"])
 
         # SHA matched the catalog → verify passes overall.
         assert result == 0
@@ -397,7 +397,7 @@ class TestCmdVerifyShaFallback:
             "lcsas.ecc.dvdisaster.SubprocessDVDisasterRunner.verify_iso",
             side_effect=FileNotFoundError("dvdisaster not installed"),
         ):
-            result = main(["--db", str(db), "verify", "VOL_SHA"])
+            result = main(["--catalog", str(db), "verify", "VOL_SHA"])
 
         assert result == 1
         out = capsys.readouterr().out
@@ -420,7 +420,7 @@ class TestCmdVerifyShaFallback:
             "lcsas.ecc.dvdisaster.SubprocessDVDisasterRunner.verify_iso",
             side_effect=FileNotFoundError("dvdisaster not installed"),
         ):
-            result = main(["--db", str(db), "verify", "VOL_SHA"])
+            result = main(["--catalog", str(db), "verify", "VOL_SHA"])
 
         assert result == 1
         out = capsys.readouterr().out
@@ -496,7 +496,7 @@ class TestVerifyDiscIdentityAndEvidence:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True) as mock_check,
         ):
-            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+            result = main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                            "--device", "/dev/null"])
 
         assert result == 1
@@ -535,7 +535,7 @@ class TestVerifyDiscIdentityAndEvidence:
         with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
                    "read_disc_volume_id",
                    side_effect=AssertionError("the drive was read")) as m:
-            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+            result = main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                            "--device", "/dev/null"])
 
         assert result == 1
@@ -567,7 +567,7 @@ class TestVerifyDiscIdentityAndEvidence:
 
         with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
                    "read_disc_volume_id", return_value=""):
-            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+            result = main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                            "--device", "/dev/null"])
 
         assert result == 1
@@ -605,7 +605,7 @@ class TestVerifyDiscIdentityAndEvidence:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True),
         ):
-            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+            result = main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                            "--device", "/dev/null"])
 
         assert result == 1
@@ -635,7 +635,7 @@ class TestVerifyDiscIdentityAndEvidence:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True),
         ):
-            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+            result = main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                            "--device", "/dev/null"])
 
         assert result == 0
@@ -683,7 +683,7 @@ class TestVerifyDiscIdentityAndEvidence:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True),
         ):
-            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+            result = main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                            "--device", str(device)])
 
         assert result == 0
@@ -699,7 +699,7 @@ class TestVerifyDiscIdentityAndEvidence:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True),
         ):
-            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+            result = main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                            "--device", str(device)])
         assert result == 1
 
@@ -761,7 +761,7 @@ def test_verify_disc_stamps_last_verified_at(tmp_path):
         patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
               return_value=True),
     ):
-        assert main(["--db", str(db), "verify", "VOL_A", "--disc",
+        assert main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                      "--device", str(device)]) == 0
 
     conn = get_connection(db)
@@ -783,7 +783,7 @@ def test_verify_disc_stamps_last_verified_at(tmp_path):
         patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
               return_value=True),
     ):
-        assert main(["--db", str(db_fail), "verify", "VOL_A", "--disc",
+        assert main(["--catalog", str(db_fail), "verify", "VOL_A", "--disc",
                      "--device", str(device)]) == 1
 
     conn = get_connection(db_fail)
@@ -820,7 +820,7 @@ def test_verify_disc_ambiguous_copies_require_location(tmp_path, caplog):
         "lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
         return_value="VOL_A",
     ) as mock_id:
-        assert main(["--db", str(db), "verify", "VOL_A", "--disc",
+        assert main(["--catalog", str(db), "verify", "VOL_A", "--disc",
                      "--device", str(device)]) == 1
     assert "pass --location" in caplog.text
     mock_id.assert_not_called()
@@ -855,7 +855,7 @@ def test_verify_all_disc_iterates_copies(tmp_path, capsys):
               return_value=True),
         patch("builtins.input", side_effect=["", "", "s"]),
     ):
-        rc = main(["--db", str(db), "verify", "--all", "--disc",
+        rc = main(["--catalog", str(db), "verify", "--all", "--disc",
                    "--device", str(device)])
     assert rc == 1, "one FAIL must make the batch exit non-zero"
 
@@ -900,7 +900,7 @@ def test_verify_all_disc_wrong_disc_records_nothing(tmp_path, capsys):
               "read_disc_volume_id", return_value="VOL_OTHER"),
         patch("builtins.input", side_effect=[""]),
     ):
-        rc = main(["--db", str(db), "verify", "--all", "--disc",
+        rc = main(["--catalog", str(db), "verify", "--all", "--disc",
                    "--device", str(device)])
     assert rc == 1, "nothing verified → non-zero"
 

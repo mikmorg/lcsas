@@ -190,7 +190,7 @@ def test_standalone_without_zstandard_exits_4(tmp_path: Path) -> None:
     """The generated reader, on a Python with no zstandard, exits 4
     ("some files failed", #875) with no traceback."""
     repo = _repo_with_bad_frame(tmp_path)
-    script = tmp_path / "standalone_restorer.py"
+    script = tmp_path / "python_reader.py"
     script.write_text(build_standalone())
     pw = tmp_path / "pw"
     pw.write_bytes(PASSWORD)
@@ -198,7 +198,7 @@ def test_standalone_without_zstandard_exits_4(tmp_path: Path) -> None:
     # -I -S: no site-packages, so no zstandard; the pure decoder runs.
     res = subprocess.run(
         [sys.executable, "-I", "-S", str(script), "--repo", str(repo),
-         "--password-file", str(pw), "--target", str(target),
+         "--password-file", str(pw), "--restore-folder", str(target),
          "--interactive", "off"],
         capture_output=True, text=True, timeout=300,
     )

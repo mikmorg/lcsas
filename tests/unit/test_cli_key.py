@@ -1,4 +1,4 @@
-"""End-to-end CLI tests for `lcsas key split` / `lcsas key combine`.
+"""End-to-end CLI tests for `lcsas password split` / `lcsas password combine`.
 
 Drives the real CLI entry point (``main([...])``).  Targets 100% line
 coverage of ``cmd_key_split`` / ``cmd_key_combine`` and their helpers in
@@ -124,7 +124,7 @@ def _config_file(
     the wrong-password path).
 
     By default ``alpha`` is also registered in the catalog under a UUID
-    repo_id, as ``repo add`` would do, because ``key split --config``
+    repo_id, as ``repo add`` would do, because ``password split --config``
     refuses a repository the catalog does not know (#571).  Pass
     ``register=False`` to leave the catalog absent.
     """
@@ -138,7 +138,7 @@ def _config_file(
         "[paths]",
         f'mirror_base = "{tmp_path / "mirror_base"}"',
         f'staging = "{tmp_path / "staging"}"',
-        f'database = "{tmp_path / "archive.db"}"',
+        f'catalog = "{tmp_path / "catalog.db"}"',
     ]
     if defaults:
         lines.append("[defaults]")
@@ -152,7 +152,7 @@ def _config_file(
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text("\n".join(lines) + "\n")
     if register:
-        _register_repo(tmp_path / "archive.db", "alpha", mirror)
+        _register_repo(tmp_path / "catalog.db", "alpha", mirror)
     return cfg
 
 
@@ -165,7 +165,7 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--threshold", "2", "--shares", "5",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
@@ -177,7 +177,7 @@ class TestSplitCombineRoundTrip:
 
         recovered = tmp_path / "recovered"
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(mfiles[0]),
             "--share-file", str(mfiles[3]),
             "--out", str(recovered),
@@ -188,13 +188,13 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ])
         capsys.readouterr()
         mfiles = _share_mnemonic_files(out)
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(mfiles[0]),
             "--share-file", str(mfiles[1]),
         ]) == 0
@@ -206,7 +206,7 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ])
         for p in out.glob("alpha-share-*"):
@@ -216,13 +216,13 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ])
         mfiles = _share_mnemonic_files(out)
         recovered = tmp_path / "recovered"
         main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(mfiles[0]),
             "--share-file", str(mfiles[1]),
             "--out", str(recovered),
@@ -233,20 +233,20 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         monkeypatch.chdir(tmp_path)
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file),
         ]) == 0
-        assert (tmp_path / "keyshares-alpha").is_dir()
-        assert len(_share_mnemonic_files(tmp_path / "keyshares-alpha")) == 5
+        assert (tmp_path / "shares-alpha").is_dir()
+        assert len(_share_mnemonic_files(tmp_path / "shares-alpha")) == 5
 
     def test_cli_combine_accepts_card_files(
         self, tmp_path: Path, capsys
     ) -> None:
-        """KEY-01: real -card.txt files reconstruct via `lcsas key combine`."""
+        """KEY-01: real -card.txt files reconstruct via `lcsas password combine`."""
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--threshold", "2", "--shares", "5",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
@@ -255,7 +255,7 @@ class TestSplitCombineRoundTrip:
         cards = _share_card_files(out)
         assert len(cards) == 5
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(cards[0]),
             "--share-file", str(cards[3]),
         ]) == 0
@@ -269,7 +269,7 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
         capsys.readouterr()
@@ -277,7 +277,7 @@ class TestSplitCombineRoundTrip:
         cards = _share_card_files(out)
         piped = cards[0].read_text() + cards[1].read_text()
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        assert main(["key", "combine"]) == 0
+        assert main(["password", "combine"]) == 0
         captured = capsys.readouterr()
         assert captured.out.encode("utf-8", "surrogateescape") == PASSWORD
 
@@ -288,7 +288,7 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
         cards = _share_card_files(out)
@@ -300,7 +300,7 @@ class TestSplitCombineRoundTrip:
         ]
         trunc.write_text("\n".join(head[:8]) + "\n")
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(trunc),
             "--share-file", str(cards[1]),
         ]) == 1
@@ -315,7 +315,7 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
         capsys.readouterr()
@@ -335,7 +335,7 @@ class TestSplitCombineRoundTrip:
             typed.append(f)
 
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(typed[0]), "--share-file", str(typed[1]),
         ]) == 0
         captured = capsys.readouterr()
@@ -343,7 +343,7 @@ class TestSplitCombineRoundTrip:
 
         piped = typed[0].read_text() + typed[1].read_text()
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        assert main(["key", "combine"]) == 0
+        assert main(["password", "combine"]) == 0
         captured = capsys.readouterr()
         assert captured.out.encode("utf-8", "surrogateescape") == PASSWORD
 
@@ -357,7 +357,7 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
         capsys.readouterr()
@@ -366,7 +366,7 @@ class TestSplitCombineRoundTrip:
         words[6] = "buidling"
         piped = " ".join(words) + "\n" + mfiles[1].read_text()
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
-        assert main(["key", "combine"]) == 1
+        assert main(["password", "combine"]) == 1
         err = capsys.readouterr().err
         assert "share (stdin line 1): word 7 'buidling' is not a share word" in err
 
@@ -374,7 +374,7 @@ class TestSplitCombineRoundTrip:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--threshold", "2", "--shares", "5",
             "--password-file", str(pw_file), "--out", str(out),
         ])
@@ -402,7 +402,7 @@ class TestWeakPasswordWarning:
         out = tmp_path / "shares"
         with caplog.at_level(logging.WARNING, logger="lcsas.cli.main"):
             rc = main([
-                "key", "split", "--repo", "alpha",
+                "password", "split", "--repo", "alpha",
                 "--no-verify-repo",
                 "--password-file", str(pw_file), "--out", str(out),
             ])
@@ -424,7 +424,7 @@ class TestWeakPasswordWarning:
         out = tmp_path / "shares"
         with caplog.at_level(logging.WARNING, logger="lcsas.cli.main"):
             rc = main([
-                "key", "split", "--repo", "alpha",
+                "password", "split", "--repo", "alpha",
                 "--no-verify-repo",
                 "--password-file", str(pw_file), "--out", str(out),
             ])
@@ -443,22 +443,22 @@ class TestConfigDefaults:
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
         assert len(_share_mnemonic_files(out)) == 5  # default N=5
 
     def test_config_override_changes_k_n(self, tmp_path: Path) -> None:
-        cfg = _config_file(tmp_path, key_threshold=3, key_shares=4)
+        cfg = _config_file(tmp_path, split_threshold=3, split_shares=4)
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
         mfiles = _share_mnemonic_files(out)
         assert len(mfiles) == 4  # overridden N=4
         # And the threshold is genuinely 3: any 2 must NOT reconstruct.
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(mfiles[0]),
             "--share-file", str(mfiles[1]),
         ]) == 1
@@ -472,11 +472,11 @@ class TestSplitRecordsState:
         from lcsas.db.connection import locked_connection
         from lcsas.db.key_escrow import get_split
 
-        cfg = _config_file(tmp_path, key_threshold=3, key_shares=4)
+        cfg = _config_file(tmp_path, split_threshold=3, split_shares=4)
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
 
         # The catalog records the 3/4 split under the repository's catalog
@@ -500,15 +500,15 @@ class TestSplitRecordsState:
         # The success output names the key_split next step.
         captured = capsys.readouterr()
         assert "NEXT STEP" in captured.out
-        assert "key_split = true" in captured.out
-        assert "key_threshold = 3" in captured.out
-        assert "key_shares = 4" in captured.out
+        assert "split = true" in captured.out
+        assert "split_threshold = 3" in captured.out
+        assert "split_shares = 4" in captured.out
 
     def test_no_config_warns_not_recorded(self, tmp_path: Path, capsys) -> None:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(out),
         ]) == 0
         # Reminder still printed; plus a loud "not recorded" warning (the
@@ -522,12 +522,12 @@ class TestSplitRecordsState:
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
         mfiles = _share_mnemonic_files(out)
         recovered = tmp_path / "recovered"
         main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(mfiles[0]),
             "--share-file", str(mfiles[1]),
             "--out", str(recovered),
@@ -536,7 +536,7 @@ class TestSplitRecordsState:
 
 
 class TestSplitRecordedUnderRepoId:
-    """#571: ``key split --repo <name>`` records the split under the catalog
+    """#571: ``password split --repo <name>`` records the split under the catalog
     repo_id that ``repo add`` assigned, which is the ID the stage preflight
     and the disc text look it up by.
 
@@ -550,7 +550,7 @@ class TestSplitRecordedUnderRepoId:
         tmp_path: Path, *, k: int = 3, n: int = 4, **defaults: object
     ) -> Path:
         cfg = _config_file(
-            tmp_path, register=False, key_threshold=k, key_shares=n, **defaults
+            tmp_path, register=False, split_threshold=k, split_shares=n, **defaults
         )
         assert main(["--config", str(cfg), "init"]) == 0
         assert main([
@@ -559,7 +559,7 @@ class TestSplitRecordedUnderRepoId:
         ]) == 0
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(tmp_path / "shares"),
+            "password", "split", "--repo", "alpha", "--out", str(tmp_path / "shares"),
         ]) == 0
         return cfg
 
@@ -629,9 +629,9 @@ class TestSplitRecordedUnderRepoId:
     def test_repo_add_split_then_stage_preflight_passes(
         self, tmp_path: Path
     ) -> None:
-        """repo add -> key split -> stage with key_split=true: the preflight
+        """repo add -> password split -> stage with split=true: the preflight
         finds the split and the disc text names its K/N."""
-        cfg = self._repo_add_and_split(tmp_path, key_split="true")
+        cfg = self._repo_add_and_split(tmp_path, split="true")
         root = self._stage_one_volume(cfg)  # must not raise EscrowDriftError
         start_here = (root / "START_HERE.txt").read_text(encoding="utf-8")
         assert "YOUR PASSWORD IS SPLIT INTO 4 SHARE CARDS" in start_here
@@ -651,8 +651,8 @@ class TestSplitRecordedUnderRepoId:
         """
         cfg = self._repo_add_and_split(tmp_path)
         text = cfg.read_text().replace(
-            "key_threshold = 3", "key_threshold = 2"
-        ).replace("key_shares = 4", "key_shares = 5\nkey_split = true")
+            "split_threshold = 3", "split_threshold = 2"
+        ).replace("split_shares = 4", "split_shares = 5\nsplit = true")
         cfg.write_text(text)
         root = self._stage_one_volume(cfg, allow_drift=True)
         start_here = (root / "START_HERE.txt").read_text(encoding="utf-8")
@@ -676,10 +676,10 @@ class TestSplitRecordedUnderRepoId:
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 1
         msg = capsys.readouterr().out
-        db = (tmp_path / "archive.db").resolve()
+        db = (tmp_path / "catalog.db").resolve()
         mirror = (tmp_path / "mirror").resolve()
         assert (
             f"Repository 'alpha' is not registered in the catalog at {db}. "
@@ -696,10 +696,10 @@ class TestSplitRecordedUnderRepoId:
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 1
         msg = capsys.readouterr().out
-        db = (tmp_path / "archive.db").resolve()
+        db = (tmp_path / "catalog.db").resolve()
         mirror = (tmp_path / "mirror").resolve()
         assert (
             f"No catalog at {db}, so the split would not be recorded. If the "
@@ -710,17 +710,17 @@ class TestSplitRecordedUnderRepoId:
         ) in msg
         assert not out.exists()
         # The refusal must not leave a fresh catalog behind.
-        assert not (tmp_path / "archive.db").exists()
+        assert not (tmp_path / "catalog.db").exists()
 
     def test_two_repositories_with_one_name_refused(
         self, tmp_path: Path, capsys
     ) -> None:
         cfg = _config_file(tmp_path)  # registers alpha once ...
-        _register_repo(tmp_path / "archive.db", "alpha", tmp_path / "mirror")
+        _register_repo(tmp_path / "catalog.db", "alpha", tmp_path / "mirror")
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 1
         msg = capsys.readouterr().out
         assert "More than one repository in the catalog is named 'alpha'" in msg
@@ -733,16 +733,16 @@ class TestSplitRecordedUnderRepoId:
         """A catalog that exists but cannot be read keeps the old behaviour:
         the cards are written and the owner is told to re-run later."""
         cfg = _config_file(tmp_path, register=False)
-        (tmp_path / "archive.db").write_bytes(b"this is not an SQLite file" * 64)
+        (tmp_path / "catalog.db").write_bytes(b"this is not an SQLite file" * 64)
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
         msg = capsys.readouterr().out
         assert "Could not read the catalog at" in msg
         assert "Split succeeded but recording it in the catalog failed" in msg
-        assert "key split --repo alpha' so burn drift-checking works" in msg
+        assert "password split --repo alpha' so burn drift-checking works" in msg
         assert len(_share_card_files(out)) == 5
 
     def test_damaged_catalog_still_writes_cards_and_warns(
@@ -753,8 +753,8 @@ class TestSplitRecordedUnderRepoId:
         same warn-and-go-ahead path, not main()'s "Unexpected error"."""
         import lcsas.db.connection as connection
 
-        cfg = _config_file(tmp_path)  # archive.db exists, alpha registered
-        db = (tmp_path / "archive.db").resolve()
+        cfg = _config_file(tmp_path)  # catalog.db exists, alpha registered
+        db = (tmp_path / "catalog.db").resolve()
         damage = "Catalog integrity check failed (test)"
 
         def _damaged(db_path: object) -> object:
@@ -764,7 +764,7 @@ class TestSplitRecordedUnderRepoId:
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
         msg = capsys.readouterr().out
         assert (
@@ -781,13 +781,13 @@ class TestSplitRecordedUnderRepoId:
         from lcsas.db.connection import locked_connection
         from lcsas.db.key_escrow import get_split, record_split
 
-        cfg = _config_file(tmp_path, key_threshold=3, key_shares=4)
-        db = tmp_path / "archive.db"
+        cfg = _config_file(tmp_path, split_threshold=3, split_shares=4)
+        db = tmp_path / "catalog.db"
         with locked_connection(db) as conn:
             record_split(conn, "alpha", 2, 5, 1)  # as builds before #571 did
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(tmp_path / "s"),
+            "password", "split", "--repo", "alpha", "--out", str(tmp_path / "s"),
         ]) == 0
         with locked_connection(db) as conn:
             (repo_id,) = [
@@ -809,13 +809,13 @@ class TestSplitRecordedUnderRepoId:
 
 class TestSplitErrors:
     def test_no_password_source_no_config(self, tmp_path: Path, capsys) -> None:
-        assert main(["key", "split", "--repo", "alpha"]) == 1
+        assert main(["password", "split", "--repo", "alpha"]) == 1
         assert "No password source" in capsys.readouterr().out
 
     def test_repo_not_in_config(self, tmp_path: Path, capsys) -> None:
         cfg = _config_file(tmp_path)
         assert main([
-            "--config", str(cfg), "key", "split", "--repo", "ghost",
+            "--config", str(cfg), "password", "split", "--repo", "ghost",
         ]) == 1
         assert "not defined in the config" in capsys.readouterr().out
 
@@ -827,18 +827,18 @@ class TestSplitErrors:
             [paths]
             mirror_base = "{tmp_path / 'mirror_base'}"
             staging = "{tmp_path / 'staging'}"
-            database = "{tmp_path / 'archive.db'}"
+            catalog = "{tmp_path / 'catalog.db'}"
             [repos.alpha]
             mirror_path = "{mirror}"
         """))
         assert main([
-            "--config", str(cfg), "key", "split", "--repo", "alpha",
+            "--config", str(cfg), "password", "split", "--repo", "alpha",
         ]) == 1
         assert "no password_file configured" in capsys.readouterr().out
 
     def test_password_file_missing(self, tmp_path: Path, capsys) -> None:
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(tmp_path / "nope"),
         ]) == 1
         assert "Password file does not exist" in capsys.readouterr().out
@@ -847,7 +847,7 @@ class TestSplitErrors:
         # threshold > shares is invalid -> KeyShareError from split_secret.
         pw_file = _write_pw_file(tmp_path / "pw")
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--threshold", "5", "--shares", "2",
             "--password-file", str(pw_file), "--out", str(tmp_path / "s"),
         ]) == 1
@@ -857,7 +857,7 @@ class TestSplitErrors:
         pw_file = tmp_path / "big"
         pw_file.write_bytes(b"\x01" * (0xFFFF + 5))  # no trailing \n to strip
         assert main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(pw_file), "--out", str(tmp_path / "s"),
         ]) == 1
         assert "Could not split password" in capsys.readouterr().out
@@ -865,7 +865,7 @@ class TestSplitErrors:
     def test_missing_repo_arg_exits(self, tmp_path: Path) -> None:
         # argparse 'required=True' -> SystemExit(2).
         with pytest.raises(SystemExit):
-            main(["key", "split", "--password-file", str(tmp_path / "x")])
+            main(["password", "split", "--password-file", str(tmp_path / "x")])
 
 
 # --------------------------------------------------------------------------
@@ -873,7 +873,7 @@ class TestSplitErrors:
 # --------------------------------------------------------------------------
 
 def _assert_stdout_clean(capsys: pytest.CaptureFixture[str], message: str) -> Any:
-    """stdout is the password channel of `key combine`: on failure it stays
+    """stdout is the password channel of `password combine`: on failure it stays
     empty and the message is on stderr."""
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -886,7 +886,7 @@ class TestCombineErrors:
         pw_file = _write_pw_file(tmp_path / "pw")
         out = tmp_path / "shares"
         main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--threshold", "2", "--shares", "5",
             "--password-file", str(pw_file), "--out", str(out),
         ])
@@ -896,13 +896,13 @@ class TestCombineErrors:
         # No --share-file and empty stdin.
         import io
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
-        assert main(["key", "combine"]) == 1
+        assert main(["password", "combine"]) == 1
         _assert_stdout_clean(capsys, "No shares supplied")
 
     def test_under_threshold_fails(self, tmp_path: Path, capsys) -> None:
         mfiles = self._make_shares(tmp_path)
         capsys.readouterr()  # drop the split's output
-        assert main(["key", "combine", "--share-file", str(mfiles[0])]) == 1
+        assert main(["password", "combine", "--share-file", str(mfiles[0])]) == 1
         _assert_stdout_clean(capsys, "Could not reconstruct")
 
     def test_corrupted_share_fails(self, tmp_path: Path, capsys) -> None:
@@ -913,7 +913,7 @@ class TestCombineErrors:
         words[3] = "zzzzzz"  # not a valid wordlist word
         bad.write_text(" ".join(words))
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(mfiles[0]),
             "--share-file", str(bad),
         ]) == 1
@@ -931,14 +931,14 @@ class TestCombineErrors:
         pw2 = _write_pw_file(tmp_path / "pw2", b"another-secret")
         out2 = tmp_path / "shares2"
         main([
-            "key", "split", "--repo", "beta",
+            "password", "split", "--repo", "beta",
             "--threshold", "2", "--shares", "5",
             "--password-file", str(pw2), "--out", str(out2),
         ])
         foreign = _share_mnemonic_files(out2, "beta")
         capsys.readouterr()  # drop the splits' output
         assert main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(mine[0]),
             "--share-file", str(foreign[0]),
         ]) == 1
@@ -946,7 +946,7 @@ class TestCombineErrors:
 
     def test_share_file_missing(self, tmp_path: Path, capsys) -> None:
         assert main([
-            "key", "combine", "--share-file", str(tmp_path / "nope.txt"),
+            "password", "combine", "--share-file", str(tmp_path / "nope.txt"),
         ]) == 1
         _assert_stdout_clean(capsys, "Share file does not exist")
 
@@ -958,11 +958,11 @@ class TestCombineErrors:
         # than silently skipping it. [KEY-01]
         blank = tmp_path / "blank.txt"
         blank.write_text("   \n")
-        assert main(["key", "combine", "--share-file", str(blank)]) == 1
+        assert main(["password", "combine", "--share-file", str(blank)]) == 1
         _assert_stdout_clean(capsys, "no share words were found in this file")
 
     def test_stdout_holds_only_the_password_subprocess(self, tmp_path: Path) -> None:
-        """A real `lcsas key combine` process, stdout and stderr captured
+        """A real `lcsas password combine` process, stdout and stderr captured
         apart: on failure stdout is empty and the error is on stderr; with
         --out stdout is empty; otherwise stdout is exactly the password."""
         import subprocess
@@ -981,7 +981,7 @@ class TestCombineErrors:
 
         def run(*args: str) -> subprocess.CompletedProcess[bytes]:
             return subprocess.run(
-                [sys.executable, "-m", "lcsas.cli.main", "key", "combine", *args],
+                [sys.executable, "-m", "lcsas.cli.main", "password", "combine", *args],
                 capture_output=True, env=env, timeout=120, check=False,
                 stdin=subprocess.DEVNULL,
             )
@@ -1026,7 +1026,7 @@ class TestCombineErrors:
         ]) + "\n"
         monkeypatch.setattr("sys.stdin", io.StringIO(stdin))
         capsys.readouterr()  # drop the split's stdout
-        assert main(["key", "combine"]) == 0
+        assert main(["password", "combine"]) == 0
         out = capsys.readouterr().out
         assert out.encode("utf-8", "surrogateescape") == PASSWORD
 
@@ -1037,8 +1037,8 @@ class TestCombineErrors:
 
 class TestKeyRouter:
     def test_key_no_subcommand(self, capsys) -> None:
-        assert main(["key"]) == 1
-        assert "Usage: lcsas key" in capsys.readouterr().out
+        assert main(["password"]) == 1
+        assert "Usage: lcsas password" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------
@@ -1121,7 +1121,7 @@ class TestEntryPointExitCode:
     """Regression: `python -m lcsas` must propagate the handler's exit code.
 
     `src/lcsas/__main__.py` previously called `main()` without `sys.exit(...)`,
-    so a failing command (e.g. `key combine` with too few shares) silently
+    so a failing command (e.g. `password combine` with too few shares) silently
     exited 0 under `python -m`.
     """
 
@@ -1136,7 +1136,7 @@ class TestEntryPointExitCode:
         ).returncode
 
     def test_combine_no_shares_exits_nonzero(self) -> None:
-        assert self._run(["key", "combine"], stdin="") != 0
+        assert self._run(["password", "combine"], stdin="") != 0
 
     def test_combine_insufficient_shares_exits_nonzero(self, tmp_path: Path) -> None:
         # one valid share from a real 2-of-5 split is below threshold
@@ -1145,11 +1145,11 @@ class TestEntryPointExitCode:
         share = split_secret(encode_master_secret(b"pw12345678"), 2, 5)[0]
         f = tmp_path / "s.txt"
         f.write_text(share, encoding="utf-8")
-        assert self._run(["key", "combine", "--share-file", str(f)]) != 0
+        assert self._run(["password", "combine", "--share-file", str(f)]) != 0
 
 
 # --------------------------------------------------------------------------
-# KEY-03: verify-at-split + `lcsas key verify` drill.
+# KEY-03: verify-at-split + `lcsas password verify` drill.
 # --------------------------------------------------------------------------
 
 
@@ -1181,7 +1181,7 @@ class TestSplitVerifiesAtWrite:
         monkeypatch.setattr(cli, "_write_private_file", corrupting_write)
         out = tmp_path / "shares"
         rc = main([
-            "key", "split", "--repo", "alpha", "--no-verify-repo",
+            "password", "split", "--repo", "alpha", "--no-verify-repo",
             "--threshold", "2", "--shares", "5",
             "--password-file", str(_write_pw_file(tmp_path / "pw")),
             "--out", str(out),
@@ -1199,7 +1199,7 @@ class TestSplitVerifiesAtWrite:
         out = tmp_path / "shares"
         rc = main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         assert rc == 1
@@ -1216,7 +1216,7 @@ class TestSplitVerifiesAtWrite:
         out = tmp_path / "shares"
         rc = main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--no-verify-repo", "--out", str(out),
         ])
         assert rc == 0
@@ -1230,7 +1230,7 @@ class TestSplitVerifiesAtWrite:
         out = tmp_path / "shares"
         rc = main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         assert rc == 1
@@ -1252,7 +1252,7 @@ class TestSplitVerifiesAtWrite:
         out = tmp_path / "shares"
         rc = main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         assert rc == 1
@@ -1270,7 +1270,7 @@ class TestSplitVerifiesAtWrite:
         out = tmp_path / "shares"
         rc = main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         assert rc == 0
@@ -1283,7 +1283,7 @@ class TestSplitVerifiesAtWrite:
         (tmp_path / "mirror" / "keys" / "0000-corrupt").write_bytes(self._BAD_KEY)
         rc = main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(tmp_path / "shares"),
         ])
         assert rc == 1
@@ -1297,7 +1297,7 @@ class TestSplitVerifiesAtWrite:
     ) -> None:
         out = tmp_path / "shares"
         rc = main([
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--password-file", str(_write_pw_file(tmp_path / "pw")),
             "--out", str(out),
         ])
@@ -1311,7 +1311,7 @@ class TestCardStamps:
 
         def split_into(out: Path) -> list[Path]:
             main([
-                "key", "split", "--repo", "alpha", "--no-verify-repo",
+                "password", "split", "--repo", "alpha", "--no-verify-repo",
                 "--threshold", "2", "--shares", "5",
                 "--password-file", str(_write_pw_file(tmp_path / "pw",
                                                       trailing_nl=False)),
@@ -1341,14 +1341,14 @@ class TestCardStamps:
     def test_stamped_cards_still_combine(self, tmp_path: Path, capsys) -> None:
         out = tmp_path / "shares"
         main([
-            "key", "split", "--repo", "alpha", "--no-verify-repo",
+            "password", "split", "--repo", "alpha", "--no-verify-repo",
             "--password-file", str(_write_pw_file(tmp_path / "pw")),
             "--out", str(out),
         ])
         capsys.readouterr()
         cards = _share_card_files(out)
         rc = main([
-            "key", "combine",
+            "password", "combine",
             "--share-file", str(cards[0]),
             "--share-file", str(cards[1]),
         ])
@@ -1362,14 +1362,14 @@ class TestKeyVerify:
         out = tmp_path / "shares"
         main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         capsys.readouterr()
         cards = _share_card_files(out)
         rc = main([
             "--config", str(cfg),
-            "key", "verify", "--repo", "alpha",
+            "password", "verify", "--repo", "alpha",
             "--share-file", str(cards[0]), "--share-file", str(cards[1]),
         ])
         assert rc == 0
@@ -1381,7 +1381,7 @@ class TestKeyVerify:
         out = tmp_path / "shares"
         main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         capsys.readouterr()
@@ -1397,7 +1397,7 @@ class TestKeyVerify:
             typed.append(f)
         rc = main([
             "--config", str(cfg),
-            "key", "verify", "--repo", "alpha",
+            "password", "verify", "--repo", "alpha",
             "--share-file", str(typed[0]), "--share-file", str(typed[1]),
         ])
         assert rc == 0
@@ -1407,7 +1407,7 @@ class TestKeyVerify:
         cfg = _config_file(tmp_path)
         rc = main([
             "--config", str(cfg),
-            "key", "verify", "--repo", "alpha",
+            "password", "verify", "--repo", "alpha",
             "--password-file", str(tmp_path / "alpha.pw"),
         ])
         assert rc == 0
@@ -1423,7 +1423,7 @@ class TestKeyVerify:
         out = tmp_path / "shares"
         main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         capsys.readouterr()
@@ -1436,7 +1436,7 @@ class TestKeyVerify:
 
         rc = main([
             "--config", str(cfg),
-            "key", "verify", "--repo", "alpha",
+            "password", "verify", "--repo", "alpha",
             "--share-file", str(cards[0]), "--share-file", str(cards[1]),
         ])
         assert rc != 0
@@ -1449,7 +1449,7 @@ class TestKeyVerify:
         out = tmp_path / "shares"
         main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         capsys.readouterr()
@@ -1457,14 +1457,14 @@ class TestKeyVerify:
         # One card is below threshold (K=2) → reconstruction fails.
         rc = main([
             "--config", str(cfg),
-            "key", "verify", "--repo", "alpha",
+            "password", "verify", "--repo", "alpha",
             "--share-file", str(cards[0]),
         ])
         assert rc != 0
         assert "Reconstruction failed" in capsys.readouterr().out
 
     def test_key_verify_requires_config(self, tmp_path: Path, capsys) -> None:
-        rc = main(["key", "verify", "--repo", "alpha",
+        rc = main(["password", "verify", "--repo", "alpha",
                    "--password-file", str(tmp_path / "x")])
         assert rc == 1
         assert "--config is required" in capsys.readouterr().out
@@ -1474,21 +1474,21 @@ class TestKeyVerify:
     ) -> None:
         cfg = _config_file(tmp_path)
         # Neither source.
-        rc = main(["--config", str(cfg), "key", "verify", "--repo", "alpha"])
+        rc = main(["--config", str(cfg), "password", "verify", "--repo", "alpha"])
         assert rc == 1
         assert "EITHER" in capsys.readouterr().out
         # Both sources.
         out = tmp_path / "shares"
         main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha",
+            "password", "split", "--repo", "alpha",
             "--out", str(out),
         ])
         capsys.readouterr()
         cards = _share_card_files(out)
         rc = main([
             "--config", str(cfg),
-            "key", "verify", "--repo", "alpha",
+            "password", "verify", "--repo", "alpha",
             "--password-file", str(tmp_path / "alpha.pw"),
             "--share-file", str(cards[0]),
         ])
@@ -1499,32 +1499,32 @@ class TestKeyVerify:
         cfg = _config_file(tmp_path)
         rc = main([
             "--config", str(cfg),
-            "key", "verify", "--repo", "ghost",
+            "password", "verify", "--repo", "ghost",
             "--password-file", str(tmp_path / "alpha.pw"),
         ])
         assert rc == 1
         assert "not defined in the config" in capsys.readouterr().out
 
     def test_key_router_lists_verify(self, capsys) -> None:
-        assert main(["key"]) == 1
+        assert main(["password"]) == 1
         assert "verify" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------
-# KEY-09: password card (`lcsas key card`)
+# KEY-09: password card (`lcsas password card`)
 # --------------------------------------------------------------------------
 
 class TestKeyCard:
     def test_key_card_renders(self, tmp_path: Path, capsys) -> None:
         cfg = _config_file(tmp_path, label_prefix='"FAMILY"')
-        # key_storage_hints lives in [survivability]; append it.
+        # password_hints lives in [survivability]; append it.
         cfg.write_text(
             cfg.read_text()
-            + '[survivability]\nkey_storage_hints = "Safe at home; bank box #7"\n'
+            + '[survivability]\npassword_hints = "Safe at home; bank box #7"\n'
         )
         rc = main([
             "--config", str(cfg),
-            "key", "card", "--repo", "alpha",
+            "password", "card", "--repo", "alpha",
         ])
         assert rc == 0
         out = capsys.readouterr().out
@@ -1548,7 +1548,7 @@ class TestKeyCard:
         cfg = _config_file(tmp_path)
         rc = main([
             "--config", str(cfg),
-            "key", "card", "--repo", "alpha", "--no-check-code",
+            "password", "card", "--repo", "alpha", "--no-check-code",
         ])
         assert rc == 0
         out = capsys.readouterr().out
@@ -1558,7 +1558,7 @@ class TestKeyCard:
 
     def test_key_card_single_repo_no_flag(self, tmp_path: Path, capsys) -> None:
         cfg = _config_file(tmp_path)
-        rc = main(["--config", str(cfg), "key", "card"])
+        rc = main(["--config", str(cfg), "password", "card"])
         assert rc == 0
         assert "alpha" in capsys.readouterr().out
 
@@ -1567,20 +1567,20 @@ class TestKeyCard:
         out_file = tmp_path / "card.txt"
         rc = main([
             "--config", str(cfg),
-            "key", "card", "--repo", "alpha", "--out", str(out_file),
+            "password", "card", "--repo", "alpha", "--out", str(out_file),
         ])
         assert rc == 0
         assert out_file.exists()
         assert (os.stat(out_file).st_mode & 0o777) == 0o600
 
     def test_key_card_requires_config(self, capsys) -> None:
-        rc = main(["key", "card", "--repo", "alpha"])
+        rc = main(["password", "card", "--repo", "alpha"])
         assert rc == 1
         assert "config" in capsys.readouterr().out.lower()
 
     def test_key_card_unknown_repo(self, tmp_path: Path, capsys) -> None:
         cfg = _config_file(tmp_path)
-        rc = main(["--config", str(cfg), "key", "card", "--repo", "ghost"])
+        rc = main(["--config", str(cfg), "password", "card", "--repo", "ghost"])
         assert rc == 1
         assert "not defined in the config" in capsys.readouterr().out
 
@@ -1589,7 +1589,7 @@ class TestKeyCard:
         code = hashlib.sha256(PASSWORD).hexdigest()[:4]
         # Correct transcription -> MATCH, rc 0.
         rc = main([
-            "key", "card", "--check", str(pw_file), "--code", code,
+            "password", "card", "--check", str(pw_file), "--code", code,
         ])
         assert rc == 0
         assert "MATCH" in capsys.readouterr().out
@@ -1600,27 +1600,27 @@ class TestKeyCard:
         pw_file = _write_pw_file(tmp_path / "typed.pw", pw=typo)
         code = hashlib.sha256(PASSWORD).hexdigest()[:4]
         rc = main([
-            "key", "card", "--check", str(pw_file), "--code", code,
+            "password", "card", "--check", str(pw_file), "--code", code,
         ])
         assert rc == 1
         assert "MISMATCH" in capsys.readouterr().out
 
     def test_key_card_check_requires_code(self, tmp_path: Path, capsys) -> None:
         pw_file = _write_pw_file(tmp_path / "typed.pw")
-        rc = main(["key", "card", "--check", str(pw_file)])
+        rc = main(["password", "card", "--check", str(pw_file)])
         assert rc == 1
         assert "--code" in capsys.readouterr().out
 
     def test_key_card_check_missing_file(self, tmp_path: Path, capsys) -> None:
         rc = main([
-            "key", "card", "--check", str(tmp_path / "nope.pw"),
+            "password", "card", "--check", str(tmp_path / "nope.pw"),
             "--code", "abcd",
         ])
         assert rc == 1
         assert "does not exist" in capsys.readouterr().out
 
     def test_key_card_code_without_check(self, capsys) -> None:
-        rc = main(["key", "card", "--code", "abcd"])
+        rc = main(["password", "card", "--code", "abcd"])
         assert rc == 1
         assert "--check" in capsys.readouterr().out
 
@@ -1628,28 +1628,28 @@ class TestKeyCard:
         cfg = _config_file(tmp_path)
         # Remove the configured password file so the check-code path errors.
         (tmp_path / "alpha.pw").unlink()
-        rc = main(["--config", str(cfg), "key", "card", "--repo", "alpha"])
+        rc = main(["--config", str(cfg), "password", "card", "--repo", "alpha"])
         assert rc == 1
         assert "does not exist" in capsys.readouterr().out
 
     def test_key_card_router_lists_card(self, capsys) -> None:
-        assert main(["key"]) == 1
+        assert main(["password"]) == 1
         assert "card" in capsys.readouterr().out
 
 
 class TestPerRepoDefaults:
-    """#587: `key split` takes K/N from the repository's own table."""
+    """#587: `password split` takes K/N from the repository's own table."""
 
     def test_repo_table_kn_is_the_default(self, tmp_path: Path, capsys) -> None:
         cfg = _config_file(tmp_path)  # [repos.alpha] is the last table
         with cfg.open("a") as f:
-            f.write("key_threshold = 3\nkey_shares = 4\n")
+            f.write("split_threshold = 3\nsplit_shares = 4\n")
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
-            "key", "split", "--repo", "alpha", "--out", str(out),
+            "password", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
         assert len(_share_mnemonic_files(out)) == 4
         captured = capsys.readouterr()
         assert "under [repos.alpha] in lcsas.toml" in captured.out
-        assert "key_threshold = 3" in captured.out
+        assert "split_threshold = 3" in captured.out

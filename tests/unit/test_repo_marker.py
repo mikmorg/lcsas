@@ -1,4 +1,4 @@
-"""The backup set marker, ``metadata/<repo_id>/LCSAS_REPO.txt`` (rc6 C1).
+"""The backup set marker, ``metadata/<repo_id>/LCSAS_BACKUP_SET.txt`` (rc6 C1).
 
 Drill #476 found that the restore scripts' set menu shows each set's
 repo_id, a UUID (F4), and that nothing on a disc says, in a form a script
@@ -322,7 +322,7 @@ def _mixed_config(tmp_path: Path, mirror: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=mirror,
         staging_path=tmp_path / "staging",
-        db_path=tmp_path / "archive.db",
+        db_path=tmp_path / "catalog.db",
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=1000,
@@ -540,7 +540,7 @@ def test_stage_writes_a_marker_for_each_set_of_a_mixed_archive(
     volume_info = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
     pad = " " * 17
     assert (
-        f"  Repositories:  photos\n{pad}  ID {PHOTOS}\n{pad}  2 packs, "
+        f"  Backup sets:   photos\n{pad}  ID {PHOTOS}\n{pad}  2 packs, "
     ) in volume_info
     assert (
         f"\n{pad}documents\n{pad}  ID {DOCUMENTS}\n{pad}  2 packs, "
@@ -554,7 +554,7 @@ def test_prepare_marks_a_set_with_no_recorded_split_as_not_split(
     """A third set: key_split=true in the config, no record, no packs.
 
     The drift guard checks only the sets with packs on this volume, so
-    the burn goes ahead without --allow-escrow-drift.  Its marker must
+    the burn goes ahead without --allow-split-drift.  Its marker must
     say split=none: no record means no share cards were made.
     """
     videos = "5d1e7a3c-2f8b-4c69-a0e4-9b3d6f2c8e17"
@@ -604,7 +604,7 @@ def test_volume_info_keeps_the_old_row_when_the_name_is_the_id(
         _volume(), packs=_packs(), repo_names={"family": "family", "work": "Work"},
     )
     text = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
-    assert "Repositories:  family (2 packs, 2.5 GB)\n" in text
+    assert "Backup sets:   family (2 packs, 2.5 GB)\n" in text
     assert (
         "                 Work\n"
         "                   ID work\n"
@@ -646,7 +646,7 @@ def test_volume_info_long_names_stay_inside_72_columns() -> None:
             if not lines[i].startswith(f"{pad}  ")
         )
         parts = [
-            lines[start].removeprefix("  Repositories:  ").strip(),
+            lines[start].removeprefix("  Backup sets:   ").strip(),
             *(line.strip() for line in lines[start + 1:id_at]),
         ]
         joiner = "" if " " not in name else " "
@@ -839,7 +839,7 @@ def test_standalone_script_ignores_the_marker(tmp_path: Path) -> None:
             sys.executable, str(script),
             "--repo", str(repo),
             "--password-file", str(pw_file),
-            "--target", str(target),
+            "--restore-folder", str(target),
             "--interactive", "off",
         ],
         capture_output=True, text=True, timeout=120,

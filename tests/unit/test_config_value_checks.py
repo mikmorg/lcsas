@@ -1,6 +1,6 @@
 """Config values of the wrong type or impossible K/N are named errors (#682).
 
-``lcsas config check`` used to pass K=5 of N=3, read ``key_split = "false"``
+``lcsas config check`` used to pass K=5 of N=3, read ``split = "false"``
 as true, and crash with a raw TypeError on a quoted number.  Each bad value
 must now stop the load with a message that names the key, and no example
 may reach main()'s "Unexpected error" (traceback) path.
@@ -29,7 +29,7 @@ def _write(tmp_path: Path, defaults: str = "", repos: str = "") -> Path:
             [paths]
             mirror_base = "{mirror}"
             staging = "{staging}"
-            database = "{tmp_path / 'archive.db'}"
+            catalog = "{tmp_path / 'catalog.db'}"
 
             [defaults]
             media_type = "TEST_TINY"
@@ -47,13 +47,13 @@ def _write(tmp_path: Path, defaults: str = "", repos: str = "") -> Path:
 
 # (id, [defaults] lines, [repos] text or None, key the message must name)
 _BAD_DEFAULTS = [
-    ("k-greater-than-n", "key_threshold = 5\nkey_shares = 3\n", "key_threshold"),
-    ("k-one-n-five", "key_threshold = 1\nkey_shares = 5\n", "key_threshold"),
-    ("n-forty", "key_threshold = 2\nkey_shares = 40\n", "key_shares"),
-    ("k-n-zero", "key_threshold = 0\nkey_shares = 0\n", "key_threshold"),
-    ("key-split-string", 'key_split = "false"\n', "key_split"),
-    ("threshold-quoted", 'key_threshold = "3"\n', "key_threshold"),
-    ("shares-quoted", 'key_shares = "5"\n', "key_shares"),
+    ("k-greater-than-n", "split_threshold = 5\nsplit_shares = 3\n", "split_threshold"),
+    ("k-one-n-five", "split_threshold = 1\nsplit_shares = 5\n", "split_threshold"),
+    ("n-forty", "split_threshold = 2\nsplit_shares = 40\n", "split_shares"),
+    ("k-n-zero", "split_threshold = 0\nsplit_shares = 0\n", "split_threshold"),
+    ("key-split-string", 'split = "false"\n', "split"),
+    ("threshold-quoted", 'split_threshold = "3"\n', "split_threshold"),
+    ("shares-quoted", 'split_shares = "5"\n', "split_shares"),
     ("reserve-quoted", 'metadata_reserve_mb = "100"\n', "metadata_reserve_mb"),
     ("label-prefix-number", "label_prefix = 7\n", "label_prefix"),
 ]
@@ -133,11 +133,11 @@ def test_repo_override_with_impossible_pair_names_the_repository(tmp_path):
     cfg = _write(tmp_path, repos=textwrap.dedent(f"""\
         [repos.work]
         mirror_path = "{mirror / 'work'}"
-        key_split = true
-        key_shares = 1
+        split = true
+        split_shares = 1
         """))
 
-    with pytest.raises(ValueError, match=r"\[repos\.work\] key_threshold/key_shares"):
+    with pytest.raises(ValueError, match=r"\[repos\.work\] split_threshold/split_shares"):
         load_config(cfg)
 
 
@@ -146,10 +146,10 @@ def test_repo_key_split_string_is_named(tmp_path):
     cfg = _write(tmp_path, repos=textwrap.dedent(f"""\
         [repos.work]
         mirror_path = "{mirror / 'work'}"
-        key_split = "false"
+        split = "false"
         """))
 
-    with pytest.raises(ValueError, match=r"\[repos\.work\] key_split"):
+    with pytest.raises(ValueError, match=r"\[repos\.work\] split"):
         load_config(cfg)
 
 
@@ -166,7 +166,7 @@ def test_impossible_pairs_fail(k, n):
 def test_valid_split_config_still_loads(tmp_path):
     cfg = _write(
         tmp_path,
-        defaults="key_split = true\nkey_threshold = 2\nkey_shares = 3\n",
+        defaults="split = true\nsplit_threshold = 2\nsplit_shares = 3\n",
     )
     config = load_config(cfg)
     assert config.repo_split("family") == (True, 2, 3)

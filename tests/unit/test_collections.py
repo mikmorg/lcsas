@@ -67,14 +67,14 @@ def _setup(
     sizes = sizes if sizes is not None else {"fam": [64, 64], "work": [64]}
     staging = tmp_path / "staging"
     staging.mkdir()
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     mirrors = {name: _mirror(tmp_path, name) for name in ("fam", "work")}
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(textwrap.dedent(f"""\
         [paths]
         mirror_base = "{tmp_path / 'mirror'}"
         staging = "{staging}"
-        database = "{db}"
+        catalog = "{db}"
 
         [defaults]
         media_type = "CD700"

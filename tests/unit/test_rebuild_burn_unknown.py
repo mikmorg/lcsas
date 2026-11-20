@@ -41,7 +41,7 @@ def _toml(tmp_path: Path, config, db: Path) -> Path:
     cfg.write_text(
         f'[paths]\nmirror_base = "{config.mirror_base_path}"\n'
         f'staging = "{config.staging_path}"\n'
-        f'database = "{db}"\n'
+        f'catalog = "{db}"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
     )
     return cfg
@@ -101,7 +101,7 @@ def two_sessions(tmp_path):
     (x_tree,) = _move_discs([s2.staging_dir / x], tmp_path)
     shutil.rmtree(config.staging_path)
     config.staging_path.mkdir()
-    db = tmp_path / "rebuilt" / "archive.db"
+    db = tmp_path / "rebuilt" / "catalog.db"
     db.parent.mkdir()
     return {"config": config, "x": x, "y": y, "s1": s1.session_id,
             "s2": s2.session_id, "x_tree": x_tree, "db": db,
@@ -190,7 +190,7 @@ def _verify_disc(db: Path, label: str, *extra: str) -> int:
               side_effect=lambda device, n:
               hashlib.sha256(b"\x00" * n).hexdigest()),
     ):
-        return main(["--db", str(db), "verify", label, "--disc",
+        return main(["--catalog", str(db), "verify", label, "--disc",
                      "--device", "/dev/null", *extra])
 
 

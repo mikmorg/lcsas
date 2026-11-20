@@ -176,7 +176,7 @@ class TestHolographicInjector:
     def test_inject_catalog(self, tmp_path):
         staging_root = tmp_path / "staging"
         staging_root.mkdir()
-        db_file = tmp_path / "archive.db"
+        db_file = tmp_path / "catalog.db"
         db_file.write_text("fake db")
 
         injector = HolographicInjector(staging_root)
@@ -190,7 +190,7 @@ class TestHolographicInjector:
 
         staging_root = tmp_path / "staging"
         staging_root.mkdir()
-        db_file = tmp_path / "archive.db"
+        db_file = tmp_path / "catalog.db"
         conn = sqlite3.connect(db_file)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE t (x)")
@@ -1001,9 +1001,9 @@ class TestOrphanedStagingCleanup:
         (active / "V1.iso").write_bytes(b"iso")
         (active / "sub" / "V2.iso.ecc.tmp").write_bytes(b"killed augment")
         cfg = LCSASConfig(
-            mirror_base_path=tmp_path, staging_path=staging, db_path=staging / "archive.db",
+            mirror_base_path=tmp_path, staging_path=staging, db_path=staging / "catalog.db",
         )
-        (staging / "archive.db").write_bytes(b"")          # catalog lives here
+        (staging / "catalog.db").write_bytes(b"")          # catalog lives here
         conn = _mem_conn()
         conn.execute(
             "INSERT INTO burn_sessions (session_id, media_type, status, staging_dir) "

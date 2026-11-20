@@ -69,7 +69,7 @@ def _write_consolidate_config(tmp_path, db) -> str:
         "[paths]\n"
         f'mirror_base = "{mirror_base}"\n'
         f'staging = "{staging}"\n'
-        f'database = "{db}"\n'
+        f'catalog = "{db}"\n'
         "\n"
         "[defaults]\n"
         'media_type = "BDXL100"\n'
@@ -83,7 +83,7 @@ def _write_consolidate_config(tmp_path, db) -> str:
 
 class TestCmdConsolidate:
     def test_consolidate_unknown_media_type_errors(self, tmp_path, capsys, caplog):
-        """`consolidate --target-media BOGUS` exits non-zero with an error
+        """`consolidate --media-type BOGUS` exits non-zero with an error
         message that lists the valid media types."""
         db = tmp_path / "test.db"
         vol_ids = _seed_db_with_volumes(db, num_volumes=2, packs_per_volume=2)
@@ -91,9 +91,9 @@ class TestCmdConsolidate:
         caplog.clear()
 
         result = main([
-            "--db", str(db), "consolidate",
+            "--catalog", str(db), "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BOGUS_MEDIA",
+            "--media-type", "BOGUS_MEDIA",
         ])
         assert result == 1
         assert "Unknown media type 'BOGUS_MEDIA'" in caplog.text
@@ -102,7 +102,7 @@ class TestCmdConsolidate:
         assert "TEST_TINY" in caplog.text
 
     def test_consolidate_plan_only_prints_summary(self, tmp_path, capsys, caplog):
-        """Default `consolidate <ids> --target-media X` is plan-only.
+        """Default `consolidate <ids> --media-type X` is plan-only.
 
         Exits 0, logs the plan, and prints next-step instructions
         including the `--execute` hint.
@@ -113,9 +113,9 @@ class TestCmdConsolidate:
         capsys.readouterr()
 
         result = main([
-            "--db", str(db), "consolidate",
+            "--catalog", str(db), "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
         ])
         assert result == 0
         assert "Consolidation Plan:" in caplog.text
@@ -167,9 +167,9 @@ class TestCmdConsolidate:
 
         caplog.clear()
         result = main([
-            "--db", str(db), "consolidate",
+            "--catalog", str(db), "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
             "--deprecate",
         ])
         assert result == 0
@@ -193,9 +193,9 @@ class TestCmdConsolidate:
         caplog.clear()
 
         result = main([
-            "--db", str(db), "consolidate",
+            "--catalog", str(db), "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
             "--deprecate", "--execute",
         ])
         assert result == 1
@@ -213,9 +213,9 @@ class TestCmdConsolidate:
         caplog.clear()
 
         result = main([
-            "--db", str(db), "consolidate",
+            "--catalog", str(db), "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
             "--execute",
         ])
         assert result == 1
@@ -239,7 +239,7 @@ class TestCmdConsolidate:
         result = main([
             "--config", cfg, "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
             "--execute",
         ])
         assert result == 0
@@ -264,7 +264,7 @@ class TestCmdConsolidate:
         result = main([
             "--config", cfg, "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
             "--execute",
         ])
         assert result == 1
@@ -308,7 +308,7 @@ class TestCmdConsolidate:
         result = main([
             "--config", cfg, "consolidate",
             *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
             "--execute",
         ])
         assert result == 0, caplog.text
@@ -342,7 +342,7 @@ class TestCmdConsolidate:
         caplog.clear()
         assert main([
             "--config", cfg, "consolidate", *[str(v) for v in vol_ids],
-            "--target-media", "BDXL100",
+            "--media-type", "BDXL100",
         ]) == 0, caplog.text
         conn = get_connection(str(db))
         try:
@@ -420,8 +420,8 @@ class TestDeprecateRefusals:
             conn.close()
         caplog.clear()
 
-        rc = main(["--db", str(db), "consolidate", *map(str, vol_ids),
-                   "--target-media", "BD25", "--deprecate"])
+        rc = main(["--catalog", str(db), "consolidate", *map(str, vol_ids),
+                   "--media-type", "BD25", "--deprecate"])
 
         assert rc == 1
         assert "Unexpected error" not in caplog.text
@@ -441,8 +441,8 @@ class TestDeprecateRefusals:
         _replicate(db, vol_ids[:1])
         caplog.clear()
 
-        rc = main(["--db", str(db), "consolidate", *map(str, vol_ids),
-                   "--target-media", "BD25", "--deprecate"])
+        rc = main(["--catalog", str(db), "consolidate", *map(str, vol_ids),
+                   "--media-type", "BD25", "--deprecate"])
 
         assert rc == 1
         assert "Unexpected error" not in caplog.text

@@ -146,7 +146,7 @@ def _build_representative_staging(
     )
 
     injector = HolographicInjector(staging_root)
-    # Each repository's LCSAS_REPO.txt marker (rc6 C1) costs one more ISO
+    # Each repository's LCSAS_BACKUP_SET.txt marker (rc6 C1) costs one more ISO
     # block per repository.
     markers = {
         name: make_repo_marker(name, config_name=name, config_split=(True, 2, 3))

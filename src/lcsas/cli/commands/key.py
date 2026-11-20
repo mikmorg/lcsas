@@ -306,7 +306,7 @@ def _check_split_repo_registered(
 ) -> None:
     """Refuse a split whose repository is not in the catalog (#571).
 
-    ``key split`` records the split under the catalog repo_id that
+    ``password split`` records the split under the catalog repo_id that
     ``repo add`` assigned, because that is the ID the burn pipeline looks
     it up by.  Raises ValueError (the message to print) when there is no
     catalog or the repository is not registered in it, so the caller can
@@ -385,7 +385,7 @@ def _record_split_by_name(
 
 
 def _existing_share_files(out_dir: Path, repo: str) -> list[Path]:
-    """Files in *out_dir* named like ``key split``'s output for *repo* (#683)."""
+    """Files in *out_dir* named like ``password split``'s output for *repo* (#683)."""
     import glob
 
     if not out_dir.is_dir():
@@ -513,7 +513,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     elif config is None:
         logger.warning(
             "No --config given: the password was NOT verified against any "
-            "repository. Run `lcsas --config ... key verify --repo %s "
+            "repository. Run `lcsas --config ... password verify --repo %s "
             "--password-file %s` once the mirror is reachable.",
             args.repo, repo_pw_file,
         )
@@ -599,7 +599,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
             logger.warning(
                 "Split succeeded but recording it in the catalog failed: %s. "
                 "Once the catalog is reachable, re-run 'lcsas --config ... "
-                "key split --repo %s' so burn drift-checking works.",
+                "password split --repo %s' so burn drift-checking works.",
                 e, args.repo,
             )
     else:
@@ -702,7 +702,7 @@ def cmd_key_unsplit(args: argparse.Namespace) -> int:
 
     from datetime import UTC, datetime
     logger.warning(
-        "AUDIT %s key unsplit: cleared the recorded %d-of-%d split of "
+        "AUDIT %s password unsplit: cleared the recorded %d-of-%d split of "
         "repository '%s' (id %s, split ID %05d, split on %s).",
         datetime.now(UTC).isoformat(timespec="seconds"), record.threshold,
         record.shares, repo.name, repo.repo_id, record.slip39_id,
@@ -843,7 +843,7 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for key verify.")
+        logger.error("--config is required for password verify.")
         return 1
     if bool(args.share_files) == bool(args.password_file):
         logger.error(

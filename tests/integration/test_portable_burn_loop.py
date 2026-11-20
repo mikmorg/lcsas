@@ -103,7 +103,7 @@ class _SiteA:
     def __init__(self, root: Path) -> None:
         self.root = root
         root.mkdir()
-        self.db = root / "archive.db"
+        self.db = root / "catalog.db"
         self.config = root / "config.toml"
         mirror = root / "mirror" / "family"
         password_file = root / "family.key"
@@ -124,7 +124,7 @@ class _SiteA:
         self.config.write_text(
             f'[paths]\nmirror_base = "{root / "mirror"}"\n'
             f'staging = "{root / "staging"}"\n'
-            f'database = "{self.db}"\n'
+            f'catalog = "{self.db}"\n'
             "\n[defaults]\n"
             'media_type = "TEST_TINY"\n'
             "ecc_redundancy_pct = 0\n"

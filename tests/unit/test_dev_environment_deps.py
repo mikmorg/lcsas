@@ -1,6 +1,6 @@
 """Regression: ``pip install -e ".[dev]"`` must pull in ``zstandard``.
 
-The tier-3 pure-Python restorer (``standalone_restorer.py``, derived from
+The tier-3 pure-Python restorer (``python_reader.py``, derived from
 ``lcsas.restore.restic_fallback``) needs ``zstandard`` to decompress modern
 rustic v2 blobs.  It is intentionally an OPTIONAL runtime dep (the
 "zero runtime dependencies" rule in CLAUDE.md), but the dev/CI environment

@@ -292,7 +292,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
         except EscrowDriftError as e:
             logger.error("%s", e)
             logger.error(
-                "Refusing to stage. Pass --allow-escrow-drift to override "
+                "Refusing to stage. Pass --allow-split-drift to override "
                 "(discs may print wrong share instructions)."
             )
             return 1

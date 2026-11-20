@@ -190,7 +190,7 @@ def test_verify_disc_device_hash_pass_then_byte_flip_fails(
     # 2. Fresh catalog with the volume registered as burned but not yet
     #    read back (BURNED, as an imported `burn-iso --no-verify` receipt
     #    leaves it), hash + size on the session row as stage() records them.
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     conn = get_connection(db_path)
     create_all(conn)
     vol = create_volume(
@@ -220,7 +220,7 @@ def test_verify_disc_device_hash_pass_then_byte_flip_fails(
     # 3. Pristine disc → verify passes, BURNED → VERIFIED, copy stamped.
     _load(iso_path, cdemu_device)
     rc = main([
-        "--db", str(db_path),
+        "--catalog", str(db_path),
         "verify", label, "--disc", "--device", cdemu_device,
         "--location", location,
     ])
@@ -243,7 +243,7 @@ def test_verify_disc_device_hash_pass_then_byte_flip_fails(
     _load(iso_path, cdemu_device)
 
     rc = main([
-        "--db", str(db_path),
+        "--catalog", str(db_path),
         "verify", label, "--disc", "--device", cdemu_device,
     ])
     assert rc == 1, "a byte-flipped disc must fail the device hash verify"
@@ -340,7 +340,7 @@ def test_verify_disc_wrong_disc_records_nothing(cdemu_device, tmp_path):
     iso_a = _master_iso(tmp_path, label_a)
     iso_b = _master_iso(tmp_path, label_b)
 
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     vol_id = _register_burned_volume(db_path, label_a, iso_a,
                                      disc_at="E2E_Shelf")
 
@@ -356,7 +356,7 @@ def test_verify_disc_wrong_disc_records_nothing(cdemu_device, tmp_path):
     # Wrong disc (B) in the drive while verifying A.
     _load(iso_b, cdemu_device)
     rc = main([
-        "--db", str(db_path),
+        "--catalog", str(db_path),
         "verify", label_a, "--disc", "--device", cdemu_device,
     ])
     assert rc == 1, "the wrong disc must never verify"
@@ -376,7 +376,7 @@ def test_verify_disc_wrong_disc_records_nothing(cdemu_device, tmp_path):
     _unload()
     _load(iso_a, cdemu_device)
     rc = main([
-        "--db", str(db_path),
+        "--catalog", str(db_path),
         "verify", label_a, "--disc", "--device", cdemu_device,
     ])
     assert rc == 0, "the correct disc must pass identity + hash verify"
@@ -406,7 +406,7 @@ def test_verify_all_disc_batch_stamps_copies(cdemu_device, tmp_path):
     iso_a = _master_iso(tmp_path, label_a)
     iso_b = _master_iso(tmp_path, label_b)
 
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     id_a = _register_burned_volume(db_path, label_a, iso_a)
     id_b = _register_burned_volume(db_path, label_b, iso_b)
 
@@ -454,7 +454,7 @@ def test_verify_all_disc_batch_stamps_copies(cdemu_device, tmp_path):
 
     with patch("builtins.input", side_effect=operator_inserts_disc):
         rc = main([
-            "--db", str(db_path),
+            "--catalog", str(db_path),
             "verify", "--all", "--disc", "--device", cdemu_device,
         ])
     assert rc == 1, "one failing disc must make the batch exit non-zero"
@@ -486,7 +486,7 @@ def test_verify_disc_truncated_image_fails(cdemu_device, tmp_path):
     iso = _master_iso(tmp_path, label)
     full_size = iso.stat().st_size
 
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     _register_burned_volume(db_path, label, iso, disc_at="E2E_Shelf")
 
     # Truncate the backing image by two sectors (PVD at sector 16 stays
@@ -497,7 +497,7 @@ def test_verify_disc_truncated_image_fails(cdemu_device, tmp_path):
     _load(truncated, cdemu_device)
 
     rc = main([
-        "--db", str(db_path),
+        "--catalog", str(db_path),
         "verify", label, "--disc", "--device", cdemu_device,
     ])
     assert rc == 1, "a truncated burn must fail verification"

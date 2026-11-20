@@ -185,10 +185,10 @@ def test_fixture_builders_register_sets_only_with_repo_add(path: Path) -> None:
 
 
 def test_macos_e2e_names_the_fixture_set_by_its_name() -> None:
-    """macos-e2e.yml's LCSAS_REPO legs pass the set's name, which must be
+    """macos-e2e.yml's LCSAS_BACKUP_SET legs pass the set's name, which must be
     the name fixture_lib gives it (the id is a fresh UUID each build).
 
-    The macOS fixture has ONE set.  restore.sh checks that LCSAS_REPO
+    The macOS fixture has ONE set.  restore.sh checks that LCSAS_BACKUP_SET
     names even a lone set (#802), but picking one set among several is
     test_restore_sh_journey's job: no step may claim these legs test it."""
     yml = (REPO_ROOT / ".github" / "workflows" / "macos-e2e.yml").read_text(
@@ -197,7 +197,7 @@ def test_macos_e2e_names_the_fixture_set_by_its_name() -> None:
     want = f'--repo "{fixture_lib.WINDOWS_SET_NAME}"'
     assert yml.count(want) == 2
     assert "--repo win" not in yml
-    assert "LCSAS_REPO by name" not in yml
+    assert "LCSAS_BACKUP_SET by name" not in yml
     assert "other_set_names" not in (E2E / "macos_restore_smoke.py").read_text(
         encoding="utf-8"
     )
@@ -223,7 +223,7 @@ def _pr_paths(workflow: str) -> list[str]:
 
 @pytest.mark.parametrize("workflow", ["windows-e2e.yml", "macos-e2e.yml"])
 def test_e2e_workflows_run_when_the_set_marker_changes(workflow: str) -> None:
-    """Both fixtures put LCSAS_REPO.txt on every disc, and the Windows legs
+    """Both fixtures put LCSAS_BACKUP_SET.txt on every disc, and the Windows legs
     expect its name_cmd (repo_marker.cmd_name): a PR that changes either
     must run the journeys, not wait for the weekly run."""
     paths = _pr_paths(workflow)
@@ -257,7 +257,7 @@ def test_set_marker_problems_accepts_an_owners_folders(tmp_path: Path) -> None:
     names = ("alpha", "bravo")
     assert fixture_lib.set_marker_problems(md, names, require_all=True) == []
     # A data disc may hold only some of the sets.
-    (md / BRAVO_ID / "LCSAS_REPO.txt").unlink()
+    (md / BRAVO_ID / "LCSAS_BACKUP_SET.txt").unlink()
     (md / BRAVO_ID / "keys").rmdir()
     (md / BRAVO_ID).rmdir()
     assert fixture_lib.set_marker_problems(md, names, require_all=False) == []
@@ -277,7 +277,7 @@ def _no_marker(md: Path) -> None:
 def _marker_of_another_folder(md: Path) -> None:
     folder = _set_folder(md, ALPHA_ID, None)
     other = _set_folder(md.parent / "elsewhere", BRAVO_ID, "alpha")
-    (folder / "LCSAS_REPO.txt").write_bytes((other / "LCSAS_REPO.txt").read_bytes())
+    (folder / "LCSAS_BACKUP_SET.txt").write_bytes((other / "LCSAS_BACKUP_SET.txt").read_bytes())
 
 
 def _foreign_name(md: Path) -> None:
@@ -295,8 +295,8 @@ def _no_folders(md: Path) -> None:
 
 @pytest.mark.parametrize(("make", "says"), [
     (_named_by_name, "not named by a UUID id (it is the set's name)"),
-    (_no_marker, "no LCSAS_REPO.txt whose id= is the folder"),
-    (_marker_of_another_folder, "no LCSAS_REPO.txt whose id= is the folder"),
+    (_no_marker, "no LCSAS_BACKUP_SET.txt whose id= is the folder"),
+    (_marker_of_another_folder, "no LCSAS_BACKUP_SET.txt whose id= is the folder"),
     (_foreign_name, "the marker names 'zulu', no set of this archive"),
     (_same_name_twice, "'alpha' also has the folder"),
     (_no_folders, "no backup set folders"),

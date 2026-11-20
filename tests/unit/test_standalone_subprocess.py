@@ -1,4 +1,4 @@
-"""Test standalone_restorer.py as a subprocess.
+"""Test python_reader.py as a subprocess.
 
 Proves that the auto-generated standalone restorer script can be
 invoked as a subprocess using only Python 3 stdlib and correctly
@@ -71,7 +71,7 @@ def _build_repo_and_script(
     file_content: bytes = b"Standalone subprocess test data!\n",
     extra_nodes: list[dict] | None = None,
 ) -> tuple[Path, Path, Path]:
-    """Build a synthetic repo + the standalone_restorer.py script.
+    """Build a synthetic repo + the python_reader.py script.
 
     Returns (repo_dir, password_file, script_path).
 
@@ -179,8 +179,8 @@ def _build_repo_and_script(
     pw_file = tmp_path / "password.txt"
     pw_file.write_bytes(PASSWORD)
 
-    # Generate standalone_restorer.py
-    script = tmp_path / "standalone_restorer.py"
+    # Generate python_reader.py
+    script = tmp_path / "python_reader.py"
     script.write_text(build_standalone())
     os.chmod(str(script), 0o755)
 
@@ -193,7 +193,7 @@ def _build_repo_and_script(
 
 
 class TestStandaloneSubprocess:
-    """Run standalone_restorer.py as a subprocess against a synthetic repo."""
+    """Run python_reader.py as a subprocess against a synthetic repo."""
 
     def test_restore_via_subprocess(self, tmp_path):
         """The standalone script restores data correctly as a subprocess."""
@@ -206,7 +206,7 @@ class TestStandaloneSubprocess:
                 sys.executable, str(script),
                 "--repo", str(repo),
                 "--password-file", str(pw_file),
-                "--target", str(target),
+                "--restore-folder", str(target),
             ],
             capture_output=True,
             text=True,
@@ -239,7 +239,7 @@ class TestStandaloneSubprocess:
         target = tmp_path / "output"
         result = subprocess.run(
             [sys.executable, str(script), "--repo", str(repo),
-             "--password-file", str(pw_file), "--target", str(target)],
+             "--password-file", str(pw_file), "--restore-folder", str(target)],
             capture_output=True, text=True, timeout=300,
         )
         assert result.returncode == 0, result.stderr
@@ -294,7 +294,7 @@ class TestStandaloneSubprocess:
                 sys.executable, str(script),
                 "--repo", str(repo),
                 "--password-file", str(pw_file),
-                "--target", "/unused",
+                "--restore-folder", "/unused",
                 "--list-snapshots",
             ],
             capture_output=True,
@@ -316,7 +316,7 @@ class TestStandaloneSubprocess:
                 sys.executable, str(script),
                 "--repo", str(repo),
                 "--password-file", str(pw_file),
-                "--target", "/unused",
+                "--restore-folder", "/unused",
                 "--info",
             ],
             capture_output=True,
@@ -338,7 +338,7 @@ class TestStandaloneSubprocess:
                 sys.executable, str(script),
                 "--repo", str(repo),
                 "--password-file", str(bad_pw),
-                "--target", str(target),
+                "--restore-folder", str(target),
             ],
             capture_output=True,
             text=True,
@@ -355,7 +355,7 @@ class TestStandaloneSubprocess:
                 sys.executable, str(script),
                 "--repo", str(tmp_path / "nonexistent"),
                 "--password-file", str(pw_file),
-                "--target", str(tmp_path / "out"),
+                "--restore-folder", str(tmp_path / "out"),
             ],
             capture_output=True,
             text=True,
@@ -379,7 +379,7 @@ class TestStandaloneSubprocess:
                 sys.executable, str(script),
                 "--repo", str(repo),
                 "--password-file", str(pw_file),
-                "--target", str(target),
+                "--restore-folder", str(target),
                 "--interactive", "off",
             ],
             capture_output=True,
@@ -414,7 +414,7 @@ class TestStandaloneSubprocess:
                     sys.executable, str(script),
                     "--repo", str(repo),
                     "--password-file", str(pw_file),
-                    "--target", str(target),
+                    "--restore-folder", str(target),
                     "--interactive", "on",
                 ],
                 input=stdin,
@@ -454,7 +454,7 @@ class TestStandaloneSubprocess:
                 sys.executable, str(script),
                 "--repo", str(repo),
                 "--password-file", str(pw_file),
-                "--target", str(target),
+                "--restore-folder", str(target),
                 "--interactive", "off",
             ],
             capture_output=True,
@@ -507,7 +507,7 @@ class TestStandaloneSubprocess:
             "sys.version_info < (99, 0)",
             1,
         )
-        script = tmp_path / "standalone_restorer.py"
+        script = tmp_path / "python_reader.py"
         script.write_text(forced)
 
         result = subprocess.run(
@@ -525,11 +525,11 @@ class TestStandaloneSubprocess:
         assert "Traceback (most recent call last)" not in combined, combined
 
 
-# ── lcsas restore standalone's in-process Python reader ──────────────
+# ── lcsas restore from-disc's in-process Python reader ──────────────
 #
 # _restore_with_python_reader runs the same reader in process when rustic
 # is not installed.  It must give the exit codes the bundled
-# standalone_restorer.py gives (#875).
+# python_reader.py gives (#875).
 
 
 def _in_process(tmp_path: Path, pw_file: Path, repo: Path) -> int:

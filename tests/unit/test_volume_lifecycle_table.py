@@ -286,7 +286,7 @@ def _write_cfg(root: Path, config: Any) -> None:
         "[paths]\n"
         f'mirror_base = "{config.mirror_base_path}"\n'
         f'staging = "{config.staging_path}"\n'
-        f'database = "{config.db_path}"\n'
+        f'catalog = "{config.db_path}"\n'
         "[defaults]\n"
         'media_type = "TEST_TINY"\n'
         'label_prefix = "TEST"\n'
@@ -675,7 +675,7 @@ class Event:
 
 
 def _verify(*extra: str) -> Callable[[Env], int]:
-    return lambda env: _main("--db", str(env.db), "verify", env.label,
+    return lambda env: _main("--catalog", str(env.db), "verify", env.label,
                              *extra)
 
 
@@ -720,10 +720,10 @@ EVENTS: dict[str, Event] = {
     "ISO check passes": Event("lcsas verify L", _verify()),
     "batch ISO check passes": Event(
         "lcsas verify --all",
-        lambda env: _main("--db", str(env.db), "verify", "--all")),
+        lambda env: _main("--catalog", str(env.db), "verify", "--all")),
     "batch disc check passes": Event(
         "lcsas verify --all --disc",
-        lambda env: _main("--db", str(env.db), "verify", "--all", "--disc",
+        lambda env: _main("--catalog", str(env.db), "verify", "--all", "--disc",
                           "--device", "/dev/sr0")),
     # --- burn receipts ------------------------------------------------
     "a passing receipt is imported": Event(
@@ -738,30 +738,30 @@ EVENTS: dict[str, Event] = {
     # --- discs --------------------------------------------------------
     "the disc is taken out of service": Event(
         "lcsas copy deprecate L Home",
-        lambda env: _main("--db", str(env.db), "copy", "deprecate",
+        lambda env: _main("--catalog", str(env.db), "copy", "deprecate",
                           env.label, "Home")),
     "the disc is destroyed": Event(
         "lcsas copy destroy L Home",
-        lambda env: _main("--db", str(env.db), "copy", "destroy",
+        lambda env: _main("--catalog", str(env.db), "copy", "destroy",
                           env.label, "Home")),
     "the last disc is marked lost": Event(
         "lcsas copy destroy L Home --lost",
-        lambda env: _main("--db", str(env.db), "copy", "destroy",
+        lambda env: _main("--catalog", str(env.db), "copy", "destroy",
                           env.label, "Home", "--lost")),
     # --- consolidation and deprecation --------------------------------
     "consolidation starts": Event(
-        "lcsas consolidate L --target-media TEST_TINY --execute",
+        "lcsas consolidate L --media-type TEST_TINY --execute",
         lambda env: _main("--config", env.cfg, "consolidate", env.label,
-                          "--target-media", "TEST_TINY", "--execute")),
+                          "--media-type", "TEST_TINY", "--execute")),
     "consolidation finishes (packs on another volume too)": Event(
-        "lcsas consolidate L --target-media TEST_TINY --deprecate",
+        "lcsas consolidate L --media-type TEST_TINY --deprecate",
         lambda env: _main("--config", env.cfg, "consolidate", env.label,
-                          "--target-media", "TEST_TINY", "--deprecate"),
+                          "--media-type", "TEST_TINY", "--deprecate"),
         prepare=seed_replica),
     "deprecate by hand (packs on no other volume)": Event(
-        "lcsas consolidate L --target-media TEST_TINY --deprecate",
+        "lcsas consolidate L --media-type TEST_TINY --deprecate",
         lambda env: _main("--config", env.cfg, "consolidate", env.label,
-                          "--target-media", "TEST_TINY", "--deprecate")),
+                          "--media-type", "TEST_TINY", "--deprecate")),
     "consolidation abandoned (its session aborted)": Event(
         "lcsas session abort <consolidation session>",
         lambda env: _main("--config", env.cfg, "session", "abort",
@@ -794,11 +794,11 @@ EVENTS: dict[str, Event] = {
                           "--force", "--session", env.session_id)),
     "catalog reconcile --fix": Event(
         "lcsas catalog reconcile --fix --yes",
-        lambda env: _main("--db", str(env.db), "catalog", "reconcile",
+        lambda env: _main("--catalog", str(env.db), "catalog", "reconcile",
                           "--fix", "--yes")),
     "catalog reconcile --fix --include-waiting": Event(
         "lcsas catalog reconcile --fix --yes --include-waiting",
-        lambda env: _main("--db", str(env.db), "catalog", "reconcile",
+        lambda env: _main("--catalog", str(env.db), "catalog", "reconcile",
                           "--fix", "--yes", "--include-waiting")),
     # --- catalog rebuild ----------------------------------------------
     "catalog rebuilt from discs, its own disc among them": Event(

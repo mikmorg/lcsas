@@ -48,7 +48,7 @@ class TestCmdCopy:
         db = tmp_path / "test.db"
         vol_id = _setup_copy_db(db)
 
-        result = main(["--db", str(db), "copy", "destroy",
+        result = main(["--catalog", str(db), "copy", "destroy",
                        "VOL_GONE", "Home_Shelf"])
         assert result == 0
         out = capsys.readouterr().out
@@ -62,7 +62,7 @@ class TestCmdCopy:
         db = tmp_path / "test.db"
         vol_id = _setup_copy_db(db, locations=("Home_Shelf", "Offsite_Safe"))
 
-        result = main(["--db", str(db), "copy", "destroy",
+        result = main(["--catalog", str(db), "copy", "destroy",
                        "VOL_GONE", "Home_Shelf"])
         assert result == 0
         out = capsys.readouterr().out
@@ -74,7 +74,7 @@ class TestCmdCopy:
         db = tmp_path / "test.db"
         vol_id = _setup_copy_db(db)
 
-        result = main(["--db", str(db), "copy", "deprecate",
+        result = main(["--catalog", str(db), "copy", "deprecate",
                        "VOL_GONE", "Home_Shelf"])
         assert result == 0
         out = capsys.readouterr().out
@@ -86,7 +86,7 @@ class TestCmdCopy:
         db = tmp_path / "test.db"
         _setup_copy_db(db)
 
-        result = main(["--db", str(db), "copy", "destroy",
+        result = main(["--catalog", str(db), "copy", "destroy",
                        "NO_SUCH_VOL", "Home_Shelf"])
         assert result == 1
         out = capsys.readouterr().out
@@ -96,7 +96,7 @@ class TestCmdCopy:
         db = tmp_path / "test.db"
         _setup_copy_db(db)
 
-        result = main(["--db", str(db), "copy", "destroy",
+        result = main(["--catalog", str(db), "copy", "destroy",
                        "VOL_GONE", "Bank_Vault"])
         assert result == 1
         out = capsys.readouterr().out

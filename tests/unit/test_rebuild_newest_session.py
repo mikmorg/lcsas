@@ -47,7 +47,7 @@ def _config(tmp_path: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=mirror,
         staging_path=staging,
-        db_path=tmp_path / "archive.db",
+        db_path=tmp_path / "catalog.db",
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=100,
@@ -218,7 +218,7 @@ def test_verify_disc_location_records_the_disc_and_verifies(
                   side_effect=lambda device, n:
                   hashlib.sha256(b"\x00" * n).hexdigest()),
         ):
-            rc = main(["--db", str(out), "verify", label, "--disc",
+            rc = main(["--catalog", str(out), "verify", label, "--disc",
                        "--device", "/dev/null", "--location", "Home"])
         assert rc == 0, caplog.text
 
@@ -254,7 +254,7 @@ def test_verify_disc_unknown_location_records_nothing(discs, tmp_path, caplog):
     read_id = MagicMock(return_value=label)
     with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
                "read_disc_volume_id", read_id):
-        rc = main(["--db", str(out), "verify", label, "--disc",
+        rc = main(["--catalog", str(out), "verify", label, "--disc",
                    "--device", "/dev/null", "--location", "Hoem"])
     assert rc == 1
     assert "Unknown location 'Hoem'" in caplog.text
@@ -275,7 +275,7 @@ def test_verify_disc_unknown_location_records_nothing(discs, tmp_path, caplog):
 def test_receipts_import_after_rebuild_with_allow_unhashed(
     discs, tmp_path, caplog,
 ):
-    """RECOVER.txt's OWNER HABIT: after a rebuild, the newest session's
+    """RESTORE.txt's OWNER HABIT: after a rebuild, the newest session's
     receipts are imported with --allow-unhashed (the rebuilt catalog has
     no ISO hash for the newest discs) and the volumes become VERIFIED at
     the receipt's location."""
@@ -321,10 +321,10 @@ def test_receipts_import_after_rebuild_with_allow_unhashed(
     cfg.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\n'
-        f'database = "{out}"\n'
+        f'catalog = "{out}"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
     )
-    # The discs' location must be registered (RECOVER.txt: 'location add').
+    # The discs' location must be registered (RESTORE.txt: 'location add').
     for loc in {v or "Home" for v in staged_for.values()}:
         main(["--config", str(cfg), "location", "add", loc])
     # Without --allow-unhashed the receipts are refused (no staged hash).

@@ -1,7 +1,7 @@
 """C-vs-Python parity for prefix entry + per-share diagnostics (KEY-07).
 
 Runs prefix-typed and typo'd share sets through BOTH the committed static
-``lcsas-keyshare`` binary and the Python ``lcsas.keyshare`` path, and asserts
+``lcsas-shares`` binary and the Python ``lcsas.keyshare`` path, and asserts
 they agree: identical accept/reject verdicts, byte-identical recovered
 passwords on accept, and the same offending-word diagnosis on reject.
 
@@ -25,7 +25,7 @@ from lcsas.keyshare import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_KEYSHARE_BIN = _REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-keyshare"
+_KEYSHARE_BIN = _REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-shares"
 
 _PASSWORD = b"correct horse battery staple\x01"
 
@@ -35,7 +35,7 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         not _KEYSHARE_BIN.is_file(),
-        reason="committed recovery/bin/x86_64/lcsas-keyshare not present",
+        reason="committed recovery/bin/x86_64/lcsas-shares not present",
     ),
 ]
 
@@ -45,7 +45,7 @@ def _split_cards(tmp_path: Path) -> list[Path]:
     pw_file.write_bytes(_PASSWORD)
     out = tmp_path / "shares"
     assert cli_main([
-        "key", "split", "--repo", "alpha",
+        "password", "split", "--repo", "alpha",
         "--threshold", "2", "--shares", "5",
         "--password-file", str(pw_file), "--out", str(out),
     ]) == 0
@@ -126,7 +126,7 @@ def test_mismatched_split_parity(tmp_path: Path) -> None:
     pw_b = tmp_path / "pw_b"
     pw_b.write_bytes(b"a different password")
     assert cli_main([
-        "key", "split", "--repo", "beta",
+        "password", "split", "--repo", "beta",
         "--threshold", "2", "--shares", "5",
         "--password-file", str(pw_b), "--out", str(out_b),
     ]) == 0

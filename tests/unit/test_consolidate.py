@@ -70,7 +70,7 @@ class TestVolumeMerger:
         from lcsas.db.repos import register_repo
         from lcsas.db.schema import create_all
 
-        db_path = tmp_path / "archive.db"
+        db_path = tmp_path / "catalog.db"
         conn = get_connection(db_path)
         create_all(conn)
         register_repo(conn, "_test", "Test", "/test")
@@ -95,7 +95,7 @@ class TestVolumeMerger:
         conn.close()
 
         # …and the CLI report output lists them explicitly.
-        rc = main(["--db", str(db_path), "consolidate", str(vol.volume_id)])
+        rc = main(["--catalog", str(db_path), "consolidate", str(vol.volume_id)])
         assert rc == 0
         out = capsys.readouterr().out
         assert "Pruned left behind" in out

@@ -219,10 +219,10 @@ def test_status_stale_copies_reads_old_form(tmp_path, capsys):
     create_all(c)
     _raw_copy(c, "V_OLD", "Home", "2020-01-01 10:00:00")
     c.close()
-    assert main(["--db", str(db), "status", "--stale-copies"]) == 0
+    assert main(["--catalog", str(db), "status", "--stale-copies"]) == 0
     out = capsys.readouterr().out
     assert "V_OLD" in out and "(2020-01-01)" in out
-    assert main(["--db", str(db), "volume", "impact", "V_OLD"]) == 0
+    assert main(["--catalog", str(db), "volume", "impact", "V_OLD"]) == 0
     assert "(2020-01-01)" in capsys.readouterr().out
 
 
@@ -235,13 +235,13 @@ def test_status_stale_copies_reads_old_form(tmp_path, capsys):
 def receipt_env(tmp_path: Path) -> tuple[Path, Path]:
     staging = tmp_path / "staging"
     staging.mkdir()
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{tmp_path}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"

@@ -12,11 +12,11 @@ class TestCmdStatus:
     def test_status_with_data(self, tmp_path, capsys):
         """Status with repos shows counts."""
         db = tmp_path / "test.db"
-        main(["init", "--db-path", str(db)])
-        main(["--db", str(db), "repo", "add", "fam", "/mnt/fam"])
+        main(["init", "--catalog-path", str(db)])
+        main(["--catalog", str(db), "repo", "add", "fam", "/mnt/fam"])
         capsys.readouterr()
 
-        result = main(["--db", str(db), "status"])
+        result = main(["--catalog", str(db), "status"])
         assert result == 0
         out = capsys.readouterr().out
         assert "Packs:" in out
@@ -30,7 +30,7 @@ class TestCmdStatusEdges:
         create_volume(conn, "VOL_001", "uuid1", "TEST_TINY", 1000000, "Home", "VERIFIED")
         conn.close()
 
-        result = main(["--db", str(db), "status"])
+        result = main(["--catalog", str(db), "status"])
         assert result == 0
         out = capsys.readouterr().out
         assert "Volumes:" in out
@@ -45,11 +45,11 @@ class TestCmdStatusEdges:
         outside the catalog lock and masked a mistyped path).  A missing
         catalog yields a non-zero exit and the "Run `lcsas init`" hint.
         """
-        db = tmp_path / "fresh-subdir" / "archive.db"
+        db = tmp_path / "fresh-subdir" / "catalog.db"
         assert not db.exists()
         assert not db.parent.exists()
 
-        result = main(["--db", str(db), "status"])
+        result = main(["--catalog", str(db), "status"])
         assert result != 0
         out = capsys.readouterr()
         assert "lcsas init" in (out.out + out.err)
@@ -58,7 +58,7 @@ class TestCmdStatusEdges:
 
     def test_status_fails_without_catalog(self, tmp_path, capsys):
         db = tmp_path / "nope.db"
-        result = main(["--db", str(db), "status"])
+        result = main(["--catalog", str(db), "status"])
         assert result != 0
         combined = capsys.readouterr()
         text = combined.out + combined.err
@@ -103,11 +103,11 @@ def test_status_reports_staged_unburned_bucket(tmp_path, capsys):
     """`lcsas status` shows the staged bucket + never-burned warning.
     [FMA-01]"""
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     capsys.readouterr()
 
-    result = main(["--db", str(db), "status"])
+    result = main(["--catalog", str(db), "status"])
     assert result == 0
     out = capsys.readouterr().out
     assert "2 staged (NOT yet on disc)" in out
@@ -148,12 +148,12 @@ def test_status_says_waiting_not_reconcile_while_the_iso_exists(tmp_path, capsys
     """#647: a staged volume whose ISO is still in the staging area is
     waiting to be burned; status must not point at `catalog reconcile`."""
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     _give_staged_iso(str(db), tmp_path)
     capsys.readouterr()
 
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     out = capsys.readouterr().out
     assert "2 staged (NOT yet on disc)" in out
     assert "waiting to be burned" in out and "GHOST_VOL" in out
@@ -165,12 +165,12 @@ def test_status_names_what_reconcile_fix_deletes_once_the_iso_is_gone(
     tmp_path, capsys,
 ):
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     _give_staged_iso(str(db), tmp_path).unlink()
     capsys.readouterr()
 
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     out = capsys.readouterr().out
     assert "ISOs are gone: GHOST_VOL" in out
     assert "'lcsas catalog reconcile --fix' deletes them" in out
@@ -185,12 +185,12 @@ def test_status_names_a_killed_stage_with_its_way_out(tmp_path, capsys):
     import json
 
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     _give_staged_iso(str(db), tmp_path, finished=False)
     capsys.readouterr()
 
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     out = capsys.readouterr().out
     assert "the stage of burn session sess-GHOST_VOL did not finish" in out, out
     assert "has no session.json. Do not burn it (GHOST_VOL)" in out, out
@@ -201,7 +201,7 @@ def test_status_names_a_killed_stage_with_its_way_out(tmp_path, capsys):
     # The #665 warning (an ISO never finished) is not given as well.
     assert "INCOMPLETE" not in out, out
 
-    assert main(["--db", str(db), "status", "--json"]) == 0
+    assert main(["--catalog", str(db), "status", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["waiting"] == []
     assert doc["incomplete"] == {"labels": ["GHOST_VOL"],
@@ -216,7 +216,7 @@ def test_status_ignores_a_cleaned_session_without_session_json(
     from lcsas.db.sessions import update_session_status
 
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     _seed_ghost_volume(str(db))
     _give_staged_iso(str(db), tmp_path, finished=False)
     conn = get_connection(str(db))
@@ -227,7 +227,7 @@ def test_status_ignores_a_cleaned_session_without_session_json(
         conn.close()
     capsys.readouterr()
 
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     out = capsys.readouterr().out
     assert "did not finish" not in out, out
 
@@ -295,7 +295,7 @@ def test_status_stale_copies_report(tmp_path, capsys):
     conn.commit()
     conn.close()
 
-    assert main(["--db", str(db), "status", "--stale-copies"]) == 0
+    assert main(["--catalog", str(db), "status", "--stale-copies"]) == 0
     captured = capsys.readouterr()
     out = captured.out + captured.err
     assert "VOL_NEVER" in out and "never verified" in out
@@ -304,13 +304,13 @@ def test_status_stale_copies_report(tmp_path, capsys):
     assert "lcsas verify --all --disc" in out
 
     # Plain status: one summary line when anything is overdue.
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     captured = capsys.readouterr()
     out = captured.out + captured.err
     assert "2 disc(s) not verified in the last 365 days" in out
 
     # Tighter threshold pulls the fresh copy in as well.
-    assert main(["--db", str(db), "status", "--stale-copies",
+    assert main(["--catalog", str(db), "status", "--stale-copies",
                  "--older-than-days", "0"]) == 0
     captured = capsys.readouterr()
     out = captured.out + captured.err
@@ -386,7 +386,7 @@ class TestStatusRedundancy:
         db = tmp_path / "test.db"
         _blast_radius_catalog(db)
 
-        assert main(["--db", str(db), "status", "--redundancy"]) == 0
+        assert main(["--catalog", str(db), "status", "--redundancy"]) == 0
         captured = capsys.readouterr()
         out = captured.out + captured.err
 
@@ -412,7 +412,7 @@ class TestStatusRedundancy:
         finally:
             conn.close()
 
-        assert main(["--db", str(db), "status", "--redundancy"]) == 0
+        assert main(["--catalog", str(db), "status", "--redundancy"]) == 0
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "All packs have at least 2 live cop(ies)" in out
@@ -426,7 +426,7 @@ class TestStatusRedundancy:
         db = tmp_path / "test.db"
         vols = _blast_radius_catalog(db)
 
-        assert main(["--db", str(db), "status"]) == 0
+        assert main(["--catalog", str(db), "status"]) == 0
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "exist on only one disc" in out
@@ -440,7 +440,7 @@ class TestStatusRedundancy:
         finally:
             conn.close()
 
-        assert main(["--db", str(db), "status"]) == 0
+        assert main(["--catalog", str(db), "status"]) == 0
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "exist on only one disc" not in out
@@ -455,7 +455,7 @@ def test_status_shows_where_the_discs_are(tmp_path, capsys):
     from lcsas.db.volumes import create_volume
 
     db = tmp_path / "test.db"
-    main(["init", "--db-path", str(db)])
+    main(["init", "--catalog-path", str(db)])
     conn = get_connection(str(db))
     try:
         for loc in ("Home_Shelf", "Bank_Box"):
@@ -470,7 +470,7 @@ def test_status_shows_where_the_discs_are(tmp_path, capsys):
         conn.close()
     capsys.readouterr()
 
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     lines = {ln.split()[0]: ln for ln in capsys.readouterr().out.splitlines()
              if ln.strip().startswith(("BURNED_VOL", "WAITING_VOL"))}
     assert lines["BURNED_VOL"].rstrip().endswith("Bank_Box")

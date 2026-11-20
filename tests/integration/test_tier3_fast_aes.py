@@ -1,7 +1,7 @@
 """Tier 3 restores a REAL rustic repository through native AES (#774).
 
 A real ``rustic`` repository (zstd-compressed, rustic's own key file and
-pack layout) is restored by the generated ``standalone_restorer.py``
+pack layout) is restored by the generated ``python_reader.py``
 with each native AES-256-CTR backend this host has: the libcrypto
 library through ctypes and the ``openssl`` command.  The restored files
 must be byte-identical to the source, and the reader must say in one
@@ -62,7 +62,7 @@ def rustic_repo(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, P
     pw.write_text(PASSWORD)
     _rustic(repo, pw, "init")
     _rustic(repo, pw, "backup", ".", cwd=src)
-    script = base / "standalone_restorer.py"
+    script = base / "python_reader.py"
     script.write_text(build_standalone())
     return src, repo, pw, script
 
@@ -90,7 +90,7 @@ def test_real_rustic_repo_restores_byte_identical(
     target = tmp_path / "restored"
     proc = subprocess.run(
         [sys.executable, str(script), "--repo", str(repo),
-         "--password-file", str(pw), "--target", str(target),
+         "--password-file", str(pw), "--restore-folder", str(target),
          "--interactive", "off"],
         capture_output=True, text=True, timeout=900, check=False,
     )
