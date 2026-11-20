@@ -102,7 +102,7 @@ def _run(recovery: Path, tmp_path: Path, stdin: str = "pw\n",
          **extra: str) -> subprocess.CompletedProcess[str]:
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir(exist_ok=True)
-    reader = tmp_path / "standalone_restorer.py"
+    reader = tmp_path / "python_reader.py"
     if not reader.exists():
         reader.write_text("# stub\n")
     env = {
@@ -111,7 +111,7 @@ def _run(recovery: Path, tmp_path: Path, stdin: str = "pw\n",
         # tool would be tier 2b.
         "PATH": f"{stub_dir}:/usr/bin:/bin",
         "HOME": str(tmp_path / "home"),
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_NO_RELOCATE": "1",
@@ -133,7 +133,7 @@ def _log(tmp_path: Path) -> list[str]:
 
 
 def _tools(tmp_path: Path) -> Path:
-    return tmp_path / "home" / "lcsas-restore-tools"
+    return tmp_path / "home" / "lcsas-tools"
 
 
 # ── #799: finished, but not every item restored ─────────────────────
@@ -202,7 +202,7 @@ def test_old_failures_file_does_not_count(tmp_path: Path) -> None:
         exit 1
     """)
 
-    res = _run(recovery, tmp_path, LCSAS_FORCE_NONEMPTY_TARGET="1")
+    res = _run(recovery, tmp_path, LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER="1")
 
     assert res.returncode == 1, res.stderr
     assert "STALE_STILL_THERE" not in res.stdout
@@ -218,7 +218,7 @@ def test_users_own_failures_file_is_kept(tmp_path: Path) -> None:
     own.write_text("my own notes\n")
     _tier1(recovery, "exit 0\n")
 
-    res = _run(recovery, tmp_path, LCSAS_FORCE_NONEMPTY_TARGET="1")
+    res = _run(recovery, tmp_path, LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER="1")
 
     assert res.returncode == 0, res.stderr
     assert own.read_text() == "my own notes\n"
@@ -292,7 +292,7 @@ def test_tier3_usage_error_is_still_a_failure(tmp_path: Path) -> None:
     wrongly (#887)."""
     recovery = _fixture(tmp_path)
     _python(tmp_path / "stubbin", """\
-        echo 'usage: standalone_restorer.py [-h]' >&2
+        echo 'usage: python_reader.py [-h]' >&2
         exit 2
     """)
 
@@ -497,7 +497,7 @@ def _armv6(tmp_path: Path) -> dict[str, str]:
     _stub(d / "uname", """\
         case "$1" in -m) echo armv6l ;; *) echo Linux ;; esac
     """)
-    return {"LCSAS_TARGET": "<unset>"}
+    return {"LCSAS_PLATFORM": "<unset>"}
 
 
 ARMV7 = "armv7-unknown-linux-gnueabihf"
@@ -506,7 +506,7 @@ ARMV7 = "armv7-unknown-linux-gnueabihf"
 def test_armv6_skips_the_armv7_programs_and_uses_host_python(
         tmp_path: Path) -> None:
     recovery = _fixture(tmp_path)
-    for name in ("lcsas-restore", "rustic-static", "lcsas-keyshare"):
+    for name in ("lcsas-restore", "rustic-static", "lcsas-shares"):
         _stub(recovery / "bin" / ARMV7 / name,
               f"echo {name}_RAN_ON_ARMV6\nexit 0\n")
     _stub(recovery / "bin" / ARMV7 / "python" / "bin" / "python3",
@@ -545,7 +545,7 @@ def test_armv6_check_disc_refuses(tmp_path: Path) -> None:
     img = tmp_path / "disc.iso"
     img.write_bytes(b"\0" * 2048)
     env = {**os.environ, "PATH": f"{tmp_path / 'stubbin'}:/usr/bin:/bin"}
-    env.pop("LCSAS_TARGET", None)
+    env.pop("LCSAS_PLATFORM", None)
     _armv6(tmp_path)
     res = subprocess.run(
         ["sh", str(RESTORE_SH), "--check-disc", str(img), str(recovery)],
@@ -679,12 +679,12 @@ def test_real_tier_finished_with_errors_exits_4(tmp_path: Path,
     if tier == "1":
         shutil.copy2(TIER1_BIN, recovery / "bin" / HOST_TARGET / "lcsas-restore")
     else:
-        (tmp_path / "standalone_restorer.py").write_text(build_standalone())
+        (tmp_path / "python_reader.py").write_text(build_standalone())
     target = tmp_path / "restored"
     (target / str(src).lstrip("/") / "clash").mkdir(parents=True)
 
     res = _run(recovery, tmp_path, stdin="test-password\n",
-               LCSAS_FORCE_NONEMPTY_TARGET="1", LCSAS_ANOTHER_SET="0")
+               LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER="1", LCSAS_ANOTHER_SET="0")
 
     assert res.returncode == 4, res.stderr
     assert ("The restore finished, but 1 item(s) could not be restored."

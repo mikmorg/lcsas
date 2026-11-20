@@ -21,11 +21,11 @@ Each entry has a "Read by:" line.  The programs are:
   restore.bat    the restore script for Windows
   tier 1         lcsas-restore (lcsas-restore.exe on Windows), the
                  program both scripts start to do the restore
-  tier 3         standalone_restorer.py, the Python reader that only
+  tier 3         python_reader.py, the Python reader that only
                  restore.sh starts
-  lcsas-keyshare the share card combiner both scripts start
+  lcsas-shares the share card combiner both scripts start
 
-A variable that tier 1 or lcsas-keyshare reads works with both
+A variable that tier 1 or lcsas-shares reads works with both
 scripts: they pass their environment on.  A "Windows:" paragraph says
 what restore.bat does when it differs from restore.sh.
 
@@ -42,7 +42,7 @@ LCSAS_PASSWORD
   Read by:  restore.sh and restore.bat
   What:     Password for the Rustic repository.  When set,
             restore.sh writes it to a temp file (mode 600) instead of
-            reading interactively.  When LCSAS_PWFILE (or --key) is
+            reading interactively.  When LCSAS_PASSWORD_FILE (or --password-file) is
             set too, the file wins and this is not used.
             A wrong one is caught before the restore starts and, when
             a person is there (a terminal, or LCSAS_INTERACTIVE=on),
@@ -52,7 +52,7 @@ LCSAS_PASSWORD
             for the first backup set only: the "Restore another backup
             set?" run asks again.
   Windows:  restore.bat honours it too (since rc6, #608), after
-            LCSAS_PWFILE.  It writes it to a temp file in %TEMP%,
+            LCSAS_PASSWORD_FILE.  It writes it to a temp file in %TEMP%,
             deleted on every way out, and tries it with
             lcsas-restore --list-snapshots before the restore: a wrong
             one is said plainly, and the password is then asked on the
@@ -61,10 +61,10 @@ LCSAS_PASSWORD
   Why:      Opt-in — credentials must never appear in the environment
             by default.  Scripted / CI use requires explicit action.
 
-LCSAS_PWFILE
+LCSAS_PASSWORD_FILE
   Default:  unset (prompts on stdin)
   Since:    Phase 1
-  Read by:  restore.sh (also as --key FILE) and restore.bat
+  Read by:  restore.sh (also as --password-file FILE) and restore.bat
   What:     Path to a file that holds the password.  Tier 1 drops the
             line breaks at the end of the file; everything before them
             is the password, exactly.  Preferred over LCSAS_PASSWORD
@@ -81,20 +81,11 @@ LCSAS_PWFILE
             the copy loses the read-only mark, and is deleted on
             every way out (a later run deletes one left by a closed
             window).  A line break at the end is ignored.
-            RECOVER_WINDOWS.txt, "THE PASSWORD", shows how to write
+            RESTORE_WINDOWS.txt, "THE PASSWORD", shows how to write
             such a file from a hidden PowerShell prompt (Windows
             PowerShell 5.1 is enough).  A file that cannot be read, or
             a wrong password, falls back to the keyboard.  It is used
             for every backup set restored in the run.
-  Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
-
-LCSAS_PW
-  Default:  unset (prompts on stdin)
-  Since:    restore.bat only, before rc6
-  Read by:  restore.bat only
-  What:     The older restore.bat name for LCSAS_PASSWORD, kept: used
-            when neither LCSAS_PWFILE nor LCSAS_PASSWORD is set.
-            restore.sh does not read it.
   Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
 
 LCSAS_SHARES_DIR
@@ -102,24 +93,24 @@ LCSAS_SHARES_DIR
             is split, else for the password)
   Since:    rc6 (#607)
   Read by:  restore.sh and restore.bat (both hand the files to
-            lcsas-keyshare)
+            lcsas-shares)
   What:     A folder of share card files, one card per file (the
             printed card's text, or just its words).  restore.sh
             rebuilds the password from every file in it with the
-            bundled lcsas-keyshare (more than K cards is fine) and asks
+            bundled lcsas-shares (more than K cards is fine) and asks
             nothing.  A file with a mistake is named and left out, and
             the rest are combined.  If they cannot rebuild it, or the
             password they rebuild is wrong, the cards (or P and the
             password) are asked on the keyboard when a person is there;
             in a script the run stops with exit 77 (since rc10, #627).
-            LCSAS_PWFILE and LCSAS_PASSWORD come first.  restore.sh
+            LCSAS_PASSWORD_FILE and LCSAS_PASSWORD come first.  restore.sh
             uses it for the first backup set only.
             Unset, restore.sh asks for exactly K cards, one per line,
-            when the set's marker (metadata/<id>/LCSAS_REPO.txt) says
+            when the set's marker (metadata/<id>/LCSAS_BACKUP_SET.txt) says
             split=K-of-N; P at that prompt types the password instead.
   Windows:  restore.bat combines the files in a new folder under
             %TEMP% that it then deletes.  It uses the folder when
-            LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW are not set, for
+            LCSAS_PASSWORD_FILE and LCSAS_PASSWORD are not set, for
             any backup set, split or not in its marker.  A file with a
             mistake is named and left out, and the rest are combined,
             as in restore.sh (since rc10, #627; up to rc9 one bad file
@@ -128,19 +119,19 @@ LCSAS_SHARES_DIR
             or P and the password); a run whose input has ended stops
             there with 77.
   Why:      Opt-in — the cards are secrets; scripted use needs an
-            explicit choice, like LCSAS_PWFILE.  The folder also serves
+            explicit choice, like LCSAS_PASSWORD_FILE.  The folder also serves
             a set whose marker does not say its password is split.
 
 DISCOVERY OVERRIDES
 ───────────────────
 
-LCSAS_REPO
+LCSAS_BACKUP_SET
   Default:  unset (prompts when multiple repositories found)
   Since:    Phase 14
-  Read by:  restore.sh and restore.bat (both also as --repo NAME)
+  Read by:  restore.sh and restore.bat (both also as --backup-set NAME)
   What:     Backup set to restore, by its id (the name of its
             metadata/<id>/ folder on the discs) or, since rc6 (#606),
-            by its name (name= in that folder's LCSAS_REPO.txt) or its
+            by its name (name= in that folder's LCSAS_BACKUP_SET.txt) or its
             plain-letters name (name_cmd=, as restore.bat shows it).
             Skips the numbered list on archives with several sets.  A
             name two sets share matches neither: the run stops (exit
@@ -156,7 +147,7 @@ LCSAS_REPO
             interactive prompt.  Setting it changes which repository's
             data is restored; wrong value exits with an error.
 
-LCSAS_TARGET
+LCSAS_PLATFORM
   Default:  unset (auto-detected from uname -m and uname -s)
   Since:    Phase 21
   Read by:  restore.sh and restore.bat
@@ -247,7 +238,7 @@ LCSAS_PACK_CACHE_DIR
             cache's drive lacks room for the disc plus 5% of the
             drive (at most 1 GB) to spare (#634; before rc7: when the
             drive was under 10% free).
-            Tier 3 (standalone_restorer.py) reads the same variable
+            Tier 3 (python_reader.py) reads the same variable
             since rc10 (#602): unset or empty, no cache.  It copies
             the packs of its backup set from each data disc it finds,
             with the same free-space rule, and checks each copy
@@ -291,7 +282,7 @@ LCSAS_INTERACTIVE
             unset, tier 3 gets on, as before.  restore.sh's own extra
             questions follow it too: the newest data disc, the check
             that asks again for a wrong password (typed, or from
-            LCSAS_PASSWORD, LCSAS_PWFILE or LCSAS_SHARES_DIR; with
+            LCSAS_PASSWORD, LCSAS_PASSWORD_FILE or LCSAS_SHARES_DIR; with
             tier 1, 2, 2b or 3, #805), and "Restore another backup
             set?" are asked on auto only when stdin is a
             terminal, on on always (a test rig answers them through a
@@ -361,7 +352,7 @@ LCSAS_ANOTHER_SET
             its pack cache; N ends the run and deletes the tools
             folder.  0 never asks.  restore_auto.sh sets it to 0.
             The next set's password is asked for: LCSAS_PASSWORD,
-            LCSAS_PWFILE (--key) and LCSAS_SHARES_DIR are for the
+            LCSAS_PASSWORD_FILE (--password-file) and LCSAS_SHARES_DIR are for the
             first set only.  Q at the next set list ends the run with
             0, as N does.
   Windows:  restore.bat asks it after a good restore of an archive
@@ -377,14 +368,14 @@ LCSAS_ANOTHER_SET
             would otherwise mean the META disc and the copy again.
 
 LCSAS_TOOLS_DIR
-  Default:  unset → $HOME/lcsas-restore-tools; on Windows
+  Default:  unset → $HOME/lcsas-tools; on Windows
             %LOCALAPPDATA%\LCSAS-restore  (opt-out / default ON)
   Since:    rc6 (#609)
   Read by:  restore.sh, restore.bat and restore_auto.sh
   What:     The tools folder restore.sh keeps a restore's own files in.
             restore_auto.sh gives each backup set its own: this
             folder's name with -<id> added, for example
-            $HOME/lcsas-restore-tools-<id>.  So a set that stopped
+            $HOME/lcsas-tools-<id>.  So a set that stopped
             keeps its resume.sh while the next sets run (#801).
             Run off the META disc, it copies there: itself, this
             computer's binaries (bin/<triple>/ only), the docs and the
@@ -401,7 +392,7 @@ LCSAS_TOOLS_DIR
             from the same META disc reuses the copy; a copy made by a
             different restore.sh is replaced (its pack cache is kept
             only when both come from the same build).  restore.sh
-            writes the file .lcsas-restore-tools in a folder it uses,
+            writes the file .lcsas-tools in a folder it uses,
             and later uses only an empty folder or one with that file.
             A folder that already holds other files is refused with
             exit 1 before anything in it changes, whether the run
@@ -423,7 +414,7 @@ LCSAS_TOOLS_DIR
             so.
   Windows:  restore.bat copies itself into it from a disc, with this
             computer's programs (bin\<triple>\ only),
-            RECOVER_WINDOWS.txt, the backup sets' metadata, a copy of
+            RESTORE_WINDOWS.txt, the backup sets' metadata, a copy of
             the catalog, the pack cache, resume.cfg and "Resume LCSAS
             restore.bat" (also put on the Desktop).  The folder stays
             until a restore has finished (exit 0) and the reader says
@@ -513,7 +504,7 @@ LCSAS_TIER_FALLBACK
             When lcsas-restore.exe is missing (say, quarantined by
             antivirus), a set read from the discs stops at once, before
             the folder and the password, with exit 64 and a message
-            that names the program and points to RECOVER_WINDOWS.txt
+            that names the program and points to RESTORE_WINDOWS.txt
             (since rc10, #631; up to rc9 it went to tier 2, which
             failed).  A set with its own data\ still goes to tier 2.
             restore.bat has no tier 3.
@@ -614,7 +605,7 @@ LCSAS_ALLOW_NO_PACK_SEARCH
             pipelines that mount data discs between the script setup
             step and the binary invocation.
 
-LCSAS_ALLOW_TMPFS_TARGET
+LCSAS_ALLOW_TMPFS_RESTORE_FOLDER
   Default:  0  (opt-in / default OFF)
   Since:    2026-06 audit (BOOT-05)
   Read by:  restore.sh only
@@ -627,7 +618,7 @@ LCSAS_ALLOW_TMPFS_TARGET
             gone).  Suppressing it is for scripted-but-interactive
             environments that have already accepted that trade-off.
 
-LCSAS_FORBID_TMPFS_TARGET
+LCSAS_FORBID_TMPFS_RESTORE_FOLDER
   Default:  0  (opt-in / default OFF)
   Since:    2026-06 audit (BOOT-05)
   Read by:  restore.sh only
@@ -692,7 +683,7 @@ LCSAS_CHECK_DISC_AUTOFIX
   Why:      Opt-IN.  Repair rewrites the image file; an unattended
             run must explicitly accept that risk.
 
-LCSAS_FORCE_NONEMPTY_TARGET
+LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER
   Default:  0  (confirm on a terminal; refuse without one / opt-in)
   Since:    2026-06 audit (UX-07)
   Read by:  restore.sh and restore.bat
@@ -712,13 +703,13 @@ LCSAS_FORCE_NONEMPTY_TARGET
   Why:      Opt-IN.  Restoring over unrelated existing files can
             silently overwrite them; scripted runs must opt in.
 
-LCSAS_KEYSHARE_PASSPHRASE
+LCSAS_SHARE_PASSPHRASE
   Default:  unset (empty passphrase)
   Since:    Key escrow (C5, 2026-05)
-  Read by:  lcsas-keyshare, so it works with restore.sh and
+  Read by:  lcsas-shares, so it works with restore.sh and
             restore.bat when they combine share cards
   What:     Passphrase for SLIP-0039 share combination, read by the
-            tier-1 `lcsas-keyshare` combiner when no --passphrase
+            tier-1 `lcsas-shares` combiner when no --passphrase
             flag is given.  Only relevant for splits created with a
             non-default passphrase.
   Why:      Opt-in — same credentials reasoning as LCSAS_PASSWORD:
@@ -801,11 +792,10 @@ QUICK REFERENCE (knobs you may set)
 Variable                    Default   Opt-in/out  Typical use
 ──────────────────────────  ────────  ──────────  ────────────────────
 LCSAS_PASSWORD              unset     opt-in      scripted restores
-LCSAS_PWFILE                unset     opt-in      scripted restores
-LCSAS_PW                    unset     opt-in      older restore.bat name
+LCSAS_PASSWORD_FILE                unset     opt-in      scripted restores
 LCSAS_SHARES_DIR            unset     opt-in      share cards, no typing
-LCSAS_REPO                  unset     opt-in      set by name, name_cmd or id
-LCSAS_TARGET                unset     opt-in      unusual host arch
+LCSAS_BACKUP_SET                  unset     opt-in      set by name, name_cmd or id
+LCSAS_PLATFORM                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
@@ -818,14 +808,14 @@ LCSAS_MAX_TREE_DEPTH        1000      opt-in      raise + 'ulimit -s unlimited'
 LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
 LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_CHECK_DISC_AUTOFIX    0         opt-in      unattended ECC repair
-LCSAS_FORCE_NONEMPTY_TARGET 0         opt-in      scripted overwrite ack
-LCSAS_KEYSHARE_PASSPHRASE   unset     opt-in      share passphrase
+LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER 0         opt-in      scripted overwrite ack
+LCSAS_SHARE_PASSPHRASE   unset     opt-in      share passphrase
 LCSAS_PROGRESS              unset     opt-out     set 0 to quiet tier 3
 LCSAS_TIER3_AES             auto      opt-out     set pure on shared hosts
 LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
 LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs
-LCSAS_ALLOW_TMPFS_TARGET    0         opt-in      set 1 to skip RAM-target prompt
-LCSAS_FORBID_TMPFS_TARGET   0         opt-in      set 1 to ban RAM targets
+LCSAS_ALLOW_TMPFS_RESTORE_FOLDER    0         opt-in      set 1 to skip RAM-target prompt
+LCSAS_FORBID_TMPFS_RESTORE_FOLDER   0         opt-in      set 1 to ban RAM targets
 LCSAS_SKIP_SPACE_CHECK      0         opt-out     set 1 to skip space preflight
 LCSAS_BLIND_ACK_COST        unset     opt-in      set 1 to run blind e2e
 LCSAS_RECOVERY_CACHE        (home)    opt-in      CI shared binary cache

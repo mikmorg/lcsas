@@ -150,14 +150,14 @@ def test_target_flag_sets_target_dir(tmp_path: Path) -> None:
 
 
 def test_key_flag_skips_password_prompt(tmp_path: Path) -> None:
-    """``--key FILE`` exports LCSAS_PWFILE; no Password: prompt fires."""
+    """``--key FILE`` exports LCSAS_PASSWORD_FILE; no Password: prompt fires."""
     recovery = _recovery_fixture(tmp_path)
     target = tmp_path / "restored"
     pwfile = tmp_path / "repo.key"
     pwfile.write_text("hunter2\n")
 
     env = {**os.environ, **_BASE_ENV}
-    env.pop("LCSAS_PWFILE", None)
+    env.pop("LCSAS_PASSWORD_FILE", None)
     env.pop("LCSAS_PASSWORD", None)
     res = subprocess.run(
         [

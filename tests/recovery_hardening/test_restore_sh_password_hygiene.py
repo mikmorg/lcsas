@@ -57,7 +57,7 @@ def test_temp_password_file_is_shredded_after_restore(tmp_path: Path) -> None:
     target = tmp_path / "restored"
 
     before = set(glob.glob(PW_GLOB))
-    # Password supplied via env so no prompt; LCSAS_PWFILE deliberately
+    # Password supplied via env so no prompt; LCSAS_PASSWORD_FILE deliberately
     # unset so restore.sh creates its own lcsas-pw.XXXXXX temp file, in
     # $TMPDIR since #806's follow-up (a private one here, so a leak is
     # seen whatever else runs on the machine).
@@ -69,7 +69,7 @@ def test_temp_password_file_is_shredded_after_restore(tmp_path: Path) -> None:
         "LCSAS_PASSWORD": "stub-password",
         "TMPDIR": str(tmpdir),
     }
-    env.pop("LCSAS_PWFILE", None)
+    env.pop("LCSAS_PASSWORD_FILE", None)
     res = subprocess.run(
         ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
         capture_output=True, text=True, env=env, timeout=30,

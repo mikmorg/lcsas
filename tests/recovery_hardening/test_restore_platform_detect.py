@@ -172,7 +172,7 @@ def test_unsupported_windows_machine_exits_1(tmp_path: Path) -> None:
 
 
 def test_lcsas_target_overrides_uname(tmp_path: Path) -> None:
-    """LCSAS_TARGET env bypasses uname-based detection entirely."""
+    """LCSAS_PLATFORM env bypasses uname-based detection entirely."""
     recovery = _make_recovery(tmp_path)
     target = "aarch64-unknown-linux-musl"
     _install_target_stub(recovery, target)
@@ -184,7 +184,7 @@ def test_lcsas_target_overrides_uname(tmp_path: Path) -> None:
         "LCSAS_RELOCATED": "/fake/meta",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_MOUNT_DIRS": "",
-        "LCSAS_TARGET": target,
+        "LCSAS_PLATFORM": target,
         "PATH": str(uname_dir) + ":" + os.environ.get("PATH", ""),
     }
     result = subprocess.run(
@@ -196,7 +196,7 @@ def test_lcsas_target_overrides_uname(tmp_path: Path) -> None:
         env=env,
     )
     assert result.returncode == 0, (
-        f"expected exit 0 with LCSAS_TARGET override; rc={result.returncode}\n"
+        f"expected exit 0 with LCSAS_PLATFORM override; rc={result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     assert "CORRECT_TARGET_BINARY_RAN" in result.stdout

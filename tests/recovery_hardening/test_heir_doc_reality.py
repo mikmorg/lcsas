@@ -9,9 +9,9 @@ binary, and these claims were wrong although every doc test was green:
   META disc, runs ``cd /`` and re-runs itself, so a relative --key file is
   looked up as ``/repo.key`` and the run stops with exit 2; and a META
   disc is read-only, so ``> repo.key`` run there fails.  Give full paths.
-* ``metadata\\<name>`` and ``dir D:\\metadata`` in RECOVER_WINDOWS.txt:
+* ``metadata\\<name>`` and ``dir D:\\metadata`` in RESTORE_WINDOWS.txt:
   the folders are named by the set's id, a long code since rc6 (C1), so
-  the listing shows no names.  RECOVER.txt already said ``<id>``.
+  the listing shows no names.  RESTORE.txt already said ``<id>``.
 * ``cd D:`` in cmd does not switch to drive D:, so the relative
   ``recovery\\bin\\...`` path on the next line was looked up on C:.
 * ``lcsas-restore.exe --catalog ... --list-pending-packs`` alone exits 2:
@@ -19,7 +19,7 @@ binary, and these claims were wrong although every doc test was green:
   --list-pending-packs (restore.sh's own size check passes both, #535).
 * restore-windows.md said lcsas-restore.exe embeds a UTF-8 manifest; the
   exe carries no resources at all, which hid the non-ASCII gap (#619).
-* RECOVER.txt's first command restored into /tmp/restored, which is RAM on
+* RESTORE.txt's first command restored into /tmp/restored, which is RAM on
   a live USB stick: restore.sh then asks "restore into RAM anyway?".
 
 Static (Path.read_text and a PE header read) only: no binaries are run.
@@ -35,8 +35,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS = REPO_ROOT / "recovery" / "docs"
-RECOVER = DOCS / "RECOVER.txt"
-RECOVER_WIN = DOCS / "RECOVER_WINDOWS.txt"
+RECOVER = DOCS / "RESTORE.txt"
+RECOVER_WIN = DOCS / "RESTORE_WINDOWS.txt"
 RESTORE_WIN_MD = REPO_ROOT / "docs" / "workflows" / "restore-windows.md"
 MAIN_C = REPO_ROOT / "recovery" / "src" / "lcsas-restore" / "main.c"
 WIN_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe"
@@ -45,7 +45,7 @@ WIN_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe
 _HEIR_TEXTS = (
     RECOVER,
     RECOVER_WIN,
-    REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py",
+    REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py",
     REPO_ROOT / "src" / "lcsas" / "staging" / "metadata.py",
     REPO_ROOT / "docs" / "RECOVERY_GUIDE.md",
     REPO_ROOT / "docs" / "guides" / "recovery-runbook.md",
@@ -92,13 +92,13 @@ def test_key_files_are_given_by_full_path(path: Path) -> None:
 def test_recover_windows_names_metadata_folders_by_id() -> None:
     text = RECOVER_WIN.read_text(encoding="utf-8")
     assert "metadata\\<name>" not in text, (
-        "RECOVER_WINDOWS.txt says metadata\\<name>: the folders are named "
+        "RESTORE_WINDOWS.txt says metadata\\<name>: the folders are named "
         "by the set's id (C1); say metadata\\<id> and how to map ids to names"
     )
     assert "metadata\\<id>" in text
     assert 'findstr /s /b /c:"name="' in text, (
-        "RECOVER_WINDOWS.txt must show how to see which metadata\\<id> "
-        "folder is which set (LCSAS_REPO.txt name= line)"
+        "RESTORE_WINDOWS.txt must show how to see which metadata\\<id> "
+        "folder is which set (LCSAS_BACKUP_SET.txt name= line)"
     )
 
 
@@ -158,8 +158,8 @@ def test_recover_txt_does_not_restore_into_tmp() -> None:
     then asks "Continue restoring into RAM anyway?" after the password."""
     for lineno, line in enumerate(RECOVER.read_text(encoding="utf-8").splitlines(), 1):
         assert not re.search(r"restore\.sh\b.*\s/tmp/restored\b", line), (
-            f"RECOVER.txt:{lineno}: restore into ~/restored, not /tmp: {line}"
+            f"RESTORE.txt:{lineno}: restore into ~/restored, not /tmp: {line}"
         )
         assert "--target /tmp/restored" not in line, (
-            f"RECOVER.txt:{lineno}: restore into ~/restored, not /tmp: {line}"
+            f"RESTORE.txt:{lineno}: restore into ~/restored, not /tmp: {line}"
         )

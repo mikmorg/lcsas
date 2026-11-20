@@ -64,16 +64,16 @@ def _stage_meta_layout(root: Path) -> Path:
         ├── recovery/
         │   ├── bin/<TARGET>/                  (no tier-1, no tier-2; force tier-3)
         │   └── scripts/
-        ├── standalone_restorer.py             (sibling of recovery/)
+        ├── python_reader.py             (sibling of recovery/)
         └── tools/lib/<py3.X>/zstandard/__init__.py   (the bundle under test)
     """
     recovery = root / "recovery"
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     (recovery / "scripts").mkdir(parents=True)
 
-    # The script lookup tries ../standalone_restorer.py first, so
+    # The script lookup tries ../python_reader.py first, so
     # placing the stub there matches the production lookup order.
-    (root / "standalone_restorer.py").write_text("# placeholder for tier-3\n")
+    (root / "python_reader.py").write_text("# placeholder for tier-3\n")
 
     # Bundled zstandard tree (matches ToolBundler.bundle_python_package).
     zstd_dir = root / "tools" / "lib" / PY_MINOR / "zstandard"
@@ -164,7 +164,7 @@ def test_tier3_pythonpath_can_actually_import_zstandard(tmp_path: Path) -> None:
         #!/bin/sh
         # restore.sh first checks the interpreter runs (#714).
         case "$1" in -c) exit 0 ;; esac
-        # We get exec'd as `python3 standalone_restorer.py --repo ...`.
+        # We get exec'd as `python3 python_reader.py --repo ...`.
         # Ignore the script + args; just probe the PYTHONPATH-resolved
         # zstandard module.
         exec {real_py} -c '

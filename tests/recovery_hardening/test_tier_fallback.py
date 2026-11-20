@@ -144,7 +144,7 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
     _make_repo(recovery)
     _install_failing_binary(recovery, "lcsas-restore", exit_code=17)
     _install_failing_binary(recovery, "rustic-static", exit_code=19)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
 
     # Stub python3 that just prints a marker and exits 0.
     pybin_dir = tmp_path / "stubbin"
@@ -184,7 +184,7 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
 def _make_tier3_fixture(tmp_path: Path) -> tuple[Path, Path]:
     """Return (recovery, pybin_dir) for a tier-3-only fixture.
 
-    Both tier-1 and tier-2 stubs crash.  standalone_restorer.py is
+    Both tier-1 and tier-2 stubs crash.  python_reader.py is
     placed at recovery.parent.  Caller is responsible for installing
     the desired stub python3 into the returned pybin_dir.
     """
@@ -193,7 +193,7 @@ def _make_tier3_fixture(tmp_path: Path) -> tuple[Path, Path]:
     _make_repo(recovery)
     _install_failing_binary(recovery, "lcsas-restore", exit_code=17)
     _install_failing_binary(recovery, "rustic-static", exit_code=19)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
     pybin_dir = tmp_path / "stubbin"
     pybin_dir.mkdir()
     return recovery, pybin_dir

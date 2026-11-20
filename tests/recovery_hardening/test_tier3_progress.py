@@ -133,7 +133,7 @@ def test_progress_final_line_at_completion(tmp_path, capsys, monkeypatch):
 
 
 def test_standalone_bundle_includes_progress_code():
-    """The generated standalone_restorer.py inherits the progress logic.
+    """The generated python_reader.py inherits the progress logic.
 
     `standalone_builder.build_standalone()` concatenates `_aes_pure.py`
     and `restic_fallback.py` into a single self-contained script for
@@ -149,7 +149,7 @@ def test_standalone_bundle_includes_progress_code():
 
     # Compile-check first — if this fails, all the substring checks
     # below would be misleading.
-    compile(bundle, "<standalone_restorer.py>", "exec")
+    compile(bundle, "<python_reader.py>", "exec")
 
     for sentinel in (
         "_PROGRESS_FILES_INTERVAL",

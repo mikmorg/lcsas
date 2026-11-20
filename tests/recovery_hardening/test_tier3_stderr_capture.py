@@ -1,6 +1,6 @@
 """Hardening test: restore.sh tier-3 stderr capture-and-replay on failure.
 
-Issue #240 -- when tier-3 (`standalone_restorer.py`) exits non-zero,
+Issue #240 -- when tier-3 (`python_reader.py`) exits non-zero,
 `restore.sh` used to `exec` it directly and silently inherit the exit
 code with NO captured stderr.  Operators saw only a numeric exit code
 (`Exit code 2`, `session r ended unexpectedly`); tracebacks vanished
@@ -52,7 +52,7 @@ def _make_minimal_repo(root: Path) -> Path:
 
 def _install_failing_python_stub(bin_dir: Path) -> None:
     """A `python3` shim that writes a fake traceback to stderr and
-    exits non-zero.  Mimics what a real broken standalone_restorer.py
+    exits non-zero.  Mimics what a real broken python_reader.py
     would emit at module-import time (e.g. ImportError pre-argparse).
     """
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,7 @@ def _install_failing_python_stub(bin_dir: Path) -> None:
         # Emit a multi-line "traceback" so we can verify the separator
         # markers wrap the captured stderr correctly.
         printf 'Traceback (most recent call last):\\n' >&2
-        printf '  File "standalone_restorer.py", line 1, in <module>\\n' >&2
+        printf '  File "python_reader.py", line 1, in <module>\\n' >&2
         printf '    import foo\\n' >&2
         printf '{TIER3_STUB_ERROR}\\n' >&2
         exit {TIER3_STUB_RC}
@@ -85,8 +85,8 @@ def test_tier3_failure_captures_and_echoes_stderr(tmp_path: Path) -> None:
     # cascade falls through to tier 3.
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     _make_minimal_repo(recovery)
-    # tier-3 script search probes ../standalone_restorer.py first.
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    # tier-3 script search probes ../python_reader.py first.
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
 
     stub_dir = tmp_path / "stubbin"
     _install_failing_python_stub(stub_dir)
@@ -171,7 +171,7 @@ def test_tier3_success_does_not_emit_failure_label(tmp_path: Path) -> None:
     recovery.mkdir()
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     _make_minimal_repo(recovery)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
 
     # A python stub that prints a benign progress line to stderr and
     # exits 0 -- mirrors a successful real restore which DOES emit

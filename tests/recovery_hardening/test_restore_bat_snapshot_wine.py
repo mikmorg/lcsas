@@ -1,9 +1,9 @@
-r"""restore.bat --snapshot ID, and LCSAS_REPO with one set, under wine (#807, #802).
+r"""restore.bat --snapshot ID, and LCSAS_BACKUP_SET with one set, under wine (#807, #802).
 
 * ``restore.bat --snapshot ID`` restores that snapshot (tier 1 gets
   ``--snapshot ID``, not ``latest``); an ID with anything but 0-9 and
   a-f is refused with exit 2 before any question.
-* LCSAS_REPO naming no set stops with the list of sets, with ONE set
+* LCSAS_BACKUP_SET naming no set stops with the list of sets, with ONE set
   too (restore.sh restored the lone set whatever the name, #802).
 
 Coarse, like test_restore_bat_wine_smoke (whose prefix helpers this
@@ -37,7 +37,7 @@ def _run(env: dict[str, str], args: list[str], stdin_data: str,
     run_env = {
         **env,
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         **extra,
     }
@@ -110,7 +110,7 @@ def test_an_unknown_lcsas_repo_with_one_set_is_refused(tmp_path: Path) -> None:
     meta = tmp_path / "meta"
     _make_meta_tree(meta)
     _map_drive(prefix, "e", meta)
-    res = _run(env, [], "\n\n\n", LCSAS_REPO="no-such-set")
+    res = _run(env, [], "\n\n\n", LCSAS_BACKUP_SET="no-such-set")
     out = res.stdout + res.stderr
     assert res.returncode == 1, f"rc={res.returncode}\n{out}"
     assert "is not among the backup sets" in out, out

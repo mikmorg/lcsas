@@ -85,7 +85,7 @@ def _run(
         "LCSAS_TOOLS_DIR": str(recovery.parent / "tools"),
         **(extra_env or {}),
     }
-    for var in ("LCSAS_REPO", "LCSAS_PWFILE", "LCSAS_PACK_CACHE_DIR"):
+    for var in ("LCSAS_BACKUP_SET", "LCSAS_PASSWORD_FILE", "LCSAS_PACK_CACHE_DIR"):
         env.pop(var, None)
     res = subprocess.run(
         ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
@@ -243,7 +243,7 @@ def test_a_resumed_run_reuses_the_copy_in_the_tools_folder(tmp_path: Path) -> No
     recovery = _recovery(tmp_path)
     tools = tmp_path / "tools"
     tools.mkdir()
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     kept = tools / "catalog.db"
     kept.write_bytes(b"copy from the first run")
     os.utime(kept, (1_700_000_000, 1_700_000_000))

@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║  DESIGN DOCUMENT — describes intended future UX, not current     ║
-║  behavior.  For restore instructions, see RECOVER.txt            ║
+║  behavior.  For restore instructions, see RESTORE.txt            ║
 ║  (MULTI-DISC RESTORE section).                                   ║
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -11,7 +11,7 @@ UX CONCERN ID: 005 (docs/development/recovery/UX_CONCERNS.txt in
         the source repository; not on the disc)
 STATUS: Significant portions shipped; further work deferred.  See
         recovery/docs/STATUS_LEDGER.md in the source repository for
-        the open / deferred items.  See RECOVER.txt for current
+        the open / deferred items.  See RESTORE.txt for current
         heir-facing procedure.
 PLATFORMS: all -- Linux, macOS, Windows
 
@@ -46,7 +46,7 @@ WHAT HAS SHIPPED (as of Phase 21)
   * Drain on first sight (rc6): with the pack cache on, tier 1
     copies a data disc into the cache the first time it sees it, so
     each disc goes in about once.  q at the prompt exits 75.
-  * See RECOVER.txt (MULTI-DISC RESTORE section) for the current
+  * See RESTORE.txt (MULTI-DISC RESTORE section) for the current
     heir-facing procedure including exact prompt text and physical
     swap steps.
 
@@ -78,7 +78,7 @@ BEHAVIOUR BEFORE THIS DESIGN (fixed since; kept for the record)
   physical disc to insert next, no opportunity to insert it, and no
   way to resume.  The only workaround is the "manually merge all
   data/ trees into one directory before running" workflow documented
-  in RECOVER_WINDOWS.txt -- which requires the heir to copy every
+  in RESTORE_WINDOWS.txt -- which requires the heir to copy every
   disc's contents to local disk first, which defeats the point of
   the multi-disc layout (it requires having free disk space larger
   than the entire archive).
@@ -227,7 +227,7 @@ restore.sh (POSIX):
       "$RESTORE_BIN" --repo "$REPO" \
                     $PACK_SEARCH \
                     --password-file "$PWFILE" \
-                    --target "$TARGET" \
+                    --restore-folder "$TARGET" \
                     --snapshot "$SNAP"
 
 restore.bat (Windows CMD):
@@ -466,7 +466,7 @@ E10. Two discs share the same pack ID by accident (HASH COLLISION).
 WORKFLOW EXAMPLE (after this lands)
 ────────────────────────────────────────────────────────────────────
 
-  $ sh /Volumes/LCSAS_META/restore.sh ~/restored
+  $ sh /Volumes/LCSAS_META/restore.sh --restore-folder ~/restored
   [tier 1] using prebuilt lcsas-restore (x86_64)
   [lcsas-restore] master key loaded
   [lcsas-restore] indexed 12,847 blobs
@@ -540,13 +540,13 @@ LCSAS releases the drive in three coordinated steps:
      They copy themselves, this computer's binaries and the META
      disc's metadata/ to the tools folder (see THE TOOLS FOLDER AND
      CARRYING ON below):
-       restore.sh:  $HOME/lcsas-restore-tools, with bin/<triple>/
+       restore.sh:  $HOME/lcsas-tools, with bin/<triple>/
                     and the docs; a temporary folder under /tmp,
                     /run and so on only when that folder cannot be
                     used;
        restore.bat: %LOCALAPPDATA%\LCSAS-restore, with only the three
                     programs of bin\<triple>\ (rustic-static.exe only
-                    when a set holds its own data\), RECOVER_WINDOWS.txt
+                    when a set holds its own data\), RESTORE_WINDOWS.txt
                     and the backup sets' metadata (#612).
      They set the sentinel env var LCSAS_RELOCATED=<original meta
      mount>, and re-exec from that folder.  The original meta disc
@@ -592,7 +592,7 @@ be closed before the heir is prompted.  The audit:
   - sh / cmd.exe: holds the script.  Released after `exec` to the
     relocated copy.
   - lcsas-restore loader: mmaps the binary.  Released after `exec`
-    to the copy in the tools folder (~/lcsas-restore-tools, #609).
+    to the copy in the tools folder (~/lcsas-tools, #609).
   - keys/, index/, snapshots/: opendir+closedir in repo.c (see
     lines 184/191, 427/434, 593/653).  All metadata is in RAM by
     the time the locator is reached.
@@ -612,8 +612,8 @@ can be ejected.
 WORKFLOW EXAMPLE (one-drive case)
 ─────────────────────────────────
 
-  $ sh /mnt/recovery/scripts/restore.sh ~/restored
-  [lcsas-restore] copied recovery binaries to /home/alice/lcsas-restore-tools
+  $ sh /mnt/recovery/scripts/restore.sh --restore-folder ~/restored
+  [lcsas-restore] copied recovery binaries to /home/alice/lcsas-tools
   [lcsas-restore] you may eject the meta disc when the binary
                   prompts for a data disc.
   (the newest-data-disc step, the set menu and the password; see
@@ -678,7 +678,7 @@ KNOWN LIMITATIONS
 
   - macOS bare-disc boot path is not in scope; the host-OS path on
     macOS still works (restore.sh relocates to its tools folder,
-    ~/lcsas-restore-tools).
+    ~/lcsas-tools).
   - On Windows, restore.bat records the META disc's drive letter
     (%~d0, as LCSAS_RELOCATED) before the relocated copy runs.  On a
     machine with one optical drive, every data disc then goes into
@@ -733,7 +733,7 @@ the NEWEST data disc when no data disc is in yet:
   * Merge rule, into the tools folder's metadata/: for each set on
     that disc, its snapshots/ and index/ come from that disc ONLY
     (they replace the older copy whole), its keys/ are the union of
-    both copies, and its LCSAS_REPO.txt comes along.  A set that is
+    both copies, and its LCSAS_BACKUP_SET.txt comes along.  A set that is
     only on the META disc keeps the META copy.  Never a union of
     index/ or snapshots/: the META copy can be newer than any disc
     at hand, and an index entry for a pack pruned since would make
@@ -768,8 +768,8 @@ tools folder, not a throwaway one, so a restore that stops can carry
 on without the META disc:
 
                 restore.sh                   restore.bat
-  folder        $HOME/lcsas-restore-tools    %LOCALAPPDATA%\LCSAS-restore
-  marker        .lcsas-restore-tools         .lcsas-tools
+  folder        $HOME/lcsas-tools    %LOCALAPPDATA%\LCSAS-restore
+  marker        .lcsas-tools         .lcsas-tools
   resume        resume.sh (mode 700)         resume.cfg + "Resume LCSAS
                                              restore.bat" (also on the
                                              Desktop)
@@ -831,7 +831,7 @@ LCSAS_TOOLS_DIR names another folder for both.
 SEE ALSO
 ────────────────────────────────────────────────────────────────────
 
-  RECOVER.txt           Current heir-facing procedure, including
+  RESTORE.txt           Current heir-facing procedure, including
                         the MULTI-DISC RESTORE section with exact
                         prompt text, physical swap steps, and the
                         LCSAS_PACK_CACHE_DIR cache knob.

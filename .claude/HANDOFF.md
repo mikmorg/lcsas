@@ -134,7 +134,7 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   fixes are usually heir-doc PRs. The real heir walks through it once
   after final.
 - **#476 (Windows), and #475 (macOS) after final:** walk through
-  `recovery/docs/RECOVER_WINDOWS.txt` / `docs/workflows/restore-host-macos.md`
+  `recovery/docs/RESTORE_WINDOWS.txt` / `docs/workflows/restore-host-macos.md`
   the way an heir would. Capture every OS prompt (SmartScreen, Defender,
   UAC, Gatekeeper, quarantine) and every place the docs and the screen
   disagree.

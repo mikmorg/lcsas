@@ -1,4 +1,4 @@
-"""Hardening test: standalone_restorer.py's `import zstandard` guard.
+"""Hardening test: python_reader.py's `import zstandard` guard.
 
 Issue #239 — the primary fix wires `PYTHONPATH` so the bundled CPython
 in tier-3 can find the bundled zstandard.  This test is the
@@ -33,12 +33,12 @@ from pathlib import Path
 
 
 def _generate_standalone(tmp_path: Path) -> Path:
-    """Generate standalone_restorer.py via build_standalone()."""
+    """Generate python_reader.py via build_standalone()."""
     # Run build_standalone in a subprocess against the in-tree src/
     # so we don't depend on the test runner having lcsas pip-installed.
     repo_root = Path(__file__).resolve().parents[2]
     src_dir = repo_root / "src"
-    out_path = tmp_path / "standalone_restorer.py"
+    out_path = tmp_path / "python_reader.py"
     res = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(f"""
             import sys
@@ -64,7 +64,7 @@ def _empty_pythonpath(tmp_path: Path) -> Path:
 
 
 def test_standalone_does_not_crash_when_zstandard_missing(tmp_path: Path) -> None:
-    """`python3 standalone_restorer.py --info ...` must NOT raise
+    """`python3 python_reader.py --info ...` must NOT raise
     ImportError when zstandard is not installed -- the try/except
     guard in restic_fallback.py is supposed to absorb that and set
     _HAS_ZSTD=False."""
@@ -104,14 +104,14 @@ def test_standalone_does_not_crash_when_zstandard_missing(tmp_path: Path) -> Non
     # zstandard.  We assert the negative.
     combined = res.stdout + res.stderr
     assert "ImportError" not in combined or "zstandard" not in combined, (
-        "standalone_restorer.py raised ImportError on zstandard -- "
+        "python_reader.py raised ImportError on zstandard -- "
         "the try/except guard in restic_fallback.py no longer survives "
         f"the build_standalone concatenation.\nstdout:\n{res.stdout}\n"
         f"stderr:\n{res.stderr}"
     )
     # A bare ModuleNotFoundError on zstandard is also a regression.
     assert "ModuleNotFoundError" not in combined or "zstandard" not in combined, (
-        "standalone_restorer.py raised ModuleNotFoundError on zstandard -- "
+        "python_reader.py raised ModuleNotFoundError on zstandard -- "
         "the import guard is broken.\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
 
@@ -156,7 +156,7 @@ def test_standalone_reports_zstd_dependency_only_on_decompress(
     # The fallback error message text must NOT appear -- we never
     # decompressed anything.
     assert "pip install zstandard" not in combined, (
-        f"standalone_restorer.py surfaced the zstandard-missing error "
+        f"python_reader.py surfaced the zstandard-missing error "
         f"during --info (no decompress should have happened).  Output:\n"
         f"{combined}"
     )

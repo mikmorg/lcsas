@@ -130,7 +130,7 @@ Embed an app manifest that sets `<activeCodePage>UTF8</activeCodePage>`.
 This lets our existing UTF-8-handling code (e.g. JSON-decoded paths)
 just work with `open()` / `mkdir()` on Windows ≥10 1903.
 
-For older Windows: document in RECOVER_WINDOWS.txt that non-ASCII
+For older Windows: document in RESTORE_WINDOWS.txt that non-ASCII
 filenames may be mangled.
 
 64-BIT FILE OFFSETS
@@ -223,9 +223,9 @@ script is authoritative; this sketch is kept for design history.
     set BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe
     if exist "%BIN%" goto :do_rustic
 
-    REM Tier 3: Python fallback (only if py + standalone_restorer.py).
+    REM Tier 3: Python fallback (only if py + python_reader.py).
     where py >nul 2>nul && (
-        if exist "%RECOVERY%\..\standalone_restorer.py" (
+        if exist "%RECOVERY%\..\python_reader.py" (
             set BIN=py
             goto :do_python
         )
@@ -235,7 +235,7 @@ script is authoritative; this sketch is kept for design history.
     echo Looked for:
     echo   %RECOVERY%\bin\%ARCH%\lcsas-restore.exe
     echo   %RECOVERY%\bin\%ARCH%\rustic-static.exe
-    echo See %RECOVERY%\docs\RECOVER_WINDOWS.txt for manual options.
+    echo See %RECOVERY%\docs\RESTORE_WINDOWS.txt for manual options.
     pause
     exit /b 1
 
@@ -245,7 +245,7 @@ script is authoritative; this sketch is kept for design history.
     mkdir "!TARGET!" 2>nul
     set /p PASSWORD=Password:
     > "%TEMP%\lcsas-pw.txt" echo !PASSWORD!
-    "%BIN%" --repo "%RECOVERY%\repo" --password-file "%TEMP%\lcsas-pw.txt" --target "!TARGET!" --snapshot latest
+    "%BIN%" --repo "%RECOVERY%\repo" --password-file "%TEMP%\lcsas-pw.txt" --restore-folder "!TARGET!" --snapshot latest
     del "%TEMP%\lcsas-pw.txt"
     pause
     exit /b %ERRORLEVEL%
@@ -255,7 +255,7 @@ script is authoritative; this sketch is kept for design history.
     ...
 
     :do_python
-    REM analogous, py + standalone_restorer.py
+    REM analogous, py + python_reader.py
     ...
 
 DESIGN NOTES
@@ -276,7 +276,7 @@ PART 4 -- DOCUMENTATION
 
 NEW FILES
 
-  recovery/docs/RECOVER_WINDOWS.txt
+  recovery/docs/RESTORE_WINDOWS.txt
     Step-by-step Windows restore walkthrough.  Includes:
     * Plug in USB BD reader, insert disc.
     * Find the disc drive letter (usually D: or E:).
@@ -290,9 +290,9 @@ NEW FILES
   START_HERE.txt   (generated at meta-build time by meta/builder.py --
                     needs Windows section)
     Add: "If you are on Windows, double-click restore.bat (or read
-         RECOVER_WINDOWS.txt for details)."
+         RESTORE_WINDOWS.txt for details)."
 
-  recovery/docs/RECOVER.txt      (existing -- expand)
+  recovery/docs/RESTORE.txt      (existing -- expand)
     Add a Windows-specific section mirroring the Linux/macOS steps.
 
 ────────────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ ON THE LINUX HOST (CI / local)
         # then run lcsas-restore.exe under Wine against it.
         wine bin/x86_64-windows/lcsas-restore.exe \
              --repo /tmp/synthetic --password-file /tmp/pw \
-             --target /tmp/out --snapshot latest
+             --restore-folder /tmp/out --snapshot latest
         diff -r /tmp/expected /tmp/out
 
   Add Makefile target: `make test-windows-wine`.
@@ -405,7 +405,7 @@ Phase W1 -- portability + cross-build (1-2 days):
 
 Phase W2 -- driver script + docs (1 day):
   * restore.bat
-  * RECOVER_WINDOWS.txt
+  * RESTORE_WINDOWS.txt
   * START_HERE.txt update
   * .gitattributes for CRLF .bat files
 
@@ -426,7 +426,7 @@ PHASE W5 -- LEGACY MSVCRT BUILD              (DECIDED AGAINST, #491)
 Decided against (#491): Windows 10 1709+ is the support floor.  On
 an unpatched 7 the heir installs KB2999226; on XP or Vista the heir
 moves the discs to a newer Windows, Linux or macOS machine
-(RECOVER_WINDOWS.txt, options A-C).  The Python reader is no way round
+(RESTORE_WINDOWS.txt, options A-C).  The Python reader is no way round
 it: it needs Python 3.10, which does not install on Windows 7 or older.
 Moved to NON-GOALS above.  The plan below is kept as written.
 
@@ -540,7 +540,7 @@ ROADMAP
   Step 2.  Add `make windows-msvcrt` target invoking it.
   Step 3.  Verify Wine-with-UCRT-disabled can run the msvcrt build.
   Step 4.  Update restore.bat with the tiered cascade.
-  Step 5.  Update docs/RECOVER_WINDOWS.txt "ON OLDER WINDOWS"
+  Step 5.  Update docs/RESTORE_WINDOWS.txt "ON OLDER WINDOWS"
            section to list this as Option A instead of "no good
            option exists".
 

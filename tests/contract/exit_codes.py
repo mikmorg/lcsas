@@ -36,8 +36,8 @@ class ReaderExit(enum.IntEnum):
 class ScriptExit(enum.IntEnum):
     """restore.sh's and restore.bat's own exit codes (#887).
 
-    Their headers and the EXIT CODES tables of ``RECOVER.txt`` and
-    ``RECOVER_WINDOWS.txt`` state them; ``script_contract.py`` runs them.
+    Their headers and the EXIT CODES tables of ``RESTORE.txt`` and
+    ``RESTORE_WINDOWS.txt`` state them; ``script_contract.py`` runs them.
     Any other code is the one the tier that ran stopped with.
     """
 

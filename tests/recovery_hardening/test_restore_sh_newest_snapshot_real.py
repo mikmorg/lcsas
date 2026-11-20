@@ -118,15 +118,15 @@ def test_latest_is_the_newest_data_discs_snapshot(tmp_path: Path, run: str) -> N
     env = {
         **os.environ,
         "LCSAS_MOUNT_DIRS": str(media),
-        "LCSAS_REPO": SET_ID,
+        "LCSAS_BACKUP_SET": SET_ID,
         "LCSAS_PASSWORD": PASSWORD,
         "LCSAS_TOOLS_DIR": str(tmp_path / "tools"),
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
         "LCSAS_SKIP_SPACE_CHECK": "1",
         "LCSAS_ANOTHER_SET": "0",
         "TMPDIR": str(tmpdir),
     }
-    for var in ("LCSAS_PWFILE", "LCSAS_SHARES_DIR", "LCSAS_RELOCATED",
+    for var in ("LCSAS_PASSWORD_FILE", "LCSAS_SHARES_DIR", "LCSAS_RELOCATED",
                 "LCSAS_META_DISC", "LCSAS_INTERACTIVE", "LCSAS_PACK_CACHE_DIR",
                 "LCSAS_TIER_FALLBACK", "LCSAS_NEWEST_DISC_PROMPT"):
         env.pop(var, None)

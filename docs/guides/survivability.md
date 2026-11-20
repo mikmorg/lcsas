@@ -82,7 +82,7 @@ all the discs plus the password to a computer professional."*
 repository, nothing on disc tells the heir which password goes with
 which repository.  The modern `restore.sh` prompts interactively for a
 single password per invocation; the legacy `restore_legacy.sh` (retired
-in #689) accepted a single `--key` argument.  Neither path lets you specify
+in #689) accepted a single key-file argument.  Neither path lets you specify
 per-repository passwords in one run.
 
 **Fix:** Write `PASSWORD_INFO.txt` listing each repository, its human
@@ -261,7 +261,7 @@ hints about where the password is kept.
 **Current state:** Different repositories may use different password
 files.  The modern `restore.sh` prompts for one password per invocation
 (re-run once per repository); the legacy `restore_legacy.sh` (retired in
-#689) accepted a single `--key` flag.  Neither maps passwords to repositories on disc.
+#689) accepted a single key-file flag.  Neither maps passwords to repositories on disc.
 
 **Fix:** `PASSWORD_INFO.txt` (§1.5) and enhance the entry-point scripts to
 loop over repositories with per-repository passwords.
@@ -298,7 +298,7 @@ sees a silently truncated file.  LCSAS closes this at the mastering
 choke point: `iso/xorriso.py` raises `OversizeFileError` for any
 file over the single-extent limit (both data volumes and the meta disc), and
 the bin-packer warns at plan time.  See
-`recovery/docs/RECOVER_WINDOWS.txt` for the 7-Zip extraction
+`recovery/docs/RESTORE_WINDOWS.txt` for the 7-Zip extraction
 workaround on any pre-guard disc.
 
 ### 4.2 Filename compatibility — ✅ Low risk

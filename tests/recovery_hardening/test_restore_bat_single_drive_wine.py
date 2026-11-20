@@ -234,7 +234,7 @@ def _build(tmp_path: Path) -> _Fixture:
                if not k.startswith("LCSAS_") and k.upper() != "TARGET"}
     run_env.update({
         "LCSAS_RELOCATED": "D:\\",   # what the relaunch line sets
-        "LCSAS_TARGET": TRIPLE,
+        "LCSAS_PLATFORM": TRIPLE,
         "LCSAS_INTERACTIVE": "on",
         # Skip the newest-data-disc step (#605): these tests count the
         # disc prompts from the META disc on.  The step has its own test,

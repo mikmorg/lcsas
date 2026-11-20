@@ -353,9 +353,9 @@ def test_the_one_set_by_its_name_or_id(tmp_path: Path, name: str) -> None:
 
 
 def test_an_unknown_lcsas_repo_with_one_set_stops_too(tmp_path: Path) -> None:
-    res = _in_place(tmp_path, ["@REC", str(tmp_path / "o")], LCSAS_REPO="other")
+    res = _in_place(tmp_path, ["@REC", str(tmp_path / "o")], LCSAS_BACKUP_SET="other")
     assert res.returncode == 1
-    assert "LCSAS_REPO=other not among available repositories" in res.stderr
+    assert "LCSAS_BACKUP_SET=other not among available repositories" in res.stderr
 
 
 # ── #806: no exit file under /tmp ────────────────────────────────────

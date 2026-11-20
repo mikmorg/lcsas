@@ -44,7 +44,7 @@ following in the clear. The meta disc carries the same key files and
   artifact; see §6).
 - **The owner's `key_storage_hints`**, printed verbatim into `START_HERE.txt`
   and `PASSWORD_INFO.txt` on every disc.
-- **Each repository's `LCSAS_REPO.txt`** (its id, name and split K/N) and
+- **Each repository's `LCSAS_BACKUP_SET.txt`** (its id, name and split K/N) and
   the disc's `VOLUME_INFO.txt` / `volume_info.json` (label, pack hashes,
   repository ids).
 - **`START_HERE.txt` and `CONFIG_SUMMARY.txt`**: the archive owner,

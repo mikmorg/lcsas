@@ -130,19 +130,19 @@ theft.
   letter (template below):
 
   1. Gather any **K** share cards and run the combiner from the META disc.
-     The primary combiner is the static, python-free `lcsas-keyshare`
+     The primary combiner is the static, python-free `lcsas-shares`
      binary (one per platform under `recovery/bin/<machine>/`; Windows
-     heirs run `lcsas-keyshare.exe`):
+     heirs run `lcsas-shares.exe`):
 
      ```
-     recovery/bin/<machine>/lcsas-keyshare <card1> <card2>
+     recovery/bin/<machine>/lcsas-shares <card1> <card2>
      ```
 
      If that binary won't run on the host, the Python fallback is
      equivalent:
 
      ```
-     python3 keyshare_combine.py <card1> <card2>
+     python3 combine_shares.py <card1> <card2>
      ```
 
      Either one prints the password (and nothing else).
@@ -312,7 +312,7 @@ LCSAS v1.0 ships without an independent security review. No outside
 person has reviewed LCSAS's own code, including the code that handles the
 crypto: the tier-1 C reader's decryption and authentication (scrypt, AES,
 Poly1305), the tier-3 Python reader's decryption and authentication, and
-the SLIP-0039 share code (in Python and in the `lcsas-keyshare` C binary).
+the SLIP-0039 share code (in Python and in the `lcsas-shares` C binary).
 The 2026-06 audit was self-graded. The encryption format itself is not
 LCSAS's: it is restic's repository format, which rustic also uses.
 

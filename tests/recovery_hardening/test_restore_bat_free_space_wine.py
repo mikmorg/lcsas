@@ -209,7 +209,7 @@ def _several_sets_up_to_the_question(wine: _Wine, meta: Path) -> _Run:
     # _Run reads only .env and .drive_c, which this _Wine has too.
     run = _Run(wine, "E:\\recovery\\scripts\\restore.bat", extra_env={  # type: ignore[arg-type]
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         "LCSAS_PW": "not-used",
         "LCSAS_PACK_CACHE_DIR": "C:\\cache660",
@@ -264,7 +264,7 @@ def test_the_chosen_set_is_sized_on_its_own(wine: _Wine, meta: Path) -> None:
     _catalog_per_set(meta, {"repo": 1024 * 1024, "setb": _free(wine) * 2})
     run = _Run(wine, "E:\\recovery\\scripts\\restore.bat", extra_env={  # type: ignore[arg-type]
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         "LCSAS_PW": "not-used",
         "LCSAS_PACK_CACHE_DIR": "C:\\cache660",

@@ -9,7 +9,7 @@ copy again and every disc again.  And the EXIT/INT/TERM handler returned
 0 on Ctrl-C, so the script carried on (and could exit 0).
 
 Now the run keeps its files in one tools folder ($LCSAS_TOOLS_DIR,
-default $HOME/lcsas-restore-tools): the pack cache, a copy of the
+default $HOME/lcsas-tools): the pack cache, a copy of the
 catalog, a copy of the set's metadata and resume.sh, which carries the
 restore on without the meta disc and never holds the password.  The
 folder goes after a restore that succeeds and stays after anything
@@ -93,7 +93,7 @@ def _meta_disc(root: Path, script: bool = False) -> Path:
     for sub in ("keys", "index", "snapshots"):
         (repo / sub).mkdir(parents=True)
         (repo / sub / f"{sub}-from-meta").write_text(sub)
-    (repo / "LCSAS_REPO.txt").write_text(
+    (repo / "LCSAS_BACKUP_SET.txt").write_text(
         f"format=1\nid={SET_ID}\nname={SET_NAME}\nname_cmd=family photos\n"
         "split=none\nsplit_id=\n"
     )
@@ -110,7 +110,7 @@ def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
         "TMPDIR": str(_tmpdir(tmp_path)),
         **extra,
     }
-    for var in ("LCSAS_PACK_CACHE_DIR", "LCSAS_PWFILE", "LCSAS_REPO",
+    for var in ("LCSAS_PACK_CACHE_DIR", "LCSAS_PASSWORD_FILE", "LCSAS_BACKUP_SET",
                 "LCSAS_RELOCATED", "LCSAS_META_DISC", "LCSAS_NO_RELOCATE",
                 "LCSAS_TIER_FALLBACK", "LCSAS_INTERACTIVE"):
         if var not in extra:
@@ -177,12 +177,12 @@ def test_failure_keeps_the_tools_folder_and_writes_resume_sh(tmp_path: Path) -> 
     assert stat.S_IMODE(resume.stat().st_mode) == 0o700
     text = resume.read_text()
     assert SECRET not in text
-    assert f"LCSAS_REPO='{SET_ID}'" in text, text
+    assert f"LCSAS_BACKUP_SET='{SET_ID}'" in text, text
     assert f"LCSAS_TOOLS_DIR='{tools}'" in text, text
     assert f"'{target}'" in text, text
     assert "exit code 1" in res.stderr and f"sh {tools}/resume.sh" in res.stderr, res.stderr
     copied = tools / "metadata" / SET_ID
-    assert (copied / "LCSAS_REPO.txt").is_file()
+    assert (copied / "LCSAS_BACKUP_SET.txt").is_file()
     assert (copied / "index" / "index-from-meta").is_file()
 
 
@@ -197,7 +197,7 @@ def test_set_metadata_from_a_data_disc_replaces_the_older_copy(tmp_path: Path) -
     for sub in ("keys", "index", "snapshots"):
         (old / sub).mkdir(parents=True)
         (old / sub / f"{sub}-old").write_text("old")
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     media = tmp_path / "media"
     data = media / "LCSAS_TEST_TINY_2026_0002" / "metadata" / SET_ID
     for sub in ("keys", "index", "snapshots"):
@@ -275,7 +275,7 @@ def test_a_run_that_stops_before_it_starts_leaves_no_empty_folder(tmp_path: Path
     assert not tools.exists()
 
     (tools / "recovery").mkdir(parents=True)
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     res = _run(empty, tmp_path / "out", _env(tmp_path, LCSAS_TOOLS_DIR=str(tools)))
     assert res.returncode == 1, res.stderr
     assert f"the tools copied from the disc stay in {tools} for the next run" in res.stderr
@@ -522,7 +522,7 @@ def test_success_removes_only_what_the_script_put_in_the_tools_folder(tmp_path: 
     # The marker stays with the folder (it was removed up to rc9): since
     # #627 item 4 a folder without it that holds files is refused, and
     # this one is still the restore's own.
-    assert sorted(p.name for p in tools.iterdir()) == [".lcsas-restore-tools", "notes.txt"]
+    assert sorted(p.name for p in tools.iterdir()) == [".lcsas-tools", "notes.txt"]
     assert f"{tools} holds other files, so the folder is kept" in res.stderr
     res = _run(recovery, tmp_path / "out2",
                _env(tmp_path, LCSAS_TOOLS_DIR=str(tools)))
@@ -647,7 +647,7 @@ def test_a_tools_folder_left_by_another_archive_is_not_used(tmp_path: Path) -> N
     other = tools / "metadata" / OTHER_ID
     for sub in ("keys", "index", "snapshots"):
         (other / sub).mkdir(parents=True)
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     (tools / ".lcsas-sets").write_text(f"{OTHER_ID}\n")
     (tools / "catalog.db").write_text("another archive's catalog")
     res = _run(recovery, tmp_path / "out",
@@ -669,10 +669,10 @@ def test_a_set_added_after_the_meta_disc_is_kept_for_the_resume(tmp_path: Path) 
     for sub in ("keys", "index", "snapshots"):
         (late / sub).mkdir(parents=True)
     (tools / "pack-cache").mkdir()
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     (tools / ".lcsas-sets").write_text(f"{SET_ID}\n")
     res = _run(recovery, tmp_path / "out",
-               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_REPO=OTHER_ID, STUB_RC="1"))
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_BACKUP_SET=OTHER_ID, STUB_RC="1"))
     assert res.returncode == 1, res.stderr
     assert "replacing it" not in res.stderr
     assert _arg(res.stdout, "--repo") == str(late)
@@ -686,7 +686,7 @@ def test_a_tools_folder_of_another_build_is_emptied_in_place_too(tmp_path: Path)
     tools = tmp_path / "tools"
     (tools / "pack-cache").mkdir(parents=True)
     (tools / "pack-cache" / "cached-pack").write_text("pack")
-    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-tools").write_text("")
     (tools / ".lcsas-build").write_text('LCSAS_RESTORE_BUILD_SHA="0123abcd"\n')
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"))

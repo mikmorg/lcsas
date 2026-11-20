@@ -5,11 +5,11 @@
 > step-by-step walkthrough for your OS and situation.
 
 > **The heir's step-by-step procedure is not repeated here.** It lives in one
-> place: `recovery/docs/RECOVER.txt` (Linux and macOS) and
-> `recovery/docs/RECOVER_WINDOWS.txt` (Windows). Both are on the meta disc.
+> place: `recovery/docs/RESTORE.txt` (Linux and macOS) and
+> `recovery/docs/RESTORE_WINDOWS.txt` (Windows). Both are on the meta disc.
 > In the repository they are
-> [recovery/docs/RECOVER.txt](../recovery/docs/RECOVER.txt) and
-> [recovery/docs/RECOVER_WINDOWS.txt](../recovery/docs/RECOVER_WINDOWS.txt).
+> [recovery/docs/RESTORE.txt](../recovery/docs/RESTORE.txt) and
+> [recovery/docs/RESTORE_WINDOWS.txt](../recovery/docs/RESTORE_WINDOWS.txt).
 > This guide covers which walkthrough fits your situation, troubleshooting,
 > and disc-layout reference.
 
@@ -37,11 +37,11 @@ You need **three things** to restore your files:
 > set's password as split: type the words of each card when it asks.
 > If it asks for a password instead (an older disc), rebuild the
 > password first with the combiner bundled on the META disc —
-> `recovery/bin/<machine>/lcsas-keyshare card1.txt card2.txt`
+> `recovery/bin/<machine>/lcsas-shares card1.txt card2.txt`
 > (`<machine>` is the folder under `recovery/bin/` for your computer,
 > `x86_64-unknown-linux-musl` for most PCs; on Windows, run
-> `lcsas-keyshare.exe`, see the Windows walkthrough).  If the binary
-> won't run, the fallback is `python3 keyshare_combine.py card1.txt
+> `lcsas-shares.exe`, see the Windows walkthrough).  If the binary
+> won't run, the fallback is `python3 combine_shares.py card1.txt
 > card2.txt`.  Either prints the password — then continue below as
 > normal.
 
@@ -70,8 +70,8 @@ If none of those fit your situation, see
 Mount the newest meta disc and run `restore.sh` from it. It asks which
 repository to restore and for its password, then tells you which data disc
 to insert. The exact commands, the questions it asks, and how to resume a
-stopped restore are in `recovery/docs/RECOVER.txt` (Linux and macOS) and
-`recovery/docs/RECOVER_WINDOWS.txt` (Windows). Follow those.
+stopped restore are in `recovery/docs/RESTORE.txt` (Linux and macOS) and
+`recovery/docs/RESTORE_WINDOWS.txt` (Windows). Follow those.
 
 [recovery-runbook.md](guides/recovery-runbook.md) adds owner-side context
 for Linux restores.
@@ -86,7 +86,7 @@ The disc may be mounted without execute permission:
 
 ```sh
 # Option 1: invoke via sh (always works)
-sh /mnt/restore.sh ~/restored/ latest
+sh /mnt/restore.sh --restore-folder ~/restored
 
 # Option 2: remount with exec
 sudo mount -o remount,exec /mnt
@@ -100,7 +100,7 @@ sudo mount -o remount,exec /mnt
   passwords.  Check `PASSWORD_INFO.txt` on any disc for which password
   goes with which repository.
 - If you have the password in a file (e.g. on a USB drive), set
-  `LCSAS_PWFILE=/path/to/file` before launching `restore.sh` to skip
+  `LCSAS_PASSWORD_FILE=/path/to/file` before launching `restore.sh` to skip
   the interactive prompt.
 
 ### "missing pack" or "incomplete data"
@@ -129,7 +129,7 @@ The META disc ships per-target binaries
 (see the original design RFC (historical) [`docs/history/CROSS_PLATFORM_META_RFC.md`](history/CROSS_PLATFORM_META_RFC.md)
 for the supported matrix).  If none works on your CPU/OS, the
 script automatically falls back to tier 3, the Python reader
-(`standalone_restorer.py`), which needs only Python 3.10+.
+(`python_reader.py`), which needs only Python 3.10+.
 
 ### Tier 3 (the Python reader) is very slow
 
@@ -184,7 +184,7 @@ LCSAS_BD25_2026_0001.iso
 ├── PASSWORD_INFO.txt        Which password unlocks which repository
 ├── CONFIG_SUMMARY.txt       Archive settings summary
 ├── DISC_CARE.txt            How to store discs safely
-├── standalone_restorer.py   Tier 3 Python reader (no dependencies)
+├── python_reader.py   Tier 3 Python reader (no dependencies)
 ├── VOLUME_INFO.txt          This disc's label and contents, in plain text
 ├── volume_info.json         Machine-readable disc identity
 ├── catalog.db               Disc catalog (SQLite): which disc holds each pack
@@ -192,7 +192,7 @@ LCSAS_BD25_2026_0001.iso
 │   └── ab/abc123...         Pack files (named by pack ID)
 └── metadata/
     └── <id>/                One folder per repository, named by its id
-        ├── LCSAS_REPO.txt   The repository's name, and whether its
+        ├── LCSAS_BACKUP_SET.txt   The repository's name, and whether its
         │                    password is split
         ├── config
         ├── keys/
@@ -206,11 +206,11 @@ The **META disc** holds no catalog.  It contains:
 LCSAS_META.iso
 ├── restore.sh               Start here (Linux, macOS).  Interactive restore script.
 ├── restore.bat              Start here (Windows).
-├── README_RESTORE.md        Short guide: points at recovery/docs/RECOVER.txt
+├── README_RESTORE.md        Short guide: points at recovery/docs/RESTORE.txt
 ├── VOLUME_INFO.txt          What this disc is and when it was built
 ├── metadata/<id>/           Every repository's metadata, as of this disc
 ├── recovery/bin/<triple>/   Per-platform recovery binaries
-├── recovery/docs/           On-disc reference (RECOVER.txt, TIERS.txt, …)
+├── recovery/docs/           On-disc reference (RESTORE.txt, TIERS.txt, …)
 ├── tools/                   Portable Linux x86_64 tools (rustic, Python 3)
 └── lcsas/                   Full LCSAS source code
 ```
@@ -238,7 +238,7 @@ Print this and tape it to the inside of your disc binder:
 │  3. On a Linux computer, insert META and run:           │
 │                                                         │
 │     sudo mount /dev/sr0 /mnt                            │
-│     sh /mnt/restore.sh ~/restored/ latest               │
+│     sh /mnt/restore.sh --restore-folder ~/restored               │
 │                                                         │
 │  4. When asked, swap META for the data disc with the    │
 │     newest label (latest year, then highest number).    │

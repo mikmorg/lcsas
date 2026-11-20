@@ -2398,7 +2398,7 @@ then
             printf 'your home folder and run the copy:\n\n'
             printf '    cp -R <this disc> ~/lcsas-meta\n'
             printf '    chmod -R u+x ~/lcsas-meta/recovery/bin\n'
-            printf '    sh ~/lcsas-meta/restore.sh <target folder>\n\n'
+            printf '    sh ~/lcsas-meta/restore.sh --restore-folder <folder>\n\n'
             printf 'Exit code %d = no_recovery_binary_available.\n' \
                    "$EXIT_NO_RECOVERY_BIN"
         } >&2
@@ -3298,7 +3298,7 @@ tmpfs|ramfs)
         printf '  is on a RAM-backed filesystem (%s).  Restored files\n' "$_tgt_fstype"
         printf '  WILL BE LOST when this computer powers off or reboots.\n'
         printf '  Choose a real disk instead, e.g.:\n'
-        printf '      sh restore.sh /media/<your-usb-drive>/restored latest\n'
+        printf '      sh restore.sh --restore-folder /media/<your-usb-drive>/restored\n'
         printf '==========================================================\n'
     } >&2
     if [ "${LCSAS_FORBID_TMPFS_RESTORE_FOLDER:-0}" = "1" ]; then

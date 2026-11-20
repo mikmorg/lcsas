@@ -1,6 +1,6 @@
 # Disc-Only Restore with the Python Reader (Tier 3)
 
-> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the tier-3 Python reader in depth, with its variant axes, expected outcomes, and tests. The heir's short route to tier 3 is in RECOVER.txt.
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RESTORE.txt` (Linux and macOS) and `recovery/docs/RESTORE_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RESTORE.txt](../../recovery/docs/RESTORE.txt), [RESTORE_WINDOWS.txt](../../recovery/docs/RESTORE_WINDOWS.txt). This file covers the tier-3 Python reader in depth, with its variant axes, expected outcomes, and tests. The heir's short route to tier 3 is in RESTORE.txt.
 
 > Recovery tier 3 — the fallback of last resort. A single LCSAS data disc,
 > a Python 3.10+ interpreter, the password, and **nothing else**.
@@ -11,7 +11,7 @@ This document is the doomsday playbook that proves the project's
 "zero runtime dependencies" claim
 (`CLAUDE.md` — *Key design patterns / Zero runtime dependencies*). Every
 LCSAS data disc carries tier 3, the self-contained Python reader
-(`standalone_restorer.py`) that reads encrypted restic packs using only
+(`python_reader.py`) that reads encrypted restic packs using only
 the standard library, plus its disc catalog (SQLite) that lets the
 disc identify itself without the master catalog.
 
@@ -30,7 +30,7 @@ Sibling restore routes (more capable, prefer them when available):
 1. [When to use Tier 3](#when-to-use-tier-3)
 2. [What every data disc contains](#what-every-data-disc-contains)
 3. [Workflow A — Mount a single data disc anywhere Python runs](#workflow-a--mount-a-single-data-disc-anywhere-python-runs)
-4. [Workflow B — Run `standalone_restorer.py` from the disc](#workflow-b--run-standalone_restorerpy-from-the-disc)
+4. [Workflow B — Run `python_reader.py` from the disc](#workflow-b--run-standalone_restorerpy-from-the-disc)
 5. [Workflow C — `lcsas restore standalone` (convenience wrapper)](#workflow-c--lcsas-restore-standalone-convenience-wrapper)
 6. [Workflow D — Use the disc catalog](#workflow-d--use-the-disc-catalog)
 7. [Workflow E — AES-256-CTR + Poly1305 + zstd decrypt path](#workflow-e--aes-256-ctr--poly1305--zstd-decrypt-path)
@@ -68,7 +68,7 @@ If the snapshot you want spans multiple discs and rustic is unavailable,
 either extract pack files from every relevant disc into a single cache
 directory **before** invoking the restorer (the merge hint logged by
 `_restore_with_python_reader()` in `src/lcsas/restore/orchestrator.py`), or lean on the
-restorer's own disc handling: since #234 `standalone_restorer.py`
+restorer's own disc handling: since #234 `python_reader.py`
 accepts repeatable `--mount-point` roots and, when interactive, prompts
 for the next disc whenever a pack is not found in any search path
 (`PurePythonRestorer._find_pack_path()`).
@@ -86,7 +86,7 @@ of each ISO contains:
 | --- | --- | --- |
 | `data/` | hardlinked packs (`staging/builder.py`) | The encrypted restic pack files. Two-level `data/<prefix>/<sha256>` layout (`pack_dest_path()` in `src/lcsas/utils/pack_layout.py`); the restorer also accepts flat `data/<sha256>` (`PurePythonRestorer._find_pack_path()`). |
 | `metadata/<repo>/` | mirror copy (`HolographicInjector.inject_metadata()`) | One folder per repository, named by its id (a UUID since `repo add`; the name for older repositories). |
-| `metadata/<repo>/LCSAS_REPO.txt` | written by `inject_metadata()` | Plain `key=value` marker: the repository's `id`, `name`, `name_cmd` and `split` (whether its password is split into share cards). `grep -H '^name=' DISC/metadata/*/LCSAS_REPO.txt` maps folders to names. |
+| `metadata/<repo>/LCSAS_BACKUP_SET.txt` | written by `inject_metadata()` | Plain `key=value` marker: the repository's `id`, `name`, `name_cmd` and `split` (whether its password is split into share cards). `grep -H '^name=' DISC/metadata/*/LCSAS_BACKUP_SET.txt` maps folders to names. |
 | `metadata/<repo>/index/` | mirror copy (`HolographicInjector.inject_metadata()`) | Encrypted blob → pack offset map. |
 | `metadata/<repo>/snapshots/` | mirror copy (`inject_metadata()`) | Encrypted snapshot pointers (root tree IDs). |
 | `metadata/<repo>/keys/` | mirror copy (`inject_metadata()`) | scrypt-protected master key files. |
@@ -94,7 +94,7 @@ of each ISO contains:
 | `catalog.db` | master catalog (`inject_catalog()`) | Disc catalog — every disc carries the catalog as of its burn. |
 | `volume_info.json` | written by `write_volume_info()` | UUID, label, pack manifest. |
 | `VOLUME_INFO.txt` | written by `write_volume_info()` | The same in plain text for a human: label, place in its burn session, when the volume was prepared (before the burn), LCSAS version, media type, repositories, pack count and size. |
-| `standalone_restorer.py` | written by `write_standalone_restorer()` | The Python reader, tier 3 (this document's hero). |
+| `python_reader.py` | written by `write_standalone_restorer()` | The Python reader, tier 3 (this document's hero). |
 | `RESTORE_INSTRUCTIONS.txt` | written by `write_restore_instructions()` | Plain-text steps for a human. |
 | `START_HERE.txt`, `PASSWORD_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | survivability docs (`write_start_here()`, `write_key_info()`, `write_config_summary()`, `write_disc_care()`) | Onboarding for a non-technical finder. |
 | `lcsas_src/restore/`, `lcsas_src/utils/`, `lcsas_src/db/` | `write_lcsas_source()` | The LCSAS source subpackages (for inspection or re-running). |
@@ -109,7 +109,7 @@ disc; the heir must supply it
 ## Workflow A — Mount a single data disc anywhere Python runs
 
 **Purpose:** Make the disc's filesystem visible to a Python interpreter
-on any OS so that `standalone_restorer.py` can run against it.
+on any OS so that `python_reader.py` can run against it.
 
 **Prerequisites:**
 
@@ -136,12 +136,12 @@ on any OS so that `standalone_restorer.py` can run against it.
    - Anywhere with `xorriso`: `xorriso -indev VOLUME.iso -osirrox on
      -extract / /tmp/vol1/` (option C in the same instructions text).
 3. Confirm the mount/extract is complete by listing the root and
-   checking for `standalone_restorer.py`, `catalog.db`, and
+   checking for `python_reader.py`, `catalog.db`, and
    `metadata/` (the "DISC CONTENTS" listing in
    `RESTORE_INSTRUCTIONS.txt`).
 4. Note the mount path — call it `DISC` in later steps.
 
-**Expected outcome:** `DISC/standalone_restorer.py`,
+**Expected outcome:** `DISC/python_reader.py`,
 `DISC/catalog.db`, `DISC/data/`, and `DISC/metadata/<repo>/` are all
 readable from the chosen host.
 
@@ -170,7 +170,7 @@ readable from the chosen host.
 
 ---
 
-## Workflow B — Run `standalone_restorer.py` from the disc
+## Workflow B — Run `python_reader.py` from the disc
 
 **Purpose:** Restore data using **only** the Python interpreter and the
 disc — no LCSAS install, no rustic, no network.
@@ -220,10 +220,10 @@ disc — no LCSAS install, no rustic, no network.
    `write_restore_instructions()`):
 
    ```
-   python3 DISC/standalone_restorer.py \
+   python3 DISC/python_reader.py \
        --repo /tmp/cache \
        --password-file /path/to/password.txt \
-       --target /path/to/output
+       --restore-folder /path/to/output
    ```
 
    The script's CLI is generated by `_CLI_BLOCK`
@@ -233,12 +233,12 @@ disc — no LCSAS install, no rustic, no network.
    `PurePythonRestorer.list_snapshots()`):
 
    ```
-   python3 DISC/standalone_restorer.py --repo /tmp/cache \
-       --password-file /path/to/password.txt --target /tmp/out \
+   python3 DISC/python_reader.py --repo /tmp/cache \
+       --password-file /path/to/password.txt --restore-folder /tmp/out \
        --list-snapshots
    ```
 
-   (`--target` is a required flag even in list mode, but nothing is
+   (`--restore-folder` is a required flag even in list mode, but nothing is
    written to it — the CLI exits after printing the snapshot list.)
 
    Or print repository info (version, snapshot count, blob count, zstd
@@ -252,7 +252,7 @@ disc — no LCSAS install, no rustic, no network.
    recorded in the tree
    (`PurePythonRestorer._read_blob()`).
 
-**Expected outcome:** Files appear under `--target`, with permissions,
+**Expected outcome:** Files appear under `--restore-folder`, with permissions,
 mtime/atime, xattrs and (where supported) hardlinks reconstructed best
 effort (`PurePythonRestorer._restore_tree()` / `_apply_metadata()`).
 
@@ -292,7 +292,7 @@ effort (`PurePythonRestorer._restore_tree()` / `_apply_metadata()`).
   wrong-password rejection, and snapshot listing against real rustic
   repositories.
 - Gap: no automated test runs the *generated*
-  `standalone_restorer.py` as a subprocess (only the in-tree
+  `python_reader.py` as a subprocess (only the in-tree
   `PurePythonRestorer` class). Confidence comes indirectly from
   `src/lcsas/restore/standalone_builder.py` being a literal
   concatenation of the same modules.
@@ -346,7 +346,7 @@ unless noted otherwise.
    nothing (#618).  Until that is fixed, run Workflow B by hand:
    build its cache (step 1) from `DISC/metadata/<id>/` and the disc's
    `data/`, or point the restorer at the folder and add the disc as a
-   pack source, `standalone_restorer.py --repo DISC/metadata/<id>
+   pack source, `python_reader.py --repo DISC/metadata/<id>
    --mount-point DISC ...` (without `--mount-point` it looks for packs
    only in `<repo>/data/`, which `metadata/<id>/` does not have).
 6. Probe for a usable `rustic` binary; if absent, mark
@@ -361,7 +361,7 @@ unless noted otherwise.
 9. Invoke `PurePythonRestorer.restore(target, snapshot_id)` —
    `--snapshot latest` is mapped to `None`.
 10. Errors print a fallback hint pointing back to
-    `standalone_restorer.py` if rustic was expected but absent
+    `python_reader.py` if rustic was expected but absent
     (the `FileNotFoundError` handlers around the dry-run and
     `execute_restore()` calls).
 
@@ -375,7 +375,7 @@ manifest under the target (special files this system cannot create
 and links the target cannot hold are listed there too, with exit
 `0`).  `q` (or the end of input) at the Python reader's
 disc box stops the whole restore with exit code `75`, as the bundled
-`standalone_restorer.py` does.  A full disk stops it with exit code `74`.
+`python_reader.py` does.  A full disk stops it with exit code `74`.
 A wrong password (a key file rejects it) stops it with exit code `77`,
 as in the bundled reader (it was `1`); key files that cannot be read
 at all give `1`.
@@ -649,7 +649,7 @@ built-in "extract one path" flag.
 **Steps:**
 
 1. Build the cache directory (Workflow B step 1).
-2. Run the restorer with `--target /path/to/output` and either no
+2. Run the restorer with `--restore-folder /path/to/output` and either no
    `--snapshot` (latest) or a hex prefix
    (`PurePythonRestorer.restore()` in
    `src/lcsas/restore/restic_fallback.py`).
@@ -661,7 +661,7 @@ built-in "extract one path" flag.
    Metadata (mode, mtime, atime, xattrs) is restored
    best effort (`_apply_metadata()`).
 
-**Expected outcome:** A complete tree under `--target` matching the
+**Expected outcome:** A complete tree under `--restore-folder` matching the
 snapshot, byte-for-byte identical to a `rustic restore` of the same
 snapshot — proven by
 `tests/integration/test_pure_python_restore.py::TestPurePythonFallbackRestore::test_fallback_matches_rustic_restore`.
@@ -678,7 +678,7 @@ practical options:
    (`--list-snapshots` in `_CLI_BLOCK`) first to pick
    the right one.
 2. **Drive `PurePythonRestorer` from a Python REPL or short script**:
-   import the class from the on-disc `standalone_restorer.py`
+   import the class from the on-disc `python_reader.py`
    (or from `lcsas_src/restore/restic_fallback.py` on the disc —
    bundled by `HolographicInjector.write_lcsas_source()`), load the
    master key, walk
@@ -817,7 +817,7 @@ disc catalog this tier relies on.
 | `cmd_restore_from_disc` validation paths | `tests/unit/test_restore_from_disc.py::TestFromDiscValidation` | Covered |
 | `cmd_restore_from_disc` batch mode | `tests/unit/test_restore_from_disc.py::TestFromDiscBatchMode` | Covered |
 | `cmd_restore_from_disc` pure-Python branch E2E | — | **Gap** |
-| Generated `standalone_restorer.py` run as subprocess | — | **Gap** |
+| Generated `python_reader.py` run as subprocess | — | **Gap** |
 | `volume_info.json` shape | — | **Gap** (existence only) |
 | Single-file extraction API | — | **Gap** (by design — not exposed) |
 
@@ -839,7 +839,7 @@ Required reading (repo-relative):
 - `src/lcsas/restore/_zstd_pure.py` — pure-Python zstd decoder
   (RST-04 fallback).
 - `src/lcsas/restore/standalone_builder.py` — `build_standalone()` +
-  `_CLI_BLOCK` build `standalone_restorer.py`.
+  `_CLI_BLOCK` build `python_reader.py`.
 - `src/lcsas/staging/metadata.py` — `HolographicInjector`
   (class), `write_standalone_restorer()`, `write_lcsas_source()`,
   `write_restore_instructions()`, `inject_catalog()`,

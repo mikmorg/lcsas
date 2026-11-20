@@ -174,7 +174,7 @@ def _env(**extra: str) -> dict[str, str]:
     }
     for var in (
         "LCSAS_PASSWORD",
-        "LCSAS_PWFILE",
+        "LCSAS_PASSWORD_FILE",
         "LCSAS_SKIP_SPACE_CHECK",
         "LCSAS_PACK_CACHE_DIR",
     ):

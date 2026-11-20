@@ -338,7 +338,7 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
     ScriptCase(
         name="tier 3 usage error",
         tier="3", reader_exit=ReaderExit.USAGE,
-        reader_says=("usage: standalone_restorer.py [-h]",),
+        reader_says=("usage: python_reader.py [-h]",),
         sh=ScriptOutcome(exit=ScriptExit.FAILED,
                          says=r"\[tier 3\] FAILED \(rc=2\)",
                          not_says=r"could not be restored",
@@ -561,7 +561,7 @@ def _sh_fixture(case: ScriptCase, work: Path) -> tuple[Path, Path]:
             (repo / "data").mkdir()
     stubs = work / "stubbin"
     stubs.mkdir()
-    (work / "standalone_restorer.py").write_text("# stub\n")
+    (work / "python_reader.py").write_text("# stub\n")
     # No host python unless the case is tier 3: tier 3 would otherwise
     # be the fall-back of a case that has no tier at all.
     for name in ("python3", "python"):
@@ -614,7 +614,7 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
         "PATH": f"{stubs}:/usr/bin:/bin",
         "HOME": str(home),
         "LCSAS_TOOLS_DIR": str(tools),
-        "LCSAS_TARGET": SH_TARGET,
+        "LCSAS_PLATFORM": SH_TARGET,
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_NO_RELOCATE": "1",
@@ -622,12 +622,12 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
         # someone can answer); its answer is the end of the input.
         "LCSAS_INTERACTIVE": "on" if case.interactive else "off",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
-        "LCSAS_REPO": SET,
+        "LCSAS_BACKUP_SET": SET,
         "LCSAS_PASSWORD": PASSWORD,
         "LCSAS_TIER_FALLBACK": "1" if case.fallback else "0",
     }
-    for name in ("LCSAS_PWFILE", "LCSAS_SHARES_DIR", "LCSAS_ANOTHER_SET",
-                 "LCSAS_FORCE_NONEMPTY_TARGET", "LCSAS_RESUME",
+    for name in ("LCSAS_PASSWORD_FILE", "LCSAS_SHARES_DIR", "LCSAS_ANOTHER_SET",
+                 "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER", "LCSAS_RESUME",
                  "LCSAS_ANOTHER_PASS", "LCSAS_PACK_CACHE_DIR"):
         env.pop(name, None)
     if case.check_disc is not None:
@@ -811,16 +811,16 @@ def run_restore_bat(case: ScriptCase, work: Path, rig: WineRig) -> ScriptOutcome
     env = {
         **rig.env,
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": BAT_TARGET,
+        "LCSAS_PLATFORM": BAT_TARGET,
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         "LCSAS_TOOLS_DIR": f"C:\\{tools_name}",
-        "LCSAS_REPO": SET,
+        "LCSAS_BACKUP_SET": SET,
         "LCSAS_PW": PASSWORD,
         "LCSAS_INTERACTIVE": "off",
         "LCSAS_SKIP_SPACE_CHECK": "1",
     }
-    for name in ("LCSAS_PWFILE", "LCSAS_PASSWORD", "LCSAS_SHARES_DIR",
-                 "LCSAS_ANOTHER_SET", "LCSAS_FORCE_NONEMPTY_TARGET",
+    for name in ("LCSAS_PASSWORD_FILE", "LCSAS_PASSWORD", "LCSAS_SHARES_DIR",
+                 "LCSAS_ANOTHER_SET", "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER",
                  "LCSAS_PACK_CACHE_DIR", "LCSAS_TIER_FALLBACK"):
         env.pop(name, None)
     bat = "E:\\recovery\\scripts\\restore.bat"

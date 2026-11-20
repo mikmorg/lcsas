@@ -5,7 +5,7 @@ name: live-usb-smoke
 # Boots the CURRENT pinned Ubuntu Server live ISO under OVMF with the
 # Microsoft-keys-enrolled Secure-Boot variables, attaches a freshly built
 # LCSAS meta + data image pair as cdroms, and proves the documented
-# `sh /mnt/recovery/scripts/restore.sh <target> latest` invocation
+# `sh /mnt/recovery/scripts/restore.sh --restore-folder <target>` invocation
 # completes a tier-1 restore inside the live guest (marker + content
 # hash asserted on the serial console).  See
 # tests/e2e/test_live_usb_restore.py and recovery/docs/BOOT.txt OPTION 2.

@@ -33,7 +33,7 @@ How the bytes on a disc are laid out, encrypted, and protected:
 Task-oriented walkthroughs for running an archive and restoring from it:
 
 - [guides/recovery-runbook.md](guides/recovery-runbook.md) — owner-side Linux
-  restore context. The heir's steps are `recovery/docs/RECOVER.txt`.
+  restore context. The heir's steps are `recovery/docs/RESTORE.txt`.
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — diagnosing and
   fixing common failures.
 - [guides/survivability.md](guides/survivability.md) — durability rationale:
@@ -85,7 +85,7 @@ Dated records, kept as written. They are not current descriptions. See
 Plain-text manuals burned onto every meta disc and followed literally by an
 heir on a machine with nothing else installed:
 
-- [../recovery/docs/](../recovery/docs/) — `RECOVER.txt`, `TIERS.txt`,
+- [../recovery/docs/](../recovery/docs/) — `RESTORE.txt`, `TIERS.txt`,
   `ENV_VARS.txt`, `PHYSICAL_DISC_VALIDATION.txt`, and the rest of the on-disc
   recovery manual.
 

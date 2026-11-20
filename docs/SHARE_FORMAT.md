@@ -36,14 +36,14 @@ document does not apply; use the password directly.
    words from the LCSAS/SLIP-0039 wordlist (1024 words, each uniquely
    identified by its first 4 letters; shipped inside the bundled
    `lcsas.keyshare` python package on the meta disc, and compiled into
-   `lcsas-keyshare` as `wordlist.c`). You may type just the first 4
-   letters of each word — the bundled combiners (`lcsas-keyshare`,
-   `keyshare_combine.py`, and `lcsas key combine`) expand any unambiguous
+   `lcsas-shares` as `wordlist.c`). You may type just the first 4
+   letters of each word — the bundled combiners (`lcsas-shares`,
+   `combine_shares.py`, and `lcsas key combine`) expand any unambiguous
    prefix to the full word.
 2. Run the combiner bundled on the meta disc:
-   `recovery/bin/<machine>/lcsas-keyshare <card1> <card2> ...`
+   `recovery/bin/<machine>/lcsas-shares <card1> <card2> ...`
    If that binary won't run, use the Python fallback:
-   `python3 keyshare_combine.py <card1> <card2> ...`
+   `python3 combine_shares.py <card1> <card2> ...`
    Any SLIP-0039-compatible tool also works, **or** re-implement §4 below.
 3. The output bytes are the repository password. Feed it to `restore.sh` at the
    `Password:` prompt exactly as for an archive whose password is not split.

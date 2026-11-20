@@ -5,7 +5,7 @@ overwrites live data with decades-old archive content.  restore.sh now
 WARNS before the password prompt and refuses (exit 65) to write into a
 non-empty target that does not look like a previous LCSAS restore --
 identified by a hidden ``.lcsas-restore-marker`` file.  The supported
-idempotent-resume re-run (RECOVER.txt RETRY SAFETY) must stay silent.
+idempotent-resume re-run (RESTORE.txt RETRY SAFETY) must stay silent.
 
 These tests drive recovery/scripts/restore.sh directly (pattern of
 test_restore_sh_relocate.py).  A pty is used for the interactive cases
@@ -60,7 +60,7 @@ def _base_env() -> dict[str, str]:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_SKIP_SPACE_CHECK": "1",
         "LCSAS_PASSWORD": "stub-pw",
-        "LCSAS_REPO": "alpha",
+        "LCSAS_BACKUP_SET": "alpha",
     }
 
 
@@ -174,13 +174,13 @@ def test_empty_target_no_prompt(tmp_path: Path) -> None:
 
 
 def test_force_env_skips_prompt(tmp_path: Path) -> None:
-    """LCSAS_FORCE_NONEMPTY_TARGET=1 skips the prompt on a foreign
+    """LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1 skips the prompt on a foreign
     non-empty target."""
     recovery = _make_recovery(tmp_path)
     target = tmp_path / "myfiles"
     target.mkdir()
     (target / "foreign.txt").write_text("x")
-    env = {**_base_env(), "LCSAS_FORCE_NONEMPTY_TARGET": "1"}
+    env = {**_base_env(), "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1"}
 
     res = _run_pipe(recovery, target, env, "")
 
@@ -204,7 +204,7 @@ def test_non_tty_without_override_aborts_with_hint(tmp_path: Path) -> None:
     )
     combined = res.stdout + res.stderr
     assert WARNING_SNIPPET in combined
-    assert "LCSAS_FORCE_NONEMPTY_TARGET=1" in combined, (
+    assert "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1" in combined, (
         "non-TTY refusal must name the override env var"
     )
     assert "STUB-TIER1-RAN" not in combined, "tier 1 ran despite refusal"

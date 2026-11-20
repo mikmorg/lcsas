@@ -14,7 +14,7 @@ smaller media types, because the recovery tools are small) that carries
 *everything else needed to drive a restore*: per-target static tool binaries
 (`rustic`, `xorriso`, `python3`, `dvdisaster` if present, plus our own
 tier-1 binaries), the LCSAS Python source tree, the Python reader
-`standalone_restorer.py` (tier 3), the SLIP-0039 `keyshare_combine.py`,
+`python_reader.py` (tier 3), the SLIP-0039 `combine_shares.py`,
 and the orchestrating scripts: `restore.sh` (the one restore driver),
 `restore.bat` (Windows) and `recovery/scripts/restore_auto.sh`
 (automation).
@@ -106,9 +106,9 @@ subcommand. `--output` / `-o` is required.
       source tarball (the format spec is only re-implementable against
       the source it transcribes; gated by `--allow-no-dvdisaster-source`).
    5. `_bundle_standalone_restorer` — generate the single-file Python
-      reader `standalone_restorer.py` at the meta root (tier 3).
+      reader `python_reader.py` at the meta root (tier 3).
    6. `_bundle_keyshare_combiner` — copy the stdlib-only SLIP-0039
-      `keyshare_combine.py` (+ wordlist) for the heir's share-combining
+      `combine_shares.py` (+ wordlist) for the heir's share-combining
       pre-step when a password was split.
    7. `_bundle_metadata` — if a catalog was provided, copy each
       repository's metadata (Rustic `config`, `keys`, `index`, and
@@ -170,8 +170,8 @@ subcommand. `--output` / `-o` is required.
       image.
    10. `_write_readme` / `_write_readme_txt` — write `README_RESTORE.md`
        (from `src/lcsas/meta/assets/README_RESTORE.md`) and a plain-text
-       twin. The README is a short pointer to `recovery/docs/RECOVER.txt`
-       and `RECOVER_WINDOWS.txt`, where the restore steps live.
+       twin. The README is a short pointer to `recovery/docs/RESTORE.txt`
+       and `RESTORE_WINDOWS.txt`, where the restore steps live.
        `tests/unit/test_meta_assets_golden.py` pins the SHA-256 of both
        files (#689).
    11. `_write_volume_info` — write `volume_info.json` with `type: "meta"`,
@@ -223,7 +223,7 @@ The directory is ready to feed to `xorriso` for ISO mastering.
 **Test coverage:**
 - `tests/unit/test_meta_builder.py` (build creates expected directory
   layout, bundled tools function, restore.sh parses as bash, cascades
-  present, START_HERE / disc-care files generated, `standalone_restorer.py`
+  present, START_HERE / disc-care files generated, `python_reader.py`
   shipped, one restore driver and none of the retired files (#689),
   no `.incomplete` marker after build; `TestBundleUpstreamBinaries`;
   `TestRecoveryBundleTrackedOnly`: only git-tracked `recovery/` files
@@ -282,7 +282,7 @@ cache between hosts.
 
 **At restore time**, `recovery/scripts/restore.sh` auto-detects
 `(uname -s, uname -m)` and picks the right `recovery/bin/<arch>/` subtree.
-Override with `$LCSAS_TARGET=<arch>` if auto-detection misfires (chroot,
+Override with `$LCSAS_PLATFORM=<arch>` if auto-detection misfires (chroot,
 foreign-arch emulator, unusual uname). See
 `tests/unit/test_restore_sh_dispatcher.py` for the full `(OS, machine)`
 matrix and the explicit rejections, and
@@ -323,9 +323,9 @@ required-contents contract (`required_meta_paths`,
 | `docs/`, `README.md`, `pyproject.toml` | `_bundle_docs` | Project docs including the restic-format spec for last-resort decoding. |
 | `restore.sh` (root), `recovery/scripts/restore.sh` (redirect stub) | `_write_restore_script` | The one restore driver: the tier dispatcher heirs run (single-drive default). |
 | `restore.bat`, `recovery/scripts/restore.bat`, `recovery/scripts/restore_auto.sh` | `_bundle_recovery_toolchain_artifacts` (copied from the source tree) | Windows dispatcher; POSIX-sh wrapper that runs `restore.sh` once per backup set it finds in the disc root's `metadata/` and on the mounted discs, with no questions (automation only). |
-| `standalone_restorer.py` | `_bundle_standalone_restorer` | The Python reader (tier 3), for when no binary works. |
-| `keyshare_combine.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (heir pre-step when a password was split). |
-| `README_RESTORE.md` / `README_RESTORE.txt` | `_write_readme` / `_write_readme_txt` | Short pointer to the restore manuals, `recovery/docs/RECOVER.txt` and `RECOVER_WINDOWS.txt`. |
+| `python_reader.py` | `_bundle_standalone_restorer` | The Python reader (tier 3), for when no binary works. |
+| `combine_shares.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (heir pre-step when a password was split). |
+| `README_RESTORE.md` / `README_RESTORE.txt` | `_write_readme` / `_write_readme_txt` | Short pointer to the restore manuals, `recovery/docs/RESTORE.txt` and `RESTORE_WINDOWS.txt`. |
 | `START_HERE.txt`, `PASSWORD_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | `_write_start_here` (via `HolographicInjector`) | Plain-language guidance for non-technical heirs. |
 | `recovery/bin/<target>/lcsas-restore` | `_bundle_tier1_binaries` | Tier-1 C89 reader, per APPROVED_TARGET (`.exe` on Windows). |
 | `recovery/bin/<target>/rustic-static` | `_bundle_upstream_binaries` | Tier-2 pinned upstream rustic, per target. |
@@ -404,11 +404,11 @@ software step on a running OS — the disc is not bootable.)
 1. Mount the meta disc and run the restore from it:
    ```bash
    sudo mount /dev/sr0 /mnt
-   sh /mnt/restore.sh ~/restored/ latest
+   sh /mnt/restore.sh --restore-folder ~/restored
    ```
 2. `restore.sh` sees it runs off a read-only disc and copies itself,
    this computer's `recovery/bin/<triple>/`, the docs and the disc's
-   `metadata/` into its tools folder, `~/lcsas-restore-tools`, then runs
+   `metadata/` into its tools folder, `~/lcsas-tools`, then runs
    that copy. Nothing on the disc is in use any more.
 3. It asks for the **newest data disc**: eject the meta disc, insert the
    data disc with the latest year and then the highest number in its
@@ -433,7 +433,7 @@ driver `restore_legacy.sh`, with its `INSERT DISC:` prompt and
 **Expected outcome:** The restore completes; the optical drive holds the
 meta disc only at the very start and is free for data discs afterward.
 If the restore stops (`q` at a disc box, Ctrl-C), the tools folder stays
-with the discs already copied, and `sh ~/lcsas-restore-tools/resume.sh`
+with the discs already copied, and `sh ~/lcsas-tools/resume.sh`
 carries it on with no meta disc.
 
 **Variant axes that apply:**
@@ -445,7 +445,7 @@ carries it on with no meta disc.
 - **Storage stage:** the cache lives on the restoring computer's local disk
   and is filled from the discs.
 - **Repository selection:** with more than one backup set, `restore.sh`
-  lists them by name and asks; `LCSAS_REPO` (or `--repo`) picks one
+  lists them by name and asks; `LCSAS_BACKUP_SET` (or `--backup-set`) picks one
   without the list.
 
 **Test coverage:**
@@ -670,7 +670,7 @@ catalog policy (no `catalog.db`).
 | Optical drive count | 1 (must self-extract before swap) vs ≥2 (meta disc stays loaded) | **Biggest behavior difference** — see [Single-drive bootstrap](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive). |
 | Storage stage | The discs (the meta disc itself), local disk (extracted copy + cache) | Drives how the heir copies tools off before swapping discs. |
 | Completeness (RST-05) | full per-target contract vs `--allow-incomplete` dev build | `missing_required_contents()` (`src/lcsas/meta/builder.py`). |
-| Target arch at restore | one of the six APPROVED_TARGETS | `restore.sh` `(uname -s, uname -m)` dispatch; `$LCSAS_TARGET` override. |
+| Target arch at restore | one of the six APPROVED_TARGETS | `restore.sh` `(uname -s, uname -m)` dispatch; `$LCSAS_PLATFORM` override. |
 | Catalog freshness | Newest data disc first vs the meta disc's older copies | The newest-disc step and catalog pick in `recovery/scripts/restore.sh`. |
 
 ---

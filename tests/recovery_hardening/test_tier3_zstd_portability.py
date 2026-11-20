@@ -10,7 +10,7 @@ Windows, aarch64/armv7 Linux) or after the build host moved to 3.13+.
 RST-04's remedy is a stdlib-only pure-Python zstd decompressor
 (``lcsas.restore._zstd_pure``) that:
   * ships in the LCSAS source bundled on every meta-volume, and
-  * is inlined into the per-disc ``standalone_restorer.py``,
+  * is inlined into the per-disc ``python_reader.py``,
 
 so it is importable / runnable by ANY of the six bundled PBS CPython
 interpreters with nothing pre-installed.
@@ -94,7 +94,7 @@ def test_standalone_restorer_inlines_pure_zstd() -> None:
     # And the fallback wires it as the no-native-zstd backend.
     assert "_pure_zstd_decompress" in text or "= decompress" in text
     # The inlined file must still be valid Python.
-    compile(text, "standalone_restorer.py", "exec")
+    compile(text, "python_reader.py", "exec")
 
 
 @pytest.mark.parametrize("target", APPROVED_TARGETS)

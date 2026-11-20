@@ -133,7 +133,7 @@ def _is_continued(line: str) -> bool:
 
 def _extract_invocations(text: str) -> list[tuple[int, str]]:
     """Return ``(lineno, full_command)`` for every doc-quoted
-    standalone_restorer.py run, joining continuation lines."""
+    python_reader.py run, joining continuation lines."""
     lines = text.splitlines()
     found: list[tuple[int, str]] = []
     i = 0
@@ -162,7 +162,7 @@ def _extract_invocations(text: str) -> list[tuple[int, str]]:
 
 
 def test_standalone_restorer_invocations_use_real_flags() -> None:
-    """Every doc-quoted standalone_restorer.py command must use the
+    """Every doc-quoted python_reader.py command must use the
     script's real interface: ``--repo``, ``--password-file`` and
     ``--target`` are all ``required=True`` and there are NO positional
     arguments, so a positional invocation makes argparse error out.
@@ -175,10 +175,10 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
             tokens = [t.strip("`'\"") for t in cmd.split()]
             tokens = [t for t in tokens if t]
             script_idx = next(
-                idx for idx, t in enumerate(tokens) if "standalone_restorer.py" in t
+                idx for idx, t in enumerate(tokens) if "python_reader.py" in t
             )
             args = tokens[script_idx + 1:]
-            # Bare references ("run `python3 standalone_restorer.py`,
+            # Bare references ("run `python3 python_reader.py`,
             # see ...") and --help pointers are mentions, not commands
             # an heir would copy verbatim.
             if not args or "--help" in args:
@@ -199,7 +199,7 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
                     problems.append(f"{where}: positional argument {tok!r} in: {cmd}")
                     idx += 1
     assert not problems, (
-        "doc-quoted standalone_restorer.py commands diverge from the real CLI:\n"
+        "doc-quoted python_reader.py commands diverge from the real CLI:\n"
         + "\n".join(problems)
     )
 
@@ -306,8 +306,8 @@ def test_restore_sh_help_starts_from_meta() -> None:
     """The ``--help`` QUICK START must route the operator to the META
     disc (UX-06).
 
-    Data discs carry standalone_restorer.py, docs and packs — never
-    restore.sh; only the LCSAS_META disc does (RECOVER.txt).  The old
+    Data discs carry python_reader.py, docs and packs — never
+    restore.sh; only the LCSAS_META disc does (RESTORE.txt).  The old
     "Insert ANY data disc" step 1 walked a first-time heir straight
     into ``sh: can't open /mnt/restore.sh``.
     """
@@ -319,7 +319,7 @@ def test_restore_sh_help_starts_from_meta() -> None:
     )
     assert "ANY data disc" not in help_text, (
         "--help QUICK START must not tell the operator to insert a data "
-        "disc: data discs do not carry restore.sh (recovery/docs/RECOVER.txt)"
+        "disc: data discs do not carry restore.sh (recovery/docs/RESTORE.txt)"
     )
 
 
@@ -457,7 +457,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
         str(doc.relative_to(REPO_ROOT)): doc.read_text()
         for doc in (
             *_all_docs(),
-            REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py",
+            REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py",
         )
     }
     corpus.update(_rendered_heir_docs(tmp_path))
@@ -605,7 +605,7 @@ def test_split_key_python_fallback_matches_bundle_layout(tmp_path: Path) -> None
     documented path must match the layout restore.sh itself probes
     and the meta-builder ships (UX-02).
 
-    Fallback chain pinned: lcsas-keyshare (static, primary) → system
+    Fallback chain pinned: lcsas-shares (static, primary) → system
     python3 → bundled ``recovery/bin/<platform>/python/bin/python3``.
     """
     fallback = "recovery/bin/<platform>/python/bin/python3"
@@ -621,9 +621,9 @@ def test_split_key_python_fallback_matches_bundle_layout(tmp_path: Path) -> None
             f"{name}: no bundled-python fallback for the combiner "
             "pre-step — an heir on a host without python3 dead-ends"
         )
-        assert "keyshare_combine.py" in text[idx : idx + 200], (
+        assert "combine_shares.py" in text[idx : idx + 200], (
             f"{name}: the bundled-python fallback must run "
-            "keyshare_combine.py"
+            "combine_shares.py"
         )
         # The example platform folder named in the doc must be a real
         # bundled target, or the heir hunts for a directory that does
@@ -921,7 +921,7 @@ _LABEL_ALLOWLIST: set[tuple[str, str]] = {
     # Quotes what File Explorer shows for a CD: the 16-character volume
     # name, the label cut short, which is why restore.bat reads the full
     # label from VOLUME_INFO.txt (#605).
-    ("recovery/docs/RECOVER_WINDOWS.txt", "LCSAS_CD700_2026"),
+    ("recovery/docs/RESTORE_WINDOWS.txt", "LCSAS_CD700_2026"),
 }
 
 

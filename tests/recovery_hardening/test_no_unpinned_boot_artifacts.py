@@ -45,8 +45,8 @@ _BOOT_NAME_RE = re.compile(
 _AUTHORED_SCRIPTS = {
     "restore.sh",
     "restore.bat",
-    "keyshare_combine.py",
-    "standalone_restorer.py",
+    "combine_shares.py",
+    "python_reader.py",
 }
 
 # The borrowed-tools bundle: binaries + python stdlib copied from the

@@ -217,7 +217,7 @@ def _run_bat(
     """Drive restore.bat under wine with redirected stdin.
 
     LCSAS_NO_RELOCATE=1 keeps us on the direct flow (no copy-to-%TEMP%
-    re-launch).  LCSAS_TARGET pins the target triple so detection cannot
+    re-launch).  LCSAS_PLATFORM pins the target triple so detection cannot
     misfire under wine.  LCSAS_NEWEST_DISC_PROMPT=0 skips the question
     for the newest data disc (#605): the meta tree here has no label, so
     it is a META disc, and the question would take the one stdin line.
@@ -225,7 +225,7 @@ def _run_bat(
     run_env = {
         **env,
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         **(extra_env or {}),
     }
@@ -572,9 +572,9 @@ def test_old_failures_list_is_removed_before_tier1(tmp_path: Path) -> None:
         "LCSAS restore: items that were NOT restored.\n\npath\treason\tblob_id\n"
         "old\tname refused: an earlier run\t\n")
     run_env = {**env, "LCSAS_NO_RELOCATE": "1",
-               "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+               "LCSAS_PLATFORM": "x86_64-pc-windows-gnu",
                "LCSAS_NEWEST_DISC_PROMPT": "0", "LCSAS_PW": "test",
-               "LCSAS_FORCE_NONEMPTY_TARGET": "1"}
+               "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1"}
     res = subprocess.run(
         ["wine", "cmd", "/c", "E:\\recovery\\scripts\\restore.bat",
          "--snapshot", "deadbeef"],

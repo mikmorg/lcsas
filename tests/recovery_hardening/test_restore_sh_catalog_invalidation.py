@@ -65,7 +65,7 @@ def _make_env(tmp_path: Path, catalog_newer: bool = True):
     env["LCSAS_PACK_CACHE_DIR"] = str(cache)
     env["LCSAS_ALLOW_NO_PACK_SEARCH"] = "1"
     env["LCSAS_PASSWORD"] = "x"
-    env["LCSAS_REPO"] = "myrepo"
+    env["LCSAS_BACKUP_SET"] = "myrepo"
     return rec, cache, loc, env
 
 

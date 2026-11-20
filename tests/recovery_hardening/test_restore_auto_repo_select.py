@@ -4,7 +4,7 @@ Issue #373: the non-interactive restore_auto.sh loops over every repo
 discovered under the recovery tree and calls restore.sh for each, but it
 did not tell restore.sh WHICH repo to restore.  On a multi-tenant archive
 restore.sh would then hit its interactive selection prompt (EOF → fail)
-or restore the same repo every loop.  The fix exports LCSAS_REPO=<name>
+or restore the same repo every loop.  The fix exports LCSAS_BACKUP_SET=<name>
 for each iteration so restore.sh restores the matching tenant.
 """
 
@@ -29,11 +29,11 @@ def test_restore_auto_selects_each_repo_via_lcsas_repo(tmp_path: Path) -> None:
         (recovery / "repos" / repo / "keys").mkdir(parents=True)
 
     record = tmp_path / "calls.txt"
-    # Stub restore.sh: record the LCSAS_REPO it was invoked with, exit 0.
+    # Stub restore.sh: record the LCSAS_BACKUP_SET it was invoked with, exit 0.
     stub = recovery / "scripts" / "restore.sh"
     stub.write_text(
         "#!/bin/sh\n"
-        'printf "LCSAS_REPO=%s\\n" "${LCSAS_REPO:-UNSET}" >> "$RECORD"\n'
+        'printf "LCSAS_BACKUP_SET=%s\\n" "${LCSAS_BACKUP_SET:-UNSET}" >> "$RECORD"\n'
         "exit 0\n"
     )
     stub.chmod(0o755)
@@ -44,7 +44,7 @@ def test_restore_auto_selects_each_repo_via_lcsas_repo(tmp_path: Path) -> None:
 
     env = {
         **os.environ,
-        "LCSAS_PWFILE": str(pwfile),
+        "LCSAS_PASSWORD_FILE": str(pwfile),
         "RECORD": str(record),
         "LCSAS_MOUNT_DIRS": "",  # no mounted disc joins the list (#801)
     }
@@ -55,18 +55,18 @@ def test_restore_auto_selects_each_repo_via_lcsas_repo(tmp_path: Path) -> None:
     assert res.returncode == 0, f"stderr:\n{res.stderr}"
 
     lines = [ln for ln in record.read_text().splitlines() if ln.strip()]
-    seen = sorted(ln.removeprefix("LCSAS_REPO=") for ln in lines)
+    seen = sorted(ln.removeprefix("LCSAS_BACKUP_SET=") for ln in lines)
     assert seen == ["alpha", "bravo"], (
-        f"each repo must be restored once with its own LCSAS_REPO; got {lines}"
+        f"each repo must be restored once with its own LCSAS_BACKUP_SET; got {lines}"
     )
     assert "UNSET" not in record.read_text(), (
-        "restore.sh was invoked without LCSAS_REPO — it would re-resolve the "
+        "restore.sh was invoked without LCSAS_BACKUP_SET — it would re-resolve the "
         "repo itself (prompt/EOF on a multi-tenant archive, issue #373)"
     )
 
 
 def test_restore_auto_keeps_going_after_wrong_password(tmp_path: Path) -> None:
-    """#384: repos have independent keys, so one shared LCSAS_PWFILE may
+    """#384: repos have independent keys, so one shared LCSAS_PASSWORD_FILE may
     be right for some tenants and wrong for others.  A per-repo tier-1
     exit 77 (wrong password for THAT repo) must NOT abort the whole run —
     restore_auto.sh reports it distinctly and still attempts the
@@ -82,8 +82,8 @@ def test_restore_auto_keeps_going_after_wrong_password(tmp_path: Path) -> None:
     stub = recovery / "scripts" / "restore.sh"
     stub.write_text(
         "#!/bin/sh\n"
-        'printf "%s\\n" "${LCSAS_REPO:-UNSET}" >> "$RECORD"\n'
-        'if [ "$LCSAS_REPO" = "bravo" ]; then exit 77; fi\n'
+        'printf "%s\\n" "${LCSAS_BACKUP_SET:-UNSET}" >> "$RECORD"\n'
+        'if [ "$LCSAS_BACKUP_SET" = "bravo" ]; then exit 77; fi\n'
         "exit 0\n"
     )
     stub.chmod(0o755)
@@ -94,7 +94,7 @@ def test_restore_auto_keeps_going_after_wrong_password(tmp_path: Path) -> None:
 
     env = {
         **os.environ,
-        "LCSAS_PWFILE": str(pwfile),
+        "LCSAS_PASSWORD_FILE": str(pwfile),
         "RECORD": str(record),
         "LCSAS_MOUNT_DIRS": "",  # no mounted disc joins the list (#801)
     }

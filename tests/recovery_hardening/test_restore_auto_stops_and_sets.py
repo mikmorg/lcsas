@@ -53,14 +53,14 @@ QUOTA_FULL = "rustic: Disk quota exceeded (os error 122)"
 
 
 def _stub(recovery: Path, behaviour: dict[str, str]) -> None:
-    """restore.sh stub: record LCSAS_REPO and LCSAS_TOOLS_DIR, print one
+    """restore.sh stub: record LCSAS_BACKUP_SET and LCSAS_TOOLS_DIR, print one
     stdout line, then run the shell snippet *behaviour[set]* (default:
     exit 0)."""
     lines = [
         "#!/bin/sh",
-        'printf "%s|%s\\n" "${LCSAS_REPO:-UNSET}" "${LCSAS_TOOLS_DIR-UNSET}" >> "$RECORD"',
-        'printf "stdout of %s\\n" "$LCSAS_REPO"',
-        'case "$LCSAS_REPO" in',
+        'printf "%s|%s\\n" "${LCSAS_BACKUP_SET:-UNSET}" "${LCSAS_TOOLS_DIR-UNSET}" >> "$RECORD"',
+        'printf "stdout of %s\\n" "$LCSAS_BACKUP_SET"',
+        'case "$LCSAS_BACKUP_SET" in',
     ]
     for name, snippet in behaviour.items():
         lines.append(f"    {name}) {snippet} ;;")
@@ -85,9 +85,9 @@ class _Auto:
 
     def env(self, **extra: str) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items()
-               if k not in ("LCSAS_PWFILE", "LCSAS_TOOLS_DIR", "LCSAS_REPO")}
+               if k not in ("LCSAS_PASSWORD_FILE", "LCSAS_TOOLS_DIR", "LCSAS_BACKUP_SET")}
         env.update({
-            "LCSAS_PWFILE": str(self.pwfile),
+            "LCSAS_PASSWORD_FILE": str(self.pwfile),
             "RECORD": str(self.record),
             "LCSAS_MOUNT_DIRS": "",
             "LCSAS_TOOLS_DIR": str(self.tools),
@@ -253,7 +253,7 @@ class TestPerSetToolsFolder:
         env.pop("LCSAS_TOOLS_DIR")
         res = a.run(env)
         assert res.returncode == 0, res.stderr
-        assert a.tools_dirs() == [f"{tmp_path}/home/lcsas-restore-tools-alpha"]
+        assert a.tools_dirs() == [f"{tmp_path}/home/lcsas-tools-alpha"]
 
     def test_a_relative_tools_folder_is_made_absolute(self, tmp_path):
         a = _Auto(tmp_path, sets=("alpha",))
@@ -370,7 +370,7 @@ def _set(md: Path, set_id: str) -> None:
     for sub in ("keys", "index", "snapshots"):
         (md / set_id / sub).mkdir(parents=True)
         (md / set_id / sub / f"{sub}-file").write_text(sub)
-    (md / set_id / "LCSAS_REPO.txt").write_text(
+    (md / set_id / "LCSAS_BACKUP_SET.txt").write_text(
         f"format=1\nid={set_id}\nname=set {set_id[9:13]}\nsplit=none\nsplit_id=\n"
     )
 
@@ -399,12 +399,12 @@ class _Real:
     def run(self, **extra: str) -> subprocess.CompletedProcess[str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("LCSAS_", "STUB_"))}
         env.update({
-            "LCSAS_PWFILE": str(self.pwfile),
+            "LCSAS_PASSWORD_FILE": str(self.pwfile),
             "LCSAS_TOOLS_DIR": str(self.tools),
             "LCSAS_MOUNT_DIRS": "",
             "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
             "LCSAS_SKIP_SPACE_CHECK": "1",
-            "LCSAS_TARGET": HOST_TARGET,
+            "LCSAS_PLATFORM": HOST_TARGET,
             "TMPDIR": str(self.tmpdir),
         })
         env.update(extra)
@@ -434,7 +434,7 @@ class TestWithTheRealRestoreSh:
         assert res.returncode == 1, res.stderr
         resume = r.tools_of(SET_A) / "resume.sh"
         assert resume.is_file(), res.stderr
-        assert f"LCSAS_REPO='{SET_A}'" in resume.read_text()
+        assert f"LCSAS_BACKUP_SET='{SET_A}'" in resume.read_text()
         assert f"LCSAS_TOOLS_DIR='{r.tools_of(SET_A)}'" in resume.read_text()
         assert not r.tools_of(SET_B).exists(), "a set's success removes its own tools folder"
         assert (r.target / SET_B / "restored.txt").is_file()

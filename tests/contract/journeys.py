@@ -65,7 +65,7 @@ from tests.contract.exit_codes import ScriptExit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BAT_TRIPLE = "x86_64-pc-windows-gnu"
-WIN_PROGRAMS = ("lcsas-restore.exe", "lcsas-keyshare.exe", "lcsas-ecc.exe")
+WIN_PROGRAMS = ("lcsas-restore.exe", "lcsas-shares.exe", "lcsas-ecc.exe")
 
 #: A share word no card has: typed in place of a card's fifth word.
 TYPO_WORD = "zqzq"
@@ -775,8 +775,8 @@ def _bat_tools_copy(archive: Archive, tools: Path) -> None:
     for prog in WIN_PROGRAMS:
         shutil.copyfile(src / "bin" / BAT_TRIPLE / prog, bindir / prog)
     (tools / "recovery" / "docs").mkdir()
-    shutil.copyfile(src / "docs" / "RECOVER_WINDOWS.txt",
-                    tools / "recovery" / "docs" / "RECOVER_WINDOWS.txt")
+    shutil.copyfile(src / "docs" / "RESTORE_WINDOWS.txt",
+                    tools / "recovery" / "docs" / "RESTORE_WINDOWS.txt")
     shutil.copytree(archive.meta / "metadata", tools / "metadata",
                     copy_function=shutil.copyfile)
     (tools / "recovery" / "scripts").mkdir()
@@ -1017,9 +1017,9 @@ JOURNEYS: tuple[Journey, ...] = (
         expect=Expect(exit=ScriptExit.USAGE, asked=(), says=(r"--bogus",)),
     ),
     Journey(
-        name="LCSAS_REPO with an unknown name",
+        name="LCSAS_BACKUP_SET with an unknown name",
         archive="one set",
-        env={"LCSAS_REPO": UNKNOWN_SET},
+        env={"LCSAS_BACKUP_SET": UNKNOWN_SET},
         typed=(NEWEST,),
         expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
                       says=(r"not among", re.escape(PHOTOS))),

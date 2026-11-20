@@ -192,7 +192,7 @@ def test_too_small_candidate_is_skipped(tmp_path: Path) -> None:
             input="pw\n", capture_output=True, text=True, env=env, timeout=60,
         )
         assert f"{small} has 1 KB free" in res.stderr, res.stderr
-        assert f"cannot use {small}/lcsas-restore-tools for the recovery tools" in (
+        assert f"cannot use {small}/lcsas-tools for the recovery tools" in (
             res.stderr
         ), res.stderr
         assert f"copied recovery binaries to {roomy}/lcsas-restore." in res.stderr, (

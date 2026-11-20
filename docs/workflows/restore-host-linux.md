@@ -1,6 +1,6 @@
 # Restore from a Running Linux Host
 
-> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the owner's `lcsas restore` path (LCSAS installed on a working host), the variant axes, and the tests that validate it. It is not the heir's procedure.
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RESTORE.txt` (Linux and macOS) and `recovery/docs/RESTORE_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RESTORE.txt](../../recovery/docs/RESTORE.txt), [RESTORE_WINDOWS.txt](../../recovery/docs/RESTORE_WINDOWS.txt). This file covers the owner's `lcsas restore` path (LCSAS installed on a working host), the variant axes, and the tests that validate it. It is not the heir's procedure.
 
 This document covers the **easy-mode** restore path: LCSAS is already
 installed on a working Linux host, the host can mount the archive

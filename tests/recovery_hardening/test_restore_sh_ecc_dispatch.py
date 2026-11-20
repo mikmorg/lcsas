@@ -74,10 +74,10 @@ def _image(tmp_path: Path) -> Path:
 _BASE_ENV = {
     "LCSAS_NO_RELOCATE": "1",
     "LCSAS_MOUNT_DIRS": "",
-    "LCSAS_TARGET": HOST_TARGET,
+    "LCSAS_PLATFORM": HOST_TARGET,
 }
 
-# Same as _BASE_ENV but WITHOUT LCSAS_TARGET, so the script exercises
+# Same as _BASE_ENV but WITHOUT LCSAS_PLATFORM, so the script exercises
 # its own uname-based triple-detection branch.
 _AUTODETECT_ENV = {
     "LCSAS_NO_RELOCATE": "1",
@@ -235,8 +235,8 @@ def test_verify_io_error_exits_three(tmp_path: Path) -> None:
 
 
 _DOCS = REPO_ROOT / "recovery" / "docs"
-_RECOVER = _DOCS / "RECOVER.txt"
-_RECOVER_WIN = _DOCS / "RECOVER_WINDOWS.txt"
+_RECOVER = _DOCS / "RESTORE.txt"
+_RECOVER_WIN = _DOCS / "RESTORE_WINDOWS.txt"
 _TIERS = _DOCS / "TIERS.txt"
 
 
@@ -250,8 +250,8 @@ def test_restore_sh_contains_check_disc_dispatch() -> None:
 
 def test_recover_txt_names_bundled_repair_tool() -> None:
     text = _RECOVER.read_text(encoding="utf-8")
-    assert "lcsas-ecc" in text, "RECOVER.txt must name the bundled repair tool"
-    assert "--check-disc" in text, "RECOVER.txt must point at restore.sh --check-disc"
+    assert "lcsas-ecc" in text, "RESTORE.txt must name the bundled repair tool"
+    assert "--check-disc" in text, "RESTORE.txt must point at restore.sh --check-disc"
 
 
 def test_recover_windows_names_bundled_repair_tool_no_fanmirror() -> None:
@@ -275,21 +275,21 @@ def test_no_jcea_mirror_anywhere_in_recovery_docs() -> None:
         )
 
 
-# ── triple auto-detection: no LCSAS_TARGET → uname-derived triple ─────
+# ── triple auto-detection: no LCSAS_PLATFORM → uname-derived triple ─────
 
 
 def test_check_disc_autodetects_target(tmp_path: Path) -> None:
-    """Without LCSAS_TARGET the script derives the triple from uname and
+    """Without LCSAS_PLATFORM the script derives the triple from uname and
     still resolves the per-target lcsas-ecc binary (host is Linux
     x86_64 in CI, so the stub at HOST_TARGET is found)."""
     recovery = _recovery_fixture(tmp_path)
     img = _image(tmp_path)
-    # _run merges _BASE_ENV (which sets LCSAS_TARGET); build a from-scratch
+    # _run merges _BASE_ENV (which sets LCSAS_PLATFORM); build a from-scratch
     # env without it so the script's own detection branch runs.
     env = {k: v for k, v in os.environ.items()}
     env.update(_AUTODETECT_ENV)
     env["LCSAS_TEST_ECC_VERIFY_RC"] = "0"
-    env.pop("LCSAS_TARGET", None)
+    env.pop("LCSAS_PLATFORM", None)
     res = subprocess.run(
         ["sh", str(RESTORE_SH), "--check-disc", str(img), str(recovery)],
         input="", capture_output=True, text=True, env=env, timeout=20,
@@ -315,7 +315,7 @@ def test_check_disc_auto_recovery_root(tmp_path: Path) -> None:
     env = {k: v for k, v in os.environ.items()}
     env.update(_AUTODETECT_ENV)
     env["LCSAS_TEST_ECC_VERIFY_RC"] = "0"
-    env.pop("LCSAS_TARGET", None)
+    env.pop("LCSAS_PLATFORM", None)
     res = subprocess.run(
         ["sh", str(scripts / "restore.sh"), "--check-disc", str(img)],
         input="", capture_output=True, text=True, env=env, timeout=20,
@@ -332,7 +332,7 @@ def test_check_disc_no_recovery_tree(tmp_path: Path) -> None:
     img = _image(tmp_path)
     env = {k: v for k, v in os.environ.items()}
     env.update(_AUTODETECT_ENV)
-    env.pop("LCSAS_TARGET", None)
+    env.pop("LCSAS_PLATFORM", None)
     # Invoke the canonical restore.sh but pass a non-recovery dir as the
     # positional so neither the positional nor AUTO_RECOVERY resolves to
     # a tree with bin/lcsas-ecc.  AUTO_RECOVERY from the canonical path

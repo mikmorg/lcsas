@@ -2,7 +2,7 @@
 
 The worst-case scenario is a meta disc that carries no working
 recovery binary at any tier: tier-1 (lcsas-restore), tier-2
-(rustic-static), and tier-3 (python3 + standalone_restorer.py) are
+(rustic-static), and tier-3 (python3 + python_reader.py) are
 all missing or unrunnable.  Before this guard, restore.sh prompted
 for the operator's password, walked discovery, and then printed
 "ERROR: no recovery method available." -- but only after exec was
@@ -41,7 +41,7 @@ def _make_minimal_repo(recovery: Path) -> Path:
 def _stub_recovery(tmp_path: Path) -> Path:
     """Build a fixture that mimics a stripped-down meta disc:
     has a repo + recovery/bin/<target>/ but ZERO binaries inside it,
-    and no standalone_restorer.py reachable from the recovery tree."""
+    and no python_reader.py reachable from the recovery tree."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
     # Empty bin/<target>/ — both tier-1 and tier-2 binaries absent.
@@ -105,7 +105,7 @@ def test_all_tiers_missing_exits_with_documented_code(tmp_path: Path) -> None:
     assert "rustic-static" in res.stderr, res.stderr
     assert "tier 3:" in res.stderr, res.stderr
     # Manual-recovery pointer present.
-    assert "RECOVER.txt" in res.stderr, res.stderr
+    assert "RESTORE.txt" in res.stderr, res.stderr
     # Exit code is named in the message so the operator can find it
     # by grepping the source.
     assert "64" in res.stderr, res.stderr
@@ -151,12 +151,12 @@ def test_python_tier_disabled_treated_as_missing(tmp_path: Path) -> None:
 
 
 def test_guard_does_not_fire_when_tier3_is_available(tmp_path: Path) -> None:
-    """If tier-3 (python + standalone_restorer.py) IS available, the
+    """If tier-3 (python + python_reader.py) IS available, the
     guard must NOT fire even if tier-1 and tier-2 are absent -- the
     tier cascade should reach tier 3 as designed."""
     recovery = _stub_recovery(tmp_path)
-    # Place a stub standalone_restorer.py where tier-3 looks for it.
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    # Place a stub python_reader.py where tier-3 looks for it.
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
     # Stub python3 on PATH so the tier-3 probe sees it.
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir()

@@ -87,7 +87,7 @@ def test_builder_split_shows_kn_and_combiner() -> None:
     assert "alpha, beta" in card
     assert "Any 2 of 5 share cards" in card
     # On-disc combiner path, not the installed-lcsas `key combine`.
-    assert "python3 keyshare_combine.py" in card
+    assert "python3 combine_shares.py" in card
     assert "8 disc(s), labeled SMITH_*" in card
 
 
@@ -106,7 +106,7 @@ def test_builder_non_split_omits_kn() -> None:
         card_date="2026-06-13",
     )
     assert "share cards reconstruct" not in card
-    assert "keyshare_combine.py" not in card
+    assert "combine_shares.py" not in card
     # No catalog -> disc inventory is a fill-in blank, still printable.
     assert "______" in card
 

@@ -1,8 +1,8 @@
-"""test_repo_marker_tolerance.py -- the real readers ignore LCSAS_REPO.txt.
+"""test_repo_marker_tolerance.py -- the real readers ignore LCSAS_BACKUP_SET.txt.
 
 WHY THIS GATE EXISTS
 --------------------
-rc6 (contract C1) puts a backup set marker, ``LCSAS_REPO.txt``, inside
+rc6 (contract C1) puts a backup set marker, ``LCSAS_BACKUP_SET.txt``, inside
 every ``metadata/<repo_id>/`` folder on every disc.  That folder is the
 root of the restic repository that the readers open: tier 1 with
 ``--repo``, tier 2 (rustic-static) with ``--repository``, tier 2b and the
@@ -18,7 +18,7 @@ carries a marker (with a hostile name and a split), and
     byte for byte.
 
 The tier-3 Python reader (``restic_fallback`` and the generated
-``standalone_restorer.py``) is checked in ``tests/unit/test_repo_marker.py``.
+``python_reader.py``) is checked in ``tests/unit/test_repo_marker.py``.
 
 Each test skips when its binary is absent (``rustic`` / ``restic`` on
 PATH, or ``LCSAS_RESTIC_BIN`` for stock restic).

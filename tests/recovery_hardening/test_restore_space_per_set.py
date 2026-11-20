@@ -122,7 +122,7 @@ def _run(tmp_path: Path, recovery: Path, set_name: str, *,
     env.update({
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_REPO": set_name,
+        "LCSAS_BACKUP_SET": set_name,
         "LCSAS_TOOLS_DIR": str(tmp_path / "tools"),
         "LCSAS_NEWEST_DISC_PROMPT": "0",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",

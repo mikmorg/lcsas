@@ -77,7 +77,7 @@ PROCEDURE
     reading from the REAL mount (e.g. /media/<label>), NOT a loopback:
 
       mount -o ro /dev/sr0 /mnt/disc
-      recovery/scripts/restore.sh --target /tmp/restored ...
+      recovery/scripts/restore.sh --restore-folder /tmp/restored ...
 
     Confirm every restored file matches the STEP 1 manifest
     byte-for-byte (sha256sum -c).  This satisfies AC #2.

@@ -1,7 +1,7 @@
 """Hardening test: --repo NAME flag on restore.sh (Issue #91).
 
 Checks that restore.sh accepts ``--repo NAME`` as a CLI flag equivalent to
-``LCSAS_REPO=NAME``, making multi-tenant repo selection discoverable from
+``LCSAS_BACKUP_SET=NAME``, making multi-tenant repo selection discoverable from
 ``--help`` without requiring environment-variable knowledge.
 """
 
@@ -124,12 +124,12 @@ def test_repo_flag_selects_tenant(tmp_path: Path) -> None:
     )
 
 
-# ── Test 3: --repo flag overrides LCSAS_REPO env var ─────────────────
+# ── Test 3: --repo flag overrides LCSAS_BACKUP_SET env var ─────────────────
 
 
 def test_repo_flag_overrides_env(tmp_path: Path) -> None:
-    """``--repo bravo`` must win over ``LCSAS_REPO=alpha`` in the
-    environment — the flag is parsed last and sets LCSAS_REPO
+    """``--repo bravo`` must win over ``LCSAS_BACKUP_SET=alpha`` in the
+    environment — the flag is parsed last and sets LCSAS_BACKUP_SET
     unconditionally before the repo-discovery block runs."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
@@ -142,7 +142,7 @@ def test_repo_flag_overrides_env(tmp_path: Path) -> None:
         **os.environ,
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_REPO": "alpha",  # env says alpha …
+        "LCSAS_BACKUP_SET": "alpha",  # env says alpha …
     }
     res = subprocess.run(
         [
@@ -155,12 +155,12 @@ def test_repo_flag_overrides_env(tmp_path: Path) -> None:
         env=full_env, timeout=15,
     )
     assert res.returncode == 0, (
-        f"restore.sh --repo bravo (with LCSAS_REPO=alpha) failed.\n"
+        f"restore.sh --repo bravo (with LCSAS_BACKUP_SET=alpha) failed.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     args = _stub_args(res.stdout)
     assert _arg_value(args, "--repo") == str(bravo), (
-        f"--repo bravo should override LCSAS_REPO=alpha; got "
+        f"--repo bravo should override LCSAS_BACKUP_SET=alpha; got "
         f"{_arg_value(args, '--repo')!r}.  full argv: {args}"
     )
 

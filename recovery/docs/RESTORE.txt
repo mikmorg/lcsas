@@ -47,7 +47,7 @@ DECISION FLOW
   Q: Does /mnt contain restore.sh and recovery/bin/<arch>/lcsas-restore?
      YES -> primary path:
 
-         sh /mnt/restore.sh ~/restored latest
+         sh /mnt/restore.sh --restore-folder ~/restored
 
        This asks a few questions (see "WHAT restore.sh ASKS"), then
        writes restored files under ~/restored.  The script
@@ -55,14 +55,14 @@ DECISION FLOW
        if the primary binary is missing.
 
      NO  -> fall back to the Python reader (tier 3) from a
-            data disc that ships its own standalone_restorer.py.
+            data disc that ships its own python_reader.py.
             You first need to assemble a pack cache from the disc
             (see "Manual pack assembly" in docs/TROUBLESHOOTING.md), then run:
 
-         python3 /mnt/standalone_restorer.py \
+         python3 /mnt/python_reader.py \
              --repo /tmp/cache \
              --password-file /tmp/pwfile \
-             --target ~/restored
+             --restore-folder ~/restored
 
             No python3 on this computer?  Use the one on a meta
             disc instead of "python3" above (<meta> is where that
@@ -72,7 +72,7 @@ DECISION FLOW
 
          <meta>/recovery/bin/x86_64-unknown-linux-musl/python/lib/ld-musl-x86_64.so.1 \
              <meta>/recovery/bin/x86_64-unknown-linux-musl/python/bin/python3 \
-             /mnt/standalone_restorer.py --repo /tmp/cache ...
+             /mnt/python_reader.py --repo /tmp/cache ...
 
             (64-bit ARM: aarch64 in place of x86_64, in all three
             places.)
@@ -95,7 +95,7 @@ uses that disc's newer list of snapshots.
 
       cp -R /Volumes/<label> ~/lcsas-meta
       xattr -dr com.apple.quarantine ~/lcsas-meta
-      sh ~/lcsas-meta/restore.sh ~/restored
+      sh ~/lcsas-meta/restore.sh --restore-folder ~/restored
 
   Linux -- "Permission denied"; restore.sh reporting that "the
   recovery programs are on this disc, but this computer will not run
@@ -106,7 +106,7 @@ uses that disc's newer list of snapshots.
 
       cp -R /media/$USER/<label> ~/lcsas-meta
       chmod -R u+x ~/lcsas-meta/recovery/bin
-      sh ~/lcsas-meta/restore.sh ~/restored
+      sh ~/lcsas-meta/restore.sh --restore-folder ~/restored
 
 A plain optical disc rarely needs this: restore.sh already copies
 itself and the binaries off a read-only disc into its tools folder
@@ -171,9 +171,9 @@ in this order.  Each one says how to answer.
      asked again, and so is a password the backup set does not
      accept: it is checked before the restore starts.  Q then ENTER
      stops (exit code 77).  A password that is just the letter q
-     cannot be typed here: put it in a file and use --key FILE,
+     cannot be typed here: put it in a file and use --password-file FILE,
      with FILE as a full path such as ~/pw.txt.  A wrong password
-     from --key FILE, LCSAS_PWFILE or LCSAS_PASSWORD is caught the
+     from --password-file FILE, LCSAS_PASSWORD_FILE or LCSAS_PASSWORD is caught the
      same way: restore.sh says so and asks for it here.
      When the set's password is split, restore.sh asks for the share
      cards instead (see "SHARE CARDS (SPLIT PASSWORDS)").
@@ -198,9 +198,9 @@ a pipe or a script.  To run with no questions at all, give the
 answers in advance (see
 "ENVIRONMENT VARIABLES"):
 
-    LCSAS_REPO=photos LCSAS_PWFILE=/path/to/password-file \
+    LCSAS_BACKUP_SET=photos LCSAS_PASSWORD_FILE=/path/to/password-file \
     LCSAS_NEWEST_DISC_PROMPT=0 LCSAS_ANOTHER_SET=0 \
-        sh /mnt/restore.sh ~/restored
+        sh /mnt/restore.sh --restore-folder ~/restored
 
 CASCADE DETAILS
 
@@ -234,7 +234,7 @@ Python dependency; the BARE MINIMUM restore path ends after tier 2.
      data can be restored.
   ─────────────────────────────────────────────────────────────────
 
-  Tier 3.  standalone_restorer.py      the Python reader, LAST RESORT
+  Tier 3.  python_reader.py      the Python reader, LAST RESORT
                                        (only invoked if every C/Rust
                                        option failed; skip entirely
                                        with LCSAS_ALLOW_PYTHON_TIER=0).
@@ -275,7 +275,7 @@ Each backup set's keys, index and snapshots are in its own folder,
 metadata/<id>/, on every disc.  <id> is the set's id; to see which
 folder is which set, run:
 
-  grep -H '^name=' /mnt/metadata/*/LCSAS_REPO.txt
+  grep -H '^name=' /mnt/metadata/*/LCSAS_BACKUP_SET.txt
 
 Then list that set's snapshots (the password file holds the password;
 <arch> is your computer's folder under recovery/bin/):
@@ -298,8 +298,8 @@ copy restore.sh keeps in its tools folder (see "THE TOOLS FOLDER"):
 after its newest-disc step, metadata/<id>/ there holds the newest data
 disc's copy, and its program runs with no META disc:
 
-  ~/lcsas-restore-tools/recovery/bin/<arch>/lcsas-restore \
-      --repo ~/lcsas-restore-tools/metadata/<id> \
+  ~/lcsas-tools/recovery/bin/<arch>/lcsas-restore \
+      --repo ~/lcsas-tools/metadata/<id> \
       --password-file ~/pw \
       --list-snapshots
 
@@ -307,18 +307,15 @@ A wrong password exits with code 77.
 
 RESTORE A SPECIFIC SNAPSHOT
 
-  sh /mnt/restore.sh ~/restored a1b2c3d4
+  sh /mnt/restore.sh --restore-folder ~/restored --snapshot a1b2c3d4
 
-or, naming each part:
-
-  sh /mnt/restore.sh --target ~/restored --snapshot a1b2c3d4
-
-When you use --target, use --snapshot for the snapshot too:
-"--target ~/restored a1b2c3d4" is refused.  The snapshot may be
-'latest', an exact ID, or the first few characters of one.
+The snapshot may be 'latest', an exact ID, or the first few
+characters of one.  The restore folder and the snapshot are named with
+--restore-folder and --snapshot; a bare folder or snapshot after
+restore.sh is refused (exit code 2).
 restore.sh handles the disc cascade, password prompt, and pack-cache
 setup automatically.  To run the underlying binary directly without
-restore.sh, see the --repo / --password-file / --target / --snapshot
+restore.sh, see the --repo / --password-file / --restore-folder / --snapshot
 flag set documented in lcsas-restore --help.
 
 CHECKING YOUR RESTORE
@@ -440,7 +437,7 @@ restore.sh / restore.bat WARN you before asking for the password and
 refuse unless you type YES, because restored files with the same
 names would overwrite what is there now.  Safest choice: restore into
 a NEW, empty folder.  To proceed non-interactively (no terminal to
-type YES on), set LCSAS_FORCE_NONEMPTY_TARGET=1.  A declined prompt
+type YES on), set LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1.  A declined prompt
 exits with code 65 and writes nothing.
 
 STOPPING AND CARRYING ON LATER
@@ -463,7 +460,7 @@ Nothing is lost.  Files restored so far stay in the target folder,
 and the tools folder (below) stays, with the discs already read in
 its pack cache.  restore.sh prints the command that carries on:
 
-    sh ~/lcsas-restore-tools/resume.sh
+    sh ~/lcsas-tools/resume.sh
 
 resume.sh is written once the backup set and the target folder are
 known, just before the password is asked for.  A stop before then
@@ -480,7 +477,7 @@ if a newer data disc is in the drive by then, so the files restored
 before and after the stop come from the same snapshot.  The command
 is printed with quotes when the folder's name needs them; copy it as
 it is.  Flags you give it
-are passed on, e.g.  sh ~/lcsas-restore-tools/resume.sh --key FILE.
+are passed on, e.g.  sh ~/lcsas-tools/resume.sh --password-file FILE.
 Files that are already complete are skipped (see RETRY SAFETY), and
 discs already copied into the pack cache are not asked for again.
 
@@ -496,7 +493,7 @@ Run from the META disc, restore.sh first copies what it needs into
 one folder on this computer and runs from there, so the META disc can
 come out of the drive.  The folder is
 
-    $HOME/lcsas-restore-tools        (set LCSAS_TOOLS_DIR to move it)
+    $HOME/lcsas-tools        (set LCSAS_TOOLS_DIR to move it)
 
 and it holds:
 
@@ -524,7 +521,7 @@ and the folder itself if nothing else is in it.  After any other exit
 (a wrong password, q at a disc prompt, Ctrl-C) it stays, so you can
 carry on; delete it yourself when you no longer need it:
 
-    rm -rf ~/lcsas-restore-tools
+    rm -rf ~/lcsas-tools
 
 The copies are made writable even though a disc is read-only, so the
 folder can always be removed.  A folder left by another restore.sh, or
@@ -555,7 +552,7 @@ keep the pack cache and the restored files on a real disk, e.g. a USB
 disk:
 
     LCSAS_PACK_CACHE_DIR=/media/$USER/USBDISK/lcsas-pack-cache \
-        sh /mnt/restore.sh /media/$USER/USBDISK/restored
+        sh /mnt/restore.sh --restore-folder /media/$USER/USBDISK/restored
 
 The pack cache and the target need no programs to run from them, so
 any USB disk will do (on FAT32 or exFAT the restored files lose their
@@ -639,7 +636,7 @@ others.  PASSWORD_INFO.txt on any disc states, for each repository,
 whether its password was split and the K and N in effect.
 
 restore.sh asks for the cards itself when the backup set's marker
-(metadata/<id>/LCSAS_REPO.txt on the discs) says its password is
+(metadata/<id>/LCSAS_BACKUP_SET.txt on the discs) says its password is
 split:
 
     The password for photos is split into 3 share cards;
@@ -651,7 +648,7 @@ Type the words of exactly K different cards, one card per line; the
 words show as you type, and a word may be cut to its first 4 letters.
 Each card is checked on its own as you type it: a mistyped word is
 named, and that card is asked for again.  The cards are then combined
-with the bundled lcsas-keyshare.  If they cannot be combined (cards
+with the bundled lcsas-shares.  If they cannot be combined (cards
 from two different splits: compare the Split ID on each card), or the
 password they make is not this set's, it starts again at card 1.
 P then ENTER instead of a card lets you type the password itself; Q
@@ -663,14 +660,14 @@ To give the cards without typing them, put each card (the printed
 card's text, or a file with just its words) in its own file in one
 folder, and name that folder:
 
-    LCSAS_SHARES_DIR=/path/to/cards sh /mnt/restore.sh ~/restored
+    LCSAS_SHARES_DIR=/path/to/cards sh /mnt/restore.sh --restore-folder ~/restored
 
 A card file with a mistake in it is named and left out, and the other
 cards are combined if enough of them are left.  If they cannot be
 combined, or the password they rebuild is not accepted, restore.sh
 says so and asks for the cards (or P and the password) instead; run
 from a script, with nobody to answer, it stops with exit code 77.  If
-lcsas-keyshare itself does not work on this computer, restore.sh says
+lcsas-shares itself does not work on this computer, restore.sh says
 so (the cards are not to blame), and asks for the password instead
 (a script stops with exit code 77).  Rebuild the password as below.
 
@@ -687,27 +684,27 @@ password.  Rebuild it first, by hand:
      Give each path in full, and save the password in your home
      folder (the disc cannot be written to):
 
-         /mnt/recovery/bin/<arch>/lcsas-keyshare \
+         /mnt/recovery/bin/<arch>/lcsas-shares \
              ~/card1.txt ~/card2.txt > ~/repo.key
 
      <arch> is your machine's target dir under recovery/bin/ -- run
      `ls /mnt/recovery/bin/` to see the exact name (the burned dirs use
      rust triples, e.g. x86_64-unknown-linux-musl for a 64-bit PC,
      aarch64-unknown-linux-musl for 64-bit ARM).  Windows ships
-     lcsas-keyshare.exe -- see RECOVER_WINDOWS.txt,
+     lcsas-shares.exe -- see RESTORE_WINDOWS.txt,
      "SHARE CARDS (SPLIT PASSWORDS)".
 
   3. If the binary will not run on your host, use the bundled
      Python fallback at the disc root:
 
-         python3 /mnt/keyshare_combine.py \
+         python3 /mnt/combine_shares.py \
              ~/card1.txt ~/card2.txt > ~/repo.key
 
   4. Continue with the normal cascade above.  Type the
      rebuilt password at the  Password:  prompt, or pass the
      saved password file:
 
-         sh /mnt/restore.sh --key ~/repo.key --target ~/restored
+         sh /mnt/restore.sh --password-file ~/repo.key --restore-folder ~/restored
 
 Format + re-implementation details: docs/SHARE_FORMAT.md on the
 meta disc.
@@ -794,7 +791,7 @@ Exit 64 means every tier (1, 2, 2b, AND 3) was missing or unrunnable on
 the current meta disc, before any password was prompted.
 This is most likely on a corrupted meta disc (all binaries lost to
 bit-rot) or a wrong-arch host (e.g. an aarch64 meta disc used on
-an x86_64 machine when LCSAS_TARGET was not overridden).
+an x86_64 machine when LCSAS_PLATFORM was not overridden).
 The diagnostic that precedes the exit names each missing tier with
 its expected path; cross-reference those paths against the meta
 disc contents to confirm which is the case.
@@ -830,7 +827,7 @@ before invoking restore.sh.
 
   LCSAS_ALLOW_PYTHON_TIER=0
       Disable tier 3 entirely, even if python3 and
-      standalone_restorer.py are present.  Use this when you want a
+      python_reader.py are present.  Use this when you want a
       hard guarantee that the restore never touches Python.  If
       tiers 1 and 2 both fail to start, restore.sh exits 64.
 
@@ -842,7 +839,7 @@ before invoking restore.sh.
       "REDUCING SWAP FREQUENCY WITH THE PACK CACHE" below).
 
   LCSAS_TOOLS_DIR=<path>
-      Where the tools folder goes (default ~/lcsas-restore-tools; see
+      Where the tools folder goes (default ~/lcsas-tools; see
       "THE TOOLS FOLDER").
 
   LCSAS_INTERACTIVE=on|off|auto
@@ -853,14 +850,14 @@ before invoking restore.sh.
       asks them only on a terminal, on asks them even when the
       answers come from a pipe (test rigs), off never asks them.
 
-  LCSAS_REPO=<name or id>
+  LCSAS_BACKUP_SET=<name or id>
       The backup set to restore, by its name, its plain-letters name
-      (the name_cmd= line of its LCSAS_REPO.txt, as restore.bat shows
+      (the name_cmd= line of its LCSAS_BACKUP_SET.txt, as restore.bat shows
       it) or its id; skips the list of sets.
 
-  LCSAS_PASSWORD=<password>   LCSAS_PWFILE=<file>
-      The password, or a file holding it (--key FILE is the same as
-      LCSAS_PWFILE); skips the password prompt.  A wrong one is
+  LCSAS_PASSWORD=<password>   LCSAS_PASSWORD_FILE=<file>
+      The password, or a file holding it (--password-file FILE is the same as
+      LCSAS_PASSWORD_FILE); skips the password prompt.  A wrong one is
       caught before the restore starts and asked for on the keyboard
       when someone can answer (see LCSAS_INTERACTIVE); run from a
       script, the run stops with exit code 77.  The file itself is
@@ -879,7 +876,7 @@ before invoking restore.sh.
       Do not ask "Restore another backup set?" after a restore that
       succeeds.
 
-See `sh restore.sh --help` for the full list including LCSAS_TARGET,
+See `sh restore.sh --help` for the full list including LCSAS_PLATFORM,
 LCSAS_META_DISC, LCSAS_MOUNT_DIRS, LCSAS_NO_RELOCATE, and
 LCSAS_PROGRESS.
 
@@ -912,14 +909,14 @@ still carries the old catalog.
   1. Insert the META disc and mount it:
          sudo mount /dev/sr0 /mnt
   2. Run:
-         sh /mnt/restore.sh ~/restored/ latest
+         sh /mnt/restore.sh --restore-folder ~/restored
   3. restore.sh copies itself, the binaries for this computer and the
      META disc's metadata into its tools folder (see "THE TOOLS
      FOLDER") so the META disc can later be ejected.  This can take a
      few minutes on a slow drive.  You will see:
          [lcsas-restore] copying the recovery tools for this computer
                          (about 130 MB) from the disc to ...
-         [lcsas-restore] copied recovery binaries to ~/lcsas-restore-tools
+         [lcsas-restore] copied recovery binaries to ~/lcsas-tools
          [lcsas-restore] copying the backup-set metadata (about 2 MB) ...
          [lcsas-restore] you may eject the meta disc when the
                          binary prompts for a data disc.
@@ -1025,7 +1022,7 @@ IF YOU HAVE ONLY ONE OPTICAL DRIVE
 
 You do NOT need two Blu-ray drives.  restore.sh detects that it is
 running from a read-only mount (the meta disc), copies itself plus the
-binaries for this computer to its tools folder (~/lcsas-restore-tools
+binaries for this computer to its tools folder (~/lcsas-tools
 by default), and re-executes from there.  After this relocation, no
 file handles remain on the meta disc, so you can eject it and insert
 a data disc into the same drive.  The first question after the copy

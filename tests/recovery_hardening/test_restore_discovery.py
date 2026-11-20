@@ -10,9 +10,9 @@ the operator mounting a data disc at `/mnt` (Linux) or `/Volumes/*`
 This test exercises every layout the script must support:
 
   • single-tenant at $RECOVERY/metadata/<one>/ → auto-pick.
-  • multi-tenant at $RECOVERY/metadata/{alpha,bravo}/ + LCSAS_REPO env
+  • multi-tenant at $RECOVERY/metadata/{alpha,bravo}/ + LCSAS_BACKUP_SET env
     → pick by name.
-  • multi-tenant at $RECOVERY/metadata/{alpha,bravo}/ + no LCSAS_REPO
+  • multi-tenant at $RECOVERY/metadata/{alpha,bravo}/ + no LCSAS_BACKUP_SET
     and stdin closed → exit 1, list both candidates in stderr.
   • legacy $RECOVERY/repo/{keys,index} → back-compat works.
 
@@ -25,7 +25,7 @@ What this catches:
     with /repo/ legacy layouts (the retired restore_legacy.sh's repos).
   - Forgetting to add a new search path when the production layout
     changes (e.g. /run/media/$USER/* on systemd-mount).
-  - LCSAS_REPO env getting renamed without updating discovery.
+  - LCSAS_BACKUP_SET env getting renamed without updating discovery.
 """
 
 from __future__ import annotations
@@ -145,17 +145,17 @@ def test_multi_tenant_env_var_selects(tmp_path: Path) -> None:
     _make_repo_skeleton(recovery / "metadata", "bravo")
     target = tmp_path / "restored"
 
-    res = _run_restore(recovery, target, env={"LCSAS_REPO": "alpha"})
+    res = _run_restore(recovery, target, env={"LCSAS_BACKUP_SET": "alpha"})
     assert res.returncode == 0, res.stderr
     args = _stub_args(res.stdout)
     assert _arg_value(args, "--repo") == str(alpha), (
-        f"LCSAS_REPO=alpha should pick {alpha!r}; got "
+        f"LCSAS_BACKUP_SET=alpha should pick {alpha!r}; got "
         f"{_arg_value(args, '--repo')!r}."
     )
 
 
 def test_multi_tenant_prompt_selects(tmp_path: Path) -> None:
-    """When LCSAS_REPO is unset, the script should prompt and accept
+    """When LCSAS_BACKUP_SET is unset, the script should prompt and accept
     the tenant name interactively (matching the human-in-chair UX)."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
@@ -181,7 +181,7 @@ def test_multi_tenant_invalid_lcsas_repo_errors(tmp_path: Path) -> None:
     _make_repo_skeleton(recovery / "metadata", "bravo")
     target = tmp_path / "restored"
 
-    res = _run_restore(recovery, target, env={"LCSAS_REPO": "charlie"})
+    res = _run_restore(recovery, target, env={"LCSAS_BACKUP_SET": "charlie"})
     assert res.returncode != 0
     # The error message should name what's available.
     assert "alpha" in res.stderr and "bravo" in res.stderr, (
@@ -242,7 +242,7 @@ def test_multi_tenant_repo_path_with_spaces_resolves(tmp_path: Path) -> None:
     _make_repo_skeleton(recovery / "metadata", "bravo")
     target = tmp_path / "restored"
 
-    res = _run_restore(recovery, target, env={"LCSAS_REPO": "alpha"})
+    res = _run_restore(recovery, target, env={"LCSAS_BACKUP_SET": "alpha"})
     assert res.returncode == 0, res.stderr
     args = _stub_args(res.stdout)
     assert _arg_value(args, "--repo") == str(alpha), (
@@ -421,7 +421,7 @@ def test_live_meta_disc_in_a_mount_dir_comes_after_the_data_discs(
     res = _run_restore(copy, tmp_path / "restored", env={
         "LCSAS_MOUNT_DIRS": str(media),
         "LCSAS_RELOCATED": str(meta),
-        "LCSAS_REPO": SET_ID,
+        "LCSAS_BACKUP_SET": SET_ID,
     })
     assert res.returncode == 0, res.stderr
     assert _arg_value(_stub_args(res.stdout), "--repo") == str(
@@ -431,7 +431,7 @@ def test_live_meta_disc_in_a_mount_dir_comes_after_the_data_discs(
     res = _run_restore(copy, tmp_path / "restored2", env={
         "LCSAS_MOUNT_DIRS": str(media),
         "LCSAS_RELOCATED": str(meta),
-        "LCSAS_REPO": OTHER_ID,
+        "LCSAS_BACKUP_SET": OTHER_ID,
     })
     assert res.returncode == 0, res.stderr
     assert _arg_value(_stub_args(res.stdout), "--repo") == str(

@@ -27,7 +27,7 @@ RESOLVED BY: UX-01 / INFRA-01 landed the full native path —
         recovery/bin/x86_64-windows/lcsas-restore.exe (built via
         zig cc), recovery/scripts/restore.bat (CMD driver mirroring
         restore.sh, with repository-metadata layout discovery), and
-        recovery/docs/RECOVER_WINDOWS.txt.  A wine smoke test plus a
+        recovery/docs/RESTORE_WINDOWS.txt.  A wine smoke test plus a
         two-job Windows-journey e2e gate exercise the .bat end to end.
         Residual: no Authenticode signature yet (the unsigned-binary
         concern below), and a bare no-OS machine still rides the
@@ -44,11 +44,11 @@ MITIGATION (DONE -- UX-01 / INFRA-01):
     disc.
   * Ship recovery/scripts/restore.bat as a CMD-compatible driver
     that mirrors restore.sh.
-  * Document the Windows workflow in docs/RECOVER_WINDOWS.txt and
+  * Document the Windows workflow in docs/RESTORE_WINDOWS.txt and
     in START_HERE.txt.
   * [DONE 2026-06-11, KEY-05] Split passwords on Windows: the
-    static combiner lcsas-keyshare.exe is now documented in
-    RECOVER_WINDOWS.txt ("SHARE CARDS (SPLIT PASSWORDS)") and in
+    static combiner lcsas-shares.exe is now documented in
+    RESTORE_WINDOWS.txt ("SHARE CARDS (SPLIT PASSWORDS)") and in
     restore.bat's header + password prompt, and the meta-builder
     relocates it next to lcsas-restore.exe under the on-disc
     rust-triple bin dir.  Pinned by
@@ -64,7 +64,7 @@ RESOLVED BY: #491 -- restore-auto.sh and restore_legacy.sh moved off
 IMPACT: MEDIUM.  Heir opens disc in file explorer, sees
         15-20 files (README, README_RESTORE, restore.sh,
         restore-auto.sh, restore_legacy.sh, restore_c89.sh,
-        standalone_restorer.py, tools/, lcsas/, ...).  Picking
+        python_reader.py, tools/, lcsas/, ...).  Picking
         the right one is non-obvious.
 
 MITIGATION:
@@ -95,7 +95,7 @@ MITIGATION (proposed, deferred):
 ID 004 -- macOS Gatekeeper / Linux execstack refuses unsigned binary
 ────────────────────────────────────────────────────────────────────
 STATUS: MITIGATED (workaround documented in START_HERE.txt and
-        RECOVER.txt "IF THE COMPUTER REFUSES TO RUN THE TOOLS", #490;
+        RESTORE.txt "IF THE COMPUTER REFUSES TO RUN THE TOOLS", #490;
         the binaries remain without a developer signature)
 IMPACT: MEDIUM.  On macOS, a quarantined copy of an unsigned
         executable (files copied from a disc image or another
@@ -126,7 +126,7 @@ MITIGATION:
 ID 005 -- Multi-disc swap prompts are unclear
 ────────────────────────────────────────────────────────────────────
 STATUS: CLOSED
-RESOLVED BY: RECOVER.txt "MULTI-DISC RESTORE" section documents the
+RESOLVED BY: RESTORE.txt "MULTI-DISC RESTORE" section documents the
              exact prompt text, physical swap steps, and pack-cache
              knob (LCSAS_PACK_CACHE_DIR) that reduces swap frequency.
              Static regression test added in
@@ -220,7 +220,7 @@ RESOLVED BY: START_HERE.txt (rendered by src/lcsas/meta/builder.py
              _render_meta_start_here: "ONE of them will be labelled
              <prefix>_META ... Start with it"), the "Insert the disc
              labelled LCSAS_META" prompts in restore.sh (QUICK START)
-             and restore.bat (no-backup-set-found message), and the RECOVER.txt
+             and restore.bat (no-backup-set-found message), and the RESTORE.txt
              MULTI-DISC RESTORE section (see ID 011).
 IMPACT: MEDIUM.  In a 50-disc archive, only the meta disc contains
         the toolchain (if there are several, use the newest).  The
@@ -238,7 +238,7 @@ ID 009 -- No confirmation step before destructive write
 ────────────────────────────────────────────────────────────────────
 STATUS: RESOLVED (non-empty-target guard) [UX-07]
 IMPACT: LOW.  lcsas-restore writes restored files directly into
-        --target.  If --target already has data, files are
+        --restore-folder.  If --restore-folder already has data, files are
         overwritten without prompt.
 
 MITIGATION:
@@ -246,9 +246,9 @@ MITIGATION:
     password prompt and refuse (exit 65) to write into a non-empty
     target that does not look like a previous LCSAS restore.  A hidden
     marker file (.lcsas-restore-marker) identifies prior LCSAS
-    targets, so the supported idempotent-resume re-run (RECOVER.txt
+    targets, so the supported idempotent-resume re-run (RESTORE.txt
     RETRY SAFETY) stays SILENT.  Override with
-    LCSAS_FORCE_NONEMPTY_TARGET=1 for non-interactive use.  Empty
+    LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1 for non-interactive use.  Empty
     targets proceed silently.  Drivers: restore.sh (~line 979),
     restore.bat (target block); tests:
     tests/recovery_hardening/test_nonempty_target_guard.py and
@@ -288,7 +288,7 @@ MITIGATION:
 ID 011 -- disc-loader is test-only — no disc-swap guide for heirs existed
 ────────────────────────────────────────────────────────────────────
 STATUS: CLOSED
-RESOLVED BY: RECOVER.txt "MULTI-DISC RESTORE" section (closes #106).
+RESOLVED BY: RESTORE.txt "MULTI-DISC RESTORE" section (closes #106).
              Static regression test added in
              tests/recovery_hardening/test_disc_swap_docs.py.
 IMPACT: HIGH.  The automated test rig uses a setuid C wrapper called
@@ -299,7 +299,7 @@ IMPACT: HIGH.  The automated test rig uses a setuid C wrapper called
         that the UX was smooth for real heirs.
 
 MITIGATION:
-  * Added a MULTI-DISC RESTORE section to RECOVER.txt that documents
+  * Added a MULTI-DISC RESTORE section to RESTORE.txt that documents
     the full swap workflow: which disc to start with (LCSAS_META),
     the exact prompt text the binary prints, the physical eject/insert
     steps (eject /dev/sr0; insert; wait; press ENTER), and the
