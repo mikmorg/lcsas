@@ -44,8 +44,8 @@ Two **profiles**, chosen with `--profile`:
   macOS volume cannot hold `case.txt` next to `CASE.txt`: on a Mac expect
   those two to fail with no restore bug behind them.
 
-No FIFO yet: the tiers make pipes only once #859 lands. `manifest.json`
-already has a `fifo` type for it.
+No FIFO: the tiers make pipes since #859 (rc10), but the corpus has none
+yet. `manifest.json` has a `fifo` type for when it does.
 
 **Two snapshots, two burn sessions.** The kit backs each set up, stages a
 burn session, then edits one file, deletes one, renames one, changes a mode,
@@ -59,11 +59,13 @@ burned discs or on that session's own discs.
 ## Build it
 
 From a **clean worktree of the rc being drilled**, so the discs carry exactly
-that rc's code. Run it under the lab's build lock: it stages about 580 MiB
+that rc's code. Run master's `build_kit.py` with `--project-root` pointing at
+that worktree if the rc's own copy of the builder is out of date (rc11's still
+called `lcsas key`, fixed in #938). Run it under the lab's build lock: it stages about 580 MiB
 with RS03 ECC and builds a full meta disc.
 
 ```sh
-git worktree add --detach /scratch/lcsas-drill-src v1.0.0-rc10
+git worktree add --detach /scratch/lcsas-drill-src v1.0.0-rcN   # the rc being drilled
 cd /scratch/lcsas-drill-src
 export LCSAS_RECOVERY_CACHE=/scratch/lcsas-recovery-cache   # the upstream cache
 /scratch/build-lock-lcsas.sh \

@@ -25,11 +25,10 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   runnable variant, split-key-docs twice) and builds a clean meta disc
   that must pass `lcsas meta verify --strict`. The results are in that
   rc's #478 announcement and the drill log.
-- **Found by the sweep, #602:** tier 3 has no pack cache, so on a
-  multi-disc archive it asks for a disc about once per restored file.
-  It is still open: the rcs shipped without a fix, which the
-  owner put after v1.0.0 final.
-  The drills run tier 1, so they're not affected.
+- **Found by the sweep, #602 (fixed, closed):** tier 3 had no pack
+  cache, so on a multi-disc archive it asked for a disc about once per
+  restored file. It now uses the cache folder restore.sh gives it, as
+  tier 1 does (`recovery/docs/ENV_VARS.txt`, LCSAS_PACK_CACHE_DIR).
 - **v1.0.0 final waits on three human/hardware gates** (tracker #478):
   - #473: physical BD-R and M-DISC burn → damage → repair → restore
   - #474: a cold restore by a non-technical stand-in (see below)
@@ -54,9 +53,9 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   the lab cuts another rc and the affected drills run again (owner,
   2026-11-02). At final the lab also builds a generic v1.0.0 meta disc,
   verifies it strictly and diffs it against the rc's.
-- Other open issues are lab-side: #479 (retire it once #476 passes),
-  #491 item 8 (location remove/rename), #573 (catalog rebuild keeps the
-  split records), #581.
+- The other open issues are lab-side: #479 (retire the windows blind
+  variant once #476 passes), #768 (lab CDEmu tooling) and #538 (CI on
+  Ubuntu 26.04, after v1.0).
 
 ## Hard rules
 
@@ -237,7 +236,7 @@ The channel between the sessions is **GitHub issues** (`gh`, repo
 - You can land small changes outside the restore path yourself, under
   rule 4: drill logs, CLI messages, non-heir docs.
   - Heir-facing text includes START_HERE, PASSWORD_INFO, VOLUME_INFO,
-    RECOVER_*.txt, `recovery/docs/`, the restore guides and the card text.
+    RESTORE*.txt, `recovery/docs/`, the restore guides and the card text.
   - For those, open the PR and add the label, because the blind drills
     must re-run after they change.
   - A change under `recovery/vendored/` also needs
