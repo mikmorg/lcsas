@@ -36,12 +36,13 @@ _PWFILE_MSG = "LCSAS_PASSWORD_FILE must point to an existing password file"
 
 
 def _write_stub(recovery: Path, *, fail_repos: dict[str, int] | None = None) -> Path:
-    """Stub restore.sh: append 'REPO|$1|$2|$3' to $RECORD; exit per-repo code."""
+    """Stub restore.sh: append 'REPO|ARG|ARG|...' to $RECORD; exit per-repo code."""
     scripts = recovery / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     lines = [
         "#!/bin/sh",
-        'printf "%s|%s|%s|%s\\n" "${LCSAS_BACKUP_SET:-UNSET}" "$1" "$2" "$3" >> "$RECORD"',
+        '_args="${LCSAS_BACKUP_SET:-UNSET}"; for a in "$@"; do _args="$_args|$a"; done',
+        'printf "%s\\n" "$_args" >> "$RECORD"',
     ]
     for repo, code in (fail_repos or {}).items():
         lines.append(f'if [ "${{LCSAS_BACKUP_SET:-}}" = "{repo}" ]; then exit {code}; fi')
@@ -204,7 +205,9 @@ class TestRootLayout:
         assert res.returncode == 0, res.stderr
 
         for name in ("alpha", "bravo"):
-            assert f"{name}|{r.recovery}|{r.target / name}|latest" in r.calls()
+            want = (f"{name}|--restore-folder|{r.target / name}"
+                    f"|--snapshot|latest|{r.recovery}")
+            assert want in r.calls()
             assert (r.target / name).is_dir()
         assert "==> restoring alpha" in res.stderr
         assert "==> restoring bravo" in res.stderr
@@ -290,8 +293,8 @@ class TestMetaDiscLayout:
 
         assert res.returncode == 0, res.stderr
         assert sorted(run.calls()) == [
-            f"set-a|{run.recovery}|{run.target / 'set-a'}|latest",
-            f"set-b|{run.recovery}|{run.target / 'set-b'}|latest",
+            f"set-a|--restore-folder|{run.target / 'set-a'}|--snapshot|latest|{run.recovery}",
+            f"set-b|--restore-folder|{run.target / 'set-b'}|--snapshot|latest|{run.recovery}",
         ]
 
     def test_a_set_in_two_places_is_restored_once(self, tmp_path):

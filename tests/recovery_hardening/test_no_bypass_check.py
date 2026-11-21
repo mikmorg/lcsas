@@ -92,9 +92,9 @@ def _write_transcript(tmp_path: Path, commands: list[str]) -> Path:
         "bash /mnt/lcsas-restore --repo alpha",
         "exec lcsas-restore --repo alpha",
         "sudo -E lcsas-restore --repo alpha",
-        "rustic restore latest --restore-folder /tmp/r",
-        "rustic-static restore latest --restore-folder /tmp/r",
-        "restic restore latest --restore-folder /tmp/r",
+        "rustic restore latest --target /tmp/r",
+        "rustic-static restore latest --target /tmp/r",
+        "restic restore latest --target /tmp/r",
         "python_reader.py --repo alpha --restore-folder /tmp/x",
     ],
     ids=[
@@ -277,7 +277,7 @@ def test_compound_commands_flagged(check, cmd):
     [
         '"$META/recovery/bin/lcsas-restore" restore --restore-folder /tmp/x',
         '"/media/LCSAS META/recovery/bin/rustic" restore latest',
-        "cd /tmp/work\nrustic restore latest --restore-folder /tmp/x",
+        "cd /tmp/work\nrustic restore latest --target /tmp/x",
         "SNAPS=$(rustic snapshots --json)",
         "RUSTIC_PASSWORD_FILE=/tmp/pw rustic restore latest",
         "sudo RUSTIC_PASSWORD_FILE=/tmp/pw rustic restore latest",

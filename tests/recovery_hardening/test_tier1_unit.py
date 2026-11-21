@@ -104,7 +104,7 @@ def test_missing_repo_fails_with_actionable_error() -> None:
     assert "repo" in err, err
 
 
-def test_missing_target_fails_with_actionable_error(tmp_path: Path) -> None:
+def test_missing_restore_folder_fails_with_actionable_error(tmp_path: Path) -> None:
     bin_path = _find_bin()
     pwfile = tmp_path / "pw"
     pwfile.write_text("stub\n")
@@ -112,7 +112,7 @@ def test_missing_target_fails_with_actionable_error(tmp_path: Path) -> None:
     res = _run(bin_path, "--repo", str(repo), "--password-file", str(pwfile))
     assert res.returncode != 0
     err = (res.stdout + res.stderr).lower()
-    assert "target" in err, err
+    assert "restore-folder" in err, err
 
 
 # ── Cache plumbing ───────────────────────────────────────────────

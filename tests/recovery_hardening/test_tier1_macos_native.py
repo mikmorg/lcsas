@@ -247,7 +247,7 @@ def test_keyshare_combines_split_byte_exact(tmp_path: Path) -> None:
     pw_file.write_bytes(password)
     out = tmp_path / "shares"
     assert cli_main([
-        "key", "split", "--repo", "alpha",
+        "password", "split", "--repo", "alpha",
         "--threshold", "2", "--shares", "5",
         "--password-file", str(pw_file), "--out", str(out),
     ]) == 0

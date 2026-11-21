@@ -118,10 +118,10 @@ def test_tier_order_matches_restore_sh_dispatch() -> None:
     # The doc's table must list the tiers in the same numeric order.
     d_t1 = _TIERS_TEXT.find("lcsas-restore")
     d_t2 = _TIERS_TEXT.find("rustic-static")
-    d_t3 = _TIERS_TEXT.find("standalone_")
+    d_t3 = _TIERS_TEXT.find("python_reader.py")
     assert d_t1 < d_t2 < d_t3, (
         "TIERS.txt introduces the tier binaries out of cascade order "
-        "(expected lcsas-restore, then rustic-static, then standalone_*)."
+        "(expected lcsas-restore, then rustic-static, then python_reader.py)."
     )
 
 
@@ -134,10 +134,10 @@ def test_bare_path_boundary_is_after_tier2_before_tier3() -> None:
     )
     i_boundary = _TIERS_TEXT.find("BARE MINIMUM PATH ENDS HERE")
     i_t2 = _TIERS_TEXT.find("rustic-static")
-    i_t3 = _TIERS_TEXT.find("standalone_")
+    i_t3 = _TIERS_TEXT.find("python_reader.py")
     assert i_t2 < i_boundary < i_t3, (
         "TIERS.txt's 'BARE MINIMUM PATH ENDS HERE' boundary is no longer "
-        "between the tier-2 (rustic-static) and tier-3 (standalone_*) rows."
+        "between the tier-2 (rustic-static) and tier-3 (python_reader.py) rows."
     )
 
 

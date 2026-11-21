@@ -169,7 +169,7 @@ def test_stock_restic_restores_and_checks_with_the_marker(
     # The tier-2b command line of restore.sh.
     res = subprocess.run(
         [restic, "--no-cache", "-r", str(repo), "restore", "latest",
-         "--restore-folder", str(out), "--no-lock"],
+         "--target", str(out), "--no-lock"],
         capture_output=True, text=True, env=env, timeout=180,
     )
     assert res.returncode == 0, res.stderr

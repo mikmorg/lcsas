@@ -326,12 +326,13 @@ _CLI_BLOCK = textwrap.dedent("""\
 
         for tok in sys.argv[1:]:
             if tok == "--target" or tok.startswith("--target="):
-                print(
+                # argparse's own usage-error exit (2), as for any
+                # other bad argument.
+                parser.exit(
+                    2,
                     "python_reader.py: --target was renamed: "
-                    "use --restore-folder",
-                    file=sys.stderr,
+                    "use --restore-folder\\n",
                 )
-                sys.exit(2)
 
         args = parser.parse_args()
 

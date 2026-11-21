@@ -726,9 +726,9 @@ def case_single_drive_script_relocation() -> int:
         env["LCSAS_PASSWORD"] = "correct-horse-battery-staple"
         cmd = [
             "sh", str(rec_scripts / "restore.sh"),
-            str(rec),                # RECOVERY_ROOT
             "--restore-folder", str(target),
             "--snapshot", "latest",
+            str(rec),                # RECOVERY_ROOT, after the options
         ]
         with open(log_path, "w") as logf:
             proc = subprocess.run(

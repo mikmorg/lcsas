@@ -489,7 +489,7 @@ def test_stop_and_carry_on_from_the_tools_folder(fx: _Fixture) -> None:
     assert f"copied recovery files to {tools_win}\r\n" in out, out
     bin_dir = tools / "recovery" / "bin"
     assert [p.name for p in bin_dir.iterdir()] == [TRIPLE], _files(tools)
-    assert sorted(p.name for p in (bin_dir / TRIPLE).iterdir()) == list(PROGRAMS), (
+    assert sorted(p.name for p in (bin_dir / TRIPLE).iterdir()) == sorted(PROGRAMS), (
         _files(tools))
     for prog in PROGRAMS:
         assert (bin_dir / TRIPLE / prog).read_bytes() == (WIN_BIN / prog).read_bytes()
@@ -535,8 +535,8 @@ def test_stop_and_carry_on_from_the_tools_folder(fx: _Fixture) -> None:
     assert got.is_file() and _sha(got.read_bytes()) == _sha(FILES["a0.txt"]), out
 
     cfg = _resume_cfg(tools)
-    assert cfg["set"] == SET_ID, cfg
-    assert cfg["target"] == TARGET_WIN, cfg
+    assert cfg["backup_set"] == SET_ID, cfg
+    assert cfg["restore_folder"] == TARGET_WIN, cfg
     assert cfg["meta"] == "D:\\", cfg
     assert "D" in cfg["letters"].split(), cfg
     for kept in (tools / "resume.cfg", tools / LAUNCHER, fx.desktop / LAUNCHER):

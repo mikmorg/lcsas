@@ -273,7 +273,7 @@ function Assert-OnlyThisPlatform {
     }
     $progs = @(Get-ChildItem -LiteralPath (Join-Path $bin 'x86_64-pc-windows-gnu') -File -ErrorAction SilentlyContinue |
                ForEach-Object { $_.Name } | Sort-Object)
-    if (($progs -join ',') -ne 'lcsas-ecc.exe,lcsas-shares.exe,lcsas-restore.exe') {
+    if (($progs -join ',') -ne 'lcsas-ecc.exe,lcsas-restore.exe,lcsas-shares.exe') {
         $Problems.Add("tools folder programs: $($progs -join ', ')")
     }
 }
