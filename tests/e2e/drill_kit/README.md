@@ -82,7 +82,7 @@ workdir with `chmod -R u+w <workdir>` first.
 
 It drives the real CLI, in the order an owner would:
 1. rustic `init` and a first `backup` of each repository;
-2. `lcsas init`, `repo add`, `key split --repo photos`, `key card --repo documents`;
+2. `lcsas init`, `repo add`, `password split --repo photos`, `password card --repo documents`;
 3. `scan`, then `stage --media CD700` (the first session's data disc, with ECC),
    recorded as burned;
 4. the corpus changes; a second rustic `backup`, `scan` and `stage` (the
