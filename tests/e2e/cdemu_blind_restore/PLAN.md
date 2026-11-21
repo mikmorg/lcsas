@@ -58,7 +58,7 @@ checker's reason under its FAIL line.
 7. The full transcript is captured to `transcript.jsonl` for review.
 8. **(v2)** The agent invoked the interactive `restore.sh`.  Direct
    invocation of `restore-auto.sh`, `restore_legacy.sh`,
-   `restore_c89.sh`, `restore.bat`, or `standalone_restorer.py`
+   `restore_c89.sh`, `restore.bat`, or `python_reader.py` (`standalone_restorer.py` before rc11)
    fails the run (the first three were retired from the meta disc in
    #689; `setup.py` strips `restore_auto.sh` and `restore.bat` from
    the test meta disc, so the agent cannot run them).  (`restore.sh` may itself `exec` whichever tier is
@@ -86,7 +86,7 @@ checker's reason under its FAIL line.
 - **Blind bootstrap:** can someone who has never heard of LCSAS figure out
   the restore procedure from the meta disc alone?
 - **Single-drive default:** does the production `restore.sh` actually drive
-  the swap loop without `--isos`, just `--key`/`--target`/`--repo`?
+  the swap loop without `--isos`, just `--password-file`/`--restore-folder`/`--backup-set` (`--key`/`--target`/`--repo` before rc11)?
 - **Holographic catalog:** does every disc carry enough metadata that any
   one of them, inserted first, identifies the remaining pick list?
 - **Multi-tenant isolation:** cannot decrypt foreign repos even when their
@@ -233,7 +233,7 @@ The single-drive flow that the agent will actually drive is built into
 the production wrapper:
 
 ```
-./restore.sh --key ~/tenant-alpha.pw --target ~/restored/ --repo alpha
+./restore.sh --password-file ~/tenant-alpha.pw --restore-folder ~/restored/ --backup-set alpha
 ```
 
 …and on each disc swap the script prints exactly:
@@ -631,7 +631,7 @@ Two split-key blind variants now coexist with different jobs:
 
 **Acceptance policy.** Any PR that changes the heir-facing recovery
 contract — `src/lcsas/staging/metadata.py` heir text, the on-disc
-`keyshare_combine.py`, or `restore.sh` flags — MUST pass
+`combine_shares.py`, or `restore.sh` flags — MUST pass
 `make blind-restore-split-docs` with **every check passing (16/16
 today) twice consecutively** before merge. The cheap always-on pre-gate for every PR is KEY-02's
 `tests/unit/test_heir_doc_commands.py` (contract check, no LLM cost) plus

@@ -5,7 +5,7 @@ less one CR at its end.  Before #641 tier 1 took the whole file less its
 trailing CR/LF bytes, so a repository written by rustic with a file of
 two lines opened in tier 2 only.  The table is the one probed against
 rustic 0.11.2 in tests/unit/test_password_file_rule.py; tier 3 and the
-``lcsas key`` commands are checked against it there.
+``lcsas password`` commands are checked against it there.
 """
 
 from __future__ import annotations
