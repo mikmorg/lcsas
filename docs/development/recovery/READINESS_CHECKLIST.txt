@@ -272,20 +272,27 @@ show /15.)
 
   DATE        VARIANT              MODEL   SCORE   COST   FIXTURE BUILT FROM
   ──────────  ───────────────────  ──────  ──────  ─────  ──────────────────
-  2026-11-18  single-key           haiku   16/16   $0.25  master 6e97e04
-  2026-11-18  split-2of5           haiku   16/16   $0.18  master 766ebcc
-  2026-11-18  split-key-docs       haiku   16/16   $0.37  master 6e97e04
-  2026-11-18  tier1-missing        haiku   16/16   $0.23  master 094a52e
-  2026-11-18  tier1-tier2-missing  haiku   16/16   $0.10  master 094a52e
-  2026-11-18  single-tenant        haiku   16/16   $0.09  master 6e97e04
-  2026-11-18  5-tenant             haiku   16/16   $0.08  master 6e97e04
-  2026-11-18  no-catalog           haiku   16/16   $0.13  master 6e97e04
-  2026-11-18  mixed-split          haiku   16/16   $0.35  master 766ebcc
-  2026-11-18  split-key-docs (2)   haiku   16/16   $0.31  master 6e97e04
+  2026-11-21  single-key           haiku   16/16   $0.15  master 258add4
+  2026-11-21  split-2of5           haiku   16/16   $0.11  master 258add4
+  2026-11-21  split-key-docs       haiku   16/16   $0.24  master 258add4
+  2026-11-21  tier1-missing        haiku   16/16   $0.24  master 258add4
+  2026-11-21  tier1-tier2-missing  haiku   16/16   $0.12  master 258add4
+  2026-11-21  single-tenant        haiku   16/16   $0.10  master 258add4
+  2026-11-21  5-tenant             haiku   16/16   $0.12  master 258add4
+  2026-11-21  no-catalog           haiku   16/16   $0.11  master 258add4
+  2026-11-21  mixed-split          haiku   16/16   $0.23  master 258add4
+  2026-11-21  split-key-docs (2)   haiku   16/16   $0.18  master 258add4
   (not built) windows              haiku   --/16   --     retires once #476 passes
                                                           (#479)
 
-  The 2026-11-18 rows are the v1.0.0-rc10 sweep (#478, #841).  Since
+  The 2026-11-21 rows are the v1.0.0-rc11 sweep (#478, #897), on
+  master 258add4: the glossary renames (#934, ADR 0005), restore.sh's
+  folder question (#926) and the heir-text check (#933), with the
+  blind harness's prompts and expect patterns following the reworded
+  prompts.  All ten runs scored 16/16 the first time, for about $1.61
+  together.
+
+  The 2026-11-18 rows were the v1.0.0-rc10 sweep (#478, #841).  Since
   #855 the 16 checks are 9 OUTCOME and 7 CONDUCT checks; a pass needs
   both groups.  The sweep started on master 6e97e04 and found faults,
   each fixed before its variant was run again, so the rows name the
