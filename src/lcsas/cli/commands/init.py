@@ -17,7 +17,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     Resolution order for the catalog path:
       1. ``--catalog-path`` on ``init`` (when provided)
       2. global ``--catalog``
-      3. ``paths.database`` from the TOML config (``--config``)
+      3. ``[paths] catalog`` from the TOML config (``--config``)
       4. ``catalog.db`` in the current working directory
     """
 

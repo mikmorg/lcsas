@@ -171,6 +171,49 @@ def _resolve_lock_timeout(args: argparse.Namespace) -> float | None:
     return None
 
 
+def _old_catalog_beside(db_path: Path) -> Path | None:
+    """An ``archive.db`` beside a missing catalog path, or None.
+
+    The master catalog's default name was ``archive.db`` until rc11
+    (#934).  An install that renamed ``[paths] catalog`` but not the file
+    has one there.
+    """
+    old = db_path.with_name("archive.db")
+    if db_path.name != "archive.db" and old.exists():
+        return old
+    return None
+
+
+def _missing_catalog_hint(db_path: Path) -> str:
+    """The hint for a catalog path that does not exist."""
+    old = _old_catalog_beside(db_path)
+    if old is None:
+        return "Run `lcsas init` first."
+    return (
+        f"{old} is there: the master catalog's default name changed "
+        "from archive.db to catalog.db (#934).  Rename that file to "
+        f"{db_path.name}, or point [paths] catalog at it.  Do not run "
+        "`lcsas init`, which starts an empty catalog."
+    )
+
+
+def _refuse_beside_old_catalog(db_path: Path | str) -> None:
+    """Refuse to create *db_path* while an old ``archive.db`` is beside it.
+
+    A new, empty catalog there would hide every volume of the real one.
+    """
+    from lcsas.exceptions import CatalogError
+
+    db_str = str(db_path)
+    if db_str == ":memory:" or Path(db_str).exists():
+        return
+    if _old_catalog_beside(Path(db_str)) is not None:
+        raise CatalogError(
+            f"No catalog at {db_path}.",
+            recovery_hint=_missing_catalog_hint(Path(db_str)),
+        )
+
+
 def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
     """Open a catalog read-only-ish, failing if it does not yet exist.
 
@@ -188,7 +231,7 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
     if db_str != ":memory:" and not Path(db_str).exists():
         raise CatalogError(
             f"No catalog at {db_path}.",
-            recovery_hint="Run `lcsas init` first.",
+            recovery_hint=_missing_catalog_hint(Path(db_str)),
         )
     conn = get_connection(db_path)
     if get_schema_version(conn) == 0:
@@ -230,12 +273,19 @@ def _open_catalog(
         No lock; the catalog is created when missing, and migrated or not.
         Only ``volume impact`` and ``session list`` open it this way, as
         they did before this helper existed.
+
+    No mode creates a catalog while an ``archive.db`` (its default name
+    before rc11, #934) sits beside the missing path: that is an install
+    whose config was renamed but not its catalog file, and a new, empty
+    catalog beside the real one would hide every volume
+    (:func:`_refuse_beside_old_catalog`).
     """
     from lcsas.db.connection import get_connection, locked_connection
     from lcsas.db.schema import ensure_schema
 
     if db_path is None:
         db_path = _resolve_db_path(args, config)
+    _refuse_beside_old_catalog(db_path)
     if mode in ("write", "write-existing"):
         if mode == "write-existing":
             _open_existing_catalog(db_path).close()
