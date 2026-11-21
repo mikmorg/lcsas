@@ -426,3 +426,30 @@ def test_verify_restore_fails_a_restore_of_the_older_snapshot(
     assert "DIFFERS  photos/album-notes-01.txt" in out
     assert "MODE     photos/private (mode 600).txt  (0600, expected 0640)" in out
     assert "MISSING  photos/added after the first backup.txt" in out
+
+
+def test_the_kit_builder_runs_no_retired_lcsas_command() -> None:
+    """build_kit.py drives the lcsas command with lcsas(...) calls, which
+    no CI job runs: the kit is built by hand before a release.  rc11's kit
+    build stopped at `lcsas key split` (renamed to `lcsas password`, #934).
+    Every lcsas(...) call's leading words must not be a retired command."""
+    import ast
+
+    from tests.contract.renames import RENAMES
+
+    retired = [r.old.split()[1:] for r in RENAMES
+               if r.kind == "command" and r.old.startswith("lcsas ")]
+    assert ["key"] in retired, retired   # the scan has something to find
+    tree = ast.parse((KIT / "build_kit.py").read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "lcsas"]
+    assert calls, "no lcsas(...) calls found in build_kit.py"
+    bad = []
+    for call in calls:
+        words = [a.value for a in call.args
+                 if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+        for old in retired:
+            if words[:len(old)] == old:
+                bad.append(f"line {call.lineno}: lcsas {' '.join(words[:3])}")
+    assert not bad, bad

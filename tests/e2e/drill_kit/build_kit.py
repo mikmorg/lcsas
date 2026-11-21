@@ -222,9 +222,9 @@ def main() -> int:
     lcsas("init")
     for repo, *_ in corpus.CORPUS:
         lcsas("repo", "add", repo, str(work / "mirror" / repo))
-    lcsas("key", "split", "--repo", "photos",
+    lcsas("password", "split", "--repo", "photos",
           "--out", str(work / "cards" / "photos-shares"))
-    lcsas("key", "card", "--repo", "documents",
+    lcsas("password", "card", "--repo", "documents",
           "--out", str(work / "cards" / "documents-password-card.txt"))
     lcsas("scan")
 
