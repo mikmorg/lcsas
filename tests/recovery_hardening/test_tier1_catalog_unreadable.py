@@ -53,7 +53,7 @@ def _first_prompt(
             str(BINARY),
             "--repo", str(repo),
             "--password-file", str(pwfile),
-            "--target", str(target),
+            "--restore-folder", str(target),
             "--snapshot", "latest",
             "--pack-search", str(disc_a),
             "--catalog", str(catalog),

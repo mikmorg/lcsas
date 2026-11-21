@@ -17,7 +17,7 @@
 #                  backup set" error (proves the .bat parses, runs, and
 #                  the guard fires).
 #   2. holographic -> with a metadata\<tenant>\ repo (the layout the meta
-#                  builder actually writes; NO repo\ dir) and LCSAS_REPO
+#                  builder actually writes; NO repo\ dir) and LCSAS_BACKUP_SET
 #                  set, the .bat gets PAST repo discovery and prints the
 #                  resolved Repo: line + canonical target triple (proves
 #                  the UX-01 holographic-layout discovery reaches the
@@ -55,7 +55,7 @@ cp "$BAT" "$WORK/recovery/scripts/restore.bat"
 
 # LCSAS_NO_RELOCATE=1 keeps the single-drive RAM relocation out of the
 # smoke (it depends on %TEMP% writability under wine and is not what we
-# are testing).  LCSAS_TARGET pins the triple so the run does not depend
+# are testing).  LCSAS_PLATFORM pins the triple so the run does not depend
 # on wine's reported PROCESSOR_ARCHITECTURE.  LCSAS_NEWEST_DISC_PROMPT=0
 # skips the question for the newest data disc (#605), which would take
 # the answers meant for the folder and the password.
@@ -64,7 +64,7 @@ run_bat() {
     # caller can assert on it without $? surviving the pipe.
     ( cd "$WORK" \
         && WINEDEBUG=-all LCSAS_NO_RELOCATE=1 LCSAS_NEWEST_DISC_PROMPT=0 \
-           LCSAS_TARGET=x86_64-pc-windows-gnu \
+           LCSAS_PLATFORM=x86_64-pc-windows-gnu \
            timeout 120 wine cmd /c "recovery\\scripts\\restore.bat < $1" ) \
         2>&1
 }
@@ -76,7 +76,7 @@ fail=0
 out1="$(run_bat empty.txt || true)"
 rc1=0
 ( cd "$WORK" \
-    && WINEDEBUG=-all LCSAS_NO_RELOCATE=1 LCSAS_NEWEST_DISC_PROMPT=0 LCSAS_TARGET=x86_64-pc-windows-gnu \
+    && WINEDEBUG=-all LCSAS_NO_RELOCATE=1 LCSAS_NEWEST_DISC_PROMPT=0 LCSAS_PLATFORM=x86_64-pc-windows-gnu \
        timeout 120 wine cmd /c "recovery\\scripts\\restore.bat < empty.txt" \
        >/dev/null 2>&1 ) || rc1=$?
 
@@ -95,14 +95,14 @@ fi
 # Build the layout the meta builder actually writes: the repo material
 # lives under <disc-root>/metadata/<tenant>/, with NO recovery/repo dir.
 # %RECOVERY% resolves to <root>/recovery (recovery/bin exists), so the
-# .bat must climb to <root>/metadata/<tenant>/.  LCSAS_REPO selects it.
+# .bat must climb to <root>/metadata/<tenant>/.  LCSAS_BACKUP_SET selects it.
 mkdir -p "$WORK/metadata/alpha/keys" "$WORK/metadata/alpha/index"
 # Feed an unwritable target + a password so the run advances PAST repo
 # discovery and the arch banner without needing a real binary.
 printf 'Q:\\nonexistent\\out\npw\n' > "$WORK/in2.txt"
 out2="$( ( cd "$WORK" \
     && WINEDEBUG=-all LCSAS_NO_RELOCATE=1 LCSAS_NEWEST_DISC_PROMPT=0 \
-       LCSAS_TARGET=x86_64-pc-windows-gnu LCSAS_REPO=alpha \
+       LCSAS_PLATFORM=x86_64-pc-windows-gnu LCSAS_BACKUP_SET=alpha \
        timeout 120 wine cmd /c "recovery\\scripts\\restore.bat < in2.txt" ) \
     2>&1 || true )"
 

@@ -356,7 +356,7 @@ def _repo_id(conn, name: str) -> str:
 def _check_set_markers(stage: Path, *, require_all: bool) -> None:
     """#617: stop the setup unless the disc staged at *stage* keeps each
     backup set as an owner's discs do: ``metadata/<uuid>/`` with an
-    ``LCSAS_REPO.txt`` naming one of the tenants.  verify.sh scores no
+    ``LCSAS_BACKUP_SET.txt`` naming one of the tenants.  verify.sh scores no
     set name, so a fixture that regressed to ``metadata/alpha/`` (or lost
     its markers) would otherwise only show in an LLM run.  *require_all*:
     the META disc carries every tenant; a data disc only those it holds
@@ -712,7 +712,7 @@ def _apply_variant_mutations(stage: Path) -> None:
                             bin/<arch>/.  Forces restore.sh's
                             LCSAS_TIER_FALLBACK=1 path through to tier 2.
       tier1-tier2-missing — delete tier-1 AND rustic-static; forces
-                            tier 3 (CPython + standalone_restorer.py).
+                            tier 3 (CPython + python_reader.py).
       single-tenant       — no meta-disc mutation (handled by tenant
                             count plumbing).
       5-tenant            — no meta-disc mutation (handled by tenant
@@ -916,7 +916,7 @@ def _stage_split_key_cards(
     """KEY-04: stage the production printable ``-card.txt`` artifacts.
 
     Splits the repo password K-of-N and renders each share through the same
-    ``_share_card_text`` used by ``lcsas key split`` — header, usage text,
+    ``_share_card_text`` used by ``lcsas password split`` — header, usage text,
     rotation metadata, and the mnemonic — then writes the first *threshold*
     cards (mode 0600) into *out_dir* (defaults to the agent home) as
     ``<repo>-share-<i>-card.txt``.  Bare mnemonic files are deliberately NOT
@@ -976,7 +976,7 @@ def _create_agent_user(labels: list[str]) -> None:
     # Key-escrow Phase 3 (K3.2): the split-key-2of5 variant stages the
     # alpha password as 5 SLIP-0039 share cards instead of a plaintext
     # ~/tenant-alpha.pw.  The agent must reconstruct any 2 of 5 with
-    # /mnt/keyshare_combine.py before it can answer the Password: prompt.
+    # /mnt/combine_shares.py before it can answer the Password: prompt.
     # All OTHER variants (including the single-key K3.1 alias of default)
     # stage tenant-alpha.pw exactly as before.
     #

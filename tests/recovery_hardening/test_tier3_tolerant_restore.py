@@ -1,6 +1,6 @@
 """Hardening guard: tier-3 standalone restorer is SKIP-AND-CONTINUE.
 
-RST-03 — the pure-Python last-resort restorer (standalone_restorer.py,
+RST-03 — the pure-Python last-resort restorer (python_reader.py,
 shipped on every data disc) must tolerate a single corrupt/missing blob
 instead of aborting the whole restore on the first bad byte.  For a
 non-technical heir this is the worst possible failure shape: one bad

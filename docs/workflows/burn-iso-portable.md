@@ -398,7 +398,7 @@ pipeline.
 - An LCSAS config file (`--config` is required —
   `cmd_catalog_import`).
 - Read/write access to the master `catalog.db` (defaults from config;
-  overridable via `--db`).
+  overridable via `--catalog`).
 - One or more receipt JSON files with the keys `volume_label`,
   `location` and `verify_passed` (`cmd_catalog_import`).
 - The referenced volume must already exist in the master catalog —

@@ -26,7 +26,7 @@ from tests.recovery_hardening.test_tier1_fault_handling import (
 
 def _restore(bin_path: Path, repo: Path, pw: Path, target: Path) -> str:
     res = _run(bin_path, "--repo", str(repo), "--password-file", str(pw),
-               "--target", str(target), "--interactive", "off", timeout=60)
+               "--restore-folder", str(target), "--interactive", "off", timeout=60)
     assert res.returncode in (0, 1), res.stderr
     assert (target / "hello.txt").is_file(), res.stderr
     return res.stderr

@@ -40,12 +40,14 @@ Scale with ``LCSAS_TEST_TIMEOUT_SCALE`` (default 4; 1 disables).
 
 **3. A private tools folder (#609).**  restore.sh keeps its tools folder
 (binaries copied off the disc, the pack cache, the catalog copy and
-resume.sh) in ``$LCSAS_TOOLS_DIR``, by default ``$HOME/lcsas-restore-tools``,
+resume.sh) in ``$LCSAS_TOOLS_DIR``, by default ``$HOME/lcsas-tools``,
 and keeps it after any run that does not succeed.  A test that runs
 restore.sh (or resume.sh, or restore_auto.sh) with the developer's own HOME and no
 ``LCSAS_TOOLS_DIR`` gets a fresh folder under the pytest basetemp
-instead, so no test writes to the real home directory.  A test that sets
-its own HOME (or drops HOME) is left alone: it is testing the default.
+instead, so no test writes to the real home directory.  Such a run with
+no ``--restore-folder`` gets a private HOME as well: the restore folder
+is then ``~/restored`` (#926).  A test that sets its own HOME (or drops
+HOME) is left alone: it is testing the default.
 """
 from __future__ import annotations
 
@@ -78,6 +80,11 @@ def _inject_tools_dir(argv: object, kwargs: dict) -> dict:
         return kwargs
     env = dict(base)
     env["LCSAS_TOOLS_DIR"] = str(factory())
+    if not any(str(a) == "--restore-folder" or str(a).startswith("--restore-folder=")
+               for a in argv):
+        # No --restore-folder: the restore folder is ~/restored (#926),
+        # so the run gets a private home folder too.
+        env["HOME"] = str(factory())
     kwargs["env"] = env
     return kwargs
 

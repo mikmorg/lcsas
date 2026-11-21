@@ -2,7 +2,7 @@
 
 Each case in ``tests/contract/restore_contract.py`` is run once on
 ``lcsas-restore`` (tier 1) and once on the generated
-``standalone_restorer.py`` (the Python reader, tier 3).  Two tests per
+``python_reader.py`` (the Python reader, tier 3).  Two tests per
 case:
 
 - ``test_reader_meets_contract[<case>-<reader>]``: the reader's exit

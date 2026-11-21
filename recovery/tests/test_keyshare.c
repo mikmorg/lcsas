@@ -190,7 +190,7 @@ static void run_extract(void)
      * exercise carriage-return trimming). */
     static const char CARD[] =
         "================ LCSAS KEY SHARE ================\n"
-        "Repository : alpha\r\n"
+        "Backup set : alpha\r\n"
         "Share      : 1 of 5\n"
         "\n"
         "WHAT THIS IS\n"
@@ -255,7 +255,7 @@ static void run_extract(void)
     {
         static const char PROSE[] =
             "================ LCSAS KEY SHARE ================\n"
-            "Repository : alpha\n"
+            "Backup set : alpha\n"
             "(the holder lost the words)\n";
         err[0] = '\0';
         rc = lcsas_keyshare_extract(PROSE, out, sizeof(out),

@@ -3,7 +3,7 @@
 rustic (the writer, and tier 2) takes a password file's first line: every
 byte before the first LF, less one CR at its end.  Spaces are kept.  Tier 1
 (lcsas-restore, see tests/recovery_hardening/test_tier1_password_file_rule.py),
-tier 3 (``read_password_file`` in restic_fallback.py) and the ``lcsas key``
+tier 3 (``read_password_file`` in restic_fallback.py) and the ``lcsas password``
 commands must take the same password, or a repository written with a file of
 two lines opens in tier 2 only.
 
@@ -115,7 +115,7 @@ def test_validate_config_logs_the_warning(
     config = LCSASConfig(
         mirror_base_path=mirror,
         staging_path=staging,
-        db_path=tmp_path / "archive.db",
+        db_path=tmp_path / "catalog.db",
         repositories={
             "r1": RepositoryConfig(
                 name="r1", mirror_path=mirror / "r1", password_file=key,

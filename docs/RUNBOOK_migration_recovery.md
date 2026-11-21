@@ -48,7 +48,7 @@ lcsas catalog rebuild /mnt/disc1 /mnt/disc2 --output rebuilt.db
 Open the catalog with the sqlite3 shell:
 
 ```bash
-sqlite3 /path/to/archive.db
+sqlite3 /path/to/catalog.db
 ```
 
 ### If the leftover is `volumes_old` (interrupted v4→v5)

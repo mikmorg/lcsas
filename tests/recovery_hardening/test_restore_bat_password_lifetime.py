@@ -22,7 +22,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_BAT = REPO_ROOT / "recovery" / "scripts" / "restore.bat"
 # How restore.bat deletes the password file.  Updated (B2 review): with
-# /f, since a copy of a read-only LCSAS_PWFILE is read-only and plain
+# /f, since a copy of a read-only LCSAS_PASSWORD_FILE is read-only and plain
 # `del` leaves it (test_restore_bat_dispatcher.py pins that no plain
 # `del "%PWFILE%"` is left).
 DEL_PWFILE = 'del /f /q "%PWFILE%"'

@@ -1,6 +1,6 @@
 # LCSAS — Linux End-to-End Restore Runbook
 
-> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file is a longer owner-side walkthrough for Linux with the meta disc, with extra context and troubleshooting. If it differs from RECOVER.txt, RECOVER.txt wins.
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RESTORE.txt` (Linux and macOS) and `recovery/docs/RESTORE_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RESTORE.txt](../../recovery/docs/RESTORE.txt), [RESTORE_WINDOWS.txt](../../recovery/docs/RESTORE_WINDOWS.txt). This file is a longer owner-side walkthrough for Linux with the meta disc, with extra context and troubleshooting. If it differs from RESTORE.txt, RESTORE.txt wins.
 
 > **New here?** Start at [RECOVERY_GUIDE.md](../RECOVERY_GUIDE.md) — the
 > short entry-point that routes you to the right walkthrough for your OS
@@ -74,20 +74,20 @@ burned closest in date to your data discs.
 ## Step 2 — Run the restore script
 
 ```sh
-sh /mnt/restore.sh ~/restored/ latest
+sh /mnt/restore.sh --restore-folder ~/restored
 ```
 
-That's it.  Two positional arguments:
+That's it.  Two flags, both optional:
 
-| Arg | Meaning | Default |
+| Flag | Meaning | Default |
 |---|---|---|
-| 1 | `TARGET_DIR` — where restored files land | `/tmp/restored` |
-| 2 | `SNAPSHOT_ID` or the word `latest` | `latest` |
+| `--restore-folder DIR` | where restored files land | asked; ENTER (or no terminal) gives `~/restored` |
+| `--snapshot ID` | a snapshot ID, or the word `latest` | `latest` |
 
 The script will:
 
 - Copy itself, this computer's recovery programs and the backup sets'
-  metadata into its tools folder, `~/lcsas-restore-tools`, and run
+  metadata into its tools folder, `~/lcsas-tools`, and run
   from there, so the meta disc can come out of the drive.  It prints
   how much it copies first; on a slow drive this takes a few minutes.
 - Auto-discover repository metadata (per-repository `keys/` +
@@ -116,22 +116,22 @@ example `LCSAS_TEST_TINY_2026_0003` is newer than
 `S` then Enter skips this and uses the copies on the meta disc (they
 may lack the latest backups).  `Q` then Enter stops (exit code 65).
 
-### `Choose a repository (number or name):` (only on archives with several repositories)
+### `Choose a backup set (number or name):` (only on archives with several repositories)
 
 If your archive has more than one repository (e.g. `alpha` and `bravo`),
 the script lists them by name and asks you to choose:
 
 ```
-Multiple repositories on this archive:
+Several backup sets on this archive:
   1) alpha
   2) bravo (password split: any 2 of 3 share cards)
-Choose a repository (number or name):
+Choose a backup set (number or name):
 ```
 
 Type the number (`1`), the name (`alpha`) or the id (its folder name
 under `metadata/`) and press Enter.
 
-To pre-select non-interactively, set `LCSAS_REPO=alpha` in your
+To pre-select non-interactively, set `LCSAS_BACKUP_SET=alpha` in your
 environment before launching the script.
 
 ### `Password:`
@@ -140,7 +140,7 @@ Type the encryption password for the chosen repository.  What you
 type is not shown.  The script checks it before the restore starts:
 an empty or wrong password is asked for again, and `Q` then Enter
 stops (exit code 77).  If you'd rather not type it, put it in a file
-and set `LCSAS_PWFILE=/path/to/file` (or pass `--key FILE`).
+and set `LCSAS_PASSWORD_FILE=/path/to/file` (or pass `--password-file FILE`).
 
 When the repository's password is split into share cards, the script
 asks for the cards instead: type the words of each card on one line.
@@ -193,7 +193,7 @@ The binary prints periodic progress on stderr:
 ```
 
 When you see `[lcsas-restore] restore complete`, your files are at the
-path you gave as `TARGET_DIR` (e.g. `~/restored/`).  Check with
+folder you gave as `--restore-folder` (e.g. `~/restored/`).  Check with
 `ls -laR ~/restored/`.
 
 If the archive holds more than one repository, the script then asks
@@ -250,9 +250,9 @@ runs share a cache folder you name, which is never removed for you:
 ```sh
 mkdir -p ~/shared-pack-cache
 LCSAS_PACK_CACHE_DIR=~/shared-pack-cache \
-    sh /mnt/restore.sh ~/restored-alpha/ latest
+    sh /mnt/restore.sh --restore-folder ~/restored-alpha
 LCSAS_PACK_CACHE_DIR=~/shared-pack-cache \
-    sh /mnt/restore.sh ~/restored-bravo/ latest
+    sh /mnt/restore.sh --restore-folder ~/restored-bravo
 ```
 
 The second run finds most packs already cached from the first run.
@@ -265,7 +265,7 @@ If you have only one optical drive, you'll be doing the eject /
 insert / press-Enter dance for each unique disc.  The pack cache
 defaults ON (`LCSAS_PACK_CACHE_DIR=auto`) so you only swap to each
 data disc **once** — the first time the binary sees a data disc it
-copies the whole disc into `~/lcsas-restore-tools/pack-cache/` (RAM
+copies the whole disc into `~/lcsas-tools/pack-cache/` (RAM
 on a live USB stick), and later packs from the same disc resolve
 from the cache.  The cache needs about as much free space as the
 discs it copies.
@@ -290,7 +290,7 @@ for iso in /path/to/iso-collection/*.iso; do
     sudo mount -o ro,loop "$iso" "/mnt/iso$n"
 done
 ls /mnt/iso*/restore.sh              # the META image is the one listed
-sh /mnt/isoN/restore.sh ~/restored/ latest   # N from the line above
+sh /mnt/isoN/restore.sh --restore-folder ~/restored   # N from the line above
 ```
 
 The script's auto-discovery walks `LCSAS_MOUNT_DIRS` (default
@@ -307,19 +307,19 @@ newest one: it uses the newest it finds.  No swap prompts needed.
 ## Aborting / re-running
 
 Type `q` at any disc prompt to stop (exit code 75), or press Ctrl-C.
-Your `TARGET_DIR` is left as-is (no cleanup), and the tools folder
+Your restore folder is left as-is (no cleanup), and the tools folder
 stays, with the discs already copied into its pack cache.  The
 script prints the command that carries on:
 
 ```sh
-sh ~/lcsas-restore-tools/resume.sh
+sh ~/lcsas-tools/resume.sh
 ```
 
 It needs no meta disc, asks only for the password (or the share
 cards) again (it never stores the password), skips the files that are
 already complete and does not ask again for the discs it already
 copied.  Re-running the first command from the meta disc works too.
-To give up, delete `~/lcsas-restore-tools` yourself.
+To give up, delete `~/lcsas-tools` yourself.
 
 ---
 
@@ -334,7 +334,7 @@ ships fallback paths:
   script.  Takes two positional arguments
   (`restore_auto.sh RECOVERY_ROOT TARGET_ROOT`; on the meta disc
   `RECOVERY_ROOT` is `/mnt/recovery`) and reads the password from the
-  `LCSAS_PWFILE` environment variable (which must be set).  It runs
+  `LCSAS_PASSWORD_FILE` environment variable (which must be set).  It runs
   `restore.sh` once for every backup set it finds (in the meta disc's
   `metadata/` and on every mounted disc in `LCSAS_MOUNT_DIRS`, so a set
   added after the meta disc was made is restored too), restoring its
@@ -350,19 +350,19 @@ ships fallback paths:
 - **Direct invocation of the upstream rustic binary** at
   `tools/bin/rustic-static`.  Requires you to manually assemble
   the pack tree (see [troubleshooting.md](../TROUBLESHOOTING.md#manual-pack-assembly-last-resort-tier-3-fallback)).
-- **Tier 3, the Python reader (`standalone_restorer.py`)** (slowest:
+- **Tier 3, the Python reader (`python_reader.py`)** (slowest:
   about 8 MB/s for photos and 1 MB/s for text with an OpenSSL on the
   computer, else about 2 hours per GB; see `recovery/docs/TIERS.txt`,
   "TIER 3: SPEED").  Requires only Python 3.10+ + standard library.  Run with
   `--repo /path/to/assembled/repo --password-file <file>
-  --target <dir>`.  As in tier 1, `q` (or the end of input) at its
+  --restore-folder <dir>`.  As in tier 1, `q` (or the end of input) at its
   disc box stops the whole restore with exit code 75.  A full disk
   stops it with exit code 74 and names the full folder.  A damaged file
   is skipped and listed in `RESTORE_FAILURES.txt` (exit code 4, as
   tier 1; exit code 2 before rc10).
   Special files this computer cannot create, and links on a file
   system without links, are listed there too but do not change the
-  exit code (see `recovery/docs/RECOVER.txt`, "ITEMS NOT RESTORED").
+  exit code (see `recovery/docs/RESTORE.txt`, "ITEMS NOT RESTORED").
 
 All four are documented in `README_RESTORE.md` on the meta disc.
 

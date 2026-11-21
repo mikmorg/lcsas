@@ -65,7 +65,7 @@ def _restore(bin_path: Path, repo: Path, target: Path,
         shutil.rmtree(target)
     return subprocess.run(
         [str(bin_path), "--repo", str(repo),
-         "--target", str(target), "--password-file", str(pwfile)],
+         "--restore-folder", str(target), "--password-file", str(pwfile)],
         capture_output=True, text=True, timeout=300,
     )
 
@@ -124,7 +124,7 @@ def test_clamped_ceiling_fails_loud_naming_the_index(tmp_path: Path) -> None:
     env = dict(os.environ, LCSAS_MAX_JSON_MIB="1")
     res = subprocess.run(
         [str(bin_path), "--repo", str(repo),
-         "--target", str(target), "--password-file", str(pwfile)],
+         "--restore-folder", str(target), "--password-file", str(pwfile)],
         capture_output=True, text=True, timeout=300, env=env,
     )
 

@@ -29,23 +29,23 @@ class TestWriteStandaloneRestorer:
         return root
 
     def test_creates_file(self, injector, staging_root):
-        """write_standalone_restorer should create standalone_restorer.py."""
+        """write_standalone_restorer should create python_reader.py."""
         injector.write_standalone_restorer()
-        path = staging_root / "standalone_restorer.py"
+        path = staging_root / "python_reader.py"
         assert path.exists()
         assert path.stat().st_size > 0
 
     def test_file_is_valid_python(self, injector, staging_root):
         """The generated file must compile."""
         injector.write_standalone_restorer()
-        text = (staging_root / "standalone_restorer.py").read_text()
+        text = (staging_root / "python_reader.py").read_text()
         tree = ast.parse(text)
         assert tree.body
 
     def test_file_has_no_lcsas_imports(self, injector, staging_root):
         """The generated file must be self-contained."""
         injector.write_standalone_restorer()
-        text = (staging_root / "standalone_restorer.py").read_text()
+        text = (staging_root / "python_reader.py").read_text()
         for line in text.splitlines():
             stripped = line.strip()
             if stripped.startswith(("from lcsas", "import lcsas")):
@@ -54,7 +54,7 @@ class TestWriteStandaloneRestorer:
     def test_overwrites_existing(self, injector, staging_root):
         """Should overwrite if called twice."""
         injector.write_standalone_restorer()
-        path = staging_root / "standalone_restorer.py"
+        path = staging_root / "python_reader.py"
         size1 = path.stat().st_size
         # Write again
         injector.write_standalone_restorer()
@@ -62,10 +62,10 @@ class TestWriteStandaloneRestorer:
         assert size1 == size2  # deterministic output
 
     def test_restore_instructions_mention_standalone(self, injector, staging_root):
-        """RESTORE_INSTRUCTIONS.txt should reference standalone_restorer.py."""
+        """RESTORE_INSTRUCTIONS.txt should reference python_reader.py."""
         injector.write_restore_instructions()
         text = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
-        assert "standalone_restorer.py" in text
+        assert "python_reader.py" in text
 
 
 class TestStandaloneFloor:
@@ -118,7 +118,7 @@ class TestStandaloneFloor:
         py310 = shutil.which("python3.10")
         if py310 is None:
             pytest.skip("python3.10 not on PATH")
-        script = tmp_path / "standalone_restorer.py"
+        script = tmp_path / "python_reader.py"
         script.write_text(build_standalone())
         result = subprocess.run(
             [py310, "-m", "py_compile", str(script)],

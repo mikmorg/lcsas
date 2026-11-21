@@ -149,7 +149,7 @@ def test_config(tmp_path):
     """LCSASConfig using TEST_TINY media and tmp directories."""
     mirror = tmp_path / "mirror"
     staging = tmp_path / "staging"
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     mirror.mkdir()
     staging.mkdir()
     return LCSASConfig(

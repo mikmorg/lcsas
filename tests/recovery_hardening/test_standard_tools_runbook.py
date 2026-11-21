@@ -79,7 +79,7 @@ def test_runbook_does_not_depend_on_lcsas_code() -> None:
 def test_runbook_cross_references_the_cascade() -> None:
     """It is one tier among several; it must point the heir at the others."""
     assert "TIERS.txt" in _TEXT
-    assert "RECOVER.txt" in _TEXT
+    assert "RESTORE.txt" in _TEXT
 
 
 def test_compat_gate_exists() -> None:

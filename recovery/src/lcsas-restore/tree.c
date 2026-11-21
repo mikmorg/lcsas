@@ -1705,7 +1705,7 @@ static const char *const failures_header[] = {
     "device that this system cannot create.  It holds no data.",
     "A row whose reason starts \"link not created: the target file",
     "system\" is a link that this file system cannot hold.",
-    "Every other row is an error: see \"ITEMS NOT RESTORED\" in RECOVER.txt.",
+    "Every other row is an error: see \"ITEMS NOT RESTORED\" in RESTORE.txt.",
     "",
     "path\treason\tblob_id",
     NULL

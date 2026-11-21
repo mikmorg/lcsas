@@ -11,8 +11,8 @@
 #  broken.  stdlib only.
 #
 #  Usage:
-#    python3 keyshare_combine.py SHARE_FILE [SHARE_FILE ...]
-#    cat share1.txt share2.txt | python3 keyshare_combine.py
+#    python3 combine_shares.py SHARE_FILE [SHARE_FILE ...]
+#    cat share1.txt share2.txt | python3 combine_shares.py
 #
 #  Each SHARE_FILE is either a bare mnemonic file or a printed share
 #  CARD (the {repo}-share-N-card.txt artifact you were handed).  The
@@ -23,8 +23,8 @@
 #  first 4 letters, in a file or on stdin.  The reconstructed password
 #  is written to stdout as RAW BYTES with no trailing newline:
 #
-#    python3 keyshare_combine.py ~/card1.txt ~/card2.txt > ~/repo.key
-#    sh /mnt/restore.sh --key ~/repo.key --target ~/restored
+#    python3 combine_shares.py ~/card1.txt ~/card2.txt > ~/repo.key
+#    sh /mnt/restore.sh --password-file ~/repo.key --restore-folder ~/restored
 #
 #  Give each file by its full path, as above (~/repo.key).
 #
@@ -33,7 +33,7 @@
 #  More than K shares is fine.  If you supply fewer than K shares, or a
 #  share is mistyped, or the shares come from a different archive, the
 #  tool prints a clear error to stderr and exits non-zero (the password
-#  is never partially printed).  Exit status, as for the C lcsas-keyshare:
+#  is never partially printed).  Exit status, as for the C lcsas-shares:
 #    0  the password was rebuilt and written
 #    1  the shares could not be combined (too few, or mixed splits)
 #    2  usage error, a file could not be read, or no shares given
@@ -62,7 +62,7 @@ from pathlib import Path
 # ``tools/lib/pythonX.Y/keyshare`` (it lands top-level, not as
 # ``lcsas.keyshare``).  This script itself sits at the meta disc's root.
 # Add both the script's own directory AND any bundled-stdlib dir(s) to
-# sys.path so a bare ``python3 keyshare_combine.py`` resolves the package
+# sys.path so a bare ``python3 combine_shares.py`` resolves the package
 # without PYTHONPATH or ambient setup.  In a dev/source tree the glob is
 # empty and the import succeeds via the installed ``lcsas.keyshare``.
 _HERE = Path(__file__).resolve().parent
@@ -85,7 +85,7 @@ except ImportError:  # pragma: no cover - meta disc top-level bundle path
     # On the meta disc the package is bundled as top-level ``keyshare``.
     # This branch is unreachable in-process (lcsas is always importable in
     # the dev/test tree); it is exercised by the subprocess isolation test
-    # in tests/unit/test_keyshare_combine.py with ``lcsas`` blocked.
+    # in tests/unit/test_combine_shares.py with ``lcsas`` blocked.
     from keyshare import (  # type: ignore[no-redef, import-not-found]
         KeyShareError,
         check_share,
@@ -96,7 +96,7 @@ except ImportError:  # pragma: no cover - meta disc top-level bundle path
         recover_secret,
     )
 
-# Exit status (the C lcsas-keyshare uses the same values).
+# Exit status (the C lcsas-shares uses the same values).
 EXIT_CANNOT_COMBINE = 1
 EXIT_USAGE = 2
 EXIT_BAD_SHARE = 3
@@ -167,8 +167,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args and args[0] in ("-h", "--help"):
         sys.stderr.write(
-            "Usage: python3 keyshare_combine.py SHARE_FILE [SHARE_FILE ...]\n"
-            "       cat share1 share2 | python3 keyshare_combine.py\n"
+            "Usage: python3 combine_shares.py SHARE_FILE [SHARE_FILE ...]\n"
+            "       cat share1 share2 | python3 combine_shares.py\n"
             "\n"
             "Reconstructs the repository password from any K SLIP-0039\n"
             "shares (more than K is fine) and writes it (raw bytes, no\n"

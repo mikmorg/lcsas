@@ -13,7 +13,7 @@ tier 1 is missing on a holographic multi-disc archive:
     tier 1 absent (no bin/<arch>/lcsas-restore)
         -> tier 2 present but SKIPPED (no $REPO/data/ -- rustic-static
            cannot drive a multi-disc archive; restore.sh:~1287)
-        -> tier 3 (standalone_restorer.py + python3) completes
+        -> tier 3 (python_reader.py + python3) completes
         -> restored tree is byte-identical to the source fixture.
 
 It complements ``test_tier3_disc_swap.py`` (which pins the restorer's
@@ -90,7 +90,7 @@ def _build_multidisc_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         recovery/
           metadata/alpha/{config,keys,index,snapshots}   (NO data/)
           bin/<HOST_TARGET>/rustic-static                 (preflight-OK noop)
-        standalone_restorer.py                            (real tier-3)
+        python_reader.py                            (real tier-3)
         mounts/disc1/data/<XX>/<hex>                       (some packs)
         mounts/disc2/data/<XX>/<hex>                       (the rest)
 
@@ -149,7 +149,7 @@ def _build_multidisc_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     assert not (recovery / "bin" / HOST_TARGET / "lcsas-restore").exists()
 
     # Real tier-3 restorer next to recovery/.
-    (recovery.parent / "standalone_restorer.py").write_text(build_standalone())
+    (recovery.parent / "python_reader.py").write_text(build_standalone())
 
     return recovery, mounts, src, pwfile
 
@@ -170,13 +170,13 @@ def test_tier1_missing_multidisc_falls_to_tier3_byte_identical(
     env = {
         **os.environ,
         "LCSAS_MOUNT_DIRS": str(mounts),
-        "LCSAS_REPO": "alpha",
+        "LCSAS_BACKUP_SET": "alpha",
         "LCSAS_TIER_FALLBACK": "1",
         "LCSAS_PASSWORD": "test-password",
         "LCSAS_PACK_CACHE_DIR": "",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=120,
     )
     assert res.returncode == 0, (
@@ -232,13 +232,13 @@ def test_tier3_under_restore_sh_uses_the_pack_cache(tmp_path: Path) -> None:
     env = {
         **os.environ,
         "LCSAS_MOUNT_DIRS": str(mounts),
-        "LCSAS_REPO": "alpha",
+        "LCSAS_BACKUP_SET": "alpha",
         "LCSAS_TIER_FALLBACK": "1",
         "LCSAS_PASSWORD": "test-password",
         "LCSAS_PACK_CACHE_DIR": str(cache),
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         capture_output=True, text=True, env=env, timeout=120,
     )
     assert res.returncode == 0, (

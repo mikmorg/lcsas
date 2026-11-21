@@ -1,7 +1,7 @@
-"""Binary-level proof that the committed lcsas-keyshare accepts cards (KEY-01).
+"""Binary-level proof that the committed lcsas-shares accepts cards (KEY-01).
 
-Subprocesses the committed static ``recovery/bin/x86_64/lcsas-keyshare``
-with real ``-card.txt`` artifacts (generated via ``lcsas key split``) and
+Subprocesses the committed static ``recovery/bin/x86_64/lcsas-shares``
+with real ``-card.txt`` artifacts (generated via ``lcsas password split``) and
 asserts a byte-exact password.  Catches the "library fixed but shipped
 binary stale" failure: if the committed bin predates the source fix this
 test fails even though the unit tests pass.
@@ -19,7 +19,7 @@ import pytest
 from lcsas.cli.main import main as cli_main
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_KEYSHARE_BIN = _REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-keyshare"
+_KEYSHARE_BIN = _REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-shares"
 
 _PASSWORD = b"correct horse battery staple\x01"
 
@@ -29,7 +29,7 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         not _KEYSHARE_BIN.is_file(),
-        reason="committed recovery/bin/x86_64/lcsas-keyshare not present",
+        reason="committed recovery/bin/x86_64/lcsas-shares not present",
     ),
 ]
 
@@ -39,7 +39,7 @@ def _split_cards(tmp_path: Path) -> list[Path]:
     pw_file.write_bytes(_PASSWORD)
     out = tmp_path / "shares"
     assert cli_main([
-        "key", "split", "--repo", "alpha",
+        "password", "split", "--repo", "alpha",
         "--threshold", "2", "--shares", "5",
         "--password-file", str(pw_file), "--out", str(out),
     ]) == 0

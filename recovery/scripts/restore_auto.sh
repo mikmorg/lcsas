@@ -1,11 +1,11 @@
 #!/bin/sh
 # restore_auto.sh -- non-interactive variant of restore.sh.
 #
-# Reads password from $LCSAS_PWFILE (must be set).  Restores the latest
+# Reads password from $LCSAS_PASSWORD_FILE (must be set).  Restores the latest
 # snapshot of every backup set (repository) it finds, each into its own
 # folder TARGET_ROOT/<id>, by running restore.sh once per set.  This is
 # the meta disc's one automation script (#689); on the disc run it as
-#   LCSAS_PWFILE=/full/path/pw sh /mnt/recovery/scripts/restore_auto.sh \
+#   LCSAS_PASSWORD_FILE=/full/path/pw sh /mnt/recovery/scripts/restore_auto.sh \
 #       /mnt/recovery ~/restored
 #
 # Where it looks for the sets (each a folder holding keys/):
@@ -23,7 +23,7 @@
 # that holds it mounted until then.
 #
 # Each set gets its own tools folder, <tools folder>-<id> (the tools
-# folder is $LCSAS_TOOLS_DIR, default $HOME/lcsas-restore-tools).  So a
+# folder is $LCSAS_TOOLS_DIR, default $HOME/lcsas-tools).  So a
 # set that stopped keeps its resume.sh and pack cache when a later set
 # succeeds: only its own success removes them (#801).  Run again, the
 # loop carries that set on with its resume.sh, on the same snapshot.
@@ -55,13 +55,25 @@ case "${1:-}" in
         exit 0 ;;
 esac
 
+# A retired environment variable, set, is refused first (#934).
+for _old_new in LCSAS_REPO:LCSAS_BACKUP_SET LCSAS_PWFILE:LCSAS_PASSWORD_FILE \
+                LCSAS_TARGET:LCSAS_PLATFORM
+do
+    _old="${_old_new%%:*}"
+    eval "_old_set=\${$_old+x}"
+    if [ -n "$_old_set" ]; then
+        printf 'restore_auto.sh: %s was renamed: use %s\n' "$_old" "${_old_new#*:}" >&2
+        exit 2
+    fi
+done
+
 if [ $# -lt 2 ]; then
     printf 'usage: %s RECOVERY_ROOT TARGET_ROOT\n' "$0" >&2
-    printf 'requires LCSAS_PWFILE environment variable to be set\n' >&2
+    printf 'requires LCSAS_PASSWORD_FILE environment variable to be set\n' >&2
     exit 2
 fi
-if [ -z "${LCSAS_PWFILE:-}" ] || [ ! -f "$LCSAS_PWFILE" ]; then
-    printf 'LCSAS_PWFILE must point to an existing password file\n' >&2
+if [ -z "${LCSAS_PASSWORD_FILE:-}" ] || [ ! -f "$LCSAS_PASSWORD_FILE" ]; then
+    printf 'LCSAS_PASSWORD_FILE must point to an existing password file\n' >&2
     exit 2
 fi
 
@@ -93,7 +105,7 @@ trap 'stop_rc=129' HUP
 # The tools folder each set gets: <base>-<id>, next to the one a plain
 # restore.sh run uses, never inside it (restore.sh only takes a folder
 # that is empty or one it made itself).
-tools_base="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
+tools_base="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-tools}}"
 tools_base="${tools_base%/}"
 case "$tools_base" in ''|/*) ;; *) tools_base="$(pwd)/$tools_base" ;; esac
 
@@ -149,7 +161,7 @@ if [ -z "$sets" ]; then
            "$RECOVERY" "$RECOVERY" "$RECOVERY" "$RECOVERY" >&2
     printf '    and no mounted disc with one in its metadata/ folder.\n' >&2
     printf '    Nothing was restored.  Run restore.sh itself with a data disc\n' >&2
-    printf '    mounted, and LCSAS_REPO=<id> to choose the set.\n' >&2
+    printf '    mounted, and LCSAS_BACKUP_SET=<id> to choose the set.\n' >&2
     exit 1
 fi
 
@@ -177,14 +189,14 @@ fi
 restore_cmd() {
     _rc_resume="$3/resume.sh"
     if [ -n "$3" ] && [ -f "$_rc_resume" ] \
-       && grep -qF "LCSAS_REPO='$1'" "$_rc_resume" 2>/dev/null \
+       && grep -qF "LCSAS_BACKUP_SET='$1'" "$_rc_resume" 2>/dev/null \
        && grep -qF "'$(cd "$2" && pwd)'" "$_rc_resume" 2>/dev/null; then
         printf '==> carrying on the restore of %s that stopped, with %s\n' \
                "$1" "$_rc_resume" >&2
         sh "$_rc_resume"
     else
-        LCSAS_REPO="$1" LCSAS_TOOLS_DIR="$3" \
-            sh "$RECOVERY/scripts/restore.sh" "$RECOVERY" "$2" latest
+        LCSAS_BACKUP_SET="$1" LCSAS_TOOLS_DIR="$3" \
+            sh "$RECOVERY/scripts/restore.sh" --restore-folder "$2" --snapshot latest "$RECOVERY"
     fi
 }
 
@@ -255,7 +267,7 @@ for name in $sets; do
     out="$TARGET/$name"
     mkdir -p "$out"
     printf '==> restoring %s -> %s\n' "$name" "$out" >&2
-    # Select THIS repository via LCSAS_REPO so restore.sh restores the
+    # Select THIS repository via LCSAS_BACKUP_SET so restore.sh restores the
     # right one for each iteration instead of re-resolving on its own --
     # which, on a multi-repository archive, would hit the interactive
     # selection prompt (EOF → fail) or restore the same one every loop
@@ -277,13 +289,13 @@ for name in $sets; do
                 "the disk is full; free some space or use a bigger disk" ;;
         77)
             # Wrong password for THIS repository (issue #384).  Each
-            # repository has its own password, so one shared LCSAS_PWFILE
+            # repository has its own password, so one shared LCSAS_PASSWORD_FILE
             # can be right for some and wrong for others -- keep looping,
             # but say exactly which repository rejected the password.
             printf '!!! restore of %s FAILED: wrong password (exit 77).\n' \
                    "$name" >&2
-            printf '    LCSAS_PWFILE does not decrypt this repository'"'"'s keys;\n' >&2
-            printf '    the remaining repositories are still attempted.\n' >&2
+            printf '    LCSAS_PASSWORD_FILE does not decrypt this backup set'"'"'s keys;\n' >&2
+            printf '    the remaining backup sets are still attempted.\n' >&2
             fail=1 ;;
         75)
             stop_loop "$name" 75 "you chose to stop at a disc prompt" ;;

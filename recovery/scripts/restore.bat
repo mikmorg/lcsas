@@ -18,7 +18,7 @@ REM time, so when tier 1 stops there the script stops too: it keeps what
 REM is restored and says how to carry on (#615).
 REM
 REM Run from a disc, the script first copies what this computer needs
-REM into the tools folder, %LOCALAPPDATA%\LCSAS-restore (LCSAS_TOOLS_DIR
+REM into the tools folder, %LOCALAPPDATA%\lcsas-tools (LCSAS_TOOLS_DIR
 REM names another), and runs that copy, so the META disc can come out
 REM of the drive.  The folder stays until the restore has finished.  A
 REM restore that stopped carries on from it, with no META disc, through
@@ -29,18 +29,18 @@ REM clear error including a manual-restore hint.  The tier-3 Python
 REM reader ships on the disc but is NOT orchestrated from
 REM this .bat (it would depend on a Python install that is not
 REM guaranteed on a Windows host used for a restore); see
-REM recovery/docs/RECOVER_WINDOWS.txt for the manual invocation.
+REM recovery/docs/RESTORE_WINDOWS.txt for the manual invocation.
 REM
 REM The order of the questions: the newest data disc (#605), the backup
 REM set, by its name (#606), the folder, then the password or the share
 REM cards (#607, #608), and after a good restore whether to restore
 REM another backup set from the same discs.
 REM
-REM Split-password archives: when a backup set's LCSAS_REPO.txt says its
+REM Split-password archives: when a backup set's LCSAS_BACKUP_SET.txt says its
 REM password is split into share cards, the script asks for the cards
 REM and rebuilds the password with the bundled combiner
-REM bin\<arch>\lcsas-keyshare.exe (#607).  When only PASSWORD_INFO.txt
-REM says so, rebuild it first -- see recovery/docs/RECOVER_WINDOWS.txt,
+REM bin\<arch>\lcsas-shares.exe (#607).  When only PASSWORD_INFO.txt
+REM says so, rebuild it first -- see recovery/docs/RESTORE_WINDOWS.txt,
 REM "SHARE CARDS (SPLIT PASSWORDS)".
 REM ====================================================================
 
@@ -53,6 +53,26 @@ REM would think it had already been relocated.
 for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")
 REM The script's own state, never taken from the caller's environment.
 for %%V in (CACHE_SET_HERE ANOTHER_PASS STAYING_ON_DISC METADATA_SET_HERE PW_NOTE_SAID NEWEST_ROOT) do set "%%V="
+
+REM A retired environment variable, set, is refused before anything else
+REM happens (#934): its value would be silently ignored otherwise.  Top
+REM level, not in a ( ) block, for the exit below (see the exit 77 note
+REM at tier 1).
+set "OLD_ENV="
+set "OLD_ENV_NEW="
+set "OLD_ENV_VERB=renamed"
+if defined LCSAS_REPO set "OLD_ENV=LCSAS_REPO" & set "OLD_ENV_NEW=LCSAS_BACKUP_SET"
+if defined LCSAS_PWFILE set "OLD_ENV=LCSAS_PWFILE" & set "OLD_ENV_NEW=LCSAS_PASSWORD_FILE"
+if defined LCSAS_PW set "OLD_ENV=LCSAS_PW" & set "OLD_ENV_NEW=LCSAS_PASSWORD" & set "OLD_ENV_VERB=removed"
+if defined LCSAS_TARGET set "OLD_ENV=LCSAS_TARGET" & set "OLD_ENV_NEW=LCSAS_PLATFORM"
+if defined LCSAS_FORCE_NONEMPTY_TARGET set "OLD_ENV=LCSAS_FORCE_NONEMPTY_TARGET" & set "OLD_ENV_NEW=LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER"
+if defined OLD_ENV goto :old_env
+goto :old_env_ok
+:old_env
+echo restore.bat: !OLD_ENV! was !OLD_ENV_VERB!: use !OLD_ENV_NEW!
+pause
+exit /b 2
+:old_env_ok
 
 REM ----- A click in this window pauses the restore (#613) ------------
 REM Windows 10's console has QuickEdit on: a click or a tap in the
@@ -78,20 +98,29 @@ if /i "%~1"=="--resume" set "RESUME=1"
 
 REM --snapshot ID: restore that snapshot, not the latest one (#807).  ID
 REM is a snapshot's id or the start of one, as lcsas-restore.exe
-REM --list-snapshots prints it (see RECOVER_WINDOWS.txt).  A restore that
+REM --list-snapshots prints it (see RESTORE_WINDOWS.txt).  A restore that
 REM carries on takes it from resume.cfg.
-REM --repo NAME: restore that backup set, by its name or its id: the
-REM same as LCSAS_REPO=NAME, as restore.sh takes it (#925).
-REM Any other argument is refused with exit 2, as restore.sh refuses an
-REM unknown flag: up to rc10 restore.bat passed over every word but
-REM --snapshot, so `restore.bat --repo NAME` restored another set.
+REM --backup-set NAME: restore that backup set, by its name or its id: the
+REM same as LCSAS_BACKUP_SET=NAME, as restore.sh takes it (#925).
+REM --restore-folder DIR: restore into that folder, and do not ask for it
+REM for the first backup set; another set asks, with DIR-<set> as the
+REM default (#934).
+REM The retired --repo and --target are refused with the name that
+REM replaced them, and any other argument is refused with exit 2, as
+REM restore.sh refuses an unknown flag: up to rc10 restore.bat passed
+REM over every word but --snapshot.
 set "SNAP=latest"
 set "SNAP_BAD="
 set "ARG_BAD="
 set "ARG_MISSING="
+set "ARG_OLD="
+set "ARG_OLD_NEW="
+set "FOLDER_ARG="
+set "FOLDER_BASE="
 call :parse_args %*
 REM Top level, not in a ( ) block: an exit /b inside one does not reach
 REM `cmd /c` on real Windows (see the exit 77 note at tier 1).
+if defined ARG_OLD goto :arg_old
 if defined ARG_MISSING goto :arg_missing
 if defined ARG_BAD goto :arg_bad
 if not defined SNAP_BAD goto :snap_ok
@@ -99,8 +128,18 @@ echo ERROR: --snapshot needs a snapshot id: the letters 0-9 and a-f,
 echo as the list of snapshots shows it, or the word latest.
 pause
 exit /b 2
+:arg_old
+echo restore.bat: !ARG_OLD! was renamed: use !ARG_OLD_NEW!
+pause
+exit /b 2
 :arg_missing
-echo ERROR: --repo needs the name or the id of a backup set.
+if "!ARG_MISSING!"=="--restore-folder" goto :arg_missing_folder
+echo ERROR: --backup-set needs the name or the id of a backup set.
+call :arg_usage
+pause
+exit /b 2
+:arg_missing_folder
+echo ERROR: --restore-folder needs a folder.
 call :arg_usage
 pause
 exit /b 2
@@ -119,11 +158,11 @@ REM target triple: bin\x86_64-pc-windows-gnu\.  The variable is named
 REM ARCH for historical reasons; treat it as the target triple.  It is
 REM known before the relocation, which copies only this triple (#612).
 REM
-REM Override with LCSAS_TARGET if auto-detection misfires (e.g. running
+REM Override with LCSAS_PLATFORM if auto-detection misfires (e.g. running
 REM under an x86 emulator on Windows ARM64).
 set "ARCH="
-if defined LCSAS_TARGET (
-    set "ARCH=%LCSAS_TARGET%"
+if defined LCSAS_PLATFORM (
+    set "ARCH=%LCSAS_PLATFORM%"
 ) else (
     if /i "%PROCESSOR_ARCHITECTURE%"=="AMD64"   set "ARCH=x86_64-pc-windows-gnu"
     if /i "%PROCESSOR_ARCHITECTURE%"=="x86"     set "ARCH=x86_64-pc-windows-gnu"
@@ -152,14 +191,14 @@ REM computer's programs, the backup sets' metadata, the pack cache, a
 REM copy of the catalog, resume.cfg and "Resume LCSAS restore.bat".
 REM That copy is TOOLS\recovery\scripts\restore.bat, so it finds TOOLS
 REM two folders up.  Otherwise TOOLS is LCSAS_TOOLS_DIR, else
-REM %LOCALAPPDATA%\LCSAS-restore: not %TEMP%, which Disk Cleanup and
+REM %LOCALAPPDATA%\lcsas-tools: not %TEMP%, which Disk Cleanup and
 REM Storage Sense empty.  A run that does not relocate keeps its pack
 REM cache, its catalog copy and the metadata it merges in TOOLS\in-place
 REM (see "A run that does not relocate" below).
 if defined LCSAS_RELOCATED goto :tools_from_script
 if defined RESUME goto :tools_from_script
-set "TOOLS=%USERPROFILE%\AppData\Local\LCSAS-restore"
-if defined LOCALAPPDATA set "TOOLS=%LOCALAPPDATA%\LCSAS-restore"
+set "TOOLS=%USERPROFILE%\AppData\Local\lcsas-tools"
+if defined LOCALAPPDATA set "TOOLS=%LOCALAPPDATA%\lcsas-tools"
 if defined LCSAS_TOOLS_DIR set "TOOLS=%LCSAS_TOOLS_DIR%"
 goto :tools_known
 :tools_from_script
@@ -195,7 +234,7 @@ REM drive letters from resume.cfg, and the META disc's letter as the
 REM relocation sets it.  The password is asked again: it is never kept.
 if not defined RESUME goto :resume_loaded
 call :read_resume
-if not defined RS_set (
+if not defined RS_backup_set (
     echo ERROR: there is no stopped restore to carry on in
     echo    !TOOLS!
     echo To restore, put the META disc in and run restore.bat from it.
@@ -203,8 +242,8 @@ if not defined RS_set (
     exit /b 1
 )
 set "LCSAS_RELOCATED=!RS_meta!"
-set "LCSAS_REPO=!RS_set!"
-set "RESUME_TARGET=!RS_target!"
+set "LCSAS_BACKUP_SET=!RS_backup_set!"
+set "RESUME_TARGET=!RS_restore_folder!"
 if defined RS_snapshot set "SNAP=!RS_snapshot!"
 set "RESUME_LETTERS=!RS_letters!"
 :resume_loaded
@@ -322,7 +361,7 @@ REM holds its own data\ (tier 2 cannot run otherwise); this computer's
 REM guide; the backup sets' metadata.  Up to rc5 this was the whole bin
 REM tree, 744 MB for six kinds of computer, with nothing on screen.
 REM Every program that needs no input reads from <nul (xcopy, attrib,
-REM fc, reg, lcsas-keyshare, --list-snapshots): on real Windows xcopy
+REM fc, reg, lcsas-shares, --list-snapshots): on real Windows xcopy
 REM and attrib read the script's own input, so with answers piped in
 REM (windows-e2e, a test rig) they swallowed every answer left.  Wine's
 REM do not, so only CI showed it.
@@ -335,8 +374,8 @@ set "COPY_BAD="
 echo [lcsas-restore] copying the restore programs for this computer to
 echo                 !TOOLS!
 echo                 so that the META disc can come out of the drive:
-for %%F in (lcsas-restore.exe lcsas-keyshare.exe lcsas-ecc.exe %T2_EXE%) do call :copy_one "bin\%ARCH%\%%F"
-call :copy_one "docs\RECOVER_WINDOWS.txt"
+for %%F in (lcsas-restore.exe lcsas-shares.exe lcsas-ecc.exe %T2_EXE%) do call :copy_one "bin\%ARCH%\%%F"
+call :copy_one "docs\RESTORE_WINDOWS.txt"
 if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') do (
     echo                   metadata\%%T
     mkdir "!TOOLS!\metadata\%%T" 2>nul
@@ -519,7 +558,7 @@ REM that to 16 characters, LCSAS_CD700_2026 for every CD of a year.
 REM With data discs already in, it takes the newest of those.  Then the
 REM tools folder's metadata\ gets, for each backup set on that disc, its
 REM snapshots\ and index\ from that disc ONLY, keys\ from both, and its
-REM LCSAS_REPO.txt; a set only on the META disc keeps the META copy (C2).
+REM LCSAS_BACKUP_SET.txt; a set only on the META disc keeps the META copy (C2).
 REM Never a union of index\ or snapshots\: the META copy can be newer
 REM than any disc at hand, and an index entry for a pack pruned since
 REM would make tier 1 pick between two at random.  The catalog copy is
@@ -646,18 +685,18 @@ if !NCAND! equ 0 (
 
 REM -- Select the repository.  (goto-based; labels must NOT live inside a
 REM parenthesised block, so the multi-candidate prompt is its own loop.)
-REM The menu shows each set's name from its LCSAS_REPO.txt (#606): the
+REM The menu shows each set's name from its LCSAS_BACKUP_SET.txt (#606): the
 REM folders are named by an id, a UUID since `repo add`.  Only the
 REM marker's name_cmd, which holds nothing cmd acts on (C1), and printed
 REM with delayed expansion, so even a marker someone edited is printed,
 REM never run.  A set with no marker shows its folder name.
-REM LCSAS_REPO picks a set by its id, its name_cmd or its name.  After a
+REM LCSAS_BACKUP_SET picks a set by its id, its name_cmd or its name.  After a
 REM good restore, "another backup set?" comes back here (ANOTHER_PASS).
 REM See the :add_cand portability note re: %%NCAND%% / `call set`.
 :choose_set
 set "REPO="
 set "SEL="
-if not defined LCSAS_REPO goto :menu
+if not defined LCSAS_BACKUP_SET goto :menu
 for /l %%I in (1,1,%NCAND%) do call :match_set %%I
 if defined SEL goto :repo_selected
 REM Not an id: a name_cmd or a name.  Two sets of the same name are both
@@ -667,12 +706,12 @@ set "SEL_N=0"
 for /l %%I in (1,1,%NCAND%) do call :match_name %%I
 if %SEL_N% gtr 1 goto :repo_ambiguous
 if defined SEL goto :repo_selected
-echo ERROR: LCSAS_REPO=!LCSAS_REPO! is not among the backup sets on this archive:
+echo ERROR: LCSAS_BACKUP_SET=!LCSAS_BACKUP_SET! is not among the backup sets on this archive:
 for /l %%I in (1,1,%NCAND%) do call :menu_line %%I
 pause
 exit /b 1
 :repo_ambiguous
-echo ERROR: more than one backup set is called !LCSAS_REPO!.  Set LCSAS_REPO
+echo ERROR: more than one backup set is called !LCSAS_BACKUP_SET!.  Set LCSAS_BACKUP_SET
 echo to the id of the one to restore, or leave it unset and choose by
 echo number.  The ids and the names:
 for /l %%I in (1,1,%NCAND%) do call :id_line %%I
@@ -725,30 +764,30 @@ echo    !CAND_NAME_%~1!  !CAND_LABEL_%~1!
 goto :eof
 
 :match_set
-REM %~1 = a candidate's number.  SEL = it when LCSAS_REPO is its folder
+REM %~1 = a candidate's number.  SEL = it when LCSAS_BACKUP_SET is its folder
 REM name (the id), case-blind.  Ids are unique.
 if defined SEL goto :eof
-if /i "!CAND_NAME_%~1!"=="!LCSAS_REPO!" set "SEL=%~1"
+if /i "!CAND_NAME_%~1!"=="!LCSAS_BACKUP_SET!" set "SEL=%~1"
 goto :eof
 
 :match_name
-REM %~1 = a candidate's number.  When LCSAS_REPO is its name_cmd or the
+REM %~1 = a candidate's number.  When LCSAS_BACKUP_SET is its name_cmd or the
 REM name= line of its marker (case-blind), SEL = it and SEL_N counts it;
 REM tried only when no id matched.  The name= line may hold any
 REM character, "!" and "^" too, so it is compared with delayed expansion
 REM off, straight from the file.  cmd reads the file in the console's
 REM code page, so a name with letters outside A-Z may not match: use the
 REM id or the name in the menu then.
-if defined CAND_NC_%~1 if /i "!CAND_NC_%~1!"=="!LCSAS_REPO!" goto :match_hit
+if defined CAND_NC_%~1 if /i "!CAND_NC_%~1!"=="!LCSAS_BACKUP_SET!" goto :match_hit
 if not defined CAND_MK_%~1 goto :eof
-set "MN_FILE=!CAND_%~1!\LCSAS_REPO.txt"
+set "MN_FILE=!CAND_%~1!\LCSAS_BACKUP_SET.txt"
 setlocal disabledelayedexpansion
 set "MN_HIT="
 REM (Brackets, not `if ... if /i ...` on one line: wine cannot parse a
 REM second `if /i` after a compare.)
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%MN_FILE%") do (
     if "%%A"=="name" (
-        if /i "%%B"=="%LCSAS_REPO%" set "MN_HIT=1"
+        if /i "%%B"=="%LCSAS_BACKUP_SET%" set "MN_HIT=1"
     )
 )
 endlocal & set "MN_HIT=%MN_HIT%"
@@ -795,11 +834,11 @@ set "CAND_LABEL_%NCAND%=!_LB!"
 goto :eof
 
 :read_marker
-REM %~1 = a backup set's folder.  Reads its LCSAS_REPO.txt (C1), and
+REM %~1 = a backup set's folder.  Reads its LCSAS_BACKUP_SET.txt (C1), and
 REM only when its id= is the folder's name: MK_NC = name_cmd, when every
 REM character of it is one C1 allows (else the folder name is shown),
 REM MK_K and MK_N = the split's K and N when split=K-of-N, MK_SID = the
-REM Split ID.  The marker is a hint: lcsas-keyshare checks the shares.
+REM Split ID.  The marker is a hint: lcsas-shares checks the shares.
 REM The name= line, which may hold any character, never reaches a for
 REM body here: eol=n skips the lines that start with "n" (name= and
 REM name_cmd=), and name_cmd= is fetched alone with findstr.  Real cmd
@@ -807,13 +846,13 @@ REM puts a for variable's text in after it has parsed the command, but
 REM wine puts it in before, so a name with & or | in it would be run
 REM there.  (The "#" lines have no "=": they set nothing.)
 for %%K in (ID NC SPLIT SID K N) do set "MK_%%K="
-if not exist "%~1\LCSAS_REPO.txt" goto :eof
-for /f "usebackq eol=n tokens=1,* delims==" %%A in ("%~1\LCSAS_REPO.txt") do (
+if not exist "%~1\LCSAS_BACKUP_SET.txt" goto :eof
+for /f "usebackq eol=n tokens=1,* delims==" %%A in ("%~1\LCSAS_BACKUP_SET.txt") do (
     if "%%A"=="id" set "MK_ID=%%B"
     if "%%A"=="split" set "MK_SPLIT=%%B"
     if "%%A"=="split_id" set "MK_SID=%%B"
 )
-for /f "tokens=1,* delims==" %%A in ('findstr /c:"name_cmd=" "%~1\LCSAS_REPO.txt" 2^>nul') do if "%%A"=="name_cmd" set "MK_NC=%%B"
+for /f "tokens=1,* delims==" %%A in ('findstr /c:"name_cmd=" "%~1\LCSAS_BACKUP_SET.txt" 2^>nul') do if "%%A"=="name_cmd" set "MK_NC=%%B"
 if not "!MK_ID!"=="%~nx1" (
     for %%K in (ID NC SPLIT SID) do set "MK_%%K="
     goto :eof
@@ -877,6 +916,7 @@ REM Another backup set goes into a folder of its own by default, so its
 REM files do not land among the last set's.
 set "DEFAULT_TARGET=%USERPROFILE%\Documents\restored"
 if defined ANOTHER_PASS set "DEFAULT_TARGET=%USERPROFILE%\Documents\restored-!SET_NAME!"
+if defined ANOTHER_PASS if defined FOLDER_BASE call :default_from_base
 echo.
 echo ============================================================
 echo                 LCSAS Restore (Windows)
@@ -913,12 +953,20 @@ REM Clear TARGET first: `set /p` keeps the old value when the answer is
 REM empty, so a TARGET left in the caller's environment would silently
 REM win over the default (#615).
 :ask_target
-echo Type a folder, or ENTER for the one in brackets; Q then ENTER quits.
 set "TARGET="
+REM --restore-folder DIR answers the question for the first set.  Taken
+REM once: a folder that fails the checks below is asked for again.
+if defined FOLDER_ARG goto :target_from_flag
+echo Type a folder, or ENTER for the one in brackets; Q then ENTER quits.
 set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "
 if /i "!TARGET!"=="q" goto :target_quit
+goto :target_typed
+:target_from_flag
+set "TARGET=!FOLDER_ARG!"
+set "FOLDER_ARG="
+:target_typed
 REM Drop any quotes typed around the folder, then any trailing backslash.
-REM The programs get the folder as --target "<folder>", and a backslash
+REM The programs get the folder as --restore-folder "<folder>", and a backslash
 REM right before the closing quote escapes it: the program then reads the
 REM rest of the line as part of the folder name (#615).
 if defined TARGET set "TARGET=!TARGET:"=!"
@@ -959,14 +1007,14 @@ REM heir's OWN files (same names would silently overwrite live data).
 REM Re-running into a prior LCSAS restore is the supported resume from
 REM an interrupted run, so we skip the prompt when the hidden marker
 REM file .lcsas-restore-marker is present (and when
-REM LCSAS_FORCE_NONEMPTY_TARGET=1).  The marker is written after
+REM LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1).  The marker is written after
 REM confirmation/creation so subsequent re-runs are silent.
 set "MARKER=%TARGET%\.lcsas-restore-marker"
 REM An earlier restore wrote into this folder: the free-space check below
 REM counts what it wrote (#660).  Asked before the marker is written.
 set "TARGET_RESUMED="
 if exist "%MARKER%" set "TARGET_RESUMED=1"
-if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_TARGET%"=="1" (
+if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER%"=="1" (
     dir /b "%TARGET%" 2>nul | findstr "." >nul
     if not errorlevel 1 (
         echo.
@@ -1230,11 +1278,10 @@ if defined LCSAS_RELOCATED call :save_resume
 REM ----- The password (#607, #608) -----------------------------------
 REM The password reaches the programs in a file in %TEMP%, PWFILE, which
 REM is deleted on every way out.  It comes from the first of:
-REM   LCSAS_PWFILE      a file; its exact bytes are copied (copy /b)
+REM   LCSAS_PASSWORD_FILE      a file; its exact bytes are copied (copy /b)
 REM   LCSAS_PASSWORD    the password itself
-REM   LCSAS_PW          the same; the older, restore.bat-only name
 REM   LCSAS_SHARES_DIR  a folder of share card files, one card a file
-REM   the share cards, typed here, when the set's LCSAS_REPO.txt says its
+REM   the share cards, typed here, when the set's LCSAS_BACKUP_SET.txt says its
 REM                     password is split (P there: type it yourself)
 REM   the keyboard.
 REM Before tier 1 starts, lcsas-restore.exe --list-snapshots tries the
@@ -1245,8 +1292,8 @@ REM empty answer from the end of its input, so the third empty answer
 REM in a row quits too: a run whose input has ended stops, and does not
 REM ask for ever.
 REM CMD has no `read -s` equivalent, so a typed password is visible on
-REM the screen; the script says so once.  RECOVER_WINDOWS.txt shows how
-REM to type it hidden in PowerShell and pass it in LCSAS_PWFILE.
+REM the screen; the script says so once.  RESTORE_WINDOWS.txt shows how
+REM to type it hidden in PowerShell and pass it in LCSAS_PASSWORD_FILE.
 REM A window closed while a password or typed share cards sat in %TEMP%
 REM left them there, and a new run picks new names, so nothing ever
 REM removed them.  The first pass removes every lcsas-pw-*.txt file and
@@ -1257,22 +1304,21 @@ del /f /q "%TEMP%\lcsas-pw-*.txt" >nul 2>nul
 for /f "delims=" %%D in ('dir /ad /b "%TEMP%\lcsas-shares-*" 2^>nul') do rmdir /s /q "%TEMP%\%%D" 2>nul
 :temp_cleared
 set "PWFILE=%TEMP%\lcsas-pw-%RANDOM%-%TIME:~6,2%%TIME:~9,2%.txt"
-set "KS_EXE=%RECOVERY%\bin\%ARCH%\lcsas-keyshare.exe"
+set "KS_EXE=%RECOVERY%\bin\%ARCH%\lcsas-shares.exe"
 set "PW_SOURCE="
 set "PW_OWN="
 set "PW_WRONG="
 set "PW_FROM="
 set "PW_EMPTY=0"
-if defined LCSAS_PWFILE set "PW_SOURCE=LCSAS_PWFILE"
+if defined LCSAS_PASSWORD_FILE set "PW_SOURCE=LCSAS_PASSWORD_FILE"
 if not defined PW_SOURCE if defined LCSAS_PASSWORD set "PW_SOURCE=LCSAS_PASSWORD"
-if not defined PW_SOURCE if defined LCSAS_PW set "PW_SOURCE=LCSAS_PW"
 if not defined PW_SOURCE if defined LCSAS_SHARES_DIR set "PW_SOURCE=LCSAS_SHARES_DIR"
 
 :pw_next
 del /f /q "%PWFILE%" >nul 2>nul
-if "!PW_SOURCE!"=="LCSAS_PWFILE" goto :pw_from_file
+if "!PW_SOURCE!"=="LCSAS_PASSWORD_FILE" goto :pw_from_file
 if "!PW_SOURCE!"=="LCSAS_PASSWORD" goto :pw_from_env
-if "!PW_SOURCE!"=="LCSAS_PW" goto :pw_from_env
+if "!PW_SOURCE!"=="PW_TYPED" goto :pw_from_env
 if "!PW_SOURCE!"=="LCSAS_SHARES_DIR" goto :pw_from_shares_dir
 if defined PW_OWN goto :pw_ask
 if defined SPLIT_K goto :shares_ask
@@ -1282,23 +1328,23 @@ if defined PW_NOTE_SAID goto :pw_prompt
 set "PW_NOTE_SAID=1"
 echo.
 echo What you type for the password is shown on the screen: make sure
-echo nobody is looking.  RECOVER_WINDOWS.txt shows how to type it hidden.
+echo nobody is looking.  RESTORE_WINDOWS.txt shows how to type it hidden.
 if defined SPLIT_K goto :pw_prompt
 echo If PASSWORD_INFO.txt says the password is SPLIT into share cards,
-echo rebuild it first with bin\%ARCH%\lcsas-keyshare.exe -- see
-echo recovery\docs\RECOVER_WINDOWS.txt, "SHARE CARDS (SPLIT PASSWORDS)".
+echo rebuild it first with bin\%ARCH%\lcsas-shares.exe -- see
+echo recovery\docs\RESTORE_WINDOWS.txt, "SHARE CARDS (SPLIT PASSWORDS)".
 :pw_prompt
 echo.
 REM Cleared first: `set /p` keeps the old value on an empty answer.
-set "LCSAS_PW="
-set /p "LCSAS_PW=Password: "
-REM `if not defined`, not `if "%LCSAS_PW%"==""`: a '"' in the password
+set "PW_TYPED="
+set /p "PW_TYPED=Password: "
+REM `if not defined`, not `if "%PW_TYPED%"==""`: a '"' in the password
 REM broke that comparison's syntax (#482).
-if not defined LCSAS_PW goto :pw_empty
-if /i "!LCSAS_PW!"=="q" goto :pw_gave_up
+if not defined PW_TYPED goto :pw_empty
+if /i "!PW_TYPED!"=="q" goto :pw_gave_up
 set "PW_EMPTY=0"
-set "PW_VALUE=!LCSAS_PW!"
-set "LCSAS_PW="
+set "PW_VALUE=!PW_TYPED!"
+set "PW_TYPED="
 set "PW_FROM=typed"
 call :write_pw
 goto :pw_check
@@ -1311,17 +1357,17 @@ goto :pw_prompt
 
 :pw_from_file
 set "PW_SOURCE="
-copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul
+copy /b /y "!LCSAS_PASSWORD_FILE!" "%PWFILE%" >nul 2>nul
 REM The copy keeps a read-only mark the reader's file has (a file on a CD
 REM or a locked USB stick): take it off, or no later del could remove the
 REM copy and no typed password could replace it.
 attrib -r "%PWFILE%" >nul 2>nul <nul
 if exist "%PWFILE%" goto :pw_file_copied
-echo [lcsas-restore] cannot read the password file LCSAS_PWFILE names:
-echo                 !LCSAS_PWFILE!
+echo [lcsas-restore] cannot read the password file LCSAS_PASSWORD_FILE names:
+echo                 !LCSAS_PASSWORD_FILE!
 goto :pw_next
 :pw_file_copied
-echo [lcsas-restore] using the password in the file LCSAS_PWFILE names
+echo [lcsas-restore] using the password in the file LCSAS_PASSWORD_FILE names
 set "PW_FROM=preset"
 goto :pw_check
 
@@ -1337,8 +1383,8 @@ goto :pw_check
 REM Every file in the folder is one card.  They are copied as card1.txt,
 REM card2.txt ... into a new folder under %TEMP% and combined there, so
 REM no name in the folder reaches the command line.  More than K cards
-REM is fine (lcsas-keyshare uses K of them).
-REM A card file with a mistake in it (lcsas-keyshare exit 3) is left out
+REM is fine (lcsas-shares uses K of them).
+REM A card file with a mistake in it (lcsas-shares exit 3) is left out
 REM and the others are combined, as restore.sh does (#627 item 3); up to
 REM rc9 one bad file failed the whole folder.  When the cards do not
 REM rebuild the password, the script asks on the keyboard; a run whose
@@ -1405,11 +1451,11 @@ goto :pw_check
 :shares_ask
 REM Share entry (C7).  Each card goes in a file of its own, in a new
 REM folder under %TEMP% (never the tools folder, which outlives the run),
-REM and is checked alone with lcsas-keyshare <file>: file mode names a
+REM and is checked alone with lcsas-shares <file>: file mode names a
 REM mistyped word (exit 3), so only that card is asked again.  Then all
 REM K are combined into PWFILE, and the folder goes.
 if not exist "%KS_EXE%" (
-    echo [lcsas-restore] lcsas-keyshare.exe is missing, so the share cards
+    echo [lcsas-restore] lcsas-shares.exe is missing, so the share cards
     echo                 cannot be used here: type the rebuilt password.
     set "PW_OWN=1"
     goto :pw_next
@@ -1523,12 +1569,12 @@ rmdir /s /q "%SH_DIR%" 2>nul
 goto :pw_gave_up
 
 :keyshare_broken
-REM lcsas-keyshare.exe answered with a code it never gives for a card
+REM lcsas-shares.exe answered with a code it never gives for a card
 REM (KRC): it does not work on this computer.  The cards are not to
 REM blame, so the rebuilt password is asked for instead.
-echo [lcsas-restore] lcsas-keyshare.exe does not work on this computer
+echo [lcsas-restore] lcsas-shares.exe does not work on this computer
 echo                 ^(exit %KRC%^); the cards are not to blame.  Rebuild the
-echo                 password as RECOVER_WINDOWS.txt "SHARE CARDS" says,
+echo                 password as RESTORE_WINDOWS.txt "SHARE CARDS" says,
 echo                 then type it.
 set "PW_OWN=1"
 goto :pw_next
@@ -1558,7 +1604,7 @@ goto :pw_next
 del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
-if defined PW_WRONG echo  ERROR: could not decrypt the repository with that password.
+if defined PW_WRONG echo  ERROR: could not decrypt the backup set with that password.
 if not defined PW_WRONG echo  No password was given, so nothing was restored.
 if defined RESUME_CMD echo  To try again, run "!RESUME_CMD!"
 if not defined RESUME_CMD echo  To try again, run restore.bat again.
@@ -1574,7 +1620,7 @@ if exist "%BIN%" (
     echo.
     echo [tier 1] running !BIN!
     call :drop_old_failures
-    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot %SNAP% %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
+    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --restore-folder "%TARGET%" --snapshot %SNAP% %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
     set "RC=!ERRORLEVEL!"
     REM %PWFILE% is deleted only on the TERMINAL branches below -- the
     REM fall-through to tier 2 needs it alive or rustic-static.exe gets
@@ -1597,7 +1643,7 @@ if exist "%BIN%" (
         del /f /q "%PWFILE%" >nul 2>nul
         echo.
         echo ============================================================
-        echo  ERROR: could not decrypt the repository with that password.
+        echo  ERROR: could not decrypt the backup set with that password.
         echo  Check the password ^(and any share cards^) and re-run.
         if defined RESUME_CMD echo  To try again, run "!RESUME_CMD!"
         echo ============================================================
@@ -1649,7 +1695,7 @@ if exist "%BIN%" (
     if defined T2_WRONG (
         echo.
         echo ============================================================
-        echo  ERROR: could not decrypt the repository with that password.
+        echo  ERROR: could not decrypt the backup set with that password.
         echo  Check the password ^(and any share cards^) and re-run.
         if defined RESUME_CMD echo  To try again, run "!RESUME_CMD!"
         echo ============================================================
@@ -1670,7 +1716,7 @@ echo    !RECOVERY!\bin\%ARCH%\rustic-static.exe
 echo.
 echo  A manual restore with the tier-3 Python reader on the disc
 echo  (requires a Python 3 install on this host) is described in
-echo  !RECOVERY!\docs\RECOVER_WINDOWS.txt -- this .bat does not
+echo  !RECOVERY!\docs\RESTORE_WINDOWS.txt -- this .bat does not
 echo  launch it for you.
 echo ============================================================
 pause
@@ -1700,7 +1746,7 @@ echo  The restore finished, but !NR_N! item^(s^) could not be restored.
 echo  Everything else was restored to: !TARGET!
 echo  The items, and why, are listed in
 echo    !TARGET!\RESTORE_FAILURES.txt
-echo  See "ITEMS NOT RESTORED" in RECOVER.txt for what to do.
+echo  See "ITEMS NOT RESTORED" in RESTORE.txt for what to do.
 echo ============================================================
 :restore_asked
 REM Another backup set from the same discs?  The drill restores one set,
@@ -1751,7 +1797,7 @@ REM one asks for its folder and its password.
 :another_set
 set "ANOTHER_PASS=1"
 set "PARTIAL="
-set "LCSAS_REPO="
+set "LCSAS_BACKUP_SET="
 set "SNAP=latest"
 set "RESUME="
 set "RESUME_TARGET="
@@ -1763,7 +1809,9 @@ REM ----- Subroutines --------------------------------------------------
 REM %* = this script's arguments (#925).  SNAP = the ID of --snapshot ID
 REM (latest when none); SNAP_BAD = 1 when the ID is missing, or holds
 REM anything but 0-9 and a-f: it goes on the lcsas-restore.exe command
-REM line.  --repo NAME sets LCSAS_REPO (ARG_MISSING = 1 without a NAME).
+REM line.  --backup-set NAME sets LCSAS_BACKUP_SET, and --restore-folder DIR
+REM sets FOLDER_ARG and FOLDER_BASE (ARG_MISSING = the flag, without its
+REM value).  The retired --repo and --target set ARG_OLD and ARG_OLD_NEW.
 REM --resume and --check-disc IMAGE are read where they are used, and
 REM only as the first argument; the IMAGE is checked there.  Any other
 REM word: ARG_BAD = it, and the rest is not read.  Flat, with goto: a
@@ -1772,7 +1820,10 @@ set "PA_FIRST=1"
 :pa_next
 if "%~1"=="" goto :eof
 if /i "%~1"=="--snapshot" goto :pa_snapshot
-if /i "%~1"=="--repo" goto :pa_repo
+if /i "%~1"=="--backup-set" goto :pa_repo
+if /i "%~1"=="--restore-folder" goto :pa_folder
+if /i "%~1"=="--repo" goto :pa_old_repo
+if /i "%~1"=="--target" goto :pa_old_target
 if defined PA_FIRST if /i "%~1"=="--resume" goto :pa_resume
 if defined PA_FIRST if /i "%~1"=="--check-disc" goto :pa_check_disc
 set "ARG_BAD=%~1"
@@ -1789,12 +1840,31 @@ goto :pa_next
 :pa_repo
 set "PA_FIRST="
 if "%~2"=="" goto :pa_repo_missing
-set "LCSAS_REPO=%~2"
+set "LCSAS_BACKUP_SET=%~2"
 shift
 shift
 goto :pa_next
 :pa_repo_missing
-set "ARG_MISSING=1"
+set "ARG_MISSING=--backup-set"
+goto :eof
+:pa_folder
+set "PA_FIRST="
+if "%~2"=="" goto :pa_folder_missing
+set "FOLDER_ARG=%~2"
+set "FOLDER_BASE=%~2"
+shift
+shift
+goto :pa_next
+:pa_folder_missing
+set "ARG_MISSING=--restore-folder"
+goto :eof
+:pa_old_repo
+set "ARG_OLD=--repo"
+set "ARG_OLD_NEW=--backup-set"
+goto :eof
+:pa_old_target
+set "ARG_OLD=--target"
+set "ARG_OLD_NEW=--restore-folder"
 goto :eof
 :pa_snapshot
 set "PA_FIRST="
@@ -1822,10 +1892,23 @@ REM The arguments restore.bat takes, after an argument it refused.
 echo.
 echo restore.bat takes no argument for an ordinary restore: double-click
 echo it, or run it on its own, and it asks its questions.  It also takes:
-echo    --repo NAME        restore the backup set NAME ^(its name or its id^)
+echo    --backup-set NAME  restore the backup set NAME ^(its name or its id^)
+echo    --restore-folder DIR  restore into the folder DIR
 echo    --snapshot ID      restore that snapshot, not the latest one
 echo    --check-disc IMAGE check a disc image for damage, and repair it
-echo See RECOVER_WINDOWS.txt.
+echo See RESTORE_WINDOWS.txt.
+goto :eof
+
+:default_from_base
+REM DEFAULT_TARGET = the --restore-folder folder, a dash and the set's
+REM name, for another set (#934).  A trailing backslash is taken off.
+set "DFB=!FOLDER_BASE!"
+:dfb_strip
+if defined DFB if "!DFB:~-1!"=="\" (
+    set "DFB=!DFB:~0,-1!"
+    goto :dfb_strip
+)
+if defined DFB set "DEFAULT_TARGET=!DFB!-!SET_NAME!"
 goto :eof
 
 :strip_hex
@@ -2077,7 +2160,7 @@ goto :eof
 REM %1 = the number of a card file copied from LCSAS_SHARES_DIR into
 REM SH_DIR.  It is checked alone: 0 or 1 keeps it (SH_ARGS, SH_KEPT); 3,
 REM a mistake in it, leaves it out and says which file; anything else
-REM means lcsas-keyshare.exe does not work here (SH_BROKEN = the code).
+REM means lcsas-shares.exe does not work here (SH_BROKEN = the code).
 if defined SH_BROKEN goto :eof
 pushd "%SH_DIR%"
 "%KS_EXE%" "card%1.txt" >nul 2> "one.txt" <nul
@@ -2330,8 +2413,8 @@ goto :eof
 
 :read_resume
 REM Read TOOLS\resume.cfg (key=value lines; # starts a comment) into
-REM RS_set, RS_target, RS_meta, RS_letters and RS_snapshot.
-for %%K in (set target meta letters snapshot) do set "RS_%%K="
+REM RS_backup_set, RS_restore_folder, RS_meta, RS_letters and RS_snapshot.
+for %%K in (backup_set restore_folder meta letters snapshot) do set "RS_%%K="
 if not exist "%TOOLS%\resume.cfg" goto :eof
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%TOOLS%\resume.cfg") do set "RS_%%A=%%B"
 goto :eof
@@ -2352,16 +2435,16 @@ for %%D in (%DISC_LETTERS%) do (
 )
 set "CFG=%TOOLS%\resume.cfg"
 > "%CFG%" echo # What "Resume LCSAS restore.bat" carries on with.  No password.
->>"%CFG%" echo set=!SAVE_SET!
->>"%CFG%" echo target=!TARGET!
+>>"%CFG%" echo backup_set=!SAVE_SET!
+>>"%CFG%" echo restore_folder=!TARGET!
 >>"%CFG%" echo meta=!LCSAS_RELOCATED!
 >>"%CFG%" echo letters=!SAVE_LETTERS!
 >>"%CFG%" echo snapshot=!SNAP!
 REM Read it back: a folder name that cmd cannot carry through a file
 REM (one with a "!" in it) must not send a resumed restore elsewhere.
 call :read_resume
-if not "!RS_set!"=="!SAVE_SET!" goto :resume_unsaved
-if not "!RS_target!"=="!TARGET!" goto :resume_unsaved
+if not "!RS_backup_set!"=="!SAVE_SET!" goto :resume_unsaved
+if not "!RS_restore_folder!"=="!TARGET!" goto :resume_unsaved
 if not "!RS_meta!"=="!LCSAS_RELOCATED!" goto :resume_unsaved
 if not "!RS_snapshot!"=="!SNAP!" goto :resume_unsaved
 REM The launcher.  (goto) ends it before the restore runs, as the
@@ -2406,7 +2489,7 @@ echo is a folder that already holds other files, or a whole drive.  The
 echo restore copies its programs there and deletes the folder once it
 echo has finished, so it uses only a new or empty folder, or one it made
 echo itself.  Set LCSAS_TOOLS_DIR to a new or empty folder, or leave it
-echo unset to use the usual one, %%LOCALAPPDATA%%\LCSAS-restore.
+echo unset to use the usual one, %%LOCALAPPDATA%%\lcsas-tools.
 pause
 exit /b 1
 
@@ -2483,7 +2566,7 @@ echo  the discs, so nothing was restored.
 echo.
 echo  Restore it from your antivirus program's quarantine list, or
 echo  allow it, then run restore.bat again from the META disc.  See
-echo  "SMARTSCREEN WARNING" in RECOVER_WINDOWS.txt, in the folder
+echo  "SMARTSCREEN WARNING" in RESTORE_WINDOWS.txt, in the folder
 echo    !TM_DOCS!
 echo ============================================================
 pause
@@ -2542,7 +2625,7 @@ echo  The restore finished, but !NR_N! item^(s^) could not be restored.
 echo  Everything else was restored to: !TARGET!
 echo  The items, and why, are listed in
 echo    !TARGET!\RESTORE_FAILURES.txt
-echo  See "ITEMS NOT RESTORED" in RECOVER.txt for what to do.
+echo  See "ITEMS NOT RESTORED" in RESTORE.txt for what to do.
 echo.
 echo  !NR_M! of them could not be read: a data disc was not in a drive
 echo  ^("pack not found" in that list^).  Insert the data disc^(s^), then

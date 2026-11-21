@@ -43,7 +43,7 @@ def archive(tmp_path):
     (mirror / "config").write_text('{"version": 2}')
     staging = tmp_path / "staging"
     staging.mkdir()
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
 
     conn = get_connection(db)
     create_all(conn)
@@ -74,7 +74,7 @@ def archive(tmp_path):
         "[paths]\n"
         f'mirror_base = "{mirror.parent}"\n'
         f'staging = "{staging}"\n'
-        f'database = "{db}"\n'
+        f'catalog = "{db}"\n'
         "\n"
         "[defaults]\n"
         'media_type = "TEST_TINY"\n'
@@ -97,7 +97,7 @@ def _consolidate(cfg: str, *extra: str, answer: str = "yes") -> tuple[int, Magic
               _fake_create_iso),
     ):
         rc = main(["--config", cfg, "consolidate", "OLD_0", "OLD_1",
-                   "--target-media", "TEST_TINY", "--execute", *extra])
+                   "--media-type", "TEST_TINY", "--execute", *extra])
     return rc, prompt
 
 

@@ -2,7 +2,7 @@
 
 The bug these pin: ``repo add``/``list``/``remove`` and ``status`` called
 ``_resolve_db_path(args)`` with no config, so they fell through to a
-*relative* ``archive.db`` while ``scan``/``stage``/``burn`` used
+*relative* ``catalog.db`` while ``scan``/``stage``/``burn`` used
 ``[paths].database``.  Nothing errored — the operator got a second, empty
 catalog in whatever directory they were standing in, and ``scan`` reported
 no repositories because the repo had been registered somewhere else.
@@ -68,7 +68,7 @@ def _write_config(tmp_path, db, *, optical_device=None):
         "[paths]\n"
         f'mirror_base = "{mirror_base}"\n'
         f'staging = "{staging}"\n'
-        f'database = "{db}"\n'
+        f'catalog = "{db}"\n'
         "\n"
         "[defaults]\n"
         'media_type = "CD700"\n'
@@ -97,7 +97,7 @@ class TestResolveDbPath:
 
     def test_config_used_when_caller_passes_none(self, tmp_path):
         """The regression: a handler that never loads a config still lands
-        on the configured catalog rather than a relative archive.db."""
+        on the configured catalog rather than a relative catalog.db."""
         configured = tmp_path / "configured.db"
         cfg = _write_config(tmp_path, configured)
         assert _resolve_db_path(_args(config=cfg)) == configured
@@ -112,14 +112,14 @@ class TestResolveDbPath:
         loaded = load_config(Path(cfg))
         other = tmp_path / "other.db"
         cfg2 = tmp_path / "other.toml"
-        cfg2.write_text(f'[paths]\ndatabase = "{other}"\n')
+        cfg2.write_text(f'[paths]\ncatalog = "{other}"\n')
         # args points at cfg2, but the caller hands us cfg's object.
         assert _resolve_db_path(_args(config=str(cfg2)), loaded) == (
             tmp_path / "configured.db"
         )
 
     def test_falls_back_to_relative_archive_db(self):
-        assert _resolve_db_path(_args()) == Path("archive.db")
+        assert _resolve_db_path(_args()) == Path("catalog.db")
 
 
 class TestLoadConfigOpt:
@@ -135,7 +135,7 @@ class TestLoadConfigOpt:
 
     def test_malformed_toml_raises_config_error(self, tmp_path):
         bad = tmp_path / "bad.toml"
-        bad.write_text("[paths\ndatabase = ")
+        bad.write_text("[paths\ncatalog = ")
         with pytest.raises(ConfigError) as exc:
             _load_config_opt(_args(config=str(bad)))
         assert "Malformed TOML" in str(exc.value)
@@ -155,7 +155,7 @@ class TestLoadConfigOpt:
             "[paths]\n"
             f'mirror_base = "{mirror}"\n'
             f'staging = "{staging}"\n'
-            f'database = "{tmp_path / "a.db"}"\n'
+            f'catalog = "{tmp_path / "a.db"}"\n'
             "\n[defaults]\n"
             'media_type = "BD26"\n'
         )
@@ -173,7 +173,7 @@ class TestLoadConfigOpt:
         ORDER in _load_config_opt is load-bearing: a syntax error must
         still report as malformed TOML, not as an invalid value."""
         bad = tmp_path / "bad.toml"
-        bad.write_text("[paths\ndatabase = ")
+        bad.write_text("[paths\ncatalog = ")
         with pytest.raises(ConfigError) as exc:
             _load_config_opt(_args(config=str(bad)))
         assert "Malformed TOML" in str(exc.value)
@@ -254,12 +254,12 @@ class TestResolveDevice:
 
 class TestCatalogIsSingular:
     """End-to-end: with only --config, every command must agree on one
-    catalog file, and no stray archive.db may appear in the cwd."""
+    catalog file, and no stray catalog.db may appear in the cwd."""
 
     def test_init_add_list_all_use_the_configured_catalog(
         self, tmp_path, monkeypatch, capsys
     ):
-        configured = tmp_path / "archive.db"
+        configured = tmp_path / "catalog.db"
         cfg = _write_config(tmp_path, configured)
 
         # Stand somewhere else entirely — this is what made the bug
@@ -279,12 +279,12 @@ class TestCatalogIsSingular:
         assert "family" in out
 
         assert configured.exists()
-        assert not (elsewhere / "archive.db").exists()
+        assert not (elsewhere / "catalog.db").exists()
 
     def test_status_reads_the_configured_catalog(
         self, tmp_path, monkeypatch, capsys
     ):
-        configured = tmp_path / "archive.db"
+        configured = tmp_path / "catalog.db"
         cfg = _write_config(tmp_path, configured)
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
@@ -294,32 +294,32 @@ class TestCatalogIsSingular:
         capsys.readouterr()
 
         # Without the fix this raised "catalog not found" against
-        # ./archive.db even though init had just created one.
+        # ./catalog.db even though init had just created one.
         assert main(["--config", cfg, "status"]) == 0
-        assert not (elsewhere / "archive.db").exists()
+        assert not (elsewhere / "catalog.db").exists()
 
     def test_db_flag_overrides_config_for_session_list(
         self, tmp_path, capsys
     ):
         """``session list`` used to read config.db_path directly, so the
-        global ``--db`` was accepted and then silently ignored."""
+        global ``--catalog`` was accepted and then silently ignored."""
         configured = tmp_path / "configured.db"
         override = tmp_path / "override.db"
         cfg = _write_config(tmp_path, configured)
 
-        main(["--db", str(override), "init"])
+        main(["--catalog", str(override), "init"])
         assert override.exists()
         capsys.readouterr()
 
         # Points at a config whose catalog was never created; only the
-        # --db override can make this succeed.
-        assert main(["--config", cfg, "--db", str(override), "session", "list"]) == 0
+        # --catalog override can make this succeed.
+        assert main(["--config", cfg, "--catalog", str(override), "session", "list"]) == 0
         assert not configured.exists()
 
     def test_repo_remove_targets_the_configured_catalog(
         self, tmp_path, monkeypatch, capsys
     ):
-        configured = tmp_path / "archive.db"
+        configured = tmp_path / "catalog.db"
         cfg = _write_config(tmp_path, configured)
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
@@ -346,4 +346,4 @@ class TestCatalogIsSingular:
             assert list_repos(conn) == []
         finally:
             conn.close()
-        assert not (elsewhere / "archive.db").exists()
+        assert not (elsewhere / "catalog.db").exists()

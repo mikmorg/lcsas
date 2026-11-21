@@ -7,7 +7,7 @@ failed with ENOSPC *after* a long disc-swapping session.
 
 These tests pin:
 
-* ``restore.sh`` with a 1 MiB tmpfs ``--target`` and a catalog
+* ``restore.sh`` with a 1 MiB tmpfs ``--restore-folder`` and a catalog
   describing a much larger archive exits with the
   required-vs-available sizing message BEFORE any password or disc
   prompt;
@@ -174,7 +174,7 @@ def _env(**extra: str) -> dict[str, str]:
     }
     for var in (
         "LCSAS_PASSWORD",
-        "LCSAS_PWFILE",
+        "LCSAS_PASSWORD_FILE",
         "LCSAS_SKIP_SPACE_CHECK",
         "LCSAS_PACK_CACHE_DIR",
     ):
@@ -195,7 +195,8 @@ def test_restore_sh_refuses_tiny_target_before_password(tmp_path: Path) -> None:
 
     with _tmpfs(Path(f"/tmp/lcsas-fma09-target-{os.getpid()}"), "1m") as mnt:
         res = subprocess.run(
-            ["sh", str(RESTORE_SH), str(recovery), str(mnt / "restored")],
+            ["sh", str(RESTORE_SH), "--restore-folder",
+             str(mnt / "restored"), str(recovery)],
             stdin=subprocess.DEVNULL,
             capture_output=True, text=True,
             env=_env(), timeout=30,
@@ -235,7 +236,8 @@ def test_skip_space_check_proceeds_to_password_prompt(tmp_path: Path) -> None:
 
     with _tmpfs(Path(f"/tmp/lcsas-fma09-skip-{os.getpid()}"), "1m") as mnt:
         res = subprocess.run(
-            ["sh", str(RESTORE_SH), str(recovery), str(mnt / "restored")],
+            ["sh", str(RESTORE_SH), "--restore-folder",
+             str(mnt / "restored"), str(recovery)],
             stdin=subprocess.DEVNULL,
             capture_output=True, text=True,
             env=_env(LCSAS_SKIP_SPACE_CHECK="1"), timeout=30,
@@ -262,7 +264,7 @@ def _run_restore_sh(recovery: Path, target: Path, cache: Path) -> subprocess.Com
     """restore.sh with the pack cache at ``cache`` and its tools folder
     beside the fixture, not in the home folder."""
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
         env=_env(LCSAS_PACK_CACHE_DIR=str(cache),
@@ -482,7 +484,7 @@ def test_tier1_fallback_size_reaches_the_check(tmp_path: Path) -> None:
     (recovery / "catalog.db").write_bytes(b"not a database, sqlite3 cannot query it")
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored")],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
         env=_env(), timeout=30, start_new_session=True,
     )

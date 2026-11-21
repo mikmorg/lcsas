@@ -19,20 +19,20 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     Use the bundled combiner (a small standalone program — no Python
     needed):
 
-    /mnt/recovery/bin/x86_64/lcsas-keyshare ~/alpha-share-1.txt ~/alpha-share-2.txt > ~/alpha.pw
+    /mnt/recovery/bin/x86_64/lcsas-shares ~/alpha-share-1.txt ~/alpha-share-2.txt > ~/alpha.pw
 
     This writes the recovered password to ~/alpha.pw (raw bytes,
-    no trailing newline).  lcsas-keyshare is a program you RUN — do
+    no trailing newline).  lcsas-shares is a program you RUN — do
     NOT cat it or read it.  Any 2 of the 5 cards work; cards 1 and 2
     are fine.  This is a PRE-STEP, not a restore — running it is
     allowed and required.
 
     (Fallback only if that binary is somehow missing — the Python
-    equivalent: python3 /mnt/keyshare_combine.py ~/alpha-share-1.txt
+    equivalent: python3 /mnt/combine_shares.py ~/alpha-share-1.txt
     ~/alpha-share-2.txt > ~/alpha.pw)
 
   Step 3 — start restore.sh inside the restore-shell facade:
-    restore-shell start sh /mnt/restore.sh ~/restored/ latest
+    restore-shell start sh /mnt/restore.sh --restore-folder ~/restored/
 
     `restore-shell` is a wrapper that runs the recovery process in
     a managed tmux session (test-rig workaround — real operators run
@@ -57,18 +57,18 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     # restore.sh first asks you to put in your NEWEST data disc
     # (the META disc is still in the drive).  Send s to skip that
     # question: this archive's META disc copies are current.  Then a
-    # multi-tenant archive asks `Choose a repository`; a single-tenant
+    # multi-tenant archive asks `Choose a backup set`; a single-tenant
     # archive skips straight to `Password:`.  Wait on any of them,
     # branch on which one matched.
-    out=$(restore-shell expect 'NEWEST data disc|Choose a repository|Password:' 120)
+    out=$(restore-shell expect 'NEWEST data disc|Choose a backup set|Password:' 120)
     case "$out" in
         *"NEWEST data disc"*)
             restore-shell send s
-            out=$(restore-shell expect 'Choose a repository|Password:' 60)
+            out=$(restore-shell expect 'Choose a backup set|Password:' 60)
             ;;
     esac
     case "$out" in
-        *"Choose a repository"*)
+        *"Choose a backup set"*)
             restore-shell send alpha
             restore-shell expect 'Password:'
             ;;
@@ -124,14 +124,14 @@ first 4 Bash calls (after mounting meta and reconstructing the key).
 ║     call.  If you feel the urge to write a helper to "handle the  ║
 ║     prompts", STOP — use restore-shell send/expect per prompt.    ║
 ║     (Writing the reconstructed password to a DATA file is fine:   ║
-║     `lcsas-keyshare card1 card2 > ~/alpha.pw` is allowed — that   ║
+║     `lcsas-shares card1 card2 > ~/alpha.pw` is allowed — that     ║
 ║     is data, not a script.)                                       ║
 ║                                                                   ║
 ║  2. NEVER read a script's contents.  No cat/head/tail/less/sed/   ║
 ║     awk/grep/strings/od/xxd/vi against any *.sh *.py *.bat *.c    ║
 ║     *.h.  EXCEPTION: reading the share cards, ~/alpha.pw, and     ║
 ║     *.txt / *.json / *.md is fine — those are data, not scripts.  ║
-║     Execute scripts (and lcsas-keyshare); never inspect them.     ║
+║     Execute scripts (and lcsas-shares); never inspect them.       ║
 ╚═══════════════════════════════════════════════════════════════════╝
 
 You are sitting in front of a single optical drive at /dev/sr0
@@ -166,11 +166,11 @@ agent action (start, expect, send, screen, quit).
 A REAL OPERATOR at a single terminal does NOT use restore-shell.  They
 run:
 
-    sh /mnt/recovery/scripts/restore.sh ~/restored/
+    sh /mnt/recovery/scripts/restore.sh --restore-folder ~/restored/
 
 …and the script prompts them interactively in the same terminal.  Disc
 swaps are handled by physically ejecting and inserting the optical medium
-when prompted.  See recovery/docs/RECOVER.txt for the complete real-
+when prompted.  See recovery/docs/RESTORE.txt for the complete real-
 operator flow (section "PHYSICAL SWAP STEPS").
 
 The instructions below therefore describe the TEST-RIG pattern, not the
@@ -184,21 +184,21 @@ one-shot, the `restore-shell` wrapper hosts a persistent terminal
 session for you.  Typical pattern:
 
   # start the script
-  restore-shell start sh /mnt/restore.sh ~/restored/ latest
+  restore-shell start sh /mnt/restore.sh --restore-folder ~/restored/
   # wait for a prompt
-  restore-shell expect 'Choose a repository'
+  restore-shell expect 'Choose a backup set'
   # respond
   restore-shell send alpha
 
 restore.sh asks up to three things via its terminal:
 
-  1. `Choose a repository (number or name):` — multi-tenant archives
+  1. `Choose a backup set (number or name):` — multi-tenant archives
      list the available tenant names.  Send `alpha` (the only tenant
      you have the key shares for).  Single-tenant archives skip this.
   2. `Password:` — send the contents of ~/alpha.pw (the password you
      reconstructed from the share cards in Step 2).  Do NOT pipe the
      password through stdin.  Do NOT set LCSAS_PASSWORD or
-     LCSAS_PWFILE.  Type it through the terminal as a human would:
+     LCSAS_PASSWORD_FILE.  Type it through the terminal as a human would:
      `restore-shell send "$(cat ~/alpha.pw)"`.
   3. A disc-swap box — the recovery binary could not find a
      required pack and prints a framed prompt containing the line
@@ -209,10 +209,10 @@ WHAT YOU MAY NOT DO
 ===================
 
   - You may not run restore_auto.sh, restore.bat, or
-    standalone_restorer.py directly.  Only restore.sh.  (restore.sh itself may exec
+    python_reader.py directly.  Only restore.sh.  (restore.sh itself may exec
     whichever tier is appropriate — that is fine.)  The ONE
     exception is the key-share PRE-STEP in Step 2:
-    `python3 /mnt/keyshare_combine.py …` is allowed and required
+    `python3 /mnt/combine_shares.py …` is allowed and required
     — it reconstructs your password, it does not run a restore.
   - You may not invoke rustic, rustic-static, lcsas-restore, or
     restic as a recovery driver.  restore.sh is the only allowed
@@ -226,14 +226,14 @@ WHAT YOU MAY NOT DO
     (`(echo ...; sleep) | sh /mnt/restore.sh`).  Interactive prompts
     are answered ONLY with `restore-shell send` / `expect`, one per
     Bash call.  (Writing the reconstructed password to a data file —
-    `lcsas-keyshare ... > ~/alpha.pw` — is allowed; that is data, not
+    `lcsas-shares ... > ~/alpha.pw` — is allowed; that is data, not
     a script.)  If `restore.sh` fails, capture its error output, print
     it, and say `RESTORE FAILED: <reason>`.  Do NOT improvise — a real
     human-in-chair cannot write code to patch broken tooling.
   - You may not read any script file.  No cat, head, tail, less,
     more, sed, awk, grep, strings, od, xxd, view, vi, vim, or
     nano against any *.sh, *.py, *.bat, *.c, or *.h file —
-    including keyshare_combine.py.  You RUN it with python3 (as in
+    including combine_shares.py.  You RUN it with python3 (as in
     Step 2); you never inspect it.  Read the markdown / text
     READMEs and the *.json / *.txt config files; execute scripts;
     never inspect them.
@@ -301,7 +301,7 @@ LCSAS_TIER_FALLBACK=1
     (lcsas-restore) crashes.  Default OFF.  Set it if you suspect
     a tier-1 binary bug and need to verify data is recoverable.
 
-LCSAS_REPO=<name or id>
+LCSAS_BACKUP_SET=<name or id>
     Skip the multi-tenant selection prompt and restore this backup
     set (its name, e.g. alpha, or its id).  Useful when you already
     know the repo.

@@ -275,8 +275,8 @@ class TestMetaVolumeRestore:
         """Run the meta disc's restore.sh, the disc's one restore driver
         (#689), against the data discs, with no questions."""
         return self._run_on_discs(
-            [str(self.meta_dir / "restore.sh"), str(self.restore_target), "latest"],
-            LCSAS_REPO="photos",
+            [str(self.meta_dir / "restore.sh"), "--restore-folder", str(self.restore_target)],
+            LCSAS_BACKUP_SET="photos",
         )
 
     def _run_on_discs(self, argv: list[str], **extra: str) -> subprocess.CompletedProcess:
@@ -304,7 +304,7 @@ class TestMetaVolumeRestore:
             "PATH": "/usr/bin:/bin",
             "HOME": str(self.tmp),
             "TMPDIR": str(self.tmp / "tmp"),
-            "LCSAS_PWFILE": str(self.key_file),
+            "LCSAS_PASSWORD_FILE": str(self.key_file),
             "LCSAS_MOUNT_DIRS": str(discs),
             "LCSAS_TOOLS_DIR": str(self.tmp / "tools"),
             "LCSAS_NEWEST_DISC_PROMPT": "0",

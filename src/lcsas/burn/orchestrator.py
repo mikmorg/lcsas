@@ -488,7 +488,7 @@ class BurnOrchestrator:
 
         # 2. Inject repository metadata — strict for repositories with packs
         #    on this volume (the disc must stay self-describing for them) —
-        #    and each repository's metadata/<repo_id>/LCSAS_REPO.txt.
+        #    and each repository's metadata/<repo_id>/LCSAS_BACKUP_SET.txt.
         injector = HolographicInjector(staging_root)
         injector.inject_metadata(
             mirror_paths, required_repos=set(packs_by_repo), markers=markers,
@@ -901,7 +901,7 @@ class BurnOrchestrator:
         return paths
 
     def _escrow_preflight(self, repo_ids: list[str]) -> str | None:
-        """Abort the burn if config key_split/K/N drifts from the record.
+        """Abort the burn if config split/K/N drifts from the record.
 
         Returns the drift message when ``allow_escrow_drift`` suppresses the
         abort (so callers can log it as a volume event), else None.  Raises
@@ -919,7 +919,7 @@ class BurnOrchestrator:
         if message is None:
             return None
         if self._allow_escrow_drift:
-            _logger.warning("%s (proceeding: --allow-escrow-drift)", message)
+            _logger.warning("%s (proceeding: --allow-split-drift)", message)
             return message
         raise EscrowDriftError(message)
 
@@ -1073,7 +1073,7 @@ class BurnOrchestrator:
         # KEY-08: refuse password split drift for every repository of the
         # plan BEFORE any side effect, so a refused stage leaves no burn
         # session, staging directory or half-built session behind (#747).
-        # With --allow-escrow-drift a real stage warns in
+        # With --allow-split-drift a real stage warns in
         # _stage_single_volume, which also records the override NOTE on
         # each volume; a dry run warns here.
         if dry_run or not self._allow_escrow_drift:

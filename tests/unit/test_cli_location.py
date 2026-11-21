@@ -14,13 +14,13 @@ def _write_config(tmp_path: Path, extra: str = "") -> Path:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -39,7 +39,7 @@ class TestCmdLocation:
 
     def test_location_add_and_list(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -56,7 +56,7 @@ class TestCmdLocation:
     def test_location_add_rejects_path_separator(self, tmp_path, capsys):
         """Sanitization rejects names with path separators."""
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -68,7 +68,7 @@ class TestCmdLocation:
 
     def test_location_status(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         from lcsas.db.locations import create_location
@@ -82,7 +82,7 @@ class TestCmdLocation:
 
     def test_location_move_nonexistent_volume(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -101,7 +101,7 @@ class TestCmdLocation:
         from lcsas.db.volumes import create_volume
 
         cfg = _write_config(tmp_path)
-        conn = get_connection(tmp_path / "archive.db")
+        conn = get_connection(tmp_path / "catalog.db")
         create_all(conn)
         create_location(conn, "Home_Shelf", "")
         create_location(conn, "Offsite_Safe", "")
@@ -128,7 +128,7 @@ class TestCmdLocation:
         assert "already recorded" not in out
         assert "'Bank_Box' is not registered" in out
         assert "lcsas location add Bank_Box" in out
-        conn = get_connection(tmp_path / "archive.db")
+        conn = get_connection(tmp_path / "catalog.db")
         rows = conn.execute("SELECT location FROM volume_copies").fetchall()
         conn.close()
         assert [r[0] for r in rows] == ["Home_Shelf"]
@@ -142,7 +142,7 @@ class TestCmdLocation:
         ])
 
         assert result == 0
-        conn = get_connection(tmp_path / "archive.db")
+        conn = get_connection(tmp_path / "catalog.db")
         rows = conn.execute("SELECT location FROM volume_copies").fetchall()
         conn.close()
         assert [r[0] for r in rows] == ["Offsite_Safe"]

@@ -1,7 +1,7 @@
 """Contract gate: heir docs reference only real restore.sh flags [KEY-02].
 
 Every ``--flag`` that the generated heir-facing docs (START_HERE.txt,
-PASSWORD_INFO.txt), the bundled ``keyshare_combine.py`` header, and
+PASSWORD_INFO.txt), the bundled ``combine_shares.py`` header, and
 ``docs/ESTATE_PLANNING.md`` attach to a ``restore.sh`` command must be
 a flag that ``recovery/scripts/restore.sh`` actually accepts.  A
 phantom flag silently became a positional argument before restore.sh
@@ -22,7 +22,7 @@ from lcsas.staging.metadata import HolographicInjector
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
-KEYSHARE_COMBINE = REPO_ROOT / "src" / "lcsas" / "meta" / "keyshare_combine.py"
+KEYSHARE_COMBINE = REPO_ROOT / "src" / "lcsas" / "meta" / "combine_shares.py"
 ESTATE_PLANNING = REPO_ROOT / "docs" / "ESTATE_PLANNING.md"
 
 # A long-option token: ``--`` followed by a letter (so the ``-----``
@@ -107,21 +107,21 @@ def test_rendered_split_blocks_use_mount_robust_command(
 ) -> None:
     """STEP 2 must be typeable from a freshly-mounted disc."""
     for name, text in rendered_docs.items():
-        assert "sh /mnt/restore.sh --target ~/restored" in text, (
+        assert "sh /mnt/restore.sh --restore-folder ~/restored" in text, (
             f"{name}: split block must show the mount-robust "
-            "'sh /mnt/restore.sh --target ~/restored' command"
+            "'sh /mnt/restore.sh --restore-folder ~/restored' command"
         )
 
 
-def test_keyshare_combine_header_uses_only_real_flags() -> None:
+def test_combine_shares_header_uses_only_real_flags() -> None:
     accepted = _accepted_flags()
     refs = _restore_sh_flag_refs(
         KEYSHARE_COMBINE.read_text(encoding="utf-8")
     )
-    assert refs, "keyshare_combine.py: expected a restore.sh usage line"
+    assert refs, "combine_shares.py: expected a restore.sh usage line"
     phantom = refs - accepted
     assert not phantom, (
-        f"keyshare_combine.py header references restore.sh flag(s) "
+        f"combine_shares.py header references restore.sh flag(s) "
         f"{sorted(phantom)} that restore.sh does not accept "
         f"(accepted: {sorted(accepted)})"
     )

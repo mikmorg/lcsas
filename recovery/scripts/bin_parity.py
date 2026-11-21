@@ -76,22 +76,22 @@ TARGETS: list[Target] = [
     # ── Linux musl (byte-reproducible) ──
     Target("x86_64", "lcsas-restore", "x86_64-linux-musl", static=True),
     Target("x86_64", "lcsas-iso9660", "x86_64-linux-musl", static=True),
-    Target("x86_64", "lcsas-keyshare", "x86_64-linux-musl", static=True),
+    Target("x86_64", "lcsas-shares", "x86_64-linux-musl", static=True),
     Target("x86_64", "lcsas-ecc", "x86_64-linux-musl", static=True),
     Target("aarch64", "lcsas-restore", "aarch64-linux-musl", static=True),
     Target("aarch64", "lcsas-iso9660", "aarch64-linux-musl", static=True),
-    Target("aarch64", "lcsas-keyshare", "aarch64-linux-musl", static=True),
+    Target("aarch64", "lcsas-shares", "aarch64-linux-musl", static=True),
     Target("aarch64", "lcsas-ecc", "aarch64-linux-musl", static=True),
     Target("armv7", "lcsas-restore", "arm-linux-musleabihf", static=True),
     Target("armv7", "lcsas-iso9660", "arm-linux-musleabihf", static=True),
-    Target("armv7", "lcsas-keyshare", "arm-linux-musleabihf", static=True),
+    Target("armv7", "lcsas-shares", "arm-linux-musleabihf", static=True),
     Target("armv7", "lcsas-ecc", "arm-linux-musleabihf", static=True),
     # ── macOS Mach-O (exempt; see BIN_PARITY_EXEMPT) ──
     Target("x86_64-macos", "lcsas-restore", "x86_64-macos", static=False),
-    Target("x86_64-macos", "lcsas-keyshare", "x86_64-macos", static=False),
+    Target("x86_64-macos", "lcsas-shares", "x86_64-macos", static=False),
     Target("x86_64-macos", "lcsas-ecc", "x86_64-macos", static=False),
     Target("aarch64-macos", "lcsas-restore", "aarch64-macos", static=False),
-    Target("aarch64-macos", "lcsas-keyshare", "aarch64-macos", static=False),
+    Target("aarch64-macos", "lcsas-shares", "aarch64-macos", static=False),
     Target("aarch64-macos", "lcsas-ecc", "aarch64-macos", static=False),
     # ── Windows PE (exempt; see BIN_PARITY_EXEMPT) ──
     Target(
@@ -99,7 +99,7 @@ TARGETS: list[Target] = [
         static=False, bin_ext=".exe",
     ),
     Target(
-        "x86_64-windows", "lcsas-keyshare.exe", "x86_64-windows-gnu",
+        "x86_64-windows", "lcsas-shares.exe", "x86_64-windows-gnu",
         static=False, bin_ext=".exe",
     ),
     Target(

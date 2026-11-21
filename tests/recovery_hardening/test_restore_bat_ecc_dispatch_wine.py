@@ -198,7 +198,7 @@ def _run_check_disc(
     run_env = {
         **env,
         "LCSAS_NO_RELOCATE": "1",
-        "LCSAS_TARGET": ARCH,
+        "LCSAS_PLATFORM": ARCH,
     }
     if autofix:
         run_env["LCSAS_CHECK_DISC_AUTOFIX"] = "1"

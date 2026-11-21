@@ -53,7 +53,7 @@ def _config(tmp_path: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=mirror,
         staging_path=staging,
-        db_path=tmp_path / "archive.db",
+        db_path=tmp_path / "catalog.db",
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=100,
@@ -124,7 +124,7 @@ def rebuilt(tmp_path):
     cfg.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\n'
-        f'database = "{out}"\n'
+        f'catalog = "{out}"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
     )
     return {
@@ -191,7 +191,7 @@ def test_clean_works_once_the_discs_are_recorded(rebuilt, caplog):
                   side_effect=lambda device, n:
                   hashlib.sha256(b"\x00" * n).hexdigest()),
         ):
-            assert main(["--db", str(rebuilt["db"]), "verify", label,
+            assert main(["--catalog", str(rebuilt["db"]), "verify", label,
                          "--disc", "--device", "/dev/null",
                          "--location", "Home"]) == 0, caplog.text
 

@@ -92,12 +92,12 @@ def test_help_exits_zero_and_prints_usage() -> None:
     out = res.stdout + res.stderr
     assert "usage" in out.lower()
     assert "--repo" in out
-    assert "--target" in out
+    assert "--restore-folder" in out
     assert "--password-file" in out
 
 
 def test_missing_repo_fails_with_actionable_error() -> None:
-    res = _run("--target", "/tmp/x", "--password-file", "/dev/null")
+    res = _run("--restore-folder", "/tmp/x", "--password-file", "/dev/null")
     assert res.returncode != 0
     # Must name what's missing.  Don't pin the exact string; just
     # require that "repo" appears in some form.
@@ -105,14 +105,14 @@ def test_missing_repo_fails_with_actionable_error() -> None:
     assert "repo" in err, err
 
 
-def test_missing_target_fails_with_actionable_error(tmp_path: Path) -> None:
+def test_missing_restore_folder_fails_with_actionable_error(tmp_path: Path) -> None:
     pwfile = tmp_path / "pw"
     pwfile.write_text("stub\n")
     repo = _make_minimal_repo(tmp_path)
     res = _run("--repo", str(repo), "--password-file", str(pwfile))
     assert res.returncode != 0
     err = (res.stdout + res.stderr).lower()
-    assert "target" in err, err
+    assert "restore-folder" in err, err
 
 
 # ── Cache plumbing ───────────────────────────────────────────────
@@ -131,7 +131,7 @@ def test_cache_dir_created_on_first_use(tmp_path: Path) -> None:
     # should still be created by init.
     _run(
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
         timeout=TIMEOUT,
@@ -151,7 +151,7 @@ def test_cache_off_when_env_unset(tmp_path: Path) -> None:
     pre = set(Path("/tmp").glob("lcsas-pack-cache.*"))
     _run(
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         env=env, timeout=TIMEOUT,
     )
@@ -190,7 +190,7 @@ def test_catalog_is_copied_to_cache_not_held_in_place(tmp_path: Path) -> None:
 
     _run(
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         "--catalog", str(fake_cat),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
@@ -215,7 +215,7 @@ def test_no_crash_on_empty_repo(tmp_path: Path) -> None:
     target = tmp_path / "restored"
     res = _run(
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=TIMEOUT,
     )
@@ -234,7 +234,7 @@ def test_no_crash_on_garbage_password_file(tmp_path: Path) -> None:
     target = tmp_path / "restored"
     res = _run(
         "--repo", str(repo),
-        "--target", str(target),
+        "--restore-folder", str(target),
         "--password-file", str(pwfile),
         timeout=TIMEOUT,
     )
@@ -244,7 +244,7 @@ def test_no_crash_on_garbage_password_file(tmp_path: Path) -> None:
 def test_missing_password_file_path() -> None:
     res = _run(
         "--repo", "/tmp/nonexistent-repo",
-        "--target", "/tmp/restored",
+        "--restore-folder", "/tmp/restored",
         "--password-file", "/this/path/does/not/exist",
         timeout=TIMEOUT,
     )

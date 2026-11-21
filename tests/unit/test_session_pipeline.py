@@ -69,7 +69,7 @@ def _make_config(tmp_path: Path, *, num_repos: int = 2,
     """
     mirror = tmp_path / "mirror"
     staging = tmp_path / "staging"
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     mirror.mkdir(parents=True, exist_ok=True)
     staging.mkdir(parents=True, exist_ok=True)
 

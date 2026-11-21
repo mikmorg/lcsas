@@ -29,7 +29,7 @@ from lcsas.config.settings import LCSASConfig
 pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RECOVER_TXT = REPO_ROOT / "recovery" / "docs" / "RECOVER.txt"
+RECOVER_TXT = REPO_ROOT / "recovery" / "docs" / "RESTORE.txt"
 READINESS_TXT = REPO_ROOT / "docs" / "development" / "recovery" / "READINESS_CHECKLIST.txt"
 
 # The configured redundancy is the source of truth the docs must track.
@@ -40,7 +40,7 @@ assert isinstance(CONFIGURED_PCT, int)
 _DOCS = pytest.mark.parametrize(
     "doc_path",
     [
-        pytest.param(RECOVER_TXT, id="RECOVER.txt"),
+        pytest.param(RECOVER_TXT, id="RESTORE.txt"),
         pytest.param(READINESS_TXT, id="READINESS_CHECKLIST.txt"),
     ],
 )

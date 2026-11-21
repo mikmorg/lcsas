@@ -316,7 +316,7 @@ build-recovery:
 		echo "==> lcsas recovery build --arch $$a"; \
 		lcsas recovery build --arch "$$a" || exit 1; \
 	done
-	@# Also (re)build the lcsas-keyshare SLIP-0039 combiner for all 6
+	@# Also (re)build the lcsas-shares SLIP-0039 combiner for all 6
 	@# approved tier-1 targets, so rebuilding a split password stays
 	@# python-free everywhere and the bins don't drift from source.
 	@echo "==> make -C recovery keyshare-arches"

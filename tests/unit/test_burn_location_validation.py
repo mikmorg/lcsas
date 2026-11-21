@@ -23,13 +23,13 @@ def _write_config(tmp_path: Path) -> Path:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -40,7 +40,7 @@ metadata_reserve_mb = 0
 
 def _init_db(tmp_path: Path) -> Path:
     """Initialise the catalog DB and register a minimal repo."""
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     conn = get_connection(db)
     create_all(conn)
     register_repo(conn, "fam", "fam", str(tmp_path / "mirror"), "")

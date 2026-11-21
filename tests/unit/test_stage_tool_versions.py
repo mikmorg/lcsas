@@ -114,13 +114,13 @@ def _catalog(tmp_path: Path) -> Path:
     sha = hashlib.sha256(content).hexdigest()
     (mirror / "data" / sha[:2]).mkdir(parents=True)
     (mirror / "data" / sha[:2] / sha).write_bytes(content)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{tmp_path / 'mirror'}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -141,7 +141,7 @@ mirror_path = "{mirror}"
 
 
 def _sessions(cfg: Path) -> int:
-    conn = get_connection(cfg.parent / "archive.db")
+    conn = get_connection(cfg.parent / "catalog.db")
     try:
         return int(conn.execute("SELECT COUNT(*) FROM burn_sessions").fetchone()[0])
     finally:

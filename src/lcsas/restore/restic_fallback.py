@@ -302,7 +302,7 @@ def password_from_file_bytes(data: bytes) -> bytes:
 
     Read as rustic reads it: every byte before the first LF, less one CR
     at its end.  Spaces are kept, and so is a second CR.  Tier 1
-    (lcsas-restore) and the ``lcsas key`` commands use the same rule, so
+    (lcsas-restore) and the ``lcsas password`` commands use the same rule, so
     every reader agrees on a file of more than one line.
     """
     line = data.split(b"\n", 1)[0]
@@ -500,7 +500,7 @@ _FAILURES_HEADER = (
     "device that this system cannot create.  It holds no data.",
     'A row whose reason starts "link not created: the target file',
     'system" is a link that this file system cannot hold.',
-    'Every other row is an error: see "ITEMS NOT RESTORED" in RECOVER.txt.',
+    'Every other row is an error: see "ITEMS NOT RESTORED" in RESTORE.txt.',
     "",
     "path\treason\tblob_id",
 )
@@ -2212,7 +2212,7 @@ def _parse_instant(ts: str) -> datetime:
         tz = f"{tz[:3]}:{tz[3:]}"
     # Python 3.10's fromisoformat takes exactly this shape: six fraction
     # digits and a +HH:MM offset (no "Z").  This file is concatenated
-    # into ``standalone_restorer.py``, which runs on 3.10.
+    # into ``python_reader.py``, which runs on 3.10.
     norm = f"{m.group('base')}.{frac}{tz}"
     try:
         return datetime.fromisoformat(norm)
@@ -2235,7 +2235,7 @@ def time_sort_key(ts: str) -> tuple[int, float]:
 
     A time that does not parse gives ``(0, 0.0)``, before every real
     time, so a damaged snapshot file is never chosen as "latest".
-    Shared with ``lcsas restore standalone latest`` (#821).
+    Shared with ``lcsas restore from-disc latest`` (#821).
     """
     try:
         return (1, _parse_timestamp(ts))

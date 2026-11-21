@@ -1,7 +1,7 @@
 """test_meta_completeness_367.py -- tiered meta completeness (issue #367).
 
 Per-repo metadata keys are RESTORE-BLOCKING (hard-required); stock restic
-(tier-2b hedge) and lcsas-keyshare are RECOMMENDED (warn, not fail).
+(tier-2b hedge) and lcsas-shares are RECOMMENDED (warn, not fail).
 """
 
 from __future__ import annotations
@@ -44,10 +44,10 @@ def test_restic_and_keyshare_are_recommended_not_required(
     # An empty output is missing every recommended path.
     assert set(recommended) == set(recommended_meta_paths())
     assert any("restic" in r for r in recommended)
-    assert any("lcsas-keyshare" in r for r in recommended)
+    assert any("lcsas-shares" in r for r in recommended)
 
-    # ...and none of restic / lcsas-keyshare leak into the REQUIRED set.
+    # ...and none of restic / lcsas-shares leak into the REQUIRED set.
     required = builder.missing_required_contents()
     assert not any(
-        "restic" in m or "lcsas-keyshare" in m for m in required
+        "restic" in m or "lcsas-shares" in m for m in required
     ), f"restic/keyshare must not be hard-required; required={required}"

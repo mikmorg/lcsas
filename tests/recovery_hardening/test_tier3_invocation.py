@@ -2,24 +2,24 @@
 
 `recovery/scripts/restore.sh` cascades through three recovery tiers.
 When tier 1 (prebuilt lcsas-restore) and tier 2 (rustic-static) are
-both absent, it `exec`s the bundled `standalone_restorer.py` as the
+both absent, it `exec`s the bundled `python_reader.py` as the
 last-resort restorer.  The blind run that exposed the fragility had a
 broken tier-3 invocation:
 
     exec "$PYBIN" "$PYREST" "$REPO" "$TARGET" --password-file "$PWFILE"
 
-…but `standalone_restorer.py`'s CLI parser (defined in
+…but `python_reader.py`'s CLI parser (defined in
 `src/lcsas/restore/standalone_builder.py:_cli_main`) requires
-`--repo`, `--target`, `--password-file` as named flags, not
+`--repo`, `--restore-folder`, `--password-file` as named flags, not
 positional.  Tier 3 silently errored out without restoring anything
 and the agent in the blind run was forced to improvise around it.
 
-This test pins the corrected invocation: standalone_restorer.py must
+This test pins the corrected invocation: python_reader.py must
 be called with named flags only.
 
 What it catches:
   - Reverting the tier-3 fix back to positional args.
-  - Adding a new arg to standalone_restorer.py without plumbing it
+  - Adding a new arg to python_reader.py without plumbing it
     through restore.sh.
   - Renaming a flag on one side without updating the other.
 """
@@ -68,8 +68,8 @@ def _install_python_stub(bin_dir: Path) -> Path:
 
 
 def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
-    """No tier-1/tier-2 binary → restore.sh execs standalone_restorer.py
-    with --repo / --target / --password-file."""
+    """No tier-1/tier-2 binary → restore.sh execs python_reader.py
+    with --repo / --restore-folder / --password-file."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
     # restore.sh's pattern-1 invocation requires bin/ to exist in the
@@ -77,10 +77,10 @@ def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
     # forces the tier cascade past 1 and 2 into tier 3.
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     repo = _make_minimal_repo(recovery)
-    # Place a fake standalone_restorer.py next to recovery/ so the
+    # Place a fake python_reader.py next to recovery/ so the
     # tier-3 search finds it (one of the candidate paths is
-    # "$RECOVERY/../standalone_restorer.py").
-    fake_restorer = recovery.parent / "standalone_restorer.py"
+    # "$RECOVERY/../python_reader.py").
+    fake_restorer = recovery.parent / "python_reader.py"
     fake_restorer.write_text("# placeholder for tier-3\n")
 
     # Capture argv through a stub python3 on PATH.
@@ -101,7 +101,7 @@ def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
     }
 
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -112,8 +112,8 @@ def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
     args = argv_log.read_text().splitlines()
 
     # First arg should be the script path itself.
-    assert args[0].endswith("standalone_restorer.py"), (
-        f"python3 was not invoked with standalone_restorer.py first; "
+    assert args[0].endswith("python_reader.py"), (
+        f"python3 was not invoked with python_reader.py first; "
         f"argv: {args}"
     )
 
@@ -122,8 +122,8 @@ def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
     assert args[args.index("--repo") + 1] == str(repo), (
         f"--repo arg points to wrong path: {args}"
     )
-    assert "--target" in args, f"--target missing: {args}"
-    assert args[args.index("--target") + 1] == str(target), args
+    assert "--restore-folder" in args, f"--restore-folder missing: {args}"
+    assert args[args.index("--restore-folder") + 1] == str(target), args
     assert "--password-file" in args, f"--password-file missing: {args}"
 
     # Positional REPO / TARGET (the legacy broken form) must NOT
@@ -154,7 +154,7 @@ def test_tier3_passes_snapshot_when_not_latest(tmp_path: Path) -> None:
     recovery.mkdir()
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     _make_minimal_repo(recovery)
-    fake_restorer = recovery.parent / "standalone_restorer.py"
+    fake_restorer = recovery.parent / "python_reader.py"
     fake_restorer.write_text("# placeholder for tier-3\n")
 
     pybin_dir = tmp_path / "stubbin"
@@ -170,8 +170,8 @@ def test_tier3_passes_snapshot_when_not_latest(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target),
-         "deadbeefcafe1234"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target),
+         "--snapshot", "deadbeefcafe1234", str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -188,7 +188,7 @@ def test_tier3_omits_snapshot_when_latest(tmp_path: Path) -> None:
     recovery.mkdir()
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     _make_minimal_repo(recovery)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
 
     pybin_dir = tmp_path / "stubbin"
     argv_log = _install_python_stub(pybin_dir)
@@ -203,7 +203,7 @@ def test_tier3_omits_snapshot_when_latest(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -230,7 +230,7 @@ def test_tier3_passes_interactive_on_and_mount_points(tmp_path: Path) -> None:
     recovery.mkdir()
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     _make_minimal_repo(recovery)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
 
     pybin_dir = tmp_path / "stubbin"
     argv_log = _install_python_stub(pybin_dir)
@@ -249,7 +249,7 @@ def test_tier3_passes_interactive_on_and_mount_points(tmp_path: Path) -> None:
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -274,17 +274,17 @@ def test_tier3_passes_interactive_on_and_mount_points(tmp_path: Path) -> None:
 
 
 def test_standalone_restorer_cli_uses_named_flags() -> None:
-    """Sanity: the standalone_restorer.py CLI parser actually does
+    """Sanity: the python_reader.py CLI parser actually does
     require these flags.  If a future commit makes them positional,
     the tier-3 tests above would still pass but production would
     break — so we also pin the parser spec."""
     builder = REPO_ROOT / "src" / "lcsas" / "restore" / "standalone_builder.py"
     src = builder.read_text()
-    for flag in ("--repo", "--password-file", "--target"):
+    for flag in ("--repo", "--password-file", "--restore-folder"):
         assert re.search(
             rf'add_argument\(\s*[\'"]{re.escape(flag)}[\'"]', src
         ), (
-            f"standalone_restorer.py's argparse spec does not register "
+            f"python_reader.py's argparse spec does not register "
             f"{flag} — restore.sh's tier-3 fallback will break."
         )
 
@@ -297,7 +297,7 @@ def test_tier3_is_told_the_meta_disc(tmp_path: Path) -> None:
     recovery.mkdir()
     (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
     _make_minimal_repo(recovery)
-    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    (recovery.parent / "python_reader.py").write_text("# stub\n")
     pybin_dir = tmp_path / "stubbin"
     argv_log = _install_python_stub(pybin_dir)
     meta = tmp_path / "media" / "LCSAS-META"
@@ -311,8 +311,7 @@ def test_tier3_is_told_the_meta_disc(tmp_path: Path) -> None:
         "LCSAS_NO_RELOCATE": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"),
-         "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(tmp_path / "restored"), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

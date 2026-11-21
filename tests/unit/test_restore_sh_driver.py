@@ -39,7 +39,7 @@ TIER1_MAIN = REPO_ROOT / "recovery" / "src" / "lcsas-restore" / "main.c"
 
 def test_valid_flags_line_is_read():
     flags = drv.restore_sh_valid_flags()
-    assert {"--repo", "--target", "--key"} <= flags
+    assert {"--backup-set", "--restore-folder", "--password-file"} <= flags
     assert "--drive" not in flags and "--work-dir" not in flags
 
 

@@ -109,7 +109,7 @@ def test_failed_restore_does_not_leave_zero_padded_file(tmp_path: Path) -> None:
         [str(bin_path),
          "--repo", str(repo),
          "--password-file", str(pwfile),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--interactive", "off"],
         capture_output=True, text=True, timeout=30,
     )

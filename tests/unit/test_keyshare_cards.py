@@ -209,7 +209,7 @@ class TestExtractMnemonic:
         assert "no share words were found in this file" in str(exc.value)
 
     def test_prose_only_rejected(self) -> None:
-        text = "Repository : alpha\n(the holder lost the words)\n"
+        text = "Backup set : alpha\n(the holder lost the words)\n"
         with pytest.raises(KeyShareError) as exc:
             extract_mnemonic(text, source="prose.txt")
         assert "prose.txt" in str(exc.value)

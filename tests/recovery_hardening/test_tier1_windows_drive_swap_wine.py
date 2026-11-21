@@ -197,7 +197,7 @@ def _drive(world, name: str, extra_env: dict[str, str],
     cmd = ["wine", str(base / "lcsas-restore.exe"),
            "--repo", _win(base / "repo"),
            "--password-file", _win(base / "pw"),
-           "--target", _win(target),
+           "--restore-folder", _win(target),
            "--meta-disc", "D:\\",
            "--interactive", "on"]
     _only_our_drives(world["dos"])
@@ -325,7 +325,7 @@ def test_mount_dirs_split_on_semicolon(world) -> None:
         ["wine", str(base / "lcsas-restore.exe"), "--verbose",
          "--repo", _win(base / "no-such-repo"),
          "--password-file", _win(base / "pw"),
-         "--target", _win(base / "unused")],
+         "--restore-folder", _win(base / "unused")],
         env={**world["env"], "LCSAS_MOUNT_DIRS": "D:\\;E:\\"},
         capture_output=True, text=True, timeout=120, check=False)
     assert "mount-parents=2" in res.stderr, res.stderr

@@ -15,7 +15,7 @@ by `time.sleep(2)`, exercises:
 
   1. `lcsas-restore --list-snapshots` — output rows must be ordered by
      time, with the newest row last.
-  2. `lcsas-restore --target ...` (no `--snapshot`) — the restored
+  2. `lcsas-restore --restore-folder ...` (no `--snapshot`) — the restored
      content must match what the THIRD backup contained.
 
 Skips when `rustic` isn't on PATH or `lcsas-restore` hasn't been built.
@@ -111,14 +111,14 @@ def test_tier1_latest_is_newest_by_time(tmp_path: Path) -> None:
         f"backup ids in time order={backup_ids}"
     )
 
-    # 2) --target without --snapshot must restore the THIRD (newest)
+    # 2) --restore-folder without --snapshot must restore the THIRD (newest)
     # backup's content, not an arbitrary one.
     target = tmp_path / "tier1_out"
     target.mkdir()
     subprocess.run(
         [str(bin_path),
          "--repo", str(repo),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--password-file", str(pwfile)],
         capture_output=True, check=True, timeout=180,
     )

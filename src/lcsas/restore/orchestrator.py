@@ -265,7 +265,7 @@ def run_restore(
         if not _is_tty(stdin_is_tty):
             logger.error(
                 "Refusing to start: free up space or choose a different "
-                "target / --cache-dir, then re-run."
+                "restore folder / --cache-dir, then re-run."
             )
             return 1
         ans = _ask(prompt, "Continue anyway? [y/N] ").strip().lower()
@@ -466,7 +466,7 @@ def restore_from_disc(
 ) -> int:
     """Restore from optical discs without a config file or mirror.
 
-    The work of ``lcsas restore standalone``.  Reads ``catalog.db`` (or
+    The work of ``lcsas restore from-disc``.  Reads ``catalog.db`` (or
     *catalog*) and repository metadata directly from the disc at
     *disc_path*, then collects the packs from *volume_dir* or by asking
     for each disc to be mounted.  Falls back to the Python reader
@@ -600,8 +600,8 @@ def restore_from_disc(
                 "Install rustic (https://rustic.cli.rs/) or "
                 "restic (https://restic.net/),\n"
                 "or use the Python reader (tier 3) bundled on the disc:\n"
-                "  python3 %s/standalone_restorer.py "
-                "--password-file %s --target %s",
+                "  python3 %s/python_reader.py "
+                "--password-file %s --restore-folder %s",
                 disc_path, password_file, target_path,
             )
             return 1
@@ -812,9 +812,9 @@ def restore_from_disc(
         except FileNotFoundError:
             logger.error(
                 "rustic/restic binary not found.\n"
-                "Use standalone_restorer.py bundled on the disc as a fallback:\n"
-                "  python3 %s/standalone_restorer.py "
-                "--password-file %s --target %s",
+                "Use python_reader.py bundled on the disc as a fallback:\n"
+                "  python3 %s/python_reader.py "
+                "--password-file %s --restore-folder %s",
                 disc_path, password_file, target,
             )
             return 1
@@ -1286,7 +1286,7 @@ def _restore_with_python_reader(
 ) -> int:
     """Restore with the Python reader (tier 3) when rustic is not installed.
 
-    Returns the exit code, as the bundled standalone_restorer.py exits:
+    Returns the exit code, as the bundled python_reader.py exits:
     0 done, 4 finished but some items not restored (#875), 74 the disk
     is full, 75 stopped at a disc prompt, 77 a key file rejected the
     password (#805), 1 for any other failure.
@@ -1346,13 +1346,13 @@ def _restore_with_python_reader(
         meta = restorer.restore(target=target, snapshot_id=snap_arg)
     except RestoreAbortedError as exc:
         # q (or the end of input) at the disc prompt exits 75, a
-        # full disk 74, as the bundled standalone_restorer.py does
+        # full disk 74, as the bundled python_reader.py does
         # (#658).
         logger.error("Python reader restore stopped: %s", exc)
         return exc.exit_code
     except NoKeyUnlockedError as exc:
         # A key file rejected the password: exit 77, as the bundled
-        # standalone_restorer.py and tier 1 do (#805).  Key files that
+        # python_reader.py and tier 1 do (#805).  Key files that
         # are all unreadable are no password verdict: exit 1.
         if not exc.rejected:
             logger.error("Python reader restore failed: %s", exc)

@@ -5,7 +5,7 @@ FAILURE MODE CAUGHT
 No disc any build has ever produced is bootable: `lcsas meta build` never
 passes `bootable=True`, no kernel/initramfs artifact exists in the repo, and
 the documented `--recovery-boot` flag never existed in the argparse tree.
-Yet for a long time every "no working computer" route — RECOVER.txt's
+Yet for a long time every "no working computer" route — RESTORE.txt's
 decision flow, BOOT.txt, and the START_HERE heredoc burned onto every meta
 disc — told the heir to boot the disc directly.  An heir with a dead
 computer would follow the instruction, get "no bootable device", and have
@@ -28,7 +28,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-_RECOVER_TXT = REPO_ROOT / "recovery" / "docs" / "RECOVER.txt"
+_RECOVER_TXT = REPO_ROOT / "recovery" / "docs" / "RESTORE.txt"
 _BOOT_TXT = REPO_ROOT / "recovery" / "docs" / "BOOT.txt"
 _BUILDER_PY = REPO_ROOT / "src" / "lcsas" / "meta" / "builder.py"
 # The restore scripts and README_RESTORE.md the builder writes (#689).
@@ -46,7 +46,7 @@ def test_recover_txt_no_os_branch_does_not_route_to_booting_the_disc():
     """The no-OS branch of the decision flow must not tell the heir to boot
     the (non-bootable) recovery medium."""
     assert "Boot the recovery medium" not in _RECOVER_TEXT, (
-        "RECOVER.txt routes the 'no working OS' case to booting the recovery "
+        "RESTORE.txt routes the 'no working OS' case to booting the recovery "
         "medium, but no LCSAS disc is bootable (BOOT-01). The branch must "
         "route to another computer or a live-Linux USB stick instead."
     )
@@ -56,13 +56,13 @@ def test_recover_txt_no_os_branch_routes_to_live_usb():
     """The no-OS branch must route to the live-USB procedure."""
     idx = _RECOVER_TEXT.find("Do you have a working OS?")
     assert idx != -1, (
-        "RECOVER.txt is missing the 'Do you have a working OS?' decision "
+        "RESTORE.txt is missing the 'Do you have a working OS?' decision "
         "question entirely."
     )
     # Bounded window: only the no-OS branch itself, not unrelated mentions.
     window = _RECOVER_TEXT[idx: idx + 400]
     assert "live" in window and "USB" in window, (
-        "The no-OS branch of RECOVER.txt's decision flow does not mention a "
+        "The no-OS branch of RESTORE.txt's decision flow does not mention a "
         "live-Linux USB stick. The replacement route for 'no working "
         "computer' is a current live-Linux USB (see BOOT.txt / BOOT-01)."
     )

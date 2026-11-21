@@ -329,7 +329,7 @@ class TestCmdMetaBuildGate:
         caplog.clear()
 
         result = main([
-            "--db", str(db),
+            "--catalog", str(db),
             "meta", "build", "--output", str(out), "--allow-incomplete",
             "--allow-no-dvdisaster-source",
         ])
@@ -393,7 +393,7 @@ class TestCmdMetaBuildKeyGate:
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
         out = tmp_path / "meta"
         argv = [
-            "--db", str(db),
+            "--catalog", str(db),
             "meta", "build", "--output", str(out), "--allow-incomplete",
             "--allow-no-dvdisaster-source", *extra,
         ]
@@ -503,7 +503,7 @@ class TestCmdMetaBuildKeyGate:
         out = tmp_path / "meta"
         caplog.clear()
         rc = main([
-            "--db", str(tmp_path / "absent.db"),
+            "--catalog", str(tmp_path / "absent.db"),
             "meta", "build", "--output", str(out), "--allow-incomplete",
             "--allow-no-dvdisaster-source",
         ])
@@ -604,7 +604,7 @@ class TestCmdMetaBuildPerRepoKeysNotAllowIncomplete:
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
         out = tmp_path / "meta"
         argv = [
-            "--db", str(db),
+            "--catalog", str(db),
             "meta", "build", "--output", str(out),
             "--allow-no-dvdisaster-source", *extra,
         ]

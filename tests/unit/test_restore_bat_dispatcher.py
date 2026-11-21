@@ -61,10 +61,10 @@ def test_restore_bat_rejects_windows_arm64_with_explanation():
 
 
 def test_restore_bat_honors_lcsas_target_override():
-    """The .bat must respect $LCSAS_TARGET so operators can override
+    """The .bat must respect $LCSAS_PLATFORM so operators can override
     the auto-detected target (e.g. when running under emulation)."""
     content = RESTORE_BAT.read_text()
-    assert "LCSAS_TARGET" in content
+    assert "LCSAS_PLATFORM" in content
 
 
 def test_restore_bat_probes_holographic_metadata_layout():
@@ -99,8 +99,8 @@ def test_restore_bat_probes_holographic_metadata_layout():
         "no per-drive-letter metadata probe (other mounted discs)"
     )
 
-    # LCSAS_REPO must select a tenant (parity with restore.sh).
-    assert "LCSAS_REPO" in content
+    # LCSAS_BACKUP_SET must select a tenant (parity with restore.sh).
+    assert "LCSAS_BACKUP_SET" in content
 
     # The relocation block must copy metadata into the tools folder
     # (#609: metadata\<id>\ at its top, where the copy's DISC_ROOT is).
@@ -131,11 +131,11 @@ def test_restore_bat_warns_before_overwriting_nonempty_target():
 
     assert ".lcsas-restore-marker" in content, "marker filename missing"
     assert "Type YES" in content, "YES confirmation prompt missing"
-    assert "LCSAS_FORCE_NONEMPTY_TARGET" in content, "override env var missing"
+    assert "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER" in content, "override env var missing"
 
     # The guard must precede the password prompt.
     guard_at = content.find(".lcsas-restore-marker")
-    pw_at = content.find('set /p "LCSAS_PW=Password:')
+    pw_at = content.find('set /p "PW_TYPED=Password:')
     assert guard_at != -1 and pw_at != -1
     assert guard_at < pw_at, "non-empty-target guard must come before the password prompt"
 
@@ -169,7 +169,7 @@ def test_restore_bat_relocation_copies_bin_for_both_script_locations():
     content = RESTORE_BAT.read_text()
     block = _relocation_block(content)
     copy_loop = (
-        'for %%F in (lcsas-restore.exe lcsas-keyshare.exe lcsas-ecc.exe %T2_EXE%) '
+        'for %%F in (lcsas-restore.exe lcsas-shares.exe lcsas-ecc.exe %T2_EXE%) '
         'do call :copy_one "bin\\%ARCH%\\%%F"'
     )
     code = _code_lines(block)
@@ -351,7 +351,7 @@ def test_restore_bat_stops_without_tier2_for_a_metadata_only_set():
 
 
 def test_restore_bat_target_cannot_end_in_a_backslash():
-    """#615: --target "E:\\" ends in \\", which the program reads as a
+    """#615: --restore-folder "E:\\" ends in \\", which the program reads as a
     quote, so the folder swallowed every later argument; and a TARGET
     left in the environment won over the default on an empty answer.
 
@@ -362,11 +362,12 @@ def test_restore_bat_target_cannot_end_in_a_backslash():
     code = _code(RESTORE_BAT.read_text())
     ask = code.index('set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "')
     # Updated (B2 review): the line that says Q quits comes first.
-    assert code[ask - 3:ask] == [
+    assert code[ask - 4:ask] == [
         ":ask_target",
-        "echo Type a folder, or ENTER for the one in brackets; Q then ENTER quits.",
-        'set "TARGET="']
-    after = code[ask:ask + 20]
+        'set "TARGET="',
+        "if defined FOLDER_ARG goto :target_from_flag",
+        "echo Type a folder, or ENTER for the one in brackets; Q then ENTER quits."]
+    after = code[ask:ask + 30]
     assert 'if defined TARGET set "TARGET=!TARGET:"=!"' in after
     assert 'set "TARGET=!TARGET:~0,-1!"' in after
     drive = after.index('if "!TARGET:~-1!"==":" (')
@@ -375,7 +376,7 @@ def test_restore_bat_target_cannot_end_in_a_backslash():
     assert "goto :ask_target" in refusal, refusal
     assert not any(ln.startswith("set ") for ln in refusal), refusal
     targets = [ln for ln in code if ln.startswith('"%BIN%"')
-               and ("--target " in ln or "restore %SNAP% " in ln)]
+               and ("--restore-folder " in ln or "restore %SNAP% " in ln)]
     assert len(targets) == 2 and all('"%TARGET%"' in ln for ln in targets), targets
 
 
@@ -471,7 +472,7 @@ def test_restore_bat_relocation_copies_only_this_platform():
     for ln in code:
         if ln.startswith(("xcopy", "copy")):
             assert "\\bin" not in ln, f"copies a whole bin folder: {ln}"
-    assert 'call :copy_one "docs\\RECOVER_WINDOWS.txt"' in code
+    assert 'call :copy_one "docs\\RESTORE_WINDOWS.txt"' in code
     # rustic-static.exe only for a set that holds its own data\.
     t2 = [ln for ln in code if 'set "T2_EXE=rustic-static.exe"' in ln]
     assert len(t2) == 1 and '\\data\\"' in t2[0], t2
@@ -545,11 +546,11 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
 
 
 def test_restore_bat_tools_folder_default_and_override():
-    """C4/C6: the tools folder is %LOCALAPPDATA%\\LCSAS-restore unless
+    """C4/C6: the tools folder is %LOCALAPPDATA%\\lcsas-tools unless
     LCSAS_TOOLS_DIR names another; the copy in it finds it two folders up
     from itself.  Not %TEMP%: Disk Cleanup and Storage Sense empty it."""
     code = _code(RESTORE_BAT.read_text())
-    assert 'if defined LOCALAPPDATA set "TOOLS=%LOCALAPPDATA%\\LCSAS-restore"' in code
+    assert 'if defined LOCALAPPDATA set "TOOLS=%LOCALAPPDATA%\\lcsas-tools"' in code
     assert 'if defined LCSAS_TOOLS_DIR set "TOOLS=%LCSAS_TOOLS_DIR%"' in code
     assert 'set "TOOLS=%~dp0..\\.."' in code
     assert not any("%TEMP%\\lcsas-restore" in ln for ln in code)
@@ -627,14 +628,14 @@ def test_restore_bat_resume_cfg_never_holds_the_password():
     content = RESTORE_BAT.read_text()
     body = _label_body(content, ":save_resume")
     for ln in body:
-        for word in ("LCSAS_PW", "PWFILE", "LCSAS_PASSWORD"):
+        for word in ("PW_TYPED", "PWFILE", "LCSAS_PASSWORD"):
             assert word not in ln, f"resume.cfg/launcher writer touches {word}: {ln}"
     cfg = [ln[ln.index("echo ") + 5:] for ln in body if '"%CFG%" echo ' in ln]
     keys = [c.split("=", 1)[0] for c in cfg if not c.startswith("#")]
-    assert keys == ["set", "target", "meta", "letters", "snapshot"], cfg
+    assert keys == ["backup_set", "restore_folder", "meta", "letters", "snapshot"], cfg
     code = _code(content)
     assert code.index("if defined LCSAS_RELOCATED call :save_resume") < code.index(
-        'set /p "LCSAS_PW=Password: "')
+        'set /p "PW_TYPED=Password: "')
 
 
 def _launcher_lines(content: str) -> list[str]:
@@ -755,11 +756,11 @@ def test_restore_bat_tries_the_password_before_tier1():
     head = '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" '
     assert check == [head + "--list-snapshots >nul 2>nul <nul"], check
     tier1 = [i for i, ln in enumerate(code)
-             if ln.startswith(head + '--target "%TARGET%" --snapshot %SNAP% ')]
+             if ln.startswith(head + '--restore-folder "%TARGET%" --snapshot %SNAP% ')]
     assert len(tier1) == 1, tier1
     assert code.index(check[0]) < tier1[0]
-    assert code.index('set "LCSAS_PW="') < code.index('set /p "LCSAS_PW=Password: "')
-    assert 'if /i "!LCSAS_PW!"=="q" goto :pw_gave_up' in code
+    assert code.index('set "PW_TYPED="') < code.index('set /p "PW_TYPED=Password: "')
+    assert 'if /i "!PW_TYPED!"=="q" goto :pw_gave_up' in code
     start = code.index(":pw_gave_up")
     gave_up = code[start:code.index("goto :wrong_password", start) + 1]
     assert "pause" in gave_up, gave_up
@@ -768,7 +769,7 @@ def test_restore_bat_tries_the_password_before_tier1():
 
 def test_restore_bat_share_cards_live_in_temp_never_in_the_tools_folder():
     """#607 (C7): each typed card is a file of its own in a new folder
-    under %TEMP%, checked alone with lcsas-keyshare, then all K are
+    under %TEMP%, checked alone with lcsas-shares, then all K are
     combined into PWFILE; P lets the reader type the password."""
     content = RESTORE_BAT.read_text()
     code = _code(content)
@@ -801,8 +802,8 @@ def test_restore_bat_c4_variables_are_documented():
     """C4: every variable restore.bat honours has a row in ENV_VARS.txt."""
     env_doc = (RESTORE_BAT.parents[1] / "docs" / "ENV_VARS.txt").read_text()
     content = RESTORE_BAT.read_text()
-    for var in ("LCSAS_REPO", "LCSAS_TARGET", "LCSAS_PASSWORD", "LCSAS_PWFILE",
-                "LCSAS_PW", "LCSAS_SHARES_DIR", "LCSAS_NEWEST_DISC_PROMPT",
+    for var in ("LCSAS_BACKUP_SET", "LCSAS_PLATFORM", "LCSAS_PASSWORD", "LCSAS_PASSWORD_FILE",
+                "LCSAS_SHARES_DIR", "LCSAS_NEWEST_DISC_PROMPT",
                 "LCSAS_TOOLS_DIR", "LCSAS_PACK_CACHE_DIR", "LCSAS_INTERACTIVE",
                 "LCSAS_ANOTHER_SET"):
         assert var in content, var
@@ -902,7 +903,7 @@ def test_restore_bat_carrying_on_keeps_the_newest_catalog_copy():
 
 def test_restore_bat_password_file_goes_even_when_read_only():
     """#608 (B2 review): `copy` keeps a read-only mark, so a copy of a
-    read-only LCSAS_PWFILE could not be deleted by plain `del` nor
+    read-only LCSAS_PASSWORD_FILE could not be deleted by plain `del` nor
     replaced by `> "%PWFILE%" echo`: the wrong password was tried again
     and again, and a right one stayed in %TEMP%.  Every delete of the
     password file is /f, and the mark comes off the copy.  A window
@@ -911,7 +912,7 @@ def test_restore_bat_password_file_goes_even_when_read_only():
     code = _code(RESTORE_BAT.read_text())
     assert not [ln for ln in code if 'del "%PWFILE%"' in ln]
     assert len([ln for ln in code if 'del /f /q "%PWFILE%" >nul 2>nul' in ln]) >= 10
-    copy = code.index('copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul')
+    copy = code.index('copy /b /y "!LCSAS_PASSWORD_FILE!" "%PWFILE%" >nul 2>nul')
     assert code[copy + 1] == 'attrib -r "%PWFILE%" >nul 2>nul <nul'
     clean = code.index("if defined ANOTHER_PASS goto :temp_cleared")
     assert code[clean + 1:clean + 4] == [
@@ -984,7 +985,7 @@ def test_restore_bat_folder_question_takes_q_and_a_whole_path():
 
 def test_restore_bat_helpers_never_read_the_scripts_input():
     """Every program that needs no input reads <nul: xcopy, attrib, fc,
-    reg, lcsas-keyshare and the --list-snapshots password check.
+    reg, lcsas-shares and the --list-snapshots password check.
 
     On real Windows xcopy and attrib read the script's own standard
     input.  With the answers piped in (windows-e2e), the catalog copy's
@@ -1034,7 +1035,7 @@ def test_restore_bat_tier1_missing_stops_a_set_read_from_the_discs():
     to tier 2, which cannot ask for discs (C5).  The check is now at top
     level, before the folder and the password, and outside the tier-1
     block: missing program + no data\\ goes to :tier1_missing (64), which
-    names the program, the antivirus and RECOVER_WINDOWS.txt."""
+    names the program, the antivirus and RESTORE_WINDOWS.txt."""
     content = RESTORE_BAT.read_text()
     code = _code(content)
     guard = [
@@ -1054,7 +1055,7 @@ def test_restore_bat_tier1_missing_stops_a_set_read_from_the_discs():
     # Its exit code, 64, is run in tests/contract/script_contract.py
     # ("no program here can restore the set").
     text = "\n".join(body)
-    for want in ("lcsas-restore.exe", "Antivirus", "RECOVER_WINDOWS.txt",
+    for want in ("lcsas-restore.exe", "Antivirus", "RESTORE_WINDOWS.txt",
                  "run restore.bat again from the META disc"):
         assert want in text, want
     # Static: only real cmd.exe drops an exit code given inside a block.
@@ -1091,7 +1092,7 @@ def test_restore_bat_a_combiner_that_does_not_work_asks_for_the_password():
 
 
 def test_restore_bat_lcsas_repo_refuses_a_name_two_sets_share():
-    """#627 item 8: LCSAS_REPO naming two sets by their name took the
+    """#627 item 8: LCSAS_BACKUP_SET naming two sets by their name took the
     first; restore.sh refuses.  An id still picks at once; a name or
     name_cmd is counted (SEL_N) and two hits stop with exit 1."""
     content = RESTORE_BAT.read_text()

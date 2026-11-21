@@ -52,7 +52,7 @@ one place that decides it
 **Purpose:** Re-confirm that one specific volume (identified by its label) still reads back cleanly from a disc or its ISO image, then record the result on the volume's permanent event log. This is the per-disc workhorse: it is what you run when you pull a single disc out of the safe and want to know "is this still good?"
 
 **Prerequisites:**
-- Catalog initialized (`lcsas init`); `archive.db` (or `--db` / `config.db_path`) exists.
+- Catalog initialized (`lcsas init`); `catalog.db` (or `--catalog` / `config.db_path`) exists.
 - Volume label is registered in the catalog (`volumes.label`).
 - Either:
   - A reachable ISO image (via `--iso` or auto-detected from the latest `session_volumes` row), **or**
@@ -254,7 +254,7 @@ one place that decides it
 
 **Prerequisites:**
 - Catalog initialized.
-- `--config` is **required** — `cmd_session_list` errors out without it (this is inconsistent with `status`/`verify`, which fall back to `archive.db`). See "Gaps".
+- `--config` is **required** — `cmd_session_list` errors out without it (this is inconsistent with `status`/`verify`, which fall back to `catalog.db`). See "Gaps".
 
 **Steps:**
 1. Argparse: `session` subcommand with `list` (optional `--status` filter) and `abort` sub-commands (`build_parser()`, `src/lcsas/cli/parser.py`).
@@ -374,11 +374,11 @@ Follow this schedule while you, the owner, maintain the archive.
 
    This is the MONTHLY TEST-RESTORE item in `docs/development/recovery/READINESS_CHECKLIST.txt` (in the source repository, not on this disc).
 
-4. **Once a year, run the drill and `lcsas key verify`.** The drill is the BLIND RESTORE DRILL in the checklist's EMERGENCY DRILL section. `lcsas key verify` checks that the share cards (any K of them), or a stored copy of the password, still unlock each repository:
+4. **Once a year, run the drill and `lcsas password verify`.** The drill is the BLIND RESTORE DRILL in the checklist's EMERGENCY DRILL section. `lcsas password verify` checks that the share cards (any K of them), or a stored copy of the password, still unlock each repository:
 
    ```bash
-   lcsas --config lcsas.toml key verify --repo <REPO> --share-file <CARD1> --share-file <CARD2>
-   lcsas --config lcsas.toml key verify --repo <REPO> --password-file <PASSWORD_COPY>
+   lcsas --config lcsas.toml password verify --repo <REPO> --share-file <CARD1> --share-file <CARD2>
+   lcsas --config lcsas.toml password verify --repo <REPO> --password-file <PASSWORD_COPY>
    ```
 
    Exit code 0 and an `OK:` line mean they still work.

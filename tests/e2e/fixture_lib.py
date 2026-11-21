@@ -75,7 +75,7 @@ def add_repo(db_path: Path, name: str, mirror: Path) -> str:
     from lcsas.cli.main import main as lcsas_main
 
     with contextlib.redirect_stdout(sys.stderr):
-        rc = lcsas_main(["--db", str(db_path), "repo", "add", name, str(mirror)])
+        rc = lcsas_main(["--catalog", str(db_path), "repo", "add", name, str(mirror)])
     if rc != 0:
         raise RuntimeError(f"lcsas repo add {name!r} {mirror} exited {rc}")
     with contextlib.closing(sqlite3.connect(db_path)) as conn:
@@ -104,8 +104,8 @@ def split_password(
 ) -> tuple[int, list[Path]]:
     """Split the password of the backup set *name* into *shares* share
     cards, any *threshold* of which rebuild it, as an owner does: the
-    set's config says ``key_split = true`` with its K and N, and ``lcsas
-    key split`` checks that the password opens the set's keys, records the
+    set's config says ``split = true`` with its K and N, and ``lcsas
+    password split`` checks that the password opens the set's keys, records the
     split in the catalog (key_escrow, under the set's id) and writes the
     printable cards.  The burn's drift guard needs that record, and the
     set markers on the discs take ``split=K-of-N`` and the split id from it
@@ -121,7 +121,7 @@ def split_password(
     from lcsas.db.key_escrow import get_split_for_repo
     from lcsas.keyshare import extract_mnemonic, share_identifier
 
-    # The owner's lcsas.toml, cut down to what `key split` reads.  JSON
+    # The owner's lcsas.toml, cut down to what `password split` reads.  JSON
     # string quoting is valid TOML for these plain paths and names.
     slug = mirror.name
     cfg = workdir / f"split-{slug}.toml"
@@ -129,28 +129,28 @@ def split_password(
         "[paths]",
         f"mirror_base = {json.dumps(str(mirror.parent))}",
         f"staging = {json.dumps(str(workdir / 'staging'))}",
-        f"database = {json.dumps(str(db_path))}",
+        f"catalog = {json.dumps(str(db_path))}",
         f"[repos.{json.dumps(name)}]",
         f"mirror_path = {json.dumps(str(mirror))}",
         f"password_file = {json.dumps(str(password_file))}",
-        "key_split = true",
-        f"key_threshold = {threshold}",
-        f"key_shares = {shares}",
+        "split = true",
+        f"split_threshold = {threshold}",
+        f"split_shares = {shares}",
     ]) + "\n", encoding="utf-8")
     out = workdir / "keyshares" / slug
     with contextlib.redirect_stdout(sys.stderr):
         rc = lcsas_main([
-            "--config", str(cfg), "key", "split", "--repo", name,
+            "--config", str(cfg), "password", "split", "--repo", name,
             "--out", str(out),
         ])
     if rc != 0:
-        raise RuntimeError(f"lcsas key split --repo {name!r} exited {rc}")
+        raise RuntimeError(f"lcsas password split --repo {name!r} exited {rc}")
     printed = sorted(
         out.glob("*-share-*-card.txt"),
         key=lambda p: int(p.name.rsplit("-share-", 1)[1].split("-", 1)[0]),
     )
     if len(printed) != shares:
-        raise RuntimeError(f"key split wrote {len(printed)} cards, not {shares}")
+        raise RuntimeError(f"password split wrote {len(printed)} cards, not {shares}")
     cards_dir.mkdir(parents=True, exist_ok=True)
     cards = []
     for card in printed:
@@ -169,7 +169,7 @@ def split_password(
     if record is None or (record.threshold, record.shares, record.slip39_id) != (
         threshold, shares, split_id,
     ):
-        raise RuntimeError(f"key split recorded {record!r} for {name!r}")
+        raise RuntimeError(f"password split recorded {record!r} for {name!r}")
     return split_id, cards
 
 
@@ -187,7 +187,7 @@ def set_marker_problems(
     disc's ``metadata/``), measured against an owner's discs (#617).
 
     Every folder must be named by a UUID id, never by a set's name.  Its
-    ``LCSAS_REPO.txt`` marker must give that id and one of *names*, and no
+    ``LCSAS_BACKUP_SET.txt`` marker must give that id and one of *names*, and no
     two folders may give the same name.  With *require_all*, every one of
     *names* must have a folder: the META disc carries every set, a data
     disc only the sets it holds packs of.  An empty list means all is well.
@@ -213,7 +213,7 @@ def set_marker_problems(
             continue
         marker = read_repo_marker(folder)
         if marker is None:
-            problems.append(f"{folder}: no LCSAS_REPO.txt whose id= is the folder")
+            problems.append(f"{folder}: no LCSAS_BACKUP_SET.txt whose id= is the folder")
             continue
         name = marker.get("name", "")
         if name not in wanted:

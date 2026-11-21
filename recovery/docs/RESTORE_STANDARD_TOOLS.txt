@@ -17,9 +17,9 @@ WHAT YOU NEED
   * All the data discs for the archive (or one disc per distinct LABEL -- the
     repository metadata is copied onto every disc, so any single disc
     carries it).
-  * The repository password, OR (if that repository's password was split) at
+  * The backup set's password, OR (if that backup set's password was split) at
     least K of its N share cards.  PASSWORD_INFO.txt says, for each
-    repository, whether its password was split.
+    backup set, whether its password was split.
   * A computer.  A stock restic binary AND a rustic binary are bundled on this
     disc under recovery/bin/<your-machine>/ (restic, restic.exe, rustic) -- so
     you need no internet.  You may also install restic fresh (below) if you'd
@@ -57,8 +57,9 @@ If a disc reads fine, skip this step.
 --------------------------------------------------------------------------------
 STEP 2 -- reassemble one restic repository from the discs
 --------------------------------------------------------------------------------
-Mount every disc (or its .iso).  Pick the repository id you want -- the folder
-names under any disc's  metadata/  directory ARE the repository ids.  Then:
+Mount every disc (or its .iso).  Pick the backup set id you want -- the folder
+names under any disc's  metadata/  directory ARE the backup set ids (each
+backup set is one restic repository).  Then:
 
     REPO=/tmp/restore-repo
     mkdir -p "$REPO/data"
@@ -83,13 +84,13 @@ names under any disc's  metadata/  directory ARE the repository ids.  Then:
 You now have a plain restic repository at $REPO.
 
 --------------------------------------------------------------------------------
-STEP 3 -- get the repository password
+STEP 3 -- get the backup set's password
 --------------------------------------------------------------------------------
 3a. SINGLE PASSWORD (most archives): you already have it.  Skip to step 4.
 
 3b. SPLIT PASSWORD (you have share cards): rebuild it with the standard
     SLIP-0039 tool -- Trezor's reference "shamir-mnemonic" (pip install
-    shamir-mnemonic), or the lcsas-keyshare / keyshare_combine.py copies on this
+    shamir-mnemonic), or the lcsas-shares / combine_shares.py copies on this
     disc.  Any K of your N cards work.  With the reference tool:
 
         python3 - <<'PY'
@@ -105,14 +106,14 @@ STEP 3 -- get the repository password
         print("password written to /tmp/repo.pw")
         PY
 
-    (lcsas-keyshare / keyshare_combine.py do the unwrap for you and print the
+    (lcsas-shares / combine_shares.py do the unwrap for you and print the
      password directly -- the binary first, the Python fallback if it will
      not run:
 
-        recovery/bin/<your-machine>/lcsas-keyshare <card1> <card2> ...
-        python3 keyshare_combine.py <card1> <card2> ...
+        recovery/bin/<your-machine>/lcsas-shares <card1> <card2> ...
+        python3 combine_shares.py <card1> <card2> ...
 
-     See RECOVER.txt.  The snippet above is the pure standard-tool path.)
+     See RESTORE.txt.  The snippet above is the pure standard-tool path.)
 
 --------------------------------------------------------------------------------
 STEP 4 -- restore with stock restic
@@ -143,5 +144,5 @@ NOTES
     the wrong K -- re-check step 3.  If it reports missing packs, you have not
     mounted every disc -- repeat step 2a for the missing ones.
   * This is one of several recovery tiers.  See TIERS.txt for the full cascade
-    and RECOVER.txt for the guided (LCSAS-tool) path.
+    and RESTORE.txt for the guided (LCSAS-tool) path.
 ================================================================================

@@ -1,6 +1,6 @@
 """Opt-in cross-arch proof: tier-3 zstd restore under aarch64 CPython (RST-04).
 
-Runs the generated ``standalone_restorer.py`` under an aarch64 CPython via
+Runs the generated ``python_reader.py`` under an aarch64 CPython via
 ``qemu-aarch64-static`` against a zstd-compressed fixture repo and asserts a
 byte-identical restore — proving the pure-Python zstd decoder
 (``lcsas.restore._zstd_pure``) works on a NON-host architecture with no
@@ -52,7 +52,7 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "unit"))
 
 
 def _build_standalone(tmp_path: Path) -> Path:
-    out = tmp_path / "standalone_restorer.py"
+    out = tmp_path / "python_reader.py"
     code = (
         f"import sys; sys.path.insert(0, {str(SRC)!r});"
         "from lcsas.restore.standalone_builder import build_standalone;"
@@ -93,7 +93,7 @@ def test_zstd_restore_under_aarch64_qemu(tmp_path: Path) -> None:
         [_QEMU, str(_AARCH64_PY), str(script),
          "--repo", str(repo),
          "--password-file", str(pw),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--interactive", "off"],
         capture_output=True, text=True, timeout=600, env=env,
     )

@@ -169,7 +169,7 @@ def test_disc_catalog_blank_but_reader_lists_snapshot_paths(
             str(src), tmp=tmp_path)
 
     # The master catalog, as scan fills it from rustic.
-    master = tmp_path / "archive.db"
+    master = tmp_path / "catalog.db"
     conn = get_connection(master)
     create_all(conn)
     register_repo(conn, "r1", "family", str(repo), "")

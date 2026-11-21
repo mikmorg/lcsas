@@ -20,7 +20,7 @@
 #     after all diagnostics are printed, so one red run tells the whole
 #     story instead of the first failure only.
 #   * Since rc6 (#609) the relocated copy lives in the fixed tools folder,
-#     %LOCALAPPDATA%\LCSAS-restore, which stays until a restore has
+#     %LOCALAPPDATA%\lcsas-tools, which stays until a restore has
 #     finished.  Every relocated leg starts by removing it (Clear-ToolsDir),
 #     so no leg takes an earlier leg's copy by accident, and checks it is
 #     gone after exit 0 and kept after exit 75 or 77.
@@ -28,7 +28,7 @@
 #     repo add`), so their folders on the discs are named by UUID ids, not
 #     by their names (#617).  sets.json says which is which.  The leg that
 #     goes through restore.bat's set menu is the single-drive leg; every
-#     other leg names the set in LCSAS_REPO (by its id, or by the name
+#     other leg names the set in LCSAS_BACKUP_SET (by its id, or by the name
 #     restore.bat shows), and checks the "Backup set:" line shows that
 #     name, never the id (#606).
 
@@ -182,7 +182,7 @@ function Test-TreeAgainstManifest {
 
 # The tools folder restore.bat copies itself into from a disc (#609), and
 # the launcher it puts on the Desktop while a restore can be carried on.
-function Get-ToolsDir { return (Join-Path $env:LOCALAPPDATA 'LCSAS-restore') }
+function Get-ToolsDir { return (Join-Path $env:LOCALAPPDATA 'lcsas-tools') }
 function Get-DesktopLauncher {
     return (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Resume LCSAS restore.bat')
 }
@@ -273,7 +273,7 @@ function Assert-OnlyThisPlatform {
     }
     $progs = @(Get-ChildItem -LiteralPath (Join-Path $bin 'x86_64-pc-windows-gnu') -File -ErrorAction SilentlyContinue |
                ForEach-Object { $_.Name } | Sort-Object)
-    if (($progs -join ',') -ne 'lcsas-ecc.exe,lcsas-keyshare.exe,lcsas-restore.exe') {
+    if (($progs -join ',') -ne 'lcsas-ecc.exe,lcsas-restore.exe,lcsas-shares.exe') {
         $Problems.Add("tools folder programs: $($progs -join ', ')")
     }
 }
@@ -331,7 +331,7 @@ function Invoke-RelocationLeg {
         [string]$TargetName,
         [switch]$SeedStale,
         [switch]$WrongFirst,
-        # LCSAS_REPO names the set by its id, or by the name restore.bat
+        # LCSAS_BACKUP_SET names the set by its id, or by the name restore.bat
         # shows (name_cmd), which it must match too (#606).
         [ValidateSet('id', 'name_cmd')]
         [string]$PickBy = 'id'
@@ -341,8 +341,8 @@ function Invoke-RelocationLeg {
     Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
     Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
     $sets = Get-FixtureSets -Fixture $Fixture
-    $env:LCSAS_REPO = $sets.restore.$PickBy
-    Write-Host "LCSAS_REPO=$($env:LCSAS_REPO) (the set's $PickBy)"
+    $env:LCSAS_BACKUP_SET = $sets.restore.$PickBy
+    Write-Host "LCSAS_BACKUP_SET=$($env:LCSAS_BACKUP_SET) (the set's $PickBy)"
 
     $meta = Find-MetaDrive
     if (-not $meta) { throw 'meta ISO not mounted (no drive holds restore.bat)' }
@@ -415,7 +415,7 @@ function Invoke-RelocationLeg {
         }
         $t1runs = ([regex]::Matches($out, '\[tier 1\] running')).Count
         if ($t1runs -ne 1) { $problems.Add("tier 1 ran $t1runs times (want once, with the right password)") }
-        if ($out -match 'could not decrypt the repository') {
+        if ($out -match 'could not decrypt the backup set') {
             $problems.Add('the run gave up after the wrong password instead of asking again')
         }
     }
@@ -489,7 +489,7 @@ function Invoke-RelocatedWrongPasswordLeg {
     Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
     Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
     $sets = Get-FixtureSets -Fixture $Fixture
-    $env:LCSAS_REPO = $sets.restore.id
+    $env:LCSAS_BACKUP_SET = $sets.restore.id
 
     $meta = Find-MetaDrive
     if (-not $meta) { throw 'meta ISO not mounted (no drive holds restore.bat)' }
@@ -524,7 +524,7 @@ function Invoke-RelocatedWrongPasswordLeg {
         $problems.Add("no 'copied recovery files to' message: the relocation did not happen")
     }
     if ($rc -ne 77) { $problems.Add("exit code $rc through the relocation (want 77, as without it)") }
-    if ($out -notmatch 'could not decrypt the repository') { $problems.Add('wrong-password banner missing') }
+    if ($out -notmatch 'could not decrypt the backup set') { $problems.Add('wrong-password banner missing') }
     if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2 on a wrong password') }
     $restored = @(Get-ChildItem -Path $target -Recurse -File -Force -ErrorAction SilentlyContinue |
                   Where-Object { $_.Name -ne '.lcsas-restore-marker' })
@@ -549,9 +549,9 @@ function Invoke-RelocatedWrongPasswordLeg {
 }
 
 # #925: restore.bat's arguments on real cmd.  Run from the disc root
-# (relocated, as a double-click is) with -Arguments, no LCSAS_REPO, and
+# (relocated, as a double-click is) with -Arguments, no LCSAS_BACKUP_SET, and
 # blank answers; the exit code must reach `cmd /c` through the relocation.
-#   --repo <a name no set has>: exit 1, the sets listed, nothing restored;
+#   --backup-set <a name no set has>: exit 1, the sets listed, nothing restored;
 #   an unknown flag: exit 2 before anything else runs, the valid
 #   arguments listed.
 function Invoke-ArgumentLeg {
@@ -566,7 +566,7 @@ function Invoke-ArgumentLeg {
     $PSNativeCommandUseErrorActionPreference = $false
     Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
     Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
-    Remove-Item Env:LCSAS_REPO -ErrorAction SilentlyContinue
+    Remove-Item Env:LCSAS_BACKUP_SET -ErrorAction SilentlyContinue
     $sets = Get-FixtureSets -Fixture $Fixture
     $meta = Find-MetaDrive
     if (-not $meta) { throw 'meta ISO not mounted (no drive holds restore.bat)' }
@@ -630,7 +630,7 @@ function Invoke-EjectLeg {
     # The set is named up front: the banner this leg waits for comes after
     # the set menu, which would wait for an answer.
     $sets = Get-FixtureSets -Fixture $Fixture
-    $env:LCSAS_REPO = $sets.restore.id
+    $env:LCSAS_BACKUP_SET = $sets.restore.id
 
     $target = Join-Path $env:RUNNER_TEMP $TargetName
     if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
@@ -1162,7 +1162,7 @@ function Assert-PackCacheWhole {
 #
 # stdin: first the newest-data-disc step (#605): the newest data ISO goes
 # into the meta disc's letter and ENTER (Invoke-NewestDiscStep).  Then
-# the set menu (#606): this is the leg with no LCSAS_REPO, so the menu
+# the set menu (#606): this is the leg with no LCSAS_BACKUP_SET, so the menu
 # must list each set by its name and the set is chosen by its number
 # (Invoke-SetMenu).  Then restore.bat's two `set /p` prompts (folder,
 # password) get one line each, written only once the prompt is in
@@ -1182,7 +1182,7 @@ function Invoke-SingleDriveLeg {
     Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
     Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
     # The reader picks the set from the menu.
-    Remove-Item Env:LCSAS_REPO -ErrorAction SilentlyContinue
+    Remove-Item Env:LCSAS_BACKUP_SET -ErrorAction SilentlyContinue
     $sets = Get-FixtureSets -Fixture $Fixture
     if (@(Get-AllSets $sets).Count -lt 2) { throw 'the fixture has one backup set: restore.bat shows no menu' }
 
@@ -1340,9 +1340,9 @@ function Invoke-StopAndResumeLeg {
     if (-not $metaIso) { throw 'LCSAS_META.iso not found in the fixture dir' }
     $dataIsos = @($isos | Where-Object { $_.Name -ne 'LCSAS_META.iso' } | ForEach-Object { $_.FullName })
     if ($dataIsos.Count -lt 2) { throw "need >= 2 data ISOs to stop between two; the fixture has $($dataIsos.Count)" }
-    # The set is named by its id (LCSAS_REPO), so no menu; carrying on
+    # The set is named by its id (LCSAS_BACKUP_SET), so no menu; carrying on
     # takes the set from resume.cfg.
-    Remove-Item Env:LCSAS_REPO -ErrorAction SilentlyContinue
+    Remove-Item Env:LCSAS_BACKUP_SET -ErrorAction SilentlyContinue
     $sets = Get-FixtureSets -Fixture $Fixture
 
     foreach ($iso in $isos) {
@@ -1383,7 +1383,7 @@ function Invoke-StopAndResumeLeg {
         # boxes from the META disc on, and Invoke-SingleDriveLeg runs it.
         Write-Host "Starting (one drive, q at the second box): $bat"
         $proc = Start-RestoreProcess -Bat $bat -OutFile $outStop -WorkDir "${letter}:\" `
-            -Env @{ LCSAS_NEWEST_DISC_PROMPT = '0'; LCSAS_REPO = $sets.restore.id }
+            -Env @{ LCSAS_NEWEST_DISC_PROMPT = '0'; LCSAS_BACKUP_SET = $sets.restore.id }
         $text = Wait-ForOutput -Path $outStop -Pattern 'Restore to which folder\?' -Proc $proc -Seconds 300
         if ($text -cnotmatch 'Restore to which folder\?') { throw "no folder prompt; output so far:`n$text" }
         $proc.StandardInput.WriteLine($target)
@@ -1503,12 +1503,12 @@ function Mount-FixtureIsos {
 # ---------------------------------------------------------------------
 # G1 (#608): the documented way to type the password hidden.
 #
-# RECOVER_WINDOWS.txt, "THE PASSWORD", gives PowerShell lines that read
+# RESTORE_WINDOWS.txt, "THE PASSWORD", gives PowerShell lines that read
 # the password with Read-Host -AsSecureString, turn it back into text
 # (SecureStringToBSTR + PtrToStringBSTR, which Windows PowerShell 5.1
 # has; ConvertFrom-SecureString -AsPlainText needs PowerShell 7), write
 # it to $env:TEMP\lcsas-pw.txt with no BOM and no line break, set
-# LCSAS_PWFILE to that file, run restore.bat and delete the file.
+# LCSAS_PASSWORD_FILE to that file, run restore.bat and delete the file.
 #
 # The doc has no markers around the lines, and this PR changes no doc
 # text, so Get-DocPasswordLines finds them by what they are: in the
@@ -1547,7 +1547,7 @@ function Get-DocPasswordLines {
         'the file in %TEMP%'            = '^\$f = "\$env:TEMP\\[^"\\]+"$'
         'UTF8Encoding($false)'          = '^\$u = New-Object Text\.UTF8Encoding\(\$false\)$'
         'WriteAllText'                  = '^\[IO\.File\]::WriteAllText\(\$f, \$p, \$u\)$'
-        'LCSAS_PWFILE = $f'             = '^\$env:LCSAS_PWFILE = \$f$'
+        'LCSAS_PASSWORD_FILE = $f'             = '^\$env:LCSAS_PASSWORD_FILE = \$f$'
         'X:\restore.bat'                = '^[A-Za-z]:\\restore\.bat$'
         'Remove-Item $f (the end marker)' = '^Remove-Item \$f$'
     }
@@ -1560,10 +1560,10 @@ function Get-DocPasswordLines {
     if ($missing.Count -gt 0) {
         throw "$DocPath, THE PASSWORD: the PowerShell lines changed; not found once: $($missing -join '; ')`n$($block -join "`n")"
     }
-    $order = @($at['WriteAllText'], $at['LCSAS_PWFILE = $f'], $at['X:\restore.bat'], $at['Remove-Item $f (the end marker)'])
+    $order = @($at['WriteAllText'], $at['LCSAS_PASSWORD_FILE = $f'], $at['X:\restore.bat'], $at['Remove-Item $f (the end marker)'])
     if ($at['Remove-Item $f (the end marker)'] -ne $block.Count - 1 -or
         (Compare-Object $order ($order | Sort-Object) -SyncWindow 0)) {
-        throw "$DocPath, THE PASSWORD: the lines are not in the order write, LCSAS_PWFILE, restore.bat, Remove-Item:`n$($block -join "`n")"
+        throw "$DocPath, THE PASSWORD: the lines are not in the order write, LCSAS_PASSWORD_FILE, restore.bat, Remove-Item:`n$($block -join "`n")"
     }
     foreach ($l in $block) {
         if ($l -match '[^\x20-\x7e]') { throw "$DocPath, THE PASSWORD: a line is not plain ASCII: $l" }
@@ -1571,12 +1571,12 @@ function Get-DocPasswordLines {
     return [pscustomobject]@{
         Lines    = @($block)
         ReadHost = $at['the password read hidden']
-        PwFile   = $at['LCSAS_PWFILE = $f']
+        PwFile   = $at['LCSAS_PASSWORD_FILE = $f']
         Restore  = $at['X:\restore.bat']
     }
 }
 
-# The doc's lines up to LCSAS_PWFILE, made into a script that runs with
+# The doc's lines up to LCSAS_PASSWORD_FILE, made into a script that runs with
 # no keyboard: ONLY the Read-Host -AsSecureString source on the first
 # line is replaced, by ConvertTo-SecureString on the password the leg
 # puts in the environment (LCSAS_E2E_DOC_PW).  The doc's next lines run
@@ -1605,7 +1605,7 @@ function New-DocPasswordScript {
         }
         $lines.Add($l)
     }
-    $lines.Add('$r = [ordered]@{ ps = "$($PSVersionTable.PSVersion)"; edition = "$($PSVersionTable.PSEdition)"; f = $f; pwfile = $env:LCSAS_PWFILE }')
+    $lines.Add('$r = [ordered]@{ ps = "$($PSVersionTable.PSVersion)"; edition = "$($PSVersionTable.PSEdition)"; f = $f; pwfile = $env:LCSAS_PASSWORD_FILE }')
     $lines.Add('[IO.File]::WriteAllText($env:LCSAS_E2E_DOC_RESULT, (ConvertTo-Json -InputObject $r), (New-Object Text.UTF8Encoding($false)))')
     # ASCII: Windows PowerShell 5.1 reads a script with no BOM in the
     # ANSI code page.
@@ -1613,16 +1613,16 @@ function New-DocPasswordScript {
 }
 
 # ---------------------------------------------------------------------
-# Leg (G1, #608): the hidden-password route of RECOVER_WINDOWS.txt, on
+# Leg (G1, #608): the hidden-password route of RESTORE_WINDOWS.txt, on
 # real Windows.
 #   1. The doc's PowerShell lines, from the META disc, run under Windows
 #      PowerShell 5.1 (powershell.exe, not pwsh) with only the Read-Host
 #      source replaced.  They must write the password, byte for byte (no
 #      BOM, no line break), to $env:TEMP\lcsas-pw.txt and set
-#      LCSAS_PWFILE to it.
+#      LCSAS_PASSWORD_FILE to it.
 #   2. restore.bat from the META disc, as the doc's next line runs it (cwd
 #      the user's folder, so it copies itself to the tools folder), with
-#      that LCSAS_PWFILE and the set named in LCSAS_REPO.  It must restore
+#      that LCSAS_PASSWORD_FILE and the set named in LCSAS_BACKUP_SET.  It must restore
 #      byte-exact with no password question, leave the reader's file as
 #      it was (its first pass deletes %TEMP%\lcsas-pw-*.txt, which
 #      lcsas-pw.txt must not match), and leave no lcsas-pw-* of its own.
@@ -1635,16 +1635,16 @@ function Invoke-HiddenPasswordLeg {
     )
     $ErrorActionPreference = 'Stop'
     $PSNativeCommandUseErrorActionPreference = $false
-    foreach ($v in @('LCSAS_NO_RELOCATE', 'LCSAS_RELOCATED', 'LCSAS_PWFILE', 'LCSAS_PASSWORD', 'LCSAS_PW', 'LCSAS_SHARES_DIR')) {
+    foreach ($v in @('LCSAS_NO_RELOCATE', 'LCSAS_RELOCATED', 'LCSAS_PASSWORD_FILE', 'LCSAS_PASSWORD', 'LCSAS_SHARES_DIR')) {
         Remove-Item "Env:$v" -ErrorAction SilentlyContinue
     }
     $sets = Get-FixtureSets -Fixture $Fixture
     $meta = Mount-FixtureIsos -Fixture $Fixture
     $bat = "${meta}:\$BatRel"
     if (-not (Test-Path -LiteralPath $bat)) { throw "no $bat on the meta disc" }
-    $docPath = "${meta}:\recovery\docs\RECOVER_WINDOWS.txt"
+    $docPath = "${meta}:\recovery\docs\RESTORE_WINDOWS.txt"
     $doc = Get-DocPasswordLines -DocPath $docPath
-    Write-Host "RECOVER_WINDOWS.txt on the META disc: the PowerShell lines of THE PASSWORD, $($doc.Lines.Count) lines"
+    Write-Host "RESTORE_WINDOWS.txt on the META disc: the PowerShell lines of THE PASSWORD, $($doc.Lines.Count) lines"
 
     $pw = (Get-Content (Join-Path $Fixture 'repo.pw') -Raw).Trim()
     $docFile = Join-Path $env:TEMP 'lcsas-pw.txt'
@@ -1670,12 +1670,12 @@ function Invoke-HiddenPasswordLeg {
         throw "the doc's PowerShell lines failed under powershell.exe (exit $psRc)"
     }
     $made = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
-    Write-Host "powershell.exe $($made.ps) ($($made.edition)) wrote $($made.f); LCSAS_PWFILE=$($made.pwfile)"
+    Write-Host "powershell.exe $($made.ps) ($($made.edition)) wrote $($made.f); LCSAS_PASSWORD_FILE=$($made.pwfile)"
     if (-not ($made.ps -like '5.1*') -or $made.edition -ne 'Desktop') {
         $problems.Add("the doc's lines ran under PowerShell $($made.ps) $($made.edition), not Windows PowerShell 5.1")
     }
     if ($made.f -ne $docFile) { $problems.Add("the doc's lines wrote $($made.f), not $docFile") }
-    if ($made.pwfile -ne $made.f) { $problems.Add("the doc's lines set LCSAS_PWFILE to $($made.pwfile), not to the file $($made.f)") }
+    if ($made.pwfile -ne $made.f) { $problems.Add("the doc's lines set LCSAS_PASSWORD_FILE to $($made.pwfile), not to the file $($made.f)") }
     $want = [Text.Encoding]::ASCII.GetBytes($pw)
     $before = if (Test-Path -LiteralPath $docFile) { [IO.File]::ReadAllBytes($docFile) } else { $null }
     if (-not $before) {
@@ -1686,8 +1686,8 @@ function Invoke-HiddenPasswordLeg {
     }
 
     Clear-ToolsDir
-    $env:LCSAS_REPO = $sets.restore.id
-    $env:LCSAS_PWFILE = $made.pwfile
+    $env:LCSAS_BACKUP_SET = $sets.restore.id
+    $env:LCSAS_PASSWORD_FILE = $made.pwfile
     $target = Join-Path $env:RUNNER_TEMP $TargetName
     if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
     New-Item -ItemType Directory -Force -Path $target | Out-Null
@@ -1697,14 +1697,14 @@ function Invoke-HiddenPasswordLeg {
     @($target, '', '', '', '', '', '', '') | Set-Content -Path $answers -Encoding ascii
     $outFile = Join-Path $env:RUNNER_TEMP "out-$TargetName.txt"
     $pwBefore = Get-TempNames 'lcsas-pw-*'
-    Write-Host "Running (cwd $env:USERPROFILE, LCSAS_PWFILE=$($env:LCSAS_PWFILE), LCSAS_REPO=$($env:LCSAS_REPO)): $bat"
+    Write-Host "Running (cwd $env:USERPROFILE, LCSAS_PASSWORD_FILE=$($env:LCSAS_PASSWORD_FILE), LCSAS_BACKUP_SET=$($env:LCSAS_BACKUP_SET)): $bat"
     Push-Location -LiteralPath $env:USERPROFILE
     try {
         cmd /c "`"$bat`" < `"$answers`" > `"$outFile`" 2>&1"
         $rc = $LASTEXITCODE
     } finally {
         Pop-Location
-        Remove-Item Env:LCSAS_PWFILE -ErrorAction SilentlyContinue
+        Remove-Item Env:LCSAS_PASSWORD_FILE -ErrorAction SilentlyContinue
     }
     $out = Get-Content $outFile -Raw
     Write-Host '----- restore.bat output -----'
@@ -1714,10 +1714,10 @@ function Invoke-HiddenPasswordLeg {
 
     if ($rc -ne 0) { $problems.Add("restore.bat exit code $rc (want 0)") }
     if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
-    if ($out -notmatch 'using the password in the file LCSAS_PWFILE names') {
-        $problems.Add('restore.bat did not take the password from LCSAS_PWFILE')
+    if ($out -notmatch 'using the password in the file LCSAS_PASSWORD_FILE names') {
+        $problems.Add('restore.bat did not take the password from LCSAS_PASSWORD_FILE')
     }
-    if ($out -cmatch 'Password: ') { $problems.Add('restore.bat asked for the password although LCSAS_PWFILE gave it') }
+    if ($out -cmatch 'Password: ') { $problems.Add('restore.bat asked for the password although LCSAS_PASSWORD_FILE gave it') }
     if ($out -match 'That password is wrong|cannot read the password file') {
         $problems.Add("the password in the doc's file did not open the set")
     }
@@ -1749,7 +1749,7 @@ function Invoke-HiddenPasswordLeg {
 # G3 (#607, F6): share cards typed into restore.bat on real Windows.
 # ---------------------------------------------------------------------
 
-# The share words of a printed card (`lcsas key split`'s -card.txt): the
+# The share words of a printed card (`lcsas password split`'s -card.txt): the
 # line after "THE SHARE WORDS".
 function Get-CardWords {
     param([string]$Path)
@@ -1804,7 +1804,7 @@ function Find-CardText {
 #   * The menu lists the set with "(password split: any 2 of 3 share
 #     cards)" (Invoke-SetMenu checks it) and it is chosen from there.
 #   * At "Words of card 1: " card 1 with ONE word changed to a word that
-#     is no share word: lcsas-keyshare.exe names it and card 1 is asked
+#     is no share word: lcsas-shares.exe names it and card 1 is asked
 #     again.  Then card 1 right, and card 3 at "Words of card 2: ".
 #   * The cards rebuild the password; "Password: " is never asked.
 #   * At "Restore another backup set from these discs? [y/N]" (the tools
@@ -1822,7 +1822,7 @@ function Invoke-SplitCardsLeg {
     )
     $ErrorActionPreference = 'Stop'
     $PSNativeCommandUseErrorActionPreference = $false
-    foreach ($v in @('LCSAS_NO_RELOCATE', 'LCSAS_RELOCATED', 'LCSAS_REPO', 'LCSAS_PWFILE', 'LCSAS_PASSWORD', 'LCSAS_PW', 'LCSAS_SHARES_DIR')) {
+    foreach ($v in @('LCSAS_NO_RELOCATE', 'LCSAS_RELOCATED', 'LCSAS_BACKUP_SET', 'LCSAS_PASSWORD_FILE', 'LCSAS_PASSWORD', 'LCSAS_SHARES_DIR')) {
         Remove-Item "Env:$v" -ErrorAction SilentlyContinue
     }
     $sets = Get-FixtureSets -Fixture $Fixture
@@ -1876,7 +1876,7 @@ function Invoke-SplitCardsLeg {
     $asked = $false
     $rc = 'n/a'
     try {
-        Write-Host "Starting (no LCSAS_NO_RELOCATE, LCSAS_INTERACTIVE=on, no LCSAS_REPO): $bat"
+        Write-Host "Starting (no LCSAS_NO_RELOCATE, LCSAS_INTERACTIVE=on, no LCSAS_BACKUP_SET): $bat"
         $proc = Start-RestoreProcess -Bat $bat -OutFile $outFile -WorkDir "${letter}:\"
         $stepIso = Invoke-NewestDiscStep -Proc $proc -OutFile $outFile -Letter $letter -Current $metaIso `
             -DataIsos $dataIsos -Problems $problems
@@ -1938,7 +1938,7 @@ function Invoke-SplitCardsLeg {
     if ($out -notmatch 'copied recovery files to') { $problems.Add("no 'copied recovery files to' message: the relocation did not happen") }
     $intro = "The password for $($work.name_cmd) is split into $splitN share cards; you`r`nneed any 2 of them (Split ID $($work.split_id))."
     if (-not $out.Contains($intro)) { $problems.Add("no card introduction naming the set, 2 of $splitN and Split ID $($work.split_id) (C7)") }
-    if ($out -notmatch "'zqzq' is not a share word") { $problems.Add("lcsas-keyshare.exe did not name the wrong word 'zqzq'") }
+    if ($out -notmatch "'zqzq' is not a share word") { $problems.Add("lcsas-shares.exe did not name the wrong word 'zqzq'") }
     if ($out -notmatch 'Share card 1 was not typed right') { $problems.Add('no line saying card 1 was not typed right') }
     if ($out -notmatch 'the share cards rebuilt the password') { $problems.Add("no 'the share cards rebuilt the password' line") }
     if ($out -match 'Words of card 3') { $problems.Add('asked for a third card of a 2-of-N split') }

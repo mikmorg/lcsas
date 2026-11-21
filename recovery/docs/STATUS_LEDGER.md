@@ -48,7 +48,7 @@ Sections below: **Resolved**, **Open / deferred**, **Coverage posture**.
   `tests/recovery_hardening/test_restore_space_preflight.py` exercise the
   `disc_locator.c` drain-guard / `<10%-free` branches that were previously
   unreachable in `coverage-c`.
-- **lcsas-keyshare under the tier-1 gates (KEY-06)** — the SLIP-0039 combiner
+- **lcsas-shares under the tier-1 gates (KEY-06)** — the SLIP-0039 combiner
   is in the `coverage-c` gcovr report, the `fuzz-smoke` aggregate
   (`fuzz_slip39_mnemonic`), the `sanitize` ASan/UBSan/LSan run, and the
   audit-gate CI path filter.  Coverage posture documented narratively in

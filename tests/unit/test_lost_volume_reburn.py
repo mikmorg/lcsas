@@ -57,7 +57,7 @@ def _config(tmp_path: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=mirror,
         staging_path=staging,
-        db_path=tmp_path / "archive.db",
+        db_path=tmp_path / "catalog.db",
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=100,
@@ -106,13 +106,13 @@ def burned(tmp_path):
     label = session.manifests[0].volume_label
     conn.close()
 
-    assert main(["--db", str(config.db_path), "copy", "destroy", "--lost",
+    assert main(["--catalog", str(config.db_path), "copy", "destroy", "--lost",
                  label, "Home"]) == 0
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(
         f'[paths]\nmirror_base = "{config.mirror_base_path}"\n'
         f'staging = "{config.staging_path}"\n'
-        f'database = "{config.db_path}"\n'
+        f'catalog = "{config.db_path}"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
     )
     conn = get_connection(config.db_path)
@@ -140,7 +140,7 @@ def _assert_in_service(conn, volume_id: int, status: str = "VERIFIED") -> None:
 
 def _status_line(capsys, db: Path, label: str) -> str:
     capsys.readouterr()
-    assert main(["--db", str(db), "status"]) == 0
+    assert main(["--catalog", str(db), "status"]) == 0
     captured = capsys.readouterr()
     out = captured.out + captured.err
     return next(line for line in out.splitlines() if label in line)
@@ -213,7 +213,7 @@ def test_lost_volume_verify_disc_at_new_location_brings_it_back(burned):
               side_effect=lambda device, n:
               hashlib.sha256(b"\x00" * n).hexdigest()),
     ):
-        assert main(["--db", str(db), "verify", burned["label"], "--disc",
+        assert main(["--catalog", str(db), "verify", burned["label"], "--disc",
                      "--device", "/dev/null", "--location", "Offsite"]) == 0
     _assert_in_service(burned["conn"], burned["volume_id"])
 

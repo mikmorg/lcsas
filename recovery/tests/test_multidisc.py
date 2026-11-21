@@ -122,7 +122,7 @@ def case_both_visible() -> int:
             [str(BINARY),
              "--repo", str(repo),
              "--password-file", str(pwfile),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--snapshot", "latest",
              "--pack-search", str(disc_a),
              "--pack-search", str(disc_b),
@@ -156,7 +156,7 @@ def case_fail_fast() -> int:
             [str(BINARY),
              "--repo", str(repo),
              "--password-file", str(pwfile),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--snapshot", "latest",
              "--pack-search", str(disc_a),
              # deliberately omit disc_b
@@ -199,7 +199,7 @@ def case_interactive_swap() -> int:
             [str(BINARY),
              "--repo", str(repo),
              "--password-file", str(pwfile),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--snapshot", "latest",
              "--pack-search", str(disc_a),
              "--pack-search", str(staging),
@@ -302,7 +302,7 @@ def case_single_drive_meta_exclusion() -> int:
             [str(BINARY),
              "--repo", str(repo),
              "--password-file", str(pwfile),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--snapshot", "latest",
              "--pack-search", str(disc_a),   # excluded by meta-disc
              "--pack-search", str(disc_b),
@@ -347,7 +347,7 @@ def _eject_hint_case(name: str, meta_live: bool) -> int:
             [str(BINARY),
              "--repo", str(repo),
              "--password-file", str(pwfile),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--snapshot", "latest",
              "--pack-search", str(disc_a),
              "--pack-search", str(staging),
@@ -588,7 +588,7 @@ def case_catalog_prompt_label() -> int:
             [str(BINARY),
              "--repo", str(repo),
              "--password-file", str(pwfile),
-             "--target", str(target),
+             "--restore-folder", str(target),
              "--snapshot", "latest",
              "--pack-search", str(disc_a),
              "--pack-search", str(staging),
@@ -722,13 +722,13 @@ def case_single_drive_script_relocation() -> int:
         # not succeed (#609): keep it inside this case's temp dir, not
         # in the developer's $HOME.
         env["LCSAS_TOOLS_DIR"] = str(tmp / "tools")
-        env["LCSAS_PWFILE"] = str(pwfile)
+        env["LCSAS_PASSWORD_FILE"] = str(pwfile)
         env["LCSAS_PASSWORD"] = "correct-horse-battery-staple"
         cmd = [
             "sh", str(rec_scripts / "restore.sh"),
-            str(rec),                # RECOVERY_ROOT
-            str(target),             # TARGET_DIR
-            "latest",
+            "--restore-folder", str(target),
+            "--snapshot", "latest",
+            str(rec),                # RECOVERY_ROOT, after the options
         ]
         with open(log_path, "w") as logf:
             proc = subprocess.run(

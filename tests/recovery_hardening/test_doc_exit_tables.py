@@ -1,7 +1,7 @@
 """The recovery docs' exit-code tables list each program's codes under their own words (#888).
 
 The tables an heir reads were the least protected copy of the exit
-codes: a wrong number in RECOVER.txt passed every gate.  Each table in
+codes: a wrong number in RESTORE.txt passed every gate.  Each table in
 ``tests/contract/doc_tables.py`` must list exactly its program's codes
 (``tests/contract/exit_codes.py``), each once, and each row must hold
 one of its code's key words.  The docs are checked, not generated: see

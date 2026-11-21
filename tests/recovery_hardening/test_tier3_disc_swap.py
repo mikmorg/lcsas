@@ -1,7 +1,7 @@
 """Hardening test: tier-3 standalone restorer disc-swap protocol (#234).
 
 When the recovery cascade reaches tier 3 on a multi-disc archive, the
-bundled CPython ``standalone_restorer.py`` must implement the same
+bundled CPython ``python_reader.py`` must implement the same
 LCSAS disc-swap UX as tier 1 -- otherwise packs spread across N data
 discs cause an unrecoverable FileNotFoundError after the meta disc
 has been ejected.
@@ -44,7 +44,7 @@ def _build_repo_and_script(
     tmp_path: Path,
 ) -> tuple[Path, Path, Path, list[Path], Path]:
     """Build a real rustic repo, move all packs to a sibling dir, and
-    materialise standalone_restorer.py.
+    materialise python_reader.py.
 
     Returns
     -------
@@ -53,7 +53,7 @@ def _build_repo_and_script(
     pwfile : Path
         The password file.
     script : Path
-        The generated standalone_restorer.py path.
+        The generated python_reader.py path.
     pack_files : list[Path]
         New locations of the moved pack files (under ``other_dir``).
     src : Path
@@ -97,8 +97,8 @@ def _build_repo_and_script(
         moved.append(dst)
     assert moved, "rustic backup produced no pack files"
 
-    # Materialise standalone_restorer.py from the source modules.
-    script = tmp_path / "standalone_restorer.py"
+    # Materialise python_reader.py from the source modules.
+    script = tmp_path / "python_reader.py"
     script.write_text(build_standalone())
     os.chmod(str(script), 0o755)
 
@@ -139,7 +139,7 @@ def test_tier3_non_interactive_raises_when_pack_missing(tmp_path: Path) -> None:
             sys.executable, str(script),
             "--repo", str(repo),
             "--password-file", str(pwfile),
-            "--target", str(target),
+            "--restore-folder", str(target),
             "--interactive", "off",
             # NOTE: no --mount-point for other_disc -- packs are unreachable.
         ],
@@ -196,7 +196,7 @@ def test_tier3_interactive_recovers_via_stdin_enter(tmp_path: Path) -> None:
             sys.executable, str(script),
             "--repo", str(repo),
             "--password-file", str(pwfile),
-            "--target", str(target),
+            "--restore-folder", str(target),
             "--interactive", "on",
             "--mount-point", str(other_disc),
         ],

@@ -1,5 +1,5 @@
 ================ LCSAS KEY SHARE ================
-Repository : alpha
+Backup set : alpha
 Share      : 1 of 5
 Split on   : 2026-06-13
 Split ID   : 00968
@@ -13,7 +13,7 @@ HOW TO USE IT
   You need ANY 2 of the 5 shares to rebuild the
   password.  Fewer than that reveal NOTHING about it.  Gather at
   least 2 share cards and run:
-      lcsas key combine --share-file <share1> --share-file <share2> ...
+      lcsas password combine --share-file <share1> --share-file <share2> ...
   (or follow the recovery disc's instructions).
 
   Other people each hold one of the remaining shares.  Losing more

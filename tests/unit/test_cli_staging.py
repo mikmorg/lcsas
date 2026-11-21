@@ -14,13 +14,13 @@ def _write_config(tmp_path: Path, extra: str = "") -> Path:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -33,7 +33,7 @@ metadata_reserve_mb = 0
 class TestCmdStagingClean:
     def test_staging_clean_no_orphans(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -45,7 +45,7 @@ class TestCmdStagingClean:
 
     def test_staging_clean_detects_orphan(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -78,7 +78,7 @@ class TestCmdStagingClean:
         from lcsas.db.sessions import create_session
 
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -114,7 +114,7 @@ class TestCmdStagingClean:
     ):
         """#826: EOF at the prompt (input redirected) refuses, exit 1."""
         cfg = _write_config(tmp_path)
-        db = tmp_path / "archive.db"
+        db = tmp_path / "catalog.db"
         conn = get_connection(db)
         create_all(conn)
         conn.close()
@@ -135,7 +135,7 @@ class TestCmdStagingClean:
 
     def test_staging_clean_reports_but_keeps_unmanaged(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
-        conn = get_connection(tmp_path / "archive.db")
+        conn = get_connection(tmp_path / "catalog.db")
         create_all(conn)
         conn.close()
         staging = tmp_path / "staging"

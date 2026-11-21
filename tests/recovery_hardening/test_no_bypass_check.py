@@ -8,7 +8,7 @@ History:
 
   * PR #235 / #236 / #238 noted that the original prefix-strip
     handled `sudo|sh|bash|exec` only.  An agent could route around
-    the check by invoking `python3 /mnt/standalone_restorer.py`
+    the check by invoking `python3 /mnt/python_reader.py`
     directly; the python wrapper isn't peeled and `python3` itself
     is not in BINARIES, so the bypass registered as a silent PASS.
 
@@ -86,8 +86,8 @@ def _write_transcript(tmp_path: Path, commands: list[str]) -> Path:
 @pytest.mark.parametrize(
     "cmd",
     [
-        "lcsas-restore --repo alpha --target /tmp/x",
-        "sudo lcsas-restore --repo alpha --target /tmp/x",
+        "lcsas-restore --repo alpha --restore-folder /tmp/x",
+        "sudo lcsas-restore --repo alpha --restore-folder /tmp/x",
         "sh /mnt/lcsas-restore --repo alpha",
         "bash /mnt/lcsas-restore --repo alpha",
         "exec lcsas-restore --repo alpha",
@@ -95,7 +95,7 @@ def _write_transcript(tmp_path: Path, commands: list[str]) -> Path:
         "rustic restore latest --target /tmp/r",
         "rustic-static restore latest --target /tmp/r",
         "restic restore latest --target /tmp/r",
-        "standalone_restorer.py --repo alpha --target /tmp/x",
+        "python_reader.py --repo alpha --restore-folder /tmp/x",
     ],
     ids=[
         "bare-lcsas-restore",
@@ -124,13 +124,13 @@ def test_classic_bypass_shapes_flagged(check, cmd):
 @pytest.mark.parametrize(
     "cmd",
     [
-        "python3 /mnt/standalone_restorer.py",
-        "python3 /mnt/standalone_restorer.py --repo X --target Y",
-        "python3.12 /tmp/standalone_restorer.py --repo X --target Y",
-        "python /mnt/standalone_restorer.py",
+        "python3 /mnt/python_reader.py",
+        "python3 /mnt/python_reader.py --repo X --restore-folder Y",
+        "python3.12 /tmp/python_reader.py --repo X --restore-folder Y",
+        "python /mnt/python_reader.py",
         "python -m standalone_restorer --repo X",
-        "python3 -m standalone_restorer --repo X --target Y",
-        "sudo python3 /mnt/standalone_restorer.py",
+        "python3 -m standalone_restorer --repo X --restore-folder Y",
+        "sudo python3 /mnt/python_reader.py",
         "sudo python3 -m standalone_restorer --repo X",
     ],
     ids=[
@@ -167,7 +167,7 @@ def test_python_bypass_shapes_flagged(check, cmd):
         "python3 -m pip --version",
         "python3 -m json.tool /tmp/data.json",
         "sh /mnt/restore.sh",
-        "sh /mnt/restore.sh --repo alpha",
+        "sh /mnt/restore.sh --backup-set alpha",
         "bash /mnt/restore.sh",
         "sudo /mnt/restore.sh",
         "/mnt/restore.sh",
@@ -213,7 +213,7 @@ def test_benign_commands_not_flagged(check, cmd):
         "rustic help",
         "lcsas-restore --version",
         "lcsas-restore version",
-        "python3 /mnt/standalone_restorer.py --version",
+        "python3 /mnt/python_reader.py --version",
         "python3 -m standalone_restorer --help",
         "sudo lcsas-restore --version",
     ],
@@ -246,7 +246,7 @@ def test_probe_invocations_not_flagged(check, cmd):
 @pytest.mark.parametrize(
     "cmd",
     [
-        "ls /mnt && python3 /mnt/standalone_restorer.py --repo X",
+        "ls /mnt && python3 /mnt/python_reader.py --repo X",
         "true; python3 -m standalone_restorer --repo X",
         "echo go || lcsas-restore --repo X",
         "lcsas-restore --repo X | tee /tmp/out.log",
@@ -275,7 +275,7 @@ def test_compound_commands_flagged(check, cmd):
 @pytest.mark.parametrize(
     "cmd",
     [
-        '"$META/recovery/bin/lcsas-restore" restore --target /tmp/x',
+        '"$META/recovery/bin/lcsas-restore" restore --restore-folder /tmp/x',
         '"/media/LCSAS META/recovery/bin/rustic" restore latest',
         "cd /tmp/work\nrustic restore latest --target /tmp/x",
         "SNAPS=$(rustic snapshots --json)",
@@ -298,7 +298,7 @@ def test_shapes_the_shared_splitter_catches(check, cmd):
     [
         # rc10 tier1-missing-3679774: the old split on `|` inside the
         # quoted pattern read `lcsas-restore` as a command.
-        "restore-shell expect 'NEWEST data disc|Choose a repository|"
+        "restore-shell expect 'NEWEST data disc|Choose a backup set|"
         "Password:|lcsas-restore|Insert|ERROR|error' 120",
         'echo "next: rustic restore; then done"',
         "ls /mnt  # rustic restore would go here",
@@ -320,8 +320,8 @@ def test_scan_transcript_flags_python_bypass(check, tmp_path):
         tmp_path,
         [
             "ls /mnt",
-            "python3 /mnt/standalone_restorer.py --repo alpha "
-            "--target /tmp/out",
+            "python3 /mnt/python_reader.py --repo alpha "
+            "--restore-folder /tmp/out",
         ],
     )
     hits = check.scan_transcript(str(transcript))
@@ -350,7 +350,7 @@ def test_main_exit_code_clean(check, tmp_path):
 def test_main_exit_code_bypass(check, tmp_path):
     transcript = _write_transcript(
         tmp_path,
-        ["python3 /mnt/standalone_restorer.py --repo X"],
+        ["python3 /mnt/python_reader.py --repo X"],
     )
     assert check.main(["no_bypass_check.py", str(transcript)]) == 1
 

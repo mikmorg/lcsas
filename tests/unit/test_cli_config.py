@@ -12,13 +12,13 @@ def _write_config(tmp_path: Path, extra: str = "") -> Path:
     staging.mkdir(exist_ok=True)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text(f"""
 [paths]
 mirror_base = "{mirror}"
 staging = "{staging}"
-database = "{db}"
+catalog = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
@@ -42,7 +42,7 @@ class TestCmdConfigCheck:
 [paths]
 mirror_base = "/nonexistent/mirror"
 staging = "/nonexistent/staging"
-database = "/nonexistent/db/archive.db"
+catalog = "/nonexistent/db/catalog.db"
 """)
         result = main(["--config", str(cfg), "config", "check"])
         assert result == 1

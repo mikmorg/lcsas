@@ -150,7 +150,7 @@ class TestKilledDuringEcc:
         # 3. lcsas status shows it as incomplete, not as waiting.
         caplog.clear()
         with caplog.at_level(logging.INFO, logger="lcsas"):
-            assert main(["--db", str(config.db_path), "status"]) == 0
+            assert main(["--catalog", str(config.db_path), "status"]) == 0
         text = caplog.text
         assert "INCOMPLETE" in text
         assert vol.label in text
@@ -178,7 +178,7 @@ class TestKilledDuringEcc:
 
         caplog.clear()
         with caplog.at_level(logging.INFO, logger="lcsas"):
-            assert main(["--db", str(config.db_path), "status"]) == 0
+            assert main(["--catalog", str(config.db_path), "status"]) == 0
         assert "INCOMPLETE" in caplog.text
         assert "waiting to be burned" not in caplog.text
 

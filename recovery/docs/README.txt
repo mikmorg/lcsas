@@ -15,13 +15,13 @@ QUICK START
   make test
 
   # Restore from a meta disc:
-  sh scripts/restore.sh /path/to/recovery /path/to/target
+  sh scripts/restore.sh --restore-folder /path/to/folder /path/to/recovery
 
 DOCUMENTATION
 
   BUILD.txt           -- compilation and cross-compilation
-  RECOVER.txt         -- macOS / Linux manual restore walkthrough
-  RECOVER_WINDOWS.txt -- Windows restore walkthrough
+  RESTORE.txt         -- macOS / Linux manual restore walkthrough
+  RESTORE_WINDOWS.txt -- Windows restore walkthrough
   TIERS.txt           -- recovery tier hierarchy + Python-free guarantee
   BOOT.txt            -- no-OS restore procedure (live-USB; the
                          discs themselves are NOT bootable)
@@ -48,14 +48,14 @@ SOURCE LAYOUT
   bin/<arch>/          prebuilt binaries (output of cross-compile)
 
   (The former boot/ live-boot scaffolding was dropped -- never
-  bootable, never built -- and deleted in 2026.  The source
-  repository keeps it only at the tag archive/pre-1.0-history.
+  bootable, never built -- and deleted in 2026.  The LCSAS
+  source code keeps it only at the tag archive/pre-1.0-history.
   It does not ship on discs.)
 
 DESIGN DECISIONS
 
-The full design plans were removed from the LCSAS source repository
-in 2026; they remain at the tag archive/pre-1.0-history.
+The full design plans were removed from the LCSAS source code in
+2026; they remain at the tag archive/pre-1.0-history.
 Summary:
 
   Architectures:   six approved targets: Linux x86_64 / aarch64 / armv7

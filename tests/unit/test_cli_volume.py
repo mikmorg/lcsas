@@ -73,7 +73,7 @@ class TestVolumeImpact:
         db = tmp_path / "test.db"
         _blast_radius_catalog(db)
 
-        assert main(["--db", str(db), "volume", "impact", "VOL_SINGLE"]) == 0
+        assert main(["--catalog", str(db), "volume", "impact", "VOL_SINGLE"]) == 0
         captured = capsys.readouterr()
         out = captured.out + captured.err
 
@@ -102,7 +102,7 @@ class TestVolumeImpact:
         finally:
             conn.close()
 
-        assert main(["--db", str(db), "volume", "impact", "VOL_DOUBLE"]) == 0
+        assert main(["--catalog", str(db), "volume", "impact", "VOL_DOUBLE"]) == 0
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "Blast radius: NONE" in out
@@ -110,7 +110,7 @@ class TestVolumeImpact:
     def test_volume_impact_unknown_volume_errors(self, tmp_path, capsys):
         db = tmp_path / "test.db"
         _blast_radius_catalog(db)
-        assert main(["--db", str(db), "volume", "impact", "NO_SUCH"]) == 1
+        assert main(["--catalog", str(db), "volume", "impact", "NO_SUCH"]) == 1
         captured = capsys.readouterr()
         assert "not found" in captured.out + captured.err
 
@@ -129,7 +129,7 @@ def _write_impact_config(tmp_path, *, with_mirror: bool) -> str:
 [paths]
 mirror_base = "{tmp_path / 'mirror'}"
 staging = "{staging}"
-database = "{tmp_path / 'test.db'}"
+catalog = "{tmp_path / 'test.db'}"
 
 [repos.photos]
 mirror_path = "{mirror}"
@@ -185,7 +185,7 @@ class TestVolumeImpactSnapshots:
             patch("lcsas.utils.subprocess.check_binary_version",
                   return_value="0.9.0"),
         ):
-            result = main(["--config", cfg, "--db", str(db),
+            result = main(["--config", cfg, "--catalog", str(db),
                            "volume", "impact", "VOL_SINGLE", "--snapshots"])
 
         assert result == 0
@@ -219,7 +219,7 @@ class TestVolumeImpactSnapshots:
             patch("lcsas.utils.subprocess.check_binary_version",
                   return_value="0.9.0"),
         ):
-            result = main(["--config", cfg, "--db", str(db),
+            result = main(["--config", cfg, "--catalog", str(db),
                            "volume", "impact", "VOL_SINGLE", "--snapshots"])
 
         assert result == 0

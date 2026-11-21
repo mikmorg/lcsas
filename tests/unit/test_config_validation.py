@@ -24,7 +24,7 @@ def _base_config(tmp_path: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=mirror,
         staging_path=staging,
-        db_path=db_dir / "archive.db",
+        db_path=db_dir / "catalog.db",
     )
 
 
@@ -74,7 +74,7 @@ class TestDbPath:
     def test_missing_db_parent_dir(self, tmp_path):
         cfg = _base_config(tmp_path)
         cfg = LCSASConfig(
-            **{**cfg.__dict__, "db_path": tmp_path / "no_such_dir" / "archive.db"}
+            **{**cfg.__dict__, "db_path": tmp_path / "no_such_dir" / "catalog.db"}
         )
         errors = validate_config(cfg)
         assert any("db_path" in e for e in errors)
@@ -111,7 +111,7 @@ class TestEccRedundancy:
             "[paths]\n"
             f'mirror_base = "{tmp_path}/mirror"\n'
             f'staging = "{tmp_path}/staging"\n'
-            f'database = "{tmp_path}/archive.db"\n'
+            f'catalog = "{tmp_path}/catalog.db"\n'
             "[defaults]\n" + defaults
         )
         return path
@@ -528,7 +528,7 @@ _GOOD_PATHS = """\
     [paths]
     mirror_base = "/mnt/mirror"
     staging = "/mnt/staging"
-    database = "/tmp/test.db"
+    catalog = "/tmp/test.db"
 """
 
 
@@ -540,7 +540,7 @@ class TestUnknownKeyWarnings:
             [paths]
             mirror_base = "/mnt/mirror"
             staging = "/mnt/staging"
-            database = "/tmp/test.db"
+            catalog = "/tmp/test.db"
             stagging = "/mnt/oops"
             """,
             caplog,
@@ -616,7 +616,7 @@ class TestUnknownKeyWarnings:
             [paths]
             mirror_base = "/mnt/mirror"
             staging = "/mnt/staging"
-            database = "/tmp/test.db"
+            catalog = "/tmp/test.db"
             zzz = 1
             aaa = 2
             """,
@@ -634,7 +634,7 @@ class TestUnknownKeyWarnings:
     [survivability]
     archive_owner = "Jane"
     archive_description = "Photos"
-    key_storage_hints = "Attorney"
+    password_hints = "Attorney"
     technical_contact = "Joe"
 
     [repos.family]
@@ -660,7 +660,7 @@ class TestUnknownKeyWarnings:
             [paths]
             mirror_base = "{mirror}"
             staging = "{staging}"
-            database = "{tmp_path / "archive.db"}"
+            catalog = "{tmp_path / "catalog.db"}"
             mirrer_base = "typo"
             """,
             caplog,

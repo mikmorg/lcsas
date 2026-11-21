@@ -31,7 +31,7 @@ on:
       - "src/lcsas/staging/repo_marker.py"
       # The hidden-password leg runs the PowerShell lines of this doc
       # (#608), so a change to them must run it.
-      - "recovery/docs/RECOVER_WINDOWS.txt"
+      - "recovery/docs/RESTORE_WINDOWS.txt"
       - "recovery/bin/x86_64-windows/**"
       - "tests/e2e/fixture_lib.py"
       - "tests/e2e/windows_e2e_lib.ps1"
@@ -93,8 +93,8 @@ jobs:
       # builds this same fixture on every PR (make test-integration).
       #
       # Split password (#607): "Work documents" has its password split
-      # 2-of-3 the way an owner does it (key_split in its config, then
-      # `lcsas key split`, which records the split in the catalog), so
+      # 2-of-3 the way an owner does it (split in its config, then
+      # `lcsas password split`, which records the split in the catalog), so
       # every disc's marker says split=2-of-3.  Its three printed cards
       # (invented, new every run) go into the artifact's cards/, and its
       # tree into manifest-other1.json, for the split-cards leg.
@@ -224,10 +224,10 @@ jobs:
           # Two backup sets: the set is named by its id (#617), so no menu
           # takes the first answer.  The single-drive leg uses the menu.
           $sets = Get-FixtureSets -Fixture $fixture
-          $env:LCSAS_REPO = $sets.restore.id
+          $env:LCSAS_BACKUP_SET = $sets.restore.id
           $bat = "${metaDrive}:\restore.bat"
           $outFile = Join-Path $env:RUNNER_TEMP "happy-out.txt"
-          Write-Host "Running: cmd /c `"$bat`" < answers.txt (LCSAS_REPO=$($env:LCSAS_REPO))"
+          Write-Host "Running: cmd /c `"$bat`" < answers.txt (LCSAS_BACKUP_SET=$($env:LCSAS_BACKUP_SET))"
           # Redirect inside the cmd /c string, so $LASTEXITCODE is restore.bat's.
           cmd /c "`"$bat`" < `"$answers`" > `"$outFile`" 2>&1"
           $rc = $LASTEXITCODE
@@ -235,7 +235,7 @@ jobs:
           Write-Host $out
           Write-Host "restore.bat exit code: $rc"
           "RESTORE_RC=$rc"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-          "TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          "RESTORE_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
           if ($rc -ne 0) { throw "restore.bat failed (rc=$rc) — see log above" }
           $problems = New-Object 'System.Collections.Generic.List[string]'
           Assert-SetNamed -Out $out -Sets $sets -Problems $problems
@@ -247,7 +247,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $fixture  = Join-Path $PWD "fixture"
           $manifest = Get-Content (Join-Path $fixture "manifest.json") -Raw | ConvertFrom-Json
-          $target   = $env:TARGET_DIR
+          $target   = $env:RESTORE_DIR
 
           # rustic restores the original absolute-ish source path under the
           # target; locate the leaf dir that actually holds file_000.bin.
@@ -297,7 +297,7 @@ jobs:
       # Same restore, but WITHOUT LCSAS_NO_RELOCATE, so the "Single-drive
       # guard" block runs: it probes the (read-only) ISO, copies the script
       # and this computer's programs into the tools folder,
-      # %LOCALAPPDATA%\LCSAS-restore (#609, #612), re-execs the copy and
+      # %LOCALAPPDATA%\lcsas-tools (#609, #612), re-execs the copy and
       # sets LCSAS_RELOCATED, so tier 1 skips the meta drive while the meta
       # disc is in it (and searches it once a data disc is, #604).  Started
       # with cwd on the disc, like a double-click.  The nested-layout run
@@ -341,9 +341,9 @@ jobs:
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           $fixture = Join-Path $PWD "fixture"
           # The set by the name restore.bat shows (its name_cmd), which
-          # LCSAS_REPO must match as well as the id (#606).
+          # LCSAS_BACKUP_SET must match as well as the id (#606).
           $sets = Get-FixtureSets -Fixture $fixture
-          $env:LCSAS_REPO = $sets.restore.name_cmd
+          $env:LCSAS_BACKUP_SET = $sets.restore.name_cmd
           $metaDrive = $null
           foreach ($d in (Get-Volume | Where-Object { $_.DriveLetter })) {
             if (Test-Path "$($d.DriveLetter):\restore.bat") { $metaDrive = $d.DriveLetter }
@@ -374,7 +374,7 @@ jobs:
           if ($rc -ne 77) { throw "restore.bat must exit 77 on a wrong password; got $rc" }
           if ($out -match "trying tier 2") { throw "restore.bat fell through to tier 2 on a wrong password" }
           if ($out -match "Access is denied") { throw "restore.bat printed 'Access is denied.' (#611)" }
-          if ($out -notmatch "could not decrypt the repository") { throw "wrong-password banner missing from output" }
+          if ($out -notmatch "could not decrypt the backup set") { throw "wrong-password banner missing from output" }
           $problems = New-Object 'System.Collections.Generic.List[string]'
           Assert-SetNamed -Out $out -Sets $sets -Problems $problems
           if ($problems.Count -gt 0) { throw ($problems -join "`n") }
@@ -412,10 +412,10 @@ jobs:
       # ---- #925: restore.bat's arguments -----------------------------------
       # Up to rc10 restore.bat passed over every argument but --snapshot, so
       # `restore.bat --repo NAME` with a NAME no set has restored the set
-      # there.  Now an unknown --repo stops with the sets listed (exit 1,
+      # there.  Now an unknown --backup-set stops with the sets listed (exit 1,
       # through the relocation) and an unknown flag is a usage error (exit
       # 2), as restore.sh does.
-      - name: Arguments — --repo with an unknown name, and an unknown flag
+      - name: Arguments — --backup-set with an unknown name, an old flag, and an unknown flag
         shell: pwsh
         timeout-minutes: 10
         run: |
@@ -425,25 +425,31 @@ jobs:
           $sets = Get-FixtureSets -Fixture $fixture
           $names = @(Get-AllSets $sets | ForEach-Object { $_.name_cmd })
           Invoke-ArgumentLeg -Fixture $fixture -Name 'repo-unknown' `
-            -Arguments '--repo NoSuchSet' -WantRc 1 `
+            -Arguments '--backup-set NoSuchSet' -WantRc 1 `
             -WantText (@('is not among the backup sets') + $names)
           Invoke-ArgumentLeg -Fixture $fixture -Name 'flag-unknown' `
             -Arguments '--bogus' -WantRc 2 `
-            -WantText @('does not know the argument "--bogus"', '--repo NAME')
+            -WantText @('does not know the argument "--bogus"', '--backup-set NAME')
+          Invoke-ArgumentLeg -Fixture $fixture -Name 'repo-renamed' `
+            -Arguments '--repo NoSuchSet' -WantRc 2 `
+            -WantText @('--repo was renamed: use --backup-set')
+          Invoke-ArgumentLeg -Fixture $fixture -Name 'target-renamed' `
+            -Arguments '--target C:\restored' -WantRc 2 `
+            -WantText @('--target was renamed: use --restore-folder')
           # Both legs expect a non-zero cmd /c; the step's result is theirs.
           exit 0
 
-      # ---- #608: the hidden-password route of RECOVER_WINDOWS.txt ----------
+      # ---- #608: the hidden-password route of RESTORE_WINDOWS.txt ----------
       # The doc's PowerShell lines ("THE PASSWORD") are read from the META
       # disc and run under Windows PowerShell 5.1 (powershell.exe), with
       # only Read-Host -AsSecureString replaced, so it is the doc's text
       # that is tested; the leg fails if those lines cannot be found.  They
       # must write the password byte for byte to %TEMP%\lcsas-pw.txt.  Then
       # restore.bat (from the disc, so relocated) restores with
-      # LCSAS_PWFILE set to that file and LCSAS_REPO naming the set: no
+      # LCSAS_PASSWORD_FILE set to that file and LCSAS_BACKUP_SET naming the set: no
       # password question, tree byte-exact, the reader's file kept, no
       # lcsas-pw-* left.  It mounts every ISO itself.
-      - name: Hidden-password leg — RECOVER_WINDOWS.txt's PowerShell 5.1 lines, then LCSAS_PWFILE
+      - name: Hidden-password leg — RESTORE_WINDOWS.txt's PowerShell 5.1 lines, then LCSAS_PASSWORD_FILE
         shell: pwsh
         timeout-minutes: 10
         run: |

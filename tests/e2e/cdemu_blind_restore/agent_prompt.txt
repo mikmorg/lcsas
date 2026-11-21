@@ -11,7 +11,7 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     sudo mount /dev/sr0 /mnt
 
   Step 2 — start restore.sh inside the restore-shell facade:
-    restore-shell start sh /mnt/restore.sh ~/restored/ latest
+    restore-shell start sh /mnt/restore.sh --restore-folder ~/restored/
 
     `restore-shell` is a wrapper that runs the recovery process in
     a managed tmux session (test-rig workaround — real operators run
@@ -36,18 +36,18 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     # restore.sh first asks you to put in your NEWEST data disc
     # (the META disc is still in the drive).  Send s to skip that
     # question: this archive's META disc copies are current.  Then a
-    # multi-tenant archive asks `Choose a repository`; a single-tenant
+    # multi-tenant archive asks `Choose a backup set`; a single-tenant
     # archive skips straight to `Password:`.  Wait on any of them,
     # branch on which one matched.
-    out=$(restore-shell expect 'NEWEST data disc|Choose a repository|Password:' 120)
+    out=$(restore-shell expect 'NEWEST data disc|Choose a backup set|Password:' 120)
     case "$out" in
         *"NEWEST data disc"*)
             restore-shell send s
-            out=$(restore-shell expect 'Choose a repository|Password:' 60)
+            out=$(restore-shell expect 'Choose a backup set|Password:' 60)
             ;;
     esac
     case "$out" in
-        *"Choose a repository"*)
+        *"Choose a backup set"*)
             restore-shell send alpha
             restore-shell expect 'Password:'
             ;;
@@ -142,11 +142,11 @@ agent action (start, expect, send, screen, quit).
 A REAL OPERATOR at a single terminal does NOT use restore-shell.  They
 run:
 
-    sh /mnt/recovery/scripts/restore.sh ~/restored/
+    sh /mnt/recovery/scripts/restore.sh --restore-folder ~/restored/
 
 …and the script prompts them interactively in the same terminal.  Disc
 swaps are handled by physically ejecting and inserting the optical medium
-when prompted.  See recovery/docs/RECOVER.txt for the complete real-
+when prompted.  See recovery/docs/RESTORE.txt for the complete real-
 operator flow (section "PHYSICAL SWAP STEPS").
 
 The instructions below therefore describe the TEST-RIG pattern, not the
@@ -160,20 +160,20 @@ one-shot, the `restore-shell` wrapper hosts a persistent terminal
 session for you.  Typical pattern:
 
   # start the script
-  restore-shell start sh /mnt/restore.sh ~/restored/ latest
+  restore-shell start sh /mnt/restore.sh --restore-folder ~/restored/
   # wait for a prompt
-  restore-shell expect 'Choose a repository'
+  restore-shell expect 'Choose a backup set'
   # respond
   restore-shell send alpha
 
 restore.sh asks up to three things via its terminal:
 
-  1. `Choose a repository (number or name):` — multi-tenant archives
+  1. `Choose a backup set (number or name):` — multi-tenant archives
      list the available tenant names.  Send `alpha` (the only tenant
      you have the password for).  Single-tenant archives skip this.
   2. `Password:` — send the contents of ~/tenant-alpha.pw.  Do
      NOT pipe the password through stdin.  Do NOT set
-     LCSAS_PASSWORD or LCSAS_PWFILE.  Type it through the
+     LCSAS_PASSWORD or LCSAS_PASSWORD_FILE.  Type it through the
      terminal as a human would: `restore-shell send "$(cat ...)"`.
   3. A disc-swap box — the recovery binary could not find a
      required pack and prints a framed prompt containing the line
@@ -184,7 +184,7 @@ WHAT YOU MAY NOT DO
 ===================
 
   - You may not run restore_auto.sh, restore.bat, or
-    standalone_restorer.py directly.  Only restore.sh.  (restore.sh itself may exec
+    python_reader.py directly.  Only restore.sh.  (restore.sh itself may exec
     whichever tier is appropriate — that is fine.)
   - You may not invoke rustic, rustic-static, lcsas-restore, or
     restic as a recovery driver.  restore.sh is the only allowed
@@ -270,7 +270,7 @@ LCSAS_TIER_FALLBACK=1
     (lcsas-restore) crashes.  Default OFF.  Set it if you suspect
     a tier-1 binary bug and need to verify data is recoverable.
 
-LCSAS_REPO=<name or id>
+LCSAS_BACKUP_SET=<name or id>
     Skip the multi-tenant selection prompt and restore this backup
     set (its name, e.g. alpha, or its id).  Useful when you already
     know the repo.

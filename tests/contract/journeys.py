@@ -65,7 +65,7 @@ from tests.contract.exit_codes import ScriptExit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BAT_TRIPLE = "x86_64-pc-windows-gnu"
-WIN_PROGRAMS = ("lcsas-restore.exe", "lcsas-keyshare.exe", "lcsas-ecc.exe")
+WIN_PROGRAMS = ("lcsas-restore.exe", "lcsas-shares.exe", "lcsas-ecc.exe")
 
 #: A share word no card has: typed in place of a card's fifth word.
 TYPO_WORD = "zqzq"
@@ -144,9 +144,10 @@ TIER1_BOX_END = r"Type 'q' then ENTER to abort\.[\s\S]*?\n\+-+\+\r?\n> "
 PROMPTS: tuple[Phrase, ...] = (
     Phrase("newest data disc", sh=r"ENTER, S or Q: ", bat=r"Newest data disc: "),
     Phrase("which set",
-           sh=r"Choose a repository \(number or name\): ",
+           sh=r"Choose a backup set \(number or name\): ",
            bat=r"Which one do you want to restore\? \[1\]: "),
-    Phrase("folder", sh=None,
+    Phrase("folder",
+           sh=r"Restore to which folder\? \(ENTER: [^)\r\n]*; Q then ENTER: stop\): ",
            bat=r"Restore to which folder\? \[[^\]\r\n]*\]: ", by_driver=True),
     Phrase("password", sh=r"(?<![a-z])Password: ", bat=r"(?<![a-z])Password: "),
     Phrase("card {n}",
@@ -251,15 +252,6 @@ DIFFERENCES: dict[str, Difference] = {
               "compares any size and asks only when a drive is short"),
         why="cmd's set /a is 32-bit (#927)",
         deliberate=True,
-    ),
-    "folder question": Difference(
-        what=("restore.bat asks 'Restore to which folder?' before the "
-              "password; restore.sh takes the folder on its command line "
-              "(--target, or the default) and asks nothing"),
-        why=("not in #895's list of deliberate differences.  Probably by "
-             "design (restore.bat is started by a double-click and has no "
-             "command line), but no issue records the decision"),
-        deliberate=False,
     ),
 }
 
@@ -721,6 +713,10 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
         def answer(prompt: Prompt, _n: int) -> bytes:
             if prompt.kind == "ram":
                 return b"y\n"
+            if prompt.kind == "folder":
+                # Asked as restore.bat asks it (#926); the driver answers.
+                asked.append(prompt.kind)
+                return (str(target) + "\n").encode()
             if prompt.kind == "disc":
                 discs[0] += 1
                 label = picker.pick(prompt.labels)
@@ -751,7 +747,9 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
             untyped=len(typed) - over[0], seconds=time.monotonic() - t0, output=out,
         )
 
-    result = leg(["sh", str(archive.meta / "restore.sh"), "--target", str(target),
+    # No --restore-folder: restore.sh asks for the folder, as restore.bat
+    # does (#926), and the driver answers it.
+    result = leg(["sh", str(archive.meta / "restore.sh"),
                   *(arg_text(a, archive) for a in journey.args)],
                  journey.typed_for("sh"), journey.quit_at_disc)
     if journey.then is not None and (tools / "resume.sh").is_file():
@@ -775,8 +773,8 @@ def _bat_tools_copy(archive: Archive, tools: Path) -> None:
     for prog in WIN_PROGRAMS:
         shutil.copyfile(src / "bin" / BAT_TRIPLE / prog, bindir / prog)
     (tools / "recovery" / "docs").mkdir()
-    shutil.copyfile(src / "docs" / "RECOVER_WINDOWS.txt",
-                    tools / "recovery" / "docs" / "RECOVER_WINDOWS.txt")
+    shutil.copyfile(src / "docs" / "RESTORE_WINDOWS.txt",
+                    tools / "recovery" / "docs" / "RESTORE_WINDOWS.txt")
     shutil.copytree(archive.meta / "metadata", tools / "metadata",
                     copy_function=shutil.copyfile)
     (tools / "recovery" / "scripts").mkdir()
@@ -868,7 +866,7 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
         )
 
     # One argv entry each (see _Run): inside one string, wine would pass
-    # a '"' to cmd as \", and restore.bat would see \--repo\.
+    # a '"' to cmd as \", and restore.bat would see \--backup-set\.
     result = leg([f"C:\\{name}\\recovery\\scripts\\restore.bat",
                   *(arg_text(a, archive) for a in journey.args)],
                  {"LCSAS_RELOCATED": "D:\\", **journey.env},
@@ -899,21 +897,18 @@ JOURNEYS: tuple[Journey, ...] = (
         name="one set, password typed, one disc",
         archive="one set",
         typed=(NEWEST, Password(PHOTOS)),
-        expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "password"),
+        expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "folder", "password"),
                       restored=PHOTOS, tools_folder="removed", disc_asked=False),
-        differs={"bat": Differs(because=("folder question",),
-                                asked=("newest data disc", "folder", "password"))},
     ),
     Journey(
         name="two sets, pick by name, newest data disc asked first",
         archive="two sets",
         typed=(NEWEST, Pick(PHOTOS), Password(PHOTOS), "n"),
         expect=Expect(exit=ScriptExit.OK,
-                      asked=("newest data disc", "which set", "password", "another set"),
+                      asked=("newest data disc", "which set", "folder",
+                             "password", "another set"),
                       restored=PHOTOS, tools_folder="removed", disc_asked=True),
-        differs={"bat": Differs(because=("menu by number", "folder question"),
-                                asked=("newest data disc", "which set", "folder",
-                                       "password", "another set"))},
+        differs={"bat": Differs(because=("menu by number",))},
     ),
     Journey(
         name="split password from share cards, one card mistyped then corrected",
@@ -921,24 +916,20 @@ JOURNEYS: tuple[Journey, ...] = (
         typed=(NEWEST, Pick(DOCS), Card(DOCS, 1, typo=True), Card(DOCS, 1),
                Card(DOCS, 3), "n"),
         expect=Expect(exit=ScriptExit.OK,
-                      asked=("newest data disc", "which set", "card 1", "card 1",
-                             "card 2", "another set"),
+                      asked=("newest data disc", "which set", "folder",
+                             "card 1", "card 1", "card 2", "another set"),
                       restored=DOCS, tools_folder="removed",
                       says=(rf"'{TYPO_WORD}' is not a share word",)),
-        differs={"bat": Differs(because=("menu by number", "folder question"),
-                                asked=("newest data disc", "which set", "folder",
-                                       "card 1", "card 1", "card 2", "another set"))},
+        differs={"bat": Differs(because=("menu by number",))},
     ),
     Journey(
         name="wrong password, then the right one",
         archive="one set",
         typed=(NEWEST, Password(PHOTOS, wrong=True), Password(PHOTOS)),
         expect=Expect(exit=ScriptExit.OK,
-                      asked=("newest data disc", "password", "password"),
+                      asked=("newest data disc", "folder", "password",
+                             "password"),
                       restored=PHOTOS, tools_folder="removed"),
-        differs={"bat": Differs(because=("folder question",),
-                                asked=("newest data disc", "folder", "password",
-                                       "password"))},
     ),
     Journey(
         name="q at the disc prompt, then carry on from the tools folder",
@@ -946,11 +937,10 @@ JOURNEYS: tuple[Journey, ...] = (
         typed=(NEWEST, Pick(PHOTOS), Password(PHOTOS)),
         quit_at_disc=1,
         expect=Expect(exit=ScriptExit.READER_QUIT,
-                      asked=("newest data disc", "which set", "password"),
+                      asked=("newest data disc", "which set", "folder",
+                             "password"),
                       tools_folder="kept", disc_asked=True),
-        differs={"bat": Differs(because=("menu by number", "folder question"),
-                                asked=("newest data disc", "which set", "folder",
-                                       "password"))},
+        differs={"bat": Differs(because=("menu by number",))},
         then=Leg(typed=(Password(PHOTOS), "n"),
                  expect=Expect(exit=ScriptExit.OK, asked=("password", "another set"),
                                restored=PHOTOS, tools_folder="removed",
@@ -961,20 +951,17 @@ JOURNEYS: tuple[Journey, ...] = (
         archive="one set, catalog sizes huge",
         typed=(NEWEST, "y", Password(PHOTOS)),
         expect=Expect(exit=ScriptExit.OK,
-                      asked=("newest data disc", "space", "password"),
+                      asked=("newest data disc", "folder", "space",
+                             "password"),
                       restored=PHOTOS, tools_folder="removed"),
-        differs={"bat": Differs(because=("folder question",),
-                                asked=("newest data disc", "folder", "space",
-                                       "password"))},
     ),
     Journey(
         name="a set too big to count: the space question, answered no",
         archive="one set, catalog sizes in petabytes",
         typed=(NEWEST, "n"),
-        expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc", "space"),
+        expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc", "folder", "space"),
                       says=(r"nothing was restored",)),
-        differs={"bat": Differs(because=("folder question", "too big to count"),
-                                asked=("newest data disc", "folder", "space"),
+        differs={"bat": Differs(because=("too big to count",),
                                 says=(r"nothing was restored",
                                       r"cannot check the free space"))},
     ),
@@ -983,31 +970,27 @@ JOURNEYS: tuple[Journey, ...] = (
         archive="one set, a pack damaged",
         typed=(NEWEST, Password(PHOTOS)),
         expect=Expect(exit=ScriptExit.NOT_ALL_RESTORED,
-                      asked=("newest data disc", "password"),
+                      asked=("newest data disc", "folder", "password"),
                       tools_folder="removed",
                       says=(r"could not be restored", r"RESTORE_FAILURES\.txt")),
-        differs={"bat": Differs(because=("folder question",),
-                                asked=("newest data disc", "folder", "password"))},
     ),
     Journey(
-        name="--repo with an unknown name",
+        name="--backup-set with an unknown name",
         archive="one set",
-        args=("--repo", UNKNOWN_SET),
+        args=("--backup-set", UNKNOWN_SET),
         typed=(NEWEST,),
         expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
                       says=(r"not among", re.escape(PHOTOS))),
     ),
     Journey(
-        name="--repo picks a set by name",
+        name="--backup-set picks a set by name",
         archive="two sets",
-        args=("--repo", PHOTOS),
+        args=("--backup-set", PHOTOS),
         typed=(NEWEST, Password(PHOTOS), "n"),
         expect=Expect(exit=ScriptExit.OK,
-                      asked=("newest data disc", "password", "another set"),
+                      asked=("newest data disc", "folder", "password",
+                             "another set"),
                       restored=PHOTOS, tools_folder="removed"),
-        differs={"bat": Differs(because=("folder question",),
-                                asked=("newest data disc", "folder", "password",
-                                       "another set"))},
     ),
     Journey(
         name="an unknown argument is a usage error",
@@ -1017,9 +1000,41 @@ JOURNEYS: tuple[Journey, ...] = (
         expect=Expect(exit=ScriptExit.USAGE, asked=(), says=(r"--bogus",)),
     ),
     Journey(
-        name="LCSAS_REPO with an unknown name",
+        name="--repo was renamed (#934)",
         archive="one set",
-        env={"LCSAS_REPO": UNKNOWN_SET},
+        args=("--repo", PHOTOS),
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"--repo was renamed: use --backup-set",)),
+    ),
+    Journey(
+        name="--target was renamed (#934)",
+        archive="one set",
+        args=("--target", "restored"),
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"--target was renamed: use --restore-folder",)),
+    ),
+    Journey(
+        name="LCSAS_REPO was renamed (#934)",
+        archive="one set",
+        env={"LCSAS_REPO": PHOTOS},
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"LCSAS_REPO was renamed: use LCSAS_BACKUP_SET",)),
+    ),
+    Journey(
+        name="LCSAS_PWFILE was renamed (#934)",
+        archive="one set",
+        env={"LCSAS_PWFILE": "pw.txt"},
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"LCSAS_PWFILE was renamed: use LCSAS_PASSWORD_FILE",)),
+    ),
+    Journey(
+        name="LCSAS_BACKUP_SET with an unknown name",
+        archive="one set",
+        env={"LCSAS_BACKUP_SET": UNKNOWN_SET},
         typed=(NEWEST,),
         expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
                       says=(r"not among", re.escape(PHOTOS))),
@@ -1029,9 +1044,7 @@ JOURNEYS: tuple[Journey, ...] = (
         archive="one set",
         args=("--snapshot", Snapshot(PHOTOS)),
         typed=(NEWEST, Password(PHOTOS)),
-        expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "password"),
+        expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "folder", "password"),
                       restored=PHOTOS, tools_folder="removed"),
-        differs={"bat": Differs(because=("folder question",),
-                                asked=("newest data disc", "folder", "password"))},
     ),
 )

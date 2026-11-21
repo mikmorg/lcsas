@@ -21,8 +21,8 @@ laptop -- anything running Windows, macOS, or Linux works.
 
 Once you have one, go back to START_HERE.txt on this disc and follow
 the section for that computer's operating system (Windows ->
-restore.bat / RECOVER_WINDOWS.txt; macOS or Linux -> restore.sh /
-RECOVER.txt).
+restore.bat / RESTORE_WINDOWS.txt; macOS or Linux -> restore.sh /
+RESTORE.txt).
 
 OPTION 2 -- BOOT A LIVE-LINUX USB STICK ON THE DEAD MACHINE
 
@@ -60,13 +60,13 @@ to prepare the stick) and a USB stick of 8 GB or more.
 
   6. Run the restore (in a terminal):
 
-         sh /mnt/recovery/scripts/restore.sh /home/ubuntu/restored latest
+         sh /mnt/recovery/scripts/restore.sh --restore-folder /home/ubuntu/restored
 
-     It copies its tools to the folder lcsas-restore-tools in your
+     It copies its tools to the folder lcsas-tools in your
      home folder, so the META disc can come out of the drive.  Then
      it asks for your newest data disc, the backup set and its
      password, and walks you through inserting data discs.  From
-     here, RECOVER.txt on this disc is the full manual.
+     here, RESTORE.txt on this disc is the full manual.
 
   7. Restored files land in /home/ubuntu/restored, which lives in
      RAM on a live system.  Copy them to a real disk (USB drive,
@@ -77,8 +77,8 @@ to prepare the stick) and a USB stick of 8 GB or more.
      folder -- restore.sh detects a RAM-backed target and asks for
      confirmation before continuing.  The tools folder is in RAM too,
      with the copies of the discs read so far: a restore that stops
-     can be carried on (sh ~/lcsas-restore-tools/resume.sh) only
-     until the computer is turned off.  RECOVER.txt, "THE TOOLS
+     can be carried on (sh ~/lcsas-tools/resume.sh) only
+     until the computer is turned off.  RESTORE.txt, "THE TOOLS
      FOLDER", shows how to keep the copies of the discs on a USB
      disk (LCSAS_PACK_CACHE_DIR), which any USB disk can hold; the
      tools folder itself needs a disk that can run programs, which
@@ -110,6 +110,6 @@ Earlier revisions of this document described a bootable meta disc
 (four-entry boot menu, bundled Linux/FreeBSD kernels, and a build
 flag that never existed in the CLI).  That boot stack was never
 built and no LCSAS disc was ever bootable; the scaffolding was
-dropped in 2026 and deleted from the LCSAS source repository later
-that year (#688).  It survives only at the repository tag
+dropped in 2026 and deleted from the LCSAS source code later
+that year (#688).  It survives only at the source code's tag
 archive/pre-1.0-history.

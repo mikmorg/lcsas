@@ -174,12 +174,13 @@ def _run_restore(recovery: Path, target_dir: Path, home: Path,
         # tier dispatch + session-log, not discovery, so bypass it.
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         # Force the host triple so detect_arch never bites us.
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
         # Don't try to relocate to RAM under pytest.
         "LCSAS_NO_RELOCATE": "1",
     }
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), snap],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir),
+         "--snapshot", snap, str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )
@@ -208,7 +209,7 @@ def test_session_log_written_on_success(tmp_path: Path) -> None:
     lines = log.read_text().splitlines()
     assert len(lines) == 1, f"expected 1 log line, got {len(lines)}: {lines}"
     line = lines[0]
-    for token in ("tenant=alpha", f"target={target}",
+    for token in ("backup_set=alpha", f"restore_folder={target}",
                   "snapshot=latest", "tier=1"):
         assert token in line, f"token {token!r} missing from log line:\n{line}"
 
@@ -246,11 +247,11 @@ def test_session_log_skipped_when_home_unwritable(tmp_path: Path) -> None:
         "HOME": "",  # explicitly empty
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",  # bypass PR #83 discovery gate
-        "LCSAS_TARGET": HOST_TARGET,
+        "LCSAS_PLATFORM": HOST_TARGET,
         "LCSAS_NO_RELOCATE": "1",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), str(recovery)],
         input="stub-password\n", capture_output=True, text=True,
         env=env, timeout=15,
     )

@@ -1,6 +1,6 @@
 # Live-USB Restore (No Working Operating System)
 
-> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RECOVER.txt` (Linux and macOS) and `recovery/docs/RECOVER_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RECOVER.txt](../../recovery/docs/RECOVER.txt), [RECOVER_WINDOWS.txt](../../recovery/docs/RECOVER_WINDOWS.txt). This file covers the no-OS journey and the tests that validate it. The steps themselves are in BOOT.txt and RECOVER.txt.
+> **Single source for the steps:** the heir's step-by-step procedure is `recovery/docs/RESTORE.txt` (Linux and macOS) and `recovery/docs/RESTORE_WINDOWS.txt` (Windows) on the meta disc. In the repository: [RESTORE.txt](../../recovery/docs/RESTORE.txt), [RESTORE_WINDOWS.txt](../../recovery/docs/RESTORE_WINDOWS.txt). This file covers the no-OS journey and the tests that validate it. The steps themselves are in BOOT.txt and RESTORE.txt.
 
 > The *no-OS* restore journey: the heir (or the owner) has the LCSAS
 > discs but no computer with a working operating system. **LCSAS discs
@@ -32,7 +32,7 @@ the restore: a friend's machine, a library computer, a second-hand
 laptop. Insert the newest META disc (if its tools fail, the one burned
 closest in date to your data discs), open `START_HERE.txt`, and follow the
 section for that machine's operating system (Windows → `restore.bat` /
-`RECOVER_WINDOWS.txt`; macOS or Linux → `restore.sh` / `RECOVER.txt`).
+`RESTORE_WINDOWS.txt`; macOS or Linux → `restore.sh` / `RESTORE.txt`).
 
 ## Option 2 — Boot a live-Linux USB stick on the dead machine
 
@@ -61,18 +61,18 @@ on the dead machine (internal or USB).
 6. Run the restore:
 
    ```sh
-   sh /mnt/recovery/scripts/restore.sh /home/ubuntu/restored latest
+   sh /mnt/recovery/scripts/restore.sh --restore-folder /home/ubuntu/restored
    ```
 
-   The script copies its tools to `~/lcsas-restore-tools` so the
+   The script copies its tools to `~/lcsas-tools` so the
    META disc can come out, then asks for your newest data disc (the
    latest year in its label, then the highest number), the backup set
    and its password, and walks through the data disc swaps.
-   `recovery/docs/RECOVER.txt` on the disc is the full manual from
+   `recovery/docs/RESTORE.txt` on the disc is the full manual from
    this point. On a live system the home folder is in RAM, so the
    tools folder, and the copies of the discs in it, are lost at
    power-off: a restore that stops can be carried on only until then
-   (`sh ~/lcsas-restore-tools/resume.sh`). To keep the copies of the
+   (`sh ~/lcsas-tools/resume.sh`). To keep the copies of the
    discs, put the pack cache on a real disk, e.g.
    `LCSAS_PACK_CACHE_DIR=/media/ubuntu/USBDISK/lcsas-pack-cache`; after
    a power-off, run `restore.sh` from the META disc again with the same
@@ -106,7 +106,7 @@ of this replacement path is BOOT-04's deliverable.)
 ## Source refs
 
 - On-disc procedure: `recovery/docs/BOOT.txt` (same steps, plain text)
-- Decision-flow routing: `recovery/docs/RECOVER.txt` ("Do you have a
+- Decision-flow routing: `recovery/docs/RESTORE.txt` ("Do you have a
   working OS?")
 - Routing guard test:
   `tests/recovery_hardening/test_no_boot_deadend_routing.py`

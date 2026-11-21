@@ -10,7 +10,7 @@ UNGUARDED: nothing tied its tier names, ordering, binary paths, or the
 disc-integrity layer back to recovery/scripts/restore.sh (the actual
 dispatcher).  A rename in the script -- ``lcsas-restore`` -> something else,
 ``rustic-static`` -> something else, the tier order, the
-``standalone_restorer.py`` last-resort tier, or the ``--check-disc`` /
+``python_reader.py`` last-resort tier, or the ``--check-disc`` /
 ``lcsas-ecc`` RS03 entry point -- would silently desync the doc from reality,
 and the heir following the doc decades from now would be reading fiction.
 
@@ -19,7 +19,7 @@ WHAT THIS GATE ASSERTS
   * TIERS.txt names tier 1 as the prebuilt C89 ``lcsas-restore`` and tier 2 as
     the vendored ``rustic-static`` -- and restore.sh actually dispatches to
     those binary names under ``bin/<arch>/`` (``$RECOVERY/bin/$TARGET/...``).
-  * TIERS.txt names tier 3 as the pure-Python ``standalone_restorer.py`` last
+  * TIERS.txt names tier 3 as the pure-Python ``python_reader.py`` last
     resort -- and restore.sh actually has a tier-3 Python dispatch to it.
   * The tier ORDER stated by TIERS.txt (1 -> 2 -> bare-path-boundary -> 3) is
     the order restore.sh dispatches in (tier 1 block precedes tier 2 block
@@ -90,13 +90,13 @@ def test_tier2_rustic_static_named_and_dispatched() -> None:
 
 
 def test_tier3_standalone_restorer_named_and_dispatched() -> None:
-    """TIERS.txt must name tier-3 ``standalone_restorer.py`` (Python last
+    """TIERS.txt must name tier-3 ``python_reader.py`` (Python last
     resort) and the script must actually have a tier-3 Python dispatch."""
-    assert "standalone_restorer.py" in _TIERS_TEXT, (
-        "TIERS.txt no longer names the tier-3 script `standalone_restorer.py`."
+    assert "python_reader.py" in _TIERS_TEXT, (
+        "TIERS.txt no longer names the tier-3 script `python_reader.py`."
     )
-    assert "standalone_restorer.py" in _RESTORE_TEXT, (
-        "restore.sh no longer references standalone_restorer.py -- TIERS.txt's "
+    assert "python_reader.py" in _RESTORE_TEXT, (
+        "restore.sh no longer references python_reader.py -- TIERS.txt's "
         "tier-3 last-resort is now fiction."
     )
 
@@ -118,10 +118,10 @@ def test_tier_order_matches_restore_sh_dispatch() -> None:
     # The doc's table must list the tiers in the same numeric order.
     d_t1 = _TIERS_TEXT.find("lcsas-restore")
     d_t2 = _TIERS_TEXT.find("rustic-static")
-    d_t3 = _TIERS_TEXT.find("standalone_")
+    d_t3 = _TIERS_TEXT.find("python_reader.py")
     assert d_t1 < d_t2 < d_t3, (
         "TIERS.txt introduces the tier binaries out of cascade order "
-        "(expected lcsas-restore, then rustic-static, then standalone_*)."
+        "(expected lcsas-restore, then rustic-static, then python_reader.py)."
     )
 
 
@@ -134,10 +134,10 @@ def test_bare_path_boundary_is_after_tier2_before_tier3() -> None:
     )
     i_boundary = _TIERS_TEXT.find("BARE MINIMUM PATH ENDS HERE")
     i_t2 = _TIERS_TEXT.find("rustic-static")
-    i_t3 = _TIERS_TEXT.find("standalone_")
+    i_t3 = _TIERS_TEXT.find("python_reader.py")
     assert i_t2 < i_boundary < i_t3, (
         "TIERS.txt's 'BARE MINIMUM PATH ENDS HERE' boundary is no longer "
-        "between the tier-2 (rustic-static) and tier-3 (standalone_*) rows."
+        "between the tier-2 (rustic-static) and tier-3 (python_reader.py) rows."
     )
 
 
@@ -213,7 +213,7 @@ def test_stock_restic_tier_present_in_script_and_doc() -> None:
     """The stock-restic auto-fallback (tier 2b) must exist in restore.sh AND
     be described in TIERS.txt -- they must not drift apart."""
     # restore.sh dispatches a stock restic/rustic step using restic's flag
-    # form (RESTIC_PASSWORD_FILE + -r REPO restore SNAP --target DIR).
+    # form (RESTIC_PASSWORD_FILE + -r REPO restore SNAP --restore-folder DIR).
     assert "tier 2b" in _RESTORE_TEXT, (
         "restore.sh no longer has the tier-2b stock-restic auto-fallback."
     )

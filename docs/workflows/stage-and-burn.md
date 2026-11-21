@@ -183,7 +183,7 @@ machines, or when staging in advance for an unattended burn.
 
 - `--config <path>` pointing at a validated TOML config; `cmd_stage` exits
   early if config is missing or fails `validate_config`. Global flags
-  (`--config`, `--db`, `--lock-timeout`, `--verbose`) come **before** the
+  (`--config`, `--catalog`, `--lock-timeout`, `--verbose`) come **before** the
   subcommand, e.g. `lcsas --config <path> stage ...`.
 - Initialised catalog (`lcsas init`).
 - Registered repositories (`lcsas repo add`). A recent `lcsas scan` is
@@ -229,8 +229,8 @@ machines, or when staging in advance for an unattended burn.
    without touching the staging area, the catalog, or the disc
    (`BurnOrchestrator.stage`). It checks for password split drift like a
    real run: on drift it refuses with exit code 1, unless
-   `--allow-escrow-drift`.
-6. `--allow-escrow-drift` — proceed even when `lcsas.toml`'s `key_split`/K/N
+   `--allow-split-drift`.
+6. `--allow-split-drift` — proceed even when `lcsas.toml`'s `split`/K/N
    disagrees with the recorded split (KEY-08); the override is logged
    as a volume event. Without it, an `EscrowDriftError` aborts the stage so a
    disc never prints share instructions that contradict the real split

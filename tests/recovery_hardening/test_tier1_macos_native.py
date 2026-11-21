@@ -1,6 +1,6 @@
 """GATE-03: tier-1 macOS (Mach-O) binary execution coverage.
 
-The two cross-built macOS ``lcsas-restore`` / ``lcsas-keyshare`` binaries
+The two cross-built macOS ``lcsas-restore`` / ``lcsas-shares`` binaries
 (``recovery/bin/{aarch64-macos,x86_64-macos}/``) are committed and bundled
 on every meta disc, but until now NOTHING ever executed them: every "macos"
 reference in the test tree is a meta-bundling presence check or a dispatcher
@@ -28,7 +28,7 @@ criterion 3 — a truncated/foreign binary must turn the gate red).
 Scope: this is binary-level *execution* proof — the Mach-O loads, parses
 args, lists snapshots, restores the committed encrypted fixture
 byte-identically, fails cleanly on a wrong password, and the Mach-O
-``lcsas-keyshare`` combiner reconstructs a real LCSAS split byte-exact.  The
+``lcsas-shares`` combiner reconstructs a real LCSAS split byte-exact.  The
 full macOS *journey* (restore.sh, hdiutil mounts) is UX-08 / INFRA-01.
 
 Gatekeeper note (UX_CONCERNS ID 004 stays open): binaries from a git
@@ -73,7 +73,7 @@ RESTORE_BIN = (
     if os.environ.get("LCSAS_RESTORE_BIN")
     else _MACOS_BIN_DIR / "lcsas-restore"
 )
-KEYSHARE_BIN = _MACOS_BIN_DIR / "lcsas-keyshare"
+KEYSHARE_BIN = _MACOS_BIN_DIR / "lcsas-shares"
 
 _BIN_OK = RESTORE_BIN.is_file() and os.access(RESTORE_BIN, os.X_OK)
 
@@ -166,7 +166,7 @@ def test_full_restore_byte_identical(tmp_path: Path) -> None:
     res = _run(
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=10,
     )
     assert res.returncode == 0, res.stderr
@@ -205,7 +205,7 @@ def test_wrong_password_fails_cleanly(tmp_path: Path) -> None:
     res = _run(
         "--repo", str(repo),
         "--password-file", str(pwfile),
-        "--target", str(target),
+        "--restore-folder", str(target),
         timeout=10,
     )
     # NOT SIGSEGV (-11/139) or SIGABRT (-6/134).
@@ -223,7 +223,7 @@ def test_wrong_password_fails_cleanly(tmp_path: Path) -> None:
 
 
 def test_keyshare_combines_split_byte_exact(tmp_path: Path) -> None:
-    """First execution coverage for the Mach-O ``lcsas-keyshare``.
+    """First execution coverage for the Mach-O ``lcsas-shares``.
 
     The committed CLI binary recovers an *LCSAS-framed* password (it
     chains SLIP-0039 recovery with the LCSAS length-prefixed codec — see
@@ -231,7 +231,7 @@ def test_keyshare_combines_split_byte_exact(tmp_path: Path) -> None:
     SLIP-0039 master-secret vectors in ``tests/fixtures/keyshare/
     vectors.json`` cannot be fed to it directly.  We therefore drive it
     the way it is actually used in recovery: split a known password into
-    a 2-of-5 set via ``lcsas key split`` and combine two cards back,
+    a 2-of-5 set via ``lcsas password split`` and combine two cards back,
     asserting the byte-exact password.  This mirrors
     ``test_keyshare_binary_cards.py`` but on the Mach-O combiner — which
     no test executes anywhere today (KEY-06 owns its deeper gates).
@@ -247,7 +247,7 @@ def test_keyshare_combines_split_byte_exact(tmp_path: Path) -> None:
     pw_file.write_bytes(password)
     out = tmp_path / "shares"
     assert cli_main([
-        "key", "split", "--repo", "alpha",
+        "password", "split", "--repo", "alpha",
         "--threshold", "2", "--shares", "5",
         "--password-file", str(pw_file), "--out", str(out),
     ]) == 0

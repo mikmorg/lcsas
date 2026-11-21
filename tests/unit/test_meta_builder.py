@@ -411,20 +411,20 @@ class TestMetaVolumeBuilder:
         assert "restore.sh" in out
         # The new driver documents positional usage, recovery tree layout,
         # and the password env vars.
-        assert "RECOVERY_ROOT" in out or "TARGET_DIR" in out
-        assert "LCSAS_PASSWORD" in out or "LCSAS_PWFILE" in out
+        assert "RECOVERY_ROOT" in out
+        assert "LCSAS_PASSWORD" in out or "LCSAS_PASSWORD_FILE" in out
 
     def test_restore_script_has_cascades(self):
         """restore.sh should declare the 3-tier recovery cascade.
 
         Tier 1: prebuilt static lcsas-restore (C89).
         Tier 2: vendored rustic-static.
-        Tier 3: Python fallback via standalone_restorer.py.
+        Tier 3: Python fallback via python_reader.py.
         """
         content = (self.output / "restore.sh").read_text()
         assert "lcsas-restore" in content, "Missing tier-1 lcsas-restore reference"
         assert "rustic-static" in content, "Missing tier-2 rustic-static reference"
-        assert "standalone_restorer.py" in content, (
+        assert "python_reader.py" in content, (
             "Missing tier-3 Python fallback reference"
         )
         assert "Tier 1" in content and "Tier 2" in content and "Tier 3" in content
@@ -498,10 +498,10 @@ class TestMetaVolumeBuilder:
         assert "DISC CARE" in content
         assert "M-DISC" in content
 
-    def test_standalone_restorer_bundled(self):
-        """standalone_restorer.py must be present at the meta disc root."""
-        sr = self.output / "standalone_restorer.py"
-        assert sr.is_file(), "standalone_restorer.py not bundled on meta disc"
+    def test_python_reader_bundled(self):
+        """python_reader.py must be present at the meta disc root."""
+        sr = self.output / "python_reader.py"
+        assert sr.is_file(), "python_reader.py not bundled on meta disc"
         content = sr.read_text()
         # Should contain the CLI entry point
         assert "def _cli_main" in content
@@ -512,8 +512,8 @@ class TestMetaVolumeBuilder:
     def test_restore_script_has_python_fallback(self):
         """restore.sh should reference the tier-3 Python fallback path."""
         content = (self.output / "restore.sh").read_text()
-        assert "standalone_restorer.py" in content, (
-            "restore.sh missing standalone_restorer.py reference"
+        assert "python_reader.py" in content, (
+            "restore.sh missing python_reader.py reference"
         )
         # Tier 3 is opt-in via an explicit allow flag — the bare path
         # (tiers 1-2) stays Python-free.
@@ -547,18 +547,18 @@ class TestMetaVolumeBuilder:
             ".incomplete marker still present after successful build"
         )
 
-    def test_keyshare_combiner_and_package_bundled(self):
+    def test_combine_sharesr_and_package_bundled(self):
         """K2.4(b): the production build ships the share combiner.
 
         Asserts the real ``build()`` output (not a direct helper call)
-        carries (1) ``keyshare_combine.py`` at the meta disc root, and
+        carries (1) ``combine_shares.py`` at the meta disc root, and
         (2) the ``keyshare`` package + its ``wordlist.txt`` under the
         bundled stdlib — the two halves the heir pre-step needs.
         """
         import sys as _sys
 
-        combiner = self.output / "keyshare_combine.py"
-        assert combiner.is_file(), "keyshare_combine.py not at meta disc root"
+        combiner = self.output / "combine_shares.py"
+        assert combiner.is_file(), "combine_shares.py not at meta disc root"
         assert os.access(str(combiner), os.X_OK)
 
         version = f"python{_sys.version_info.major}.{_sys.version_info.minor}"
@@ -647,14 +647,14 @@ class TestMovedRestoreScripts:
     def test_readme_points_at_the_manuals(self, meta_tree: Path) -> None:
         """#689 (C): README_RESTORE is a short pointer to the manuals."""
         readme = (meta_tree / "README_RESTORE.md").read_text()
-        assert "`recovery/docs/RECOVER.txt`" in readme
-        assert "`recovery/docs/RECOVER_WINDOWS.txt`" in readme
+        assert "`recovery/docs/RESTORE.txt`" in readme
+        assert "`recovery/docs/RESTORE_WINDOWS.txt`" in readme
         assert "| `recovery/scripts/restore_auto.sh` |" in readme
         assert "| `VOLUME_INFO.txt` |" in readme
         for stale in ("restore-auto.sh", "restore_legacy.sh", "restore_c89.sh",
                       "restore_single_drive.py", "--disc-cmd", "--isos"):
             assert stale not in readme, f"README still names {stale}"
-        for rel in ("recovery/docs/RECOVER.txt", "recovery/docs/RECOVER_WINDOWS.txt",
+        for rel in ("recovery/docs/RESTORE.txt", "recovery/docs/RESTORE_WINDOWS.txt",
                     "restore.bat", RESTORE_AUTO_SCRIPT_PATH):
             assert (meta_tree / rel).is_file(), f"README names missing {rel}"
 
@@ -669,7 +669,7 @@ class TestMovedRestoreScripts:
         stub = meta_tree / "recovery" / "scripts" / "restore.sh"
         stub.write_text(
             "#!/bin/sh\n"
-            'printf "%s|%s\\n" "$LCSAS_REPO" "$2" >> "$RECORD"\n'
+            'printf "%s|%s\\n" "$LCSAS_BACKUP_SET" "$2" >> "$RECORD"\n'
         )
         for set_id in ("set-a", "set-b"):
             (meta_tree / "metadata" / set_id / "keys").mkdir(parents=True)
@@ -679,7 +679,7 @@ class TestMovedRestoreScripts:
         out = tmp_path / "restored"
         # LCSAS_MOUNT_DIRS="": no disc mounted on this machine joins the
         # list (restore_auto.sh lists the mounted discs' sets too, #801).
-        env = {**os.environ, "LCSAS_PWFILE": str(pw), "RECORD": str(record),
+        env = {**os.environ, "LCSAS_PASSWORD_FILE": str(pw), "RECORD": str(record),
                "LCSAS_MOUNT_DIRS": ""}
         result = subprocess.run(
             ["sh", str(meta_tree / RESTORE_AUTO_SCRIPT_PATH),
@@ -698,7 +698,7 @@ class TestMovedRestoreScripts:
         restore is an error, not a silent success (#689)."""
         pw = tmp_path / "pw"
         pw.write_text("pw\n")
-        env = {**os.environ, "LCSAS_PWFILE": str(pw), "LCSAS_MOUNT_DIRS": ""}
+        env = {**os.environ, "LCSAS_PASSWORD_FILE": str(pw), "LCSAS_MOUNT_DIRS": ""}
         result = subprocess.run(
             ["sh", str(meta_tree / RESTORE_AUTO_SCRIPT_PATH),
              str(meta_tree / "recovery"), str(tmp_path / "restored")],
@@ -1197,8 +1197,8 @@ class TestBundleTier1Binaries:
         dst = recovery_dst / "bin" / "x86_64-pc-windows-gnu" / "lcsas-restore.exe"
         assert dst.is_file()
 
-    def test_keyshare_combiner_relocated_alongside_tier1(self, tmp_path):
-        """KEY-05: lcsas-keyshare[.exe] must land in the same rust-triple
+    def test_combine_sharesr_relocated_alongside_tier1(self, tmp_path):
+        """KEY-05: lcsas-shares[.exe] must land in the same rust-triple
         dir as lcsas-restore — the heir-facing Windows docs name a single
         on-disc bin dir (bin\\x86_64-pc-windows-gnu\\) for both binaries.
         Targets without a built keyshare binary are skipped silently."""
@@ -1210,8 +1210,8 @@ class TestBundleTier1Binaries:
             "aarch64": "lcsas-restore",  # no keyshare build for this one
         })
         for short_arch, exe in (
-            ("x86_64", "lcsas-keyshare"),
-            ("x86_64-windows", "lcsas-keyshare.exe"),
+            ("x86_64", "lcsas-shares"),
+            ("x86_64-windows", "lcsas-shares.exe"),
         ):
             p = src / "bin" / short_arch / exe
             p.write_text(f"fake keyshare {short_arch}\n")
@@ -1225,13 +1225,13 @@ class TestBundleTier1Binaries:
         b._bundle_tier1_binaries(recovery_dst)
 
         bin_root = recovery_dst / "bin"
-        assert (bin_root / "x86_64-unknown-linux-musl" / "lcsas-keyshare").is_file()
-        assert (bin_root / "x86_64-pc-windows-gnu" / "lcsas-keyshare.exe").is_file()
+        assert (bin_root / "x86_64-unknown-linux-musl" / "lcsas-shares").is_file()
+        assert (bin_root / "x86_64-pc-windows-gnu" / "lcsas-shares.exe").is_file()
         # lcsas-restore still lands as before.
         assert (bin_root / "x86_64-pc-windows-gnu" / "lcsas-restore.exe").is_file()
         # Missing keyshare build → restore copied, keyshare skipped.
         assert (bin_root / "aarch64-unknown-linux-musl" / "lcsas-restore").is_file()
-        assert not (bin_root / "aarch64-unknown-linux-musl" / "lcsas-keyshare").exists()
+        assert not (bin_root / "aarch64-unknown-linux-musl" / "lcsas-shares").exists()
 
     def test_unmapped_short_arch_names_skipped(self, tmp_path):
         """Short-arch names NOT in the tier1_map (e.g. typo, or some
@@ -1660,7 +1660,7 @@ class TestMetaStartHereVariants:
                 "xattr -dr com.apple.quarantine ~/lcsas-meta",
                 f"cp -R /media/$USER/{label} ~/lcsas-meta",
                 "chmod -R u+x ~/lcsas-meta/recovery/bin",
-                "sh ~/lcsas-meta/restore.sh ~/restored",
+                "sh ~/lcsas-meta/restore.sh --restore-folder ~/restored",
             ):
                 assert cmd in text, f"missing workaround command {cmd!r}"
         # The copied tree must actually hold what the commands touch.
@@ -1676,12 +1676,12 @@ class TestMetaStartHereVariants:
 
         refs: set[str] = set()
         for pattern in (
-            # Doc paths: recovery/docs/RECOVER.txt, docs/SHARE_FORMAT.md,
+            # Doc paths: recovery/docs/RESTORE.txt, docs/SHARE_FORMAT.md,
             # and bare UPPER_CASE.txt files at the disc root.
             r"(?:[A-Za-z0-9_./-]+/)?[A-Z][A-Z0-9_]*\.(?:txt|md)",
             r"(?:[A-Za-z0-9_./$-]+/)?restore\.(?:sh|bat)",
-            r"keyshare_combine\.py",
-            r"standalone_restorer\.py",
+            r"combine_shares\.py",
+            r"python_reader\.py",
         ):
             refs.update(re.findall(pattern, content))
         assert refs, "expected START_HERE.txt to reference on-disc files"
@@ -1701,14 +1701,14 @@ class TestMetaStartHereVariants:
         )
 
     def test_start_here_split_block_present_when_key_split(self, meta_tree):
-        """key_split=True → the split-password pre-step appears, free of
+        """split=True → the split-password pre-step appears, free of
         phantom restore.sh flags (UX-02 contract); configs whose password
         is not split must not show it."""
         out, builder = meta_tree
         content = (out / "START_HERE.txt").read_text(encoding="utf-8")
 
         assert "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS" in content
-        assert "keyshare_combine.py" in content
+        assert "combine_shares.py" in content
 
         # Every --flag attached to a restore.sh command must be one
         # recovery/scripts/restore.sh actually accepts.
@@ -2255,18 +2255,18 @@ class TestRegenerateRecoveryManifestFromTree:
         out = tmp_path / "out"
         docs = out / "recovery" / "docs"
         (docs / "sub").mkdir(parents=True)
-        (docs / "RECOVER.txt").write_bytes(b"read me\n")
+        (docs / "RESTORE.txt").write_bytes(b"read me\n")
         (docs / "sub" / "b.txt").write_bytes(b"b\n")
         (docs / "MANIFEST.sha256").write_text("stale  ./gone.txt\n")
         b = MetaVolumeBuilder(out, project_root=tmp_path)
         b._regenerate_recovery_manifest(out / "recovery")
         recover_sha, b_sha = _sha256(b"read me\n"), _sha256(b"b\n")
         assert (docs / "MANIFEST.sha256").read_text() == (
-            f"{recover_sha}  ./RECOVER.txt\n"
+            f"{recover_sha}  ./RESTORE.txt\n"
             f"{b_sha}  ./sub/b.txt\n"
         )
         top = (out / "recovery" / "MANIFEST.sha256").read_text()
-        assert "./docs/RECOVER.txt" in top
+        assert "./docs/RESTORE.txt" in top
         assert "MANIFEST.sha256" not in top
 
     def test_rows_sort_as_c_locale_sort_does(self, tmp_path: Path):

@@ -4,7 +4,7 @@ Issue #517 gap tests for the non-interactive restore wrapper
 (recovery/scripts/restore_auto.sh), complementing the per-repo selection and
 wrong-password tests in test_restore_auto_repo_select.py:
 
-* every exit-2 usage path (too few arguments, LCSAS_PWFILE unset / empty /
+* every exit-2 usage path (too few arguments, LCSAS_PASSWORD_FILE unset / empty /
   missing / a directory) -- fails before any repo is touched, the stub
   restore.sh is never run and the target is never created;
 * the "root layout" branch: with no $RECOVERY/repos/ directory, repos are
@@ -32,19 +32,20 @@ pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_AUTO = REPO_ROOT / "recovery" / "scripts" / "restore_auto.sh"
 
-_PWFILE_MSG = "LCSAS_PWFILE must point to an existing password file"
+_PWFILE_MSG = "LCSAS_PASSWORD_FILE must point to an existing password file"
 
 
 def _write_stub(recovery: Path, *, fail_repos: dict[str, int] | None = None) -> Path:
-    """Stub restore.sh: append 'REPO|$1|$2|$3' to $RECORD; exit per-repo code."""
+    """Stub restore.sh: append 'REPO|ARG|ARG|...' to $RECORD; exit per-repo code."""
     scripts = recovery / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     lines = [
         "#!/bin/sh",
-        'printf "%s|%s|%s|%s\\n" "${LCSAS_REPO:-UNSET}" "$1" "$2" "$3" >> "$RECORD"',
+        '_args="${LCSAS_BACKUP_SET:-UNSET}"; for a in "$@"; do _args="$_args|$a"; done',
+        'printf "%s\\n" "$_args" >> "$RECORD"',
     ]
     for repo, code in (fail_repos or {}).items():
-        lines.append(f'if [ "${{LCSAS_REPO:-}}" = "{repo}" ]; then exit {code}; fi')
+        lines.append(f'if [ "${{LCSAS_BACKUP_SET:-}}" = "{repo}" ]; then exit {code}; fi')
     lines.append("exit 0")
     stub = scripts / "restore.sh"
     stub.write_text("\n".join(lines) + "\n")
@@ -67,8 +68,8 @@ class _Run:
         self.pwfile.write_text("secret\n")
 
     def env(self, **overrides: str | None) -> dict[str, str]:
-        env = {k: v for k, v in os.environ.items() if k != "LCSAS_PWFILE"}
-        env["LCSAS_PWFILE"] = str(self.pwfile)
+        env = {k: v for k, v in os.environ.items() if k != "LCSAS_PASSWORD_FILE"}
+        env["LCSAS_PASSWORD_FILE"] = str(self.pwfile)
         env["RECORD"] = str(self.record)
         # No mounted disc: restore_auto.sh also lists the sets on the
         # discs in LCSAS_MOUNT_DIRS (#801), and this machine's /mnt or
@@ -119,7 +120,7 @@ class TestUsageErrors:
         _assert_refused_untouched(r, res)
         assert "usage:" in res.stderr
         assert "RECOVERY_ROOT TARGET_ROOT" in res.stderr
-        assert "LCSAS_PWFILE" in res.stderr  # usage reminds about the env var
+        assert "LCSAS_PASSWORD_FILE" in res.stderr  # usage reminds about the env var
 
     def test_only_recovery_root_given(self, r):
         res = r.run(str(r.recovery))
@@ -127,31 +128,31 @@ class TestUsageErrors:
         assert "usage:" in res.stderr
 
     def test_usage_is_reported_before_the_password_file_problem(self, r):
-        """Too few args AND no LCSAS_PWFILE: the usage line wins."""
-        res = r.run(str(r.recovery), env=r.env(LCSAS_PWFILE=None))
+        """Too few args AND no LCSAS_PASSWORD_FILE: the usage line wins."""
+        res = r.run(str(r.recovery), env=r.env(LCSAS_PASSWORD_FILE=None))
         _assert_refused_untouched(r, res)
         assert "usage:" in res.stderr
         assert _PWFILE_MSG not in res.stderr
 
     def test_pwfile_unset(self, r):
-        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PWFILE=None))
+        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PASSWORD_FILE=None))
         _assert_refused_untouched(r, res)
         assert _PWFILE_MSG in res.stderr
         assert "usage:" not in res.stderr
 
     def test_pwfile_set_but_empty(self, r):
-        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PWFILE=""))
+        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PASSWORD_FILE=""))
         _assert_refused_untouched(r, res)
         assert _PWFILE_MSG in res.stderr
 
     def test_pwfile_points_at_a_missing_file(self, r):
         gone = r.tmp_path / "no-such-password-file"
-        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PWFILE=str(gone)))
+        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PASSWORD_FILE=str(gone)))
         _assert_refused_untouched(r, res)
         assert _PWFILE_MSG in res.stderr
 
     def test_pwfile_points_at_a_directory(self, r):
-        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PWFILE=str(r.tmp_path)))
+        res = r.run(str(r.recovery), str(r.target), env=r.env(LCSAS_PASSWORD_FILE=str(r.tmp_path)))
         _assert_refused_untouched(r, res)
         assert _PWFILE_MSG in res.stderr
 
@@ -204,7 +205,9 @@ class TestRootLayout:
         assert res.returncode == 0, res.stderr
 
         for name in ("alpha", "bravo"):
-            assert f"{name}|{r.recovery}|{r.target / name}|latest" in r.calls()
+            want = (f"{name}|--restore-folder|{r.target / name}"
+                    f"|--snapshot|latest|{r.recovery}")
+            assert want in r.calls()
             assert (r.target / name).is_dir()
         assert "==> restoring alpha" in res.stderr
         assert "==> restoring bravo" in res.stderr
@@ -290,8 +293,8 @@ class TestMetaDiscLayout:
 
         assert res.returncode == 0, res.stderr
         assert sorted(run.calls()) == [
-            f"set-a|{run.recovery}|{run.target / 'set-a'}|latest",
-            f"set-b|{run.recovery}|{run.target / 'set-b'}|latest",
+            f"set-a|--restore-folder|{run.target / 'set-a'}|--snapshot|latest|{run.recovery}",
+            f"set-b|--restore-folder|{run.target / 'set-b'}|--snapshot|latest|{run.recovery}",
         ]
 
     def test_a_set_in_two_places_is_restored_once(self, tmp_path):

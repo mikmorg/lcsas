@@ -73,7 +73,7 @@ def test_golden_covers_every_command() -> None:
     """The walk reaches every top-level command and their subcommands."""
     text = GOLDEN.read_text(encoding="utf-8")
     for title in ("lcsas --help", "lcsas repo add --help",
-                  "lcsas key split --help", "lcsas restore standalone --help",
+                  "lcsas password split --help", "lcsas restore from-disc --help",
                   "lcsas estate card --help"):
         assert f"===== {title} =====" in text
 
@@ -88,9 +88,9 @@ _BARE_GROUPS = [
     (["volume"], "Usage: lcsas volume {impact}"),
     (["catalog"], "Usage: lcsas catalog {import-receipts|validate|reconcile|rebuild}"),
     (["session"], "Usage: lcsas session {list,abort}"),
-    (["restore"], "Usage: lcsas restore {plan,exec,standalone}"),
+    (["restore"], "Usage: lcsas restore {plan,exec,from-disc}"),
     (["meta"], "Usage: lcsas meta {build,verify}"),
-    (["key"], "Usage: lcsas key {split,unsplit,combine,verify,card}"),
+    (["password"], "Usage: lcsas password {split,unsplit,combine,verify,card}"),
     (["estate"], "Usage: lcsas estate card"),
     (["recovery"], "Usage: lcsas recovery {build,test,manifest,verify}"),
 ]

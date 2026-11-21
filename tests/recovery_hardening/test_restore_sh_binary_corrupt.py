@@ -100,7 +100,7 @@ def _run(recovery: Path, target_dir: Path,
         **(env_extra or {}),
     }
     return subprocess.run(
-        ["sh", str(RESTORE_SH), str(recovery), str(target_dir), "latest"],
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target_dir), str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )

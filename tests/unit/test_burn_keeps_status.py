@@ -88,7 +88,7 @@ def _setup(tmp_path, monkeypatch, *, num_packs: int, pack_size: int):
     cfg.write_text(
         f'[paths]\nmirror_base = "{config.mirror_base_path}"\n'
         f'staging = "{config.staging_path}"\n'
-        f'database = "{config.db_path}"\n'
+        f'catalog = "{config.db_path}"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
     )
     return {
@@ -159,7 +159,7 @@ def _assert_abort_and_reconcile_keep_it(env, caplog) -> None:
                  env["session_id"]]) == 1
     assert "BURNED, but no disc of it is recorded" in caplog.text
     for extra in ([], ["--include-waiting"]):
-        assert main(["--db", env["db"], "catalog", "reconcile", "--fix",
+        assert main(["--catalog", env["db"], "catalog", "reconcile", "--fix",
                      "--yes", *extra]) == 0, caplog.text
     conn = get_connection(Path(env["db"]))
     try:

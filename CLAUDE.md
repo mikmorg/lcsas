@@ -70,7 +70,7 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 |---|---|---|
 | **1 (primary)** | our C89 `lcsas-restore` built against vendored sqlite+zstd | The DURABLE path. C89 ABI-stable for 35 years. Depends only on a kernel + libc. No third-party RUNTIME dependency. |
 | 2 (fallback) | upstream `rustic-static` | Hedge in case tier 1 won't run on a given host. Pinned upstream artifact (`recovery/UPSTREAM.sha256`). |
-| 3 (last resort) | bundled CPython + `standalone_restorer.py` (the Python reader) | Last-resort restore if tiers 1+2 both fail. Pinned upstream CPython (`python-build-standalone`). |
+| 3 (last resort) | bundled CPython + `python_reader.py` (the Python reader) | Last-resort restore if tiers 1+2 both fail. Pinned upstream CPython (`python-build-standalone`). |
 
 **Vendoring vs runtime dependency:** sqlite + zstd live as C source in `recovery/vendored/` and we compile them ourselves alongside our own code — that's not a "third party runtime dependency", it's source we ship and audit (pinned in `recovery/VENDORED.sha256`). Rustic and CPython ARE runtime dependencies (we ship opaque prebuilt artifacts pinned in `recovery/UPSTREAM.sha256`).
 

@@ -36,8 +36,8 @@ class ReaderExit(enum.IntEnum):
 class ScriptExit(enum.IntEnum):
     """restore.sh's and restore.bat's own exit codes (#887).
 
-    Their headers and the EXIT CODES tables of ``RECOVER.txt`` and
-    ``RECOVER_WINDOWS.txt`` state them; ``script_contract.py`` runs them.
+    Their headers and the EXIT CODES tables of ``RESTORE.txt`` and
+    ``RESTORE_WINDOWS.txt`` state them; ``script_contract.py`` runs them.
     Any other code is the one the tier that ran stopped with.
     """
 
@@ -100,7 +100,7 @@ READER_WORDS: dict[int, tuple[str, ...]] = {
 SCRIPT_WORDS: dict[int, tuple[str, ...]] = {
     ScriptExit.OK: ("success", "finished"),
     ScriptExit.FAILED: ("failure",),
-    # restore.bat: an argument it does not take, --repo without a name, a
+    # restore.bat: an argument it does not take, --backup-set without a name, a
     # bad --snapshot (#925).
     ScriptExit.USAGE: ("usage", "wrongly", "--snapshot"),
     ScriptExit.CHECK_DISC_ERROR: ("check-disc",),

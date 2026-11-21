@@ -15,13 +15,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     """Initialize the LCSAS catalog.
 
     Resolution order for the catalog path:
-      1. ``--db-path`` on ``init`` (when provided)
-      2. global ``--db``
+      1. ``--catalog-path`` on ``init`` (when provided)
+      2. global ``--catalog``
       3. ``paths.database`` from the TOML config (``--config``)
-      4. ``archive.db`` in the current working directory
+      4. ``catalog.db`` in the current working directory
     """
 
-    # --db-path is init-only and outranks everything; the rest of the
+    # --catalog-path is init-only and outranks everything; the rest of the
     # ladder is the same one every other command walks.
     db_path: Path | None = getattr(args, "db_path", None)
     if db_path is None:

@@ -5,7 +5,7 @@ story used to be the owner manually transcribing the password with no
 transcription check of any kind.  A typo is discovered DECADES later, at
 restore time, as an unrecoverable archive.  The fix ships a static
 fill-in template (docs/PASSWORD_CARD.txt) plus a generator
-(`lcsas key card`) carrying a SHA-256 check code.
+(`lcsas password card`) carrying a SHA-256 check code.
 
 These static assertions catch:
   * docs/PASSWORD_CARD.txt being deleted or moved.
@@ -63,9 +63,9 @@ def test_recovery_card_documents_check_code_disclosure() -> None:
 def test_estate_planning_references_recovery_card() -> None:
     """ESTATE_PLANNING.md must point owners at the Recovery Card."""
     content = ESTATE_PLANNING.read_text()
-    assert "PASSWORD_CARD.txt" in content or "lcsas key card" in content, (
+    assert "PASSWORD_CARD.txt" in content or "lcsas password card" in content, (
         "docs/ESTATE_PLANNING.md no longer references the Recovery Card "
-        "(docs/PASSWORD_CARD.txt or `lcsas key card`). The card must be in "
+        "(docs/PASSWORD_CARD.txt or `lcsas password card`). The card must be in "
         "the key-management checklist or owners will never know it exists."
     )
 
@@ -94,9 +94,9 @@ def test_ux_concerns_id006_mitigation_implemented() -> None:
     assert "IMPLEMENTED (KEY-09)" in content, (
         "docs/development/recovery/UX_CONCERNS.txt ID 006 still describes the Recovery "
         "Card as unimplemented homework. The mitigation now exists "
-        "(docs/PASSWORD_CARD.txt + `lcsas key card`) and the ledger must "
+        "(docs/PASSWORD_CARD.txt + `lcsas password card`) and the ledger must "
         "say so, or the promise and reality drift apart."
     )
-    assert "lcsas key card" in content, (
-        "UX_CONCERNS ID 006 should name the `lcsas key card` generator."
+    assert "lcsas password card" in content, (
+        "UX_CONCERNS ID 006 should name the `lcsas password card` generator."
     )

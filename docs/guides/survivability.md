@@ -17,7 +17,7 @@ Everything in this document is evaluated against that single objective.
 > opposite concern — what a thief who steals a single disc gets, and the
 > password entropy that is the only thing protecting your data — is documented
 > in [DISC_CONFIDENTIALITY.md](../DISC_CONFIDENTIALITY.md). The hint examples
-> below predate that threat model; write `key_storage_hints` to name a
+> below predate that threat model; write `password_hints` to name a
 > custodian, not a findable cache (DISC_CONFIDENTIALITY.md §5).
 
 ---
@@ -46,7 +46,7 @@ meta) written in plain English:
 - Contact info for someone who can help
 
 Requires: new config fields `archive_owner`, `archive_description`,
-`key_storage_hints`, `technical_contact` on `LCSASConfig`.
+`password_hints`, `technical_contact` on `LCSASConfig`.
 
 ### 1.2 No "what is this data" description — P0 ✅ (resolved)
 
@@ -63,7 +63,7 @@ and `volume_info.json`.
 stored on any disc for security"* but never says WHERE the owner
 put it.  Password storage strategy exists only in the owner's head.
 
-**Fix:** Add `key_storage_hints` to config (e.g. "Paper copy in the
+**Fix:** Add `password_hints` to config (e.g. "Paper copy in the
 home safe, USB copy in safe deposit box #1234 at First National Bank").
 Embed in `START_HERE.txt`.
 
@@ -82,7 +82,7 @@ all the discs plus the password to a computer professional."*
 repository, nothing on disc tells the heir which password goes with
 which repository.  The modern `restore.sh` prompts interactively for a
 single password per invocation; the legacy `restore_legacy.sh` (retired
-in #689) accepted a single `--key` argument.  Neither path lets you specify
+in #689) accepted a single key-file argument.  Neither path lets you specify
 per-repository passwords in one run.
 
 **Fix:** Write `PASSWORD_INFO.txt` listing each repository, its human
@@ -261,7 +261,7 @@ hints about where the password is kept.
 **Current state:** Different repositories may use different password
 files.  The modern `restore.sh` prompts for one password per invocation
 (re-run once per repository); the legacy `restore_legacy.sh` (retired in
-#689) accepted a single `--key` flag.  Neither maps passwords to repositories on disc.
+#689) accepted a single key-file flag.  Neither maps passwords to repositories on disc.
 
 **Fix:** `PASSWORD_INFO.txt` (§1.5) and enhance the entry-point scripts to
 loop over repositories with per-repository passwords.
@@ -298,7 +298,7 @@ sees a silently truncated file.  LCSAS closes this at the mastering
 choke point: `iso/xorriso.py` raises `OversizeFileError` for any
 file over the single-extent limit (both data volumes and the meta disc), and
 the bin-packer warns at plan time.  See
-`recovery/docs/RECOVER_WINDOWS.txt` for the 7-Zip extraction
+`recovery/docs/RESTORE_WINDOWS.txt` for the 7-Zip extraction
 workaround on any pre-guard disc.
 
 ### 4.2 Filename compatibility — ✅ Low risk
@@ -344,7 +344,7 @@ advice.  Included on both data volumes and the meta disc.
 |---|---------|----------|--------|
 | 1.1 | START_HERE.txt on every disc | P0 | ✅ Done |
 | 1.2 | Archive description field | P0 | ✅ Done (config.archive_description) |
-| 1.3 | Password storage hints on disc | P0 | ✅ Done (config.key_storage_hints) |
+| 1.3 | Password storage hints on disc | P0 | ✅ Done (config.password_hints) |
 | 1.4 | "Get a tech person" advice | P1 | ✅ Done (in START_HERE + RESTORE_INSTRUCTIONS) |
 | 1.5 | Password-to-repository mapping (PASSWORD_INFO.txt) | P1 | ✅ Done |
 | 1.6 | Fix placeholder URL | P1 | ✅ Done (removed placeholder) |

@@ -16,7 +16,7 @@ DVDisaster to write deduplicated, encrypted data packs onto optical media
 - **Session-based multi-volume staging** (decouple ISO creation from burning)
 - **DVDisaster RS03 ECC** (image-level error correction, always-on for production media)
 - **3-tier recovery cascade** (in-house C `lcsas-restore` → pinned upstream
-  `rustic-static` → the Python reader `standalone_restorer.py`; tiers 1–2 are Python-free)
+  `rustic-static` → the Python reader `python_reader.py`; tiers 1–2 are Python-free)
 - **Shamir password split** (recorded K/N + SLIP-0039 split; `key_escrow` table, KEY-08)
 
 The codebase has zero runtime pip dependencies (pure stdlib; `zstandard` is
@@ -123,7 +123,7 @@ libSystem. See [`../history/CROSS_PLATFORM_META_RFC.md`](../history/CROSS_PLATFO
   upstream dvdisaster binary. Validated against the real dvdisaster binary for
   interoperability.
 - **KEY-08 — Shamir password split:** the `key_escrow` table records a Shamir
-  split (K/N threshold + SLIP-0039 identifier); `lcsas-keyshare` performs the
+  split (K/N threshold + SLIP-0039 identifier); `lcsas-shares` performs the
   split/combine. The catalog (schema v10) includes this table.
 
 ---

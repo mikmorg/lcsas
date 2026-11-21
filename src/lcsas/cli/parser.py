@@ -59,7 +59,7 @@ logger = get_logger()
 
 # Options only the top-level parser knows; `lcsas scan --config x.toml`
 # is an argparse "unrecognized arguments" error.
-_TOP_LEVEL_OPTIONS = ("--config", "--db", "--lock-timeout", "--verbose", "-v")
+_TOP_LEVEL_OPTIONS = ("--config", "--catalog", "--lock-timeout", "--verbose", "-v")
 
 
 class _LcsasArgumentParser(argparse.ArgumentParser):
@@ -83,6 +83,47 @@ class _LcsasArgumentParser(argparse.ArgumentParser):
                     f"not 'lcsas scan {misplaced[0]} ...'"
                 )
         super().error(message)
+
+
+# Flags renamed before v1.0.0 (#934): old flag -> new flag.  No aliases.
+_RENAMED_FLAGS = {
+    "--db": "--catalog",
+    "--db-path": "--catalog-path",
+    "--allow-escrow-drift": "--allow-split-drift",
+    "--target-media": "--media-type",
+}
+# Top-level options that take a value (the next token is not the command).
+_VALUE_OPTIONS = ("--config", "--catalog", "--lock-timeout")
+
+
+def renamed_message(argv: list[str]) -> str | None:
+    """The "was renamed" line when *argv* uses a retired name, else None.
+
+    The old command ``lcsas key``, the old subcommand ``lcsas restore
+    standalone`` and the old flags fail with exit 2 and this message,
+    never run (#934).  Checked before argparse so no alias exists.
+    """
+    command: list[str] = []
+    skip = False
+    for tok in argv:
+        if tok == "--":
+            break
+        if skip:
+            skip = False
+            continue
+        flag = tok.split("=", 1)[0]
+        if flag in _RENAMED_FLAGS:
+            return f"lcsas: {flag} was renamed: use {_RENAMED_FLAGS[flag]}"
+        if tok in _VALUE_OPTIONS:
+            skip = True
+        elif not tok.startswith("-") and len(command) < 2:
+            command.append(tok)
+    if command[:1] == ["key"]:
+        return "lcsas: lcsas key was renamed: use lcsas password"
+    if command[:2] == ["restore", "standalone"]:
+        return ("lcsas: lcsas restore standalone was renamed: "
+                "use lcsas restore from-disc")
+    return None
 
 
 def _volume_ref(text: str) -> int | str:
@@ -117,8 +158,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to TOML configuration file.",
     )
     parser.add_argument(
-        "--db", type=Path, default=None,
-        help="Path to SQLite archive catalog (overrides config).",
+        "--catalog", dest="db", type=Path, default=None,
+        help="Path to the master catalog (overrides config).",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true", default=False,
@@ -135,9 +176,9 @@ def build_parser() -> argparse.ArgumentParser:
     # --- init ---
     init_p = subparsers.add_parser("init", help="Initialize the LCSAS catalog and config.")
     init_p.set_defaults(func=cmd_init)
-    init_p.add_argument("--db-path", type=Path, default=None,
+    init_p.add_argument("--catalog-path", dest="db_path", type=Path, default=None,
                         help="Path for the SQLite catalog file. "
-                             "Overrides --config's [paths].database when set.")
+                             "Overrides --config's [paths].catalog when set.")
 
     # --- repo ---
     repo_p = subparsers.add_parser("repo", help="Manage backup repositories.")
@@ -323,8 +364,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Session ID (for --clean).")
     stage_p.add_argument("--dry-run", "-n", action="store_true", default=False,
                          help="Show staging plan without creating ISOs or catalog rows.")
-    stage_p.add_argument("--allow-escrow-drift", action="store_true", default=False,
-                         help="Proceed even if lcsas.toml's key_split/K/N "
+    stage_p.add_argument("--allow-split-drift", dest="allow_escrow_drift",
+                         action="store_true", default=False,
+                         help="Proceed even if lcsas.toml's split/K/N "
                               "disagrees with the recorded split (KEY-08). "
                               "Logged as a volume event. For multi-config "
                               "edge cases only — discs may print share "
@@ -579,7 +621,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- restore ---
     restore_p = subparsers.add_parser("restore", help="Plan or execute a restore.")
-    restore_p.set_defaults(func=_usage("Usage: lcsas restore {plan,exec,standalone}"))
+    restore_p.set_defaults(func=_usage("Usage: lcsas restore {plan,exec,from-disc}"))
     restore_sub = restore_p.add_subparsers(dest="restore_command")
 
     plan_p = restore_sub.add_parser("plan", help="Generate a restore pick list.")
@@ -595,12 +637,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Restore a snapshot using the live rustic mirror and LCSAS config. "
             "Requires --repo and --password-file. "
             "For offline disc-only restore (no mirrors or config needed), "
-            "use: lcsas restore standalone"
+            "use: lcsas restore from-disc"
         ),
     )
     exec_p.set_defaults(func=cmd_restore_exec)
     exec_p.add_argument("snapshot_id", help="Rustic snapshot ID to restore.")
-    exec_p.add_argument("target_path", type=Path, help="Target directory for restored files.")
+    exec_p.add_argument("restore_folder", type=Path,
+                        help="The restore folder: where the restored files go.")
     exec_p.add_argument("--repo", type=str, required=True,
                         help="Repository name containing the snapshot.")
     exec_p.add_argument("--password-file", type=Path, required=True,
@@ -619,9 +662,9 @@ def build_parser() -> argparse.ArgumentParser:
     exec_p.add_argument("--skip-verify", action="store_true", default=False,
                         help="Skip SHA-256 verification of ingested packs.")
 
-    # restore standalone — disc-only restore without config or mirror
+    # restore from-disc — disc-only restore without config or mirror
     fromdisc_p = restore_sub.add_parser(
-        "standalone",
+        "from-disc",
         help="Restore directly from disc — no config file or mirror needed.",
         description=(
             "Restore from a mounted or extracted LCSAS disc without any config "
@@ -636,8 +679,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to a mounted or extracted LCSAS disc (must contain catalog.db).",
     )
     fromdisc_p.add_argument(
-        "target_path", type=Path,
-        help="Directory to restore files into.",
+        "restore_folder", type=Path,
+        help="The restore folder: where the restored files go.",
     )
     fromdisc_p.add_argument(
         "--password-file", type=Path, required=True,
@@ -675,8 +718,8 @@ def build_parser() -> argparse.ArgumentParser:
                         type=_volume_ref,
                         help="Volume labels (or catalog volume IDs) to "
                              "consolidate.")
-    cons_p.add_argument("--target-media", type=str, default="MDISC100",
-                        help="Target media type for consolidated volume.")
+    cons_p.add_argument("--media-type", dest="target_media", type=str, default="MDISC100",
+                        help="Media type for consolidated volume.")
     cons_p.add_argument("--execute", action="store_true", default=False,
                         help="Stage active packs (without deprecating source volumes).")
     cons_p.add_argument("--deprecate", action="store_true", default=False,
@@ -914,11 +957,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- key (Shamir / SLIP-0039 password split) ---
     key_p = subparsers.add_parser(
-        "key",
+        "password",
         help="Split a repository password into SLIP-0039 shares, or combine them.",
     )
-    key_p.set_defaults(func=_usage("Usage: lcsas key {split,unsplit,combine,verify,card}"))
-    key_sub = key_p.add_subparsers(dest="key_command")
+    key_p.set_defaults(func=_usage("Usage: lcsas password {split,unsplit,combine,verify,card}"))
+    key_sub = key_p.add_subparsers(dest="password_command")
 
     key_split = key_sub.add_parser(
         "split",
@@ -931,11 +974,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     key_split.add_argument(
         "--threshold", "-k", type=int, default=None,
-        help="K: shares required to reconstruct (default: config key_threshold).",
+        help="K: shares required to reconstruct (default: config split_threshold).",
     )
     key_split.add_argument(
         "--shares", "-n", type=int, default=None,
-        help="N: total shares to produce (default: config key_shares).",
+        help="N: total shares to produce (default: config split_shares).",
     )
     key_split.add_argument(
         "--password-file", type=Path, default=None,
@@ -944,7 +987,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     key_split.add_argument(
         "--out", type=Path, default=None,
-        help="Output directory for share files (default: ./keyshares-<repo>/).",
+        help="Output directory for share files (default: ./shares-<repository>/).",
     )
     key_split.add_argument(
         "--no-verify-repo", action="store_true",
@@ -999,7 +1042,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Remove the recorded K-of-N split for one repository from the "
             "catalog, so burned discs stop telling the heir to gather share "
             "cards. It does not touch any share card or the password. Use it "
-            "when the split was abandoned and key_split is false for the "
+            "when the split was abandoned and split is false for the "
             "repository."
         ),
     )

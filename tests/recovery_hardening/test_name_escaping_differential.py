@@ -106,7 +106,7 @@ def _restore_tier1(repo: Path, target: Path, pwfile: Path,
                    bin_path: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     res = subprocess.run(
-        [str(bin_path), "--repo", str(repo), "--target", str(target),
+        [str(bin_path), "--repo", str(repo), "--restore-folder", str(target),
          "--password-file", str(pwfile)],
         capture_output=True, timeout=300,
     )

@@ -76,7 +76,7 @@ rather than a top-level axis.
 - **Live distro** — yes (restore run from a live system booted from USB) vs. no
   (workflow runs under the host OS).
 - **Recovery tier** — `1` prebuilt static `lcsas-restore`, `2` pinned
-  upstream `rustic-static`, `3` the Python reader (`standalone_restorer.py`).
+  upstream `rustic-static`, `3` the Python reader (`python_reader.py`).
   Full definitions in `recovery/docs/TIERS.txt`; tiers 1–2 are the
   bare-minimum path and must remain Python-free.
 

@@ -1,4 +1,4 @@
-"""The backup set marker: ``metadata/<repo_id>/LCSAS_REPO.txt`` (rc6 C1).
+"""The backup set marker: ``metadata/<repo_id>/LCSAS_BACKUP_SET.txt`` (rc6 C1).
 
 Every disc keeps a repository's metadata in a folder named by its
 catalog repo_id, and ``repo add`` makes that a UUID.  The marker inside
@@ -46,7 +46,7 @@ from lcsas.db.models import KeyEscrow
 
 _logger = logging.getLogger(__name__)
 
-MARKER_FILENAME = "LCSAS_REPO.txt"
+MARKER_FILENAME = "LCSAS_BACKUP_SET.txt"
 MARKER_FORMAT = 1
 MARKER_HEADER = "# LCSAS backup set marker. Restore works without this file."
 
@@ -118,7 +118,7 @@ def _check_repo_id(repo_id: str) -> None:
 
 @dataclass(frozen=True)
 class RepoMarker:
-    """What one ``LCSAS_REPO.txt`` says.  Build it with :func:`make_repo_marker`.
+    """What one ``LCSAS_BACKUP_SET.txt`` says.  Build it with :func:`make_repo_marker`.
 
     ``split`` is ``(K, N)`` or None for an ordinary password.
     ``split_id`` is the SLIP-39 identifier printed on the share cards
@@ -187,7 +187,7 @@ def make_repo_marker(
 
 
 def render_repo_marker(marker: RepoMarker) -> str:
-    """The exact text of ``LCSAS_REPO.txt`` for *marker* (LF line endings)."""
+    """The exact text of ``LCSAS_BACKUP_SET.txt`` for *marker* (LF line endings)."""
     split = "none" if marker.split is None else "{}-of-{}".format(*marker.split)
     split_id = "" if marker.split_id is None else f"{marker.split_id:05d}"
     lines = [
@@ -242,7 +242,7 @@ def parse_repo_marker(text: str) -> dict[str, str]:
 
 
 def read_repo_marker(repo_dir: Path) -> dict[str, str] | None:
-    """The fields of ``<repo_dir>/LCSAS_REPO.txt``, or None.
+    """The fields of ``<repo_dir>/LCSAS_BACKUP_SET.txt``, or None.
 
     None when the file is missing or unreadable, or when its ``id`` is
     not *repo_dir*'s name (a marker copied into the wrong folder).

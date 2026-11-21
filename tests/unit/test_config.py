@@ -66,7 +66,7 @@ class TestLoadConfig:
         [paths]
         mirror_base = "/mnt/mirror"
         staging = "/mnt/staging"
-        database = "/var/lib/lcsas/archive.db"
+        catalog = "/var/lib/lcsas/catalog.db"
 
         [defaults]
         media_type = "TEST_TINY"
@@ -97,12 +97,12 @@ class TestLoadConfig:
         [paths]
         mirror_base = "/mnt/mirror"
         staging = "/mnt/staging"
-        database = "/var/lib/lcsas/archive.db"
+        catalog = "/var/lib/lcsas/catalog.db"
 
         [survivability]
         archive_owner = "Jane Doe"
         archive_description = "Family photos 2000-2025"
-        key_storage_hints = "In the home safe"
+        password_hints = "In the home safe"
         technical_contact = "Bob (bob@example.com)"
         """)
         config_file = tmp_path / "lcsas.toml"
@@ -119,7 +119,7 @@ class TestLoadConfig:
         [paths]
         mirror_base = "/mnt/mirror"
         staging = "/mnt/staging"
-        database = "/var/lib/lcsas/archive.db"
+        catalog = "/var/lib/lcsas/catalog.db"
         """)
         config_file = tmp_path / "lcsas.toml"
         config_file.write_text(config_toml)
@@ -165,7 +165,7 @@ class TestTomlKeyValidation:
             [paths]
             mirror_base = "/mnt/mirror"
             staging = "/mnt/staging"
-            database = "/tmp/test.db"
+            catalog = "/tmp/test.db"
 
             [defaults]
             media_type = "BD25"
@@ -183,13 +183,13 @@ class TestXdgDbPath:
         from lcsas.config.settings import _xdg_db_path
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg_data"))
         result = _xdg_db_path()
-        assert result == str(tmp_path / "xdg_data" / "lcsas" / "archive.db")
+        assert result == str(tmp_path / "xdg_data" / "lcsas" / "catalog.db")
 
     def test_fallback_to_home(self, monkeypatch):
         from lcsas.config.settings import _xdg_db_path
         monkeypatch.delenv("XDG_DATA_HOME", raising=False)
         result = _xdg_db_path()
-        assert ".local/share/lcsas/archive.db" in result
+        assert ".local/share/lcsas/catalog.db" in result
 
 
 class TestNegativeConfig:
@@ -202,7 +202,7 @@ class TestNegativeConfig:
             [paths]
             mirror_base = "/mnt/mirror"
             staging = "/mnt/staging"
-            database = "/tmp/test.db"
+            catalog = "/tmp/test.db"
 
             [defaults]
             media_type = "BLUERAY_TYPO"
@@ -223,7 +223,7 @@ class TestNegativeConfig:
             [paths]
             mirror_base = "{tmp_path}"
             staging = "{tmp_path}"
-            database = "{tmp_path / 'test.db'}"
+            catalog = "{tmp_path / 'test.db'}"
 
             [repos.missing_mirror]
             mirror_path = "/absolute/nonexistent/mirror/path/12345"
@@ -240,7 +240,7 @@ class TestNegativeConfig:
             [paths]
             mirror_base = "{tmp_path}"
             staging = "{tmp_path}"
-            database = "{tmp_path / 'test.db'}"
+            catalog = "{tmp_path / 'test.db'}"
 
             [repos.family]
             mirror_path = "{mirror}"
@@ -269,7 +269,7 @@ class TestNegativeConfig:
         config_file.write_text(textwrap.dedent(f"""\
             [paths]
             staging = "{tmp_path}"
-            database = "{tmp_path / 'test.db'}"
+            catalog = "{tmp_path / 'test.db'}"
         """))
         with caplog.at_level(logging.WARNING, logger="lcsas"):
             load_config(config_file)
@@ -284,7 +284,7 @@ class TestNegativeConfig:
         config_file.write_text(textwrap.dedent(f"""\
             [paths]
             mirror_base = "{tmp_path}"
-            database = "{tmp_path / 'test.db'}"
+            catalog = "{tmp_path / 'test.db'}"
         """))
         with caplog.at_level(logging.WARNING, logger="lcsas"):
             load_config(config_file)
@@ -300,7 +300,7 @@ class TestNegativeConfig:
             [paths]
             mirror_base = "{tmp_path}"
             staging = "{tmp_path}"
-            database = "{tmp_path / 'test.db'}"
+            catalog = "{tmp_path / 'test.db'}"
         """))
         with caplog.at_level(logging.WARNING, logger="lcsas"):
             load_config(config_file)

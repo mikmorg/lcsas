@@ -179,7 +179,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
             return 1
 
     # Issue #367: recommended-contents advisory (WARN only).  A meta disc
-    # missing the tier-2b restic hedge or lcsas-keyshare can still
+    # missing the tier-2b restic hedge or lcsas-shares can still
     # restore via tier 1 + tier 3, so warn rather than fail — and stock
     # restic comes from the upstream cache, so it is legitimately absent on
     # a cold-cache build.
@@ -188,7 +188,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         logger.warning(
             "Meta disc is missing %d RECOMMENDED artifact(s) (it can still "
             "restore without them — stock restic tier-2b hedge and/or "
-            "lcsas-keyshare): %s",
+            "lcsas-shares): %s",
             len(recommended_missing), ", ".join(recommended_missing),
         )
 

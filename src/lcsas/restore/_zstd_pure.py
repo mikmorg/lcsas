@@ -3,7 +3,7 @@
 A complete, stdlib-only zstd *decompressor* sufficient to read the
 frames that restic / rustic emit (rustic v2 repositories are zstd-compressed
 by default).  It exists so that a tier-3 restore — the Python reader, bundled
-CPython + ``standalone_restorer.py``, the last resort — can decompress repository
+CPython + ``python_reader.py``, the last resort — can decompress repository
 blobs decades from now on ANY architecture / CPython minor, with the
 ``zstandard`` package absent and no stdlib ``compression.zstd`` (which
 landed only in CPython 3.14).

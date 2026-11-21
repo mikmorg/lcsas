@@ -118,7 +118,7 @@ class TestRestoreParser:
         assert args.command == "restore"
         assert args.restore_command == "exec"
         assert args.snapshot_id == "snap123"
-        assert args.target_path == Path("/tmp/out")
+        assert args.restore_folder == Path("/tmp/out")
         assert args.repo == "family"
         assert args.password_file == Path("/root/keys/family.key")
 
@@ -401,7 +401,7 @@ class TestCmdRestoreExec:
         args = _make_args(
             restore_command="exec",
             repo="missing",
-            target_path=Path("/tmp/out"),
+            restore_folder=Path("/tmp/out"),
             password_file=Path("/tmp/key"),
             cache_dir=None,
             volume_dir=None,
@@ -452,7 +452,7 @@ class TestCmdRestoreExec:
         args = _make_args(
             restore_command="exec",
             repo="family",
-            target_path=Path("/tmp/out"),
+            restore_folder=Path("/tmp/out"),
             password_file=key_file,
             cache_dir=None,
             volume_dir=None,
@@ -521,7 +521,7 @@ class TestCmdRestoreExec:
             restore_command="exec",
             repo="family",
             snapshot_id="snap1",
-            target_path=target_dir,
+            restore_folder=target_dir,
             password_file=key_file,
             cache_dir=cache_dir,
             volume_dir=tmp_path / "volumes",
@@ -585,7 +585,7 @@ class TestCmdRestoreExec:
 
         args = _make_args(
             restore_command="exec", repo="family", snapshot_id="snap1",
-            target_path=tmp_path / "restored", password_file=key_file,
+            restore_folder=tmp_path / "restored", password_file=key_file,
             cache_dir=tmp_path / "cache", volume_dir=None, iso_dir=None,
         )
 
@@ -647,7 +647,7 @@ class TestCmdRestoreExec:
 
         args = _make_args(
             restore_command="exec", repo="family", snapshot_id="snap1",
-            target_path=tmp_path / "restored", password_file=key_file,
+            restore_folder=tmp_path / "restored", password_file=key_file,
             cache_dir=tmp_path / "cache", volume_dir=None, iso_dir=None,
         )
 
@@ -743,7 +743,7 @@ class TestRestoreExecSpacePreflight:
             restore_command="exec",
             repo="family",
             snapshot_id="snap1",
-            target_path=tmp_path / "restored",
+            restore_folder=tmp_path / "restored",
             password_file=key_file,
             cache_dir=cache_dir if cache_dir is not None else tmp_path / "cache",
             volume_dir=tmp_path / "volumes",
@@ -1340,7 +1340,7 @@ class _Env:
         ns = {
             "config": Path("config.toml"), "db": None, "command": "restore",
             "restore_command": "exec", "repo": "family", "snapshot_id": "snap1",
-            "target_path": self.tmp / "restored", "password_file": self.key,
+            "restore_folder": self.tmp / "restored", "password_file": self.key,
             "cache_dir": None, "volume_dir": self.volumes, "iso_dir": None,
             "skip_verify": True,
         }

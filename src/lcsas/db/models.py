@@ -136,7 +136,7 @@ class VolumeEvent:
 
 @dataclass(frozen=True)
 class KeyEscrow:
-    """The durable record of a `lcsas key split` for one repository (KEY-08)."""
+    """The durable record of a `lcsas password split` for one repository (KEY-08)."""
 
     repo_id: str
     threshold: int       # K: shares needed to reconstruct

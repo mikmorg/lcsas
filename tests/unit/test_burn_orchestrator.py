@@ -53,7 +53,7 @@ def _make_config(tmp_path: Path) -> LCSASConfig:
     """Build a minimal config for testing."""
     mirror = tmp_path / "mirror"
     staging = tmp_path / "staging"
-    db_path = tmp_path / "archive.db"
+    db_path = tmp_path / "catalog.db"
     mirror.mkdir(parents=True, exist_ok=True)
     staging.mkdir(parents=True, exist_ok=True)
 
@@ -536,7 +536,7 @@ def _make_two_repo_env(tmp_path):
     config = LCSASConfig(
         mirror_base_path=mirror,
         staging_path=staging,
-        db_path=tmp_path / "archive.db",
+        db_path=tmp_path / "catalog.db",
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=1000,
@@ -991,14 +991,14 @@ class TestEscrowDrift:
         )
 
     def test_config_true_no_record_aborts(self, orch_env):
-        """key_split=true but no recorded split → abort naming both sides."""
+        """split=true but no recorded split → abort naming both sides."""
         from lcsas.db.key_escrow import EscrowDriftError
 
         orch = self._split_orch(orch_env, key_split=True)
         with pytest.raises(EscrowDriftError) as ei:
             _stage_one(orch)
         msg = str(ei.value)
-        assert "key_split=true" in msg
+        assert "split=true" in msg
         assert "no split" in msg
         # Named by the repository's catalog name, not its repo_id (#571).
         assert "password split drift for repository 'Family Photos':" in msg
@@ -1012,11 +1012,11 @@ class TestEscrowDrift:
         with pytest.raises(EscrowDriftError) as ei:
             _stage_one(orch)
         msg = str(ei.value)
-        assert "key_split=false" in msg
+        assert "split=false" in msg
         assert "3-of-5" in msg
 
     def test_kn_mismatch_aborts(self, orch_env):
-        """key_split=true 2-of-5 but record is 3-of-5 → abort."""
+        """split=true 2-of-5 but record is 3-of-5 → abort."""
         from lcsas.db.key_escrow import EscrowDriftError, record_split
 
         record_split(orch_env["conn"], "family", 3, 5, 999)
@@ -1028,7 +1028,7 @@ class TestEscrowDrift:
         assert "3-of-5" in msg
 
     def test_consistent_split_proceeds(self, orch_env):
-        """key_split=true 3-of-5 matching the record → no abort."""
+        """split=true 3-of-5 matching the record → no abort."""
         from lcsas.db.key_escrow import record_split
 
         record_split(orch_env["conn"], "family", 3, 5, 777)
@@ -1037,7 +1037,7 @@ class TestEscrowDrift:
         assert manifest.volume_id > 0
 
     def test_allow_drift_proceeds_and_logs_event(self, orch_env):
-        """--allow-escrow-drift proceeds and records a NOTE volume event."""
+        """--allow-split-drift proceeds and records a NOTE volume event."""
         from lcsas.db.volume_events import get_events_for_volume
 
         orch = self._split_orch(orch_env, key_split=True, allow_drift=True)
@@ -1156,7 +1156,7 @@ class TestEscrowDriftUuidRepo:
             _stage_one(orch)
         msg = str(ei.value)
         assert "password split drift for repository 'family':" in msg
-        assert "key_split=false" in msg
+        assert "split=false" in msg
         assert "3-of-5" in msg
 
     def test_drift_message_names_repository_not_uuid(self, uuid_orch_env):
@@ -1168,7 +1168,7 @@ class TestEscrowDriftUuidRepo:
             _stage_one(orch)
         msg = str(ei.value)
         assert "password split drift for repository 'family':" in msg
-        assert "'lcsas --config ... key split --repo family'" in msg
+        assert "'lcsas --config ... password split --repo family'" in msg
         assert env["repo_id"] not in msg
 
 

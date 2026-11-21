@@ -42,7 +42,7 @@ def _check_disc_copy(root: Path) -> sqlite3.Connection:
 
 
 def test_injector_copies_rows_a_reader_keeps_in_the_wal(tmp_path):
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     master = get_connection(db)
     master.execute("CREATE TABLE t (x)")
     master.execute("INSERT INTO t VALUES (1)")
@@ -73,7 +73,7 @@ def test_injector_copies_rows_a_reader_keeps_in_the_wal(tmp_path):
 
 
 def test_injector_reads_a_catalog_file_by_path(tmp_path):
-    db = tmp_path / "archive.db"
+    db = tmp_path / "catalog.db"
     master = get_connection(db)
     master.execute("CREATE TABLE t (x)")
     master.execute("INSERT INTO t VALUES (7)")

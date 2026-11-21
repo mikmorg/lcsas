@@ -103,7 +103,7 @@ def _run_restore(repo: Path, target: Path, pwfile: Path
         [str(BINARY),
          "--repo", str(repo),
          "--password-file", str(pwfile),
-         "--target", str(target),
+         "--restore-folder", str(target),
          "--snapshot", "latest"],
         capture_output=True, text=True, timeout=30,
     )
