@@ -53,9 +53,9 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   the lab cuts another rc and the affected drills run again (owner,
   2026-11-02). At final the lab also builds a generic v1.0.0 meta disc,
   verifies it strictly and diffs it against the rc's.
-- The other open issues are lab-side: #479 (retire the windows blind
-  variant once #476 passes), #768 (lab CDEmu tooling) and #538 (CI on
-  Ubuntu 26.04, after v1.0).
+- Every other open issue is lab-side or labelled `post-final`
+  (`gh issue list --state open`). The one that touches the drills: #479
+  retires the windows blind variant once #476 passes.
 
 ## Hard rules
 
