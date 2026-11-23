@@ -630,13 +630,18 @@ Windows workflow inherits. Source refs in parentheses.
   the drive-letter arguments go unquoted, and trailing backslashes are
   stripped from the target (step 8).
 - **Long paths (> 260 chars):** Windows historically caps paths at
-  `MAX_PATH=260`. Modern Windows 10/11 supports longer paths if the
-  registry key `LongPathsEnabled=1` is set or via group policy. Files
-  with paths > 260 chars fail to write on default installs; documented
-  workaround is to restore to a short root like `C:\r`
-  (`recovery/docs/RESTORE_WINDOWS.txt`, "DESTINATION FOLDER NOTES").
-  Tier 1's handling of such paths, of non-ASCII names, of `:` and of
-  `..\` is tracked in #619.
+  `MAX_PATH=260`. Tier 1 (`lcsas-restore.exe`) restores longer paths
+  itself since #619: it gives a path of 248 UTF-16 units or more
+  the `\\?\` prefix, so nothing needs to be turned on. Tier 2
+  (`rustic-static.exe`) does not: there, paths > 260 chars may fail to
+  write on default installs, and the workaround is to restore to a short
+  root like `C:\r` or to set the registry key `LongPathsEnabled=1`
+  (`recovery/docs/RESTORE_WINDOWS.txt`, "RESTORE FOLDER NOTES"). Tier 1
+  refuses a name Windows cannot store (one holding a reserved character
+  such as `:` or `\`, so `..\` too; one that ends in a dot or a space; a
+  device name): the item is listed in
+  `RESTORE_FAILURES.txt` and never written under another name
+  (`lcsas_name_windows_refusal()` in `recovery/src/lcsas-restore/path.c`).
 - **Symlinks:** `posix_compat.h` stubs `symlink()` to return `-1` with
   `EPERM` because Windows symlink creation requires
   `SeCreateSymbolicLinkPrivilege`, which the binary deliberately does
@@ -652,8 +657,9 @@ Windows workflow inherits. Source refs in parentheses.
   degrade to copies (`docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository).
 - **UTF-8 / code page:** the binary has no application manifest (no
   `<activeCodePage>UTF8</activeCodePage>`; the exes carry no resources
-  at all), so file names outside the console's code page may be mangled
-  on restore (#619). `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository describes
+  at all). Tier 1 does not need one: since #619 it creates files through
+  the wide (UTF-16) API, so names in any language or script restore as
+  they are (`recovery/docs/FORMAT.txt`). `docs/development/recovery/WINDOWS_RECOVERY_PLAN.txt` in the source repository describes
   the manifest as a plan only. The menu shows only a set's `name_cmd`
   (plain letters), because cmd reads marker files in the console's code
   page.

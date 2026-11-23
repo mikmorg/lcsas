@@ -23,7 +23,7 @@ How the bytes on a disc are laid out, encrypted, and protected:
 - [DVDISASTER_RS03_FORMAT.md](DVDISASTER_RS03_FORMAT.md) — DVDisaster RS03 error-correction
   layer wrapped around every burned image.
 - [SHARE_FORMAT.md](SHARE_FORMAT.md) — SLIP-0039 Shamir share
-  format used by the `keyshare` package and the `lcsas key` commands
+  format used by the `keyshare` package and the `lcsas password` commands
   to split a password.
 - [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) — what a
   disc does and does not reveal to someone who finds it.
