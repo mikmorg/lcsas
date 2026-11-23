@@ -423,12 +423,9 @@ class TestCmdMetaBuildKeyGate:
         assert "Mount the mirror" in caplog.text
         assert "lcsas repo retire" in caplog.text
         assert "--allow-missing-metadata" in caplog.text
-        # `repo retire` must be offered WITH the warning that the
-        # destructive neighbour deletes history — an operator who reaches
-        # for `repo remove --force` to silence this gate destroys the pack
-        # and snapshot record of data still sitting on their discs.
-        assert "repo remove --force" in caplog.text
-        assert "deletes it" in caplog.text
+        # `repo retire` must be offered as THE way, not `repo remove`:
+        # since #962 that refuses a repository with packs on burned discs.
+        assert "`repo remove` refuses" in caplog.text
 
     def test_gate_ignores_is_pruned(self, tmp_path, monkeypatch, caplog):
         """packs.is_pruned is NOT in the tier-1 frozen surface, so tier-1

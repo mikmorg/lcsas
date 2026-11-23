@@ -193,21 +193,30 @@ def build_parser() -> argparse.ArgumentParser:
     repo_list = repo_sub.add_parser("list", help="List registered repositories.")
     repo_list.set_defaults(func=cmd_repo_list)
 
-    repo_rm = repo_sub.add_parser("remove", help="Remove a repository.")
+    repo_rm = repo_sub.add_parser(
+        "remove",
+        help="Delete a repository from the catalog (never one with packs "
+             "on a burned volume).",
+        description="Delete a repository from the catalog. Refused, even "
+                    "with --force, when any of its packs is on a burned "
+                    "volume: its catalog ID is on those discs. Use "
+                    "`lcsas repo retire` for a repository whose mirror is "
+                    "gone for good.",
+    )
     repo_rm.set_defaults(func=cmd_repo_remove)
     repo_rm.add_argument("repo_id", metavar="REPO",
-                         help="Repository name (or its catalog ID) to remove.")
+                         help="Repository name (or its catalog ID) to delete.")
     repo_rm.add_argument("--force", action="store_true",
-                         help="Force removal even if packs exist (marks them pruned).")
+                         help="Also delete its packs and snapshots from the "
+                              "catalog when none is on a burned volume.")
 
     repo_retire = repo_sub.add_parser(
         "retire",
         help="Mark a repository retired (its mirror is gone for good).",
         description="Mark a repository retired: its mirror is gone for good, "
                     "so `lcsas meta build` stops requiring its Rustic keys. "
-                    "The catalog row and its pack history are kept intact "
-                    "(unlike `repo remove --force`). Reversible with "
-                    "`lcsas repo activate`.",
+                    "The catalog row and its pack history are kept intact. "
+                    "Reversible with `lcsas repo activate`.",
     )
     repo_retire.set_defaults(func=cmd_repo_retire)
     repo_retire.add_argument("repo_id", metavar="REPO",

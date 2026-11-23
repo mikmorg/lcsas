@@ -3,10 +3,10 @@
 `lcsas repo retire <id>` marks a repo whose Rustic mirror is gone for
 good, so `lcsas meta build`'s key gate stops demanding keys LCSAS can no
 longer reach.  It is deliberately NOT destructive — `repo remove --force`
-deletes pack and snapshot history, and an operator whose packs are on
-burned discs must never be pushed toward that verb just to silence a
-gate.  Retirement is therefore a reversible flag with no confirmation
-prompt, and `repo activate` is its inverse.
+deletes pack and snapshot history, so since #962 it refuses a repository
+with packs on burned discs and points here instead.  Retirement is
+therefore a reversible flag with no confirmation prompt, and
+`repo activate` is its inverse.
 
 These tests drive main() only, so they also pin the argparse wiring and
 the dispatch table, not just the CRUD underneath.

@@ -106,7 +106,7 @@ class TestCmdRepoRemove:
         result = main(["--catalog", str(db), "repo", "remove", repo_id])
         assert result == 0
         out = capsys.readouterr().out
-        assert "Removed repository 'family'" in out
+        assert "Deleted repository 'family'" in out
 
         # Row is gone from the catalog.
         from lcsas.db.connection import get_connection
@@ -130,10 +130,11 @@ class TestCmdRepoRemove:
         assert "no-such-name" in out
         assert "not found" in out
 
-    def test_repo_remove_rejects_active_packs_without_force(
+    def test_repo_remove_rejects_packs_on_a_burned_volume(
         self, tmp_path, capsys
     ):
-        """repo remove refuses while active packs sit on active volumes."""
+        """repo remove refuses while a pack sits on a burned volume (#962),
+        and points at `repo retire` rather than --force."""
         from lcsas.db.connection import get_connection
         from lcsas.db.packs import register_pack
         from lcsas.db.volume_packs import bulk_link_packs
@@ -168,8 +169,8 @@ class TestCmdRepoRemove:
         assert result != 0
         out = capsys.readouterr().out
         assert "family" in out
-        assert "active volumes" in out
-        assert "--force" in out
+        assert "1 burned volume" in out
+        assert "lcsas repo retire family" in out
 
         # Repo and pack are still in the catalog.
         conn = get_connection(str(db))
@@ -185,7 +186,8 @@ class TestCmdRepoRemove:
     def test_repo_remove_with_force_purges_packs(
         self, tmp_path, capsys, monkeypatch
     ):
-        """repo remove --force marks packs pruned and deletes the repo."""
+        """repo remove --force deletes a never-burned repository's packs,
+        their links to a staged volume, and the repo (#962)."""
         from lcsas.db.connection import get_connection
         from lcsas.db.packs import list_packs, register_pack
         from lcsas.db.repos import list_repos
@@ -206,7 +208,7 @@ class TestCmdRepoRemove:
                 uuid=generate_uuid(),
                 media_type="BD25",
                 capacity_bytes=25_000_000_000,
-                status="BURNED",
+                status="STAGING",
             )
             pack = register_pack(
                 conn, sha256="force_pack_1", size_bytes=4096, repo_id=repo_id
@@ -222,9 +224,12 @@ class TestCmdRepoRemove:
         result = main(["--catalog", str(db), "repo", "remove", repo_id, "--force"])
         assert result == 0
         out = capsys.readouterr().out
-        assert "Removed repository 'family'" in out
+        assert "Deleted repository 'family'" in out
+        assert "pruned" not in out
+        assert "with 1 pack(s)" in out
 
-        # Repo gone; packs gone; volume_packs links gone.
+        # Repo gone; packs gone; volume_packs links gone; the staged
+        # volume no longer counts the pack's bytes.
         conn = get_connection(str(db))
         try:
             assert [r.name for r in list_repos(conn)] == []
@@ -234,6 +239,58 @@ class TestCmdRepoRemove:
                 (pack.pack_id,),
             ).fetchone()
             assert row[0] == 0
+            used = conn.execute(
+                "SELECT used_bytes FROM volumes WHERE volume_id = ?",
+                (vol.volume_id,),
+            ).fetchone()[0]
+            assert used == 0
+        finally:
+            conn.close()
+
+    def test_repo_remove_refuses_pruned_packs_on_a_burned_volume(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """#962: a pruned pack on a burned volume is still on that disc.
+
+        Only non-pruned packs were checked, so a repository whose burned
+        packs had all been pruned was deleted without --force.
+        """
+        from lcsas.db.packs import bulk_mark_pruned, register_pack
+        from lcsas.db.repos import list_repos
+        from lcsas.db.volume_packs import bulk_link_packs
+        from lcsas.db.volumes import create_volume
+        from lcsas.utils.labels import generate_uuid
+
+        db = tmp_path / "test.db"
+        main(["init", "--catalog-path", str(db)])
+        main(["--catalog", str(db), "repo", "add", "family", str(tmp_path / "m")])
+        repo_id = _get_repo_id_by_name(str(db), "family")
+        conn = get_connection(str(db))
+        try:
+            vol = create_volume(
+                conn, label="V1", uuid=generate_uuid(), media_type="BD25",
+                capacity_bytes=25_000_000_000, status="VERIFIED",
+            )
+            pack = register_pack(
+                conn, sha256="pruned_pack_1", size_bytes=4096, repo_id=repo_id
+            )
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
+            bulk_mark_pruned(conn, [pack.pack_id])
+        finally:
+            conn.close()
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "yes")
+        capsys.readouterr()
+
+        for argv in ([], ["--force"]):
+            rc = main(["--catalog", str(db), "repo", "remove", "family", *argv])
+            assert rc == 1, argv
+            out = capsys.readouterr().out
+            assert "1 burned volume" in out
+        conn = get_connection(str(db))
+        try:
+            assert [r.name for r in list_repos(conn)] == ["family"]
+            assert conn.execute(
+                "SELECT COUNT(*) FROM volume_packs").fetchone()[0] == 1
         finally:
             conn.close()
 

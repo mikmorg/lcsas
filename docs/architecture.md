@@ -700,7 +700,7 @@ representative, not exhaustive — run `lcsas --help` (or read
 lcsas init          [--catalog-path PATH]              Initialize the catalog
 lcsas repo add      NAME MIRROR_PATH               Register a repository
 lcsas repo list                                    List registered repositories
-lcsas repo remove   REPO_ID [--force]              Remove a repository and its packs
+lcsas repo remove   REPO_ID [--force]              Delete a never-burned repository
 lcsas repo retire   REPO_ID                        Mark a repository retired (mirror gone for good)
 lcsas repo activate REPO_ID                        Mark a retired repository active again
 lcsas scan          [--repo REPO] [--no-prune-sync] Discover new packs, mark pruned

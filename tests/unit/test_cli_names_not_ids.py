@@ -99,7 +99,7 @@ def test_repo_retire_and_activate_take_the_name(tmp_path: Path) -> None:
 def test_repo_remove_takes_the_name(tmp_path: Path, capsys) -> None:
     db, _ = _catalog(tmp_path)
     assert main(["--catalog", str(db), "repo", "remove", "Family"]) == 0
-    assert "Removed repository 'Family'" in capsys.readouterr().out
+    assert "Deleted repository 'Family'" in capsys.readouterr().out
     conn = get_connection(db)
     assert list_repos(conn) == []
     conn.close()

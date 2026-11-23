@@ -63,7 +63,8 @@ positional arguments:
   {add,list,remove,retire,activate}
     add                 Register a new repository.
     list                List registered repositories.
-    remove              Remove a repository.
+    remove              Delete a repository from the catalog (never one with
+                        packs on a burned volume).
     retire              Mark a repository retired (its mirror is gone for
                         good).
     activate            Mark a retired repository active again.
@@ -87,18 +88,23 @@ options:
 ===== lcsas repo remove --help =====
 usage: lcsas repo remove [-h] [--force] REPO
 
+Delete a repository from the catalog. Refused, even with --force, when any of
+its packs is on a burned volume: its catalog ID is on those discs. Use `lcsas
+repo retire` for a repository whose mirror is gone for good.
+
 positional arguments:
-  REPO        Repository name (or its catalog ID) to remove.
+  REPO        Repository name (or its catalog ID) to delete.
 
 options:
   -h, --help  show this help message and exit
-  --force     Force removal even if packs exist (marks them pruned).
+  --force     Also delete its packs and snapshots from the catalog when none
+              is on a burned volume.
 ===== lcsas repo retire --help =====
 usage: lcsas repo retire [-h] REPO
 
 Mark a repository retired: its mirror is gone for good, so `lcsas meta build`
 stops requiring its Rustic keys. The catalog row and its pack history are kept
-intact (unlike `repo remove --force`). Reversible with `lcsas repo activate`.
+intact. Reversible with `lcsas repo activate`.
 
 positional arguments:
   REPO        Repository name (or its catalog ID) to retire.

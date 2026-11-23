@@ -527,10 +527,10 @@ accident. When it is used, `volume_info.json` records
 that the gap was accepted — years later an heir can tell an accepted gap
 from a defect, long after the build log is gone.
 
-**Note:** `lcsas repo remove --force` is *not* a remedy. It deletes the
-repository's packs and snapshots from the catalog; an owner whose data is on
-burned discs must never be pushed toward it to quiet a gate. That is why
-retirement exists.
+**Note:** `lcsas repo remove` is *not* a remedy. It refuses, even with
+`--force`, a repository with packs on burned discs (#962): deleting their
+record would make the catalog forget packs that are on discs, and a
+repository added again gets a new catalog ID. That is why retirement exists.
 
 **The other shape of the same gap (#367 / #443):** this gate covers a
 mirror that was **unreachable** at build time, so the repository never gets

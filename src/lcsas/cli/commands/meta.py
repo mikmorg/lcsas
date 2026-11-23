@@ -272,8 +272,9 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
                 logger.error(
                     "  2. `lcsas repo retire <repo>` if a mirror is gone "
                     "for good. Reversible, and it keeps the repo's pack and "
-                    "snapshot history (unlike `repo remove --force`, which "
-                    "deletes it). Also drop its [repos.<name>] block from "
+                    "snapshot history (`repo remove` refuses a repository "
+                    "with packs on burned discs). Also drop its "
+                    "[repos.<name>] block from "
                     "your config — retirement is a catalog fact, and scan/"
                     "burn still fail on a config mirror_path that is gone."
                 )
