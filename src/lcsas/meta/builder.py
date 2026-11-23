@@ -1437,9 +1437,31 @@ class MetaVolumeBuilder:
             # The split reader (key_escrow.get_split_for_repo) needs named
             # columns; a Row still unpacks like a tuple below.
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT repo_id, mirror_path FROM repositories"
-            ).fetchall()
+            has_name = "name" in {
+                str(c[1]) for c in conn.execute(
+                    "PRAGMA table_info(repositories)")
+            }
+            named = [
+                (str(r[0]), str(r[1] or ""), str(r[2] or ""))
+                for r in conn.execute(
+                    "SELECT repo_id, mirror_path, "
+                    f"{'name' if has_name else 'repo_id'} FROM repositories"
+                )
+            ]
+            rows = [(repo_id, path) for repo_id, path, _name in named]
+            if self._config is not None:
+                # #958: the config owns a mirror's path; the catalog's is
+                # the last one scan saw (blank on a rebuilt catalog).
+                from lcsas.config.mirrors import mirror_path as find_mirror
+                from lcsas.db.models import Repository
+
+                rows = [
+                    (repo_id, str(find_mirror(self._config, Repository(
+                        repo_id=repo_id, name=name, mirror_path=path,
+                        encryption_key_id="", created_at="",
+                    )) or ""))
+                    for repo_id, path, name in named
+                ]
             retired = self._read_retired_repos(conn)
             packs_on_discs = self._read_packs_on_discs(conn)
             markers = self._read_repo_markers(conn, [r[0] for r in rows])
@@ -1451,7 +1473,8 @@ class MetaVolumeBuilder:
             n_on_discs = packs_on_discs.get(repo_id, 0)
             if not mirror_path:
                 self._record_metadata_skip(
-                    repo_id, "", "no mirror_path recorded in the catalog",
+                    repo_id, "",
+                    "no mirror_path in the config or the catalog",
                     retired=is_retired, packs_on_discs=n_on_discs,
                 )
                 continue

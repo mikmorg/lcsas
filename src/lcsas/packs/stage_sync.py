@@ -17,11 +17,15 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
-from pathlib import Path
+from typing import TYPE_CHECKING
 
+from lcsas.config.mirrors import mirror_path
 from lcsas.db.repos import list_repos
 from lcsas.packs.delta import DeltaAnalyzer
 from lcsas.packs.scanner import scan_mirror_packs
+
+if TYPE_CHECKING:
+    from lcsas.config.settings import LCSASConfig
 
 
 @dataclass
@@ -44,11 +48,14 @@ def sync_unscanned_packs(
     repo_ids: list[str] | None = None,
     *,
     dry_run: bool = False,
+    config: LCSASConfig | None = None,
 ) -> MirrorSyncResult:
     """Register the pack files in the mirrors that the catalog lacks.
 
     Covers every active catalog repository (or only *repo_ids*).  With
-    *dry_run* nothing is written; the counts are still reported.
+    *dry_run* nothing is written; the counts are still reported.  Each
+    mirror is where *config* says, else where the catalog last saw it
+    (:func:`lcsas.config.mirrors.mirror_path`, #958).
     """
     result = MirrorSyncResult()
     wanted = set(repo_ids) if repo_ids else None
@@ -57,7 +64,12 @@ def sync_unscanned_packs(
             continue
         if wanted is not None and repo.repo_id not in wanted:
             continue
-        scan = scan_mirror_packs(Path(repo.mirror_path))
+        mirror = mirror_path(config, repo)
+        if mirror is None:
+            result.incomplete[repo.name] = [
+                "no mirror path in the config or the catalog"]
+            continue
+        scan = scan_mirror_packs(mirror)
         if scan.errors:
             result.incomplete[repo.name] = list(scan.errors)
         analyzer = DeltaAnalyzer(conn, scan.packs, repo.repo_id)

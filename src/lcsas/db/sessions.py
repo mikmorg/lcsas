@@ -3,9 +3,22 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from lcsas.db.models import BurnSession, SessionVolume
 from lcsas.utils.labels import generate_session_id
+
+
+def recorded_path(value: str) -> Path | None:
+    """A path a catalog row records (a session's ``staging_dir``, a
+    volume's ``iso_path``), or None when it is blank.
+
+    A disc copy of the catalog carries none of this computer's paths
+    (#958), so a catalog rebuilt from discs has blank ones: the folder
+    or the ISO is not on this computer.  Never ``Path('')``, which is the
+    current folder.
+    """
+    return Path(value) if value else None
 
 
 def _row_to_session(row: sqlite3.Row) -> BurnSession:
@@ -221,8 +234,6 @@ def get_staged_iso_path(
 def staged_iso_present(conn: sqlite3.Connection, volume_id: int) -> bool:
     """True when the volume's staged ISO still exists on disk: it is waiting
     to be burned (here, or elsewhere via burn-iso), not a ghost (#647)."""
-    from pathlib import Path
-
     path = get_staged_iso_path(conn, volume_id)
     return path is not None and Path(path).is_file()
 
@@ -238,8 +249,6 @@ def retained_iso_session(
     disc of the volume that failed verification is burned again from the
     same session, which keeps the volume and its label.
     """
-    from pathlib import Path
-
     for row in conn.execute(
         """SELECT sv.session_id, sv.iso_path
            FROM session_volumes sv

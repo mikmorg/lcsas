@@ -181,6 +181,12 @@ def test_stage_clean_refuses_rebuilt_burned_volumes(rebuilt, caplog, force):
 def test_clean_works_once_the_discs_are_recorded(rebuilt, caplog):
     """The refusal's way out: 'verify --disc --location' records each disc,
     after which the burn session cleans as usual and the volumes stay."""
+    # #958: the rebuilt catalog has no staging folder for the session,
+    # but while the session is not cleaned its folder (named after the
+    # session) is not an orphan: 'staging clean' keeps it.
+    assert main(["--config", str(rebuilt["cfg"]), "staging", "clean",
+                 "--force"]) == 0, caplog.text
+    assert rebuilt["staging_dir"].is_dir()
     for label in rebuilt["labels"]:
         with (
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
@@ -204,6 +210,12 @@ def test_clean_works_once_the_discs_are_recorded(rebuilt, caplog):
         assert get_session(conn, rebuilt["session_id"]).status == "CLEANED"
     finally:
         conn.close()
+    # #958: a disc catalog records no staging folder, so the rebuilt
+    # catalog cannot name it; the folder left behind is an orphan, which
+    # 'lcsas staging clean' removes.
+    assert rebuilt["staging_dir"].exists()
+    assert main(["--config", str(rebuilt["cfg"]), "staging", "clean",
+                 "--force"]) == 0, caplog.text
     assert not rebuilt["staging_dir"].exists()
 
 

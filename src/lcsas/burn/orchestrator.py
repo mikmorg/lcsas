@@ -881,33 +881,25 @@ class BurnOrchestrator:
                     f"burn anyway (NOT recommended)."
                 )
 
-            check_repo_recoverable(Path(repo.mirror_path), password_file)
+            from lcsas.config.mirrors import mirror_path
+            mirror = mirror_path(self._config, repo)
+            if mirror is None:
+                raise MirrorUnavailableError(
+                    repo_id, None, [],
+                    detail="neither the config nor the catalog places it",
+                )
+            check_repo_recoverable(mirror, password_file)
 
     def _match_repo_config(
         self, db_name: str, db_mirror_path: str,
     ) -> RepositoryConfig | None:
-        """Find the RepositoryConfig for a catalog repository, joining on mirror_path.
-
-        mirror_path is the authoritative join (the catalog ``name`` may be
-        title-cased relative to the config key, as in `lcsas repo add`).
-        Falls back to an exact then case-insensitive name match.
+        """Find the RepositoryConfig for a catalog repository
+        (:func:`lcsas.config.mirrors.config_for_repo`): mirror path, then
+        name; a blank catalog path joins on the name alone (#958).
         """
-        try:
-            db_resolved = Path(db_mirror_path).resolve()
-        except OSError:
-            db_resolved = Path(db_mirror_path)
-        for cfg in self._config.repositories.values():
-            try:
-                if cfg.mirror_path.resolve() == db_resolved:
-                    return cfg
-            except OSError:
-                continue
-        if db_name in self._config.repositories:
-            return self._config.repositories[db_name]
-        for key, cfg in self._config.repositories.items():
-            if key.lower() == db_name.lower():
-                return cfg
-        return None
+        from lcsas.config.mirrors import config_for_repo
+
+        return config_for_repo(self._config, db_name, db_mirror_path)
 
     def _config_names(self) -> dict[str, str]:
         """Catalog repo_id -> the repository's ``[repos.<name>]`` key (#587).
@@ -924,14 +916,16 @@ class BurnOrchestrator:
         return names
 
     def _get_mirror_paths(self) -> dict[str, Path]:
-        """Build a dict of {repo_id: mirror_path} from the catalog's repositories."""
-        paths: dict[str, Path] = {}
-        for repo in list_repos(self._conn):
-            paths[repo.repo_id] = Path(repo.mirror_path)
+        """Every catalog repository's mirror, by repo_id (#958): the
+        config's ``mirror_path`` first, then the catalog's
+        (:func:`lcsas.config.mirrors.mirror_paths`)."""
+        from lcsas.config.mirrors import mirror_paths
+
+        paths = mirror_paths(self._conn, self._config)
 
         # Fallback: if no repositories in the catalog, use mirror_base_path
         # as "default"
-        if not paths:
+        if not paths and not list_repos(self._conn):
             paths["default"] = self._config.mirror_base_path
 
         return paths
@@ -1784,10 +1778,34 @@ class BurnOrchestrator:
             if refusal is not None:
                 raise BurnError(f"{refusal} Nothing was burned.")
 
+        # #958: a blank ISO path (a catalog rebuilt from discs, which
+        # carry no paths) means the ISO is not on this computer.  Said
+        # before the first disc prompt.
+        if not skip_burn:
+            from lcsas.db.sessions import recorded_path
+
+            not_here = [
+                get_volume_by_id(self._conn, sv.volume_id).label
+                for sv in session_vols if recorded_path(sv.iso_path) is None
+            ]
+            if not_here:
+                raise BurnError(
+                    f"The ISO of {', '.join(not_here)} is not on this "
+                    f"computer: the catalog records no ISO path for it (a "
+                    f"catalog rebuilt from discs has none). Nothing was "
+                    f"burned.",
+                    recovery_hint=(
+                        f"To burn another disc of these volumes, stage them "
+                        f"again: lcsas stage --for-location {location}, then "
+                        f"lcsas burn --session latest --location {location}."
+                    ),
+                )
+
         receipts: list[BurnReceipt] = []
         total = len(session_vols)
 
         for idx, sv in enumerate(session_vols, start=1):
+            # Not blank unless skip_burn, which does not read it (above).
             iso_path = Path(sv.iso_path)
             vol = get_volume_by_id(self._conn, sv.volume_id)
 
@@ -1964,8 +1982,12 @@ class BurnOrchestrator:
         # [BURN-08]
         session_vols_info = get_session_volumes(self._conn, session_id)
         if session_vols_info:
-            session_dir = Path(session_vols_info[0].iso_path).parent
-            self._write_receipts(receipts, session_dir, location)
+            from lcsas.db.sessions import recorded_path
+
+            # A blank ISO path (#958): no staging tree here to copy into.
+            first_iso = recorded_path(session_vols_info[0].iso_path)
+            if first_iso is not None:
+                self._write_receipts(receipts, first_iso.parent, location)
         self._write_durable_receipts(receipts, location)
 
         return receipts
@@ -1983,7 +2005,7 @@ class BurnOrchestrator:
         staged by a ``lcsas stage`` that was killed
         (:func:`unfinished_stage_refusal`).
         """
-        from lcsas.db.sessions import get_session
+        from lcsas.db.sessions import get_session, recorded_path
 
         vols = [(sv, get_volume_by_id(self._conn, sv.volume_id))
                 for sv in session_vols]
@@ -2001,9 +2023,11 @@ class BurnOrchestrator:
                     f"again."
                 ),
             )
-        refusal = unfinished_stage_refusal(
-            Path(get_session(self._conn, session_id).staging_dir), session_id,
-        )
+        # #958: a blank staging folder is not on this computer; the burn
+        # says its ISOs are not here.
+        session_dir = recorded_path(get_session(self._conn, session_id).staging_dir)
+        refusal = (unfinished_stage_refusal(session_dir, session_id)
+                   if session_dir is not None else None)
         if refusal is not None:
             raise BurnError(refusal)
 
@@ -2264,16 +2288,25 @@ class BurnOrchestrator:
             )
             lifecycle.never_burned_deleted(vid, never_burned=never_burned)
 
+        # #958: a blank path (a catalog rebuilt from discs) is not on
+        # this computer: nothing to remove.  Never Path(''), the cwd.
+        from lcsas.db.sessions import get_session, recorded_path
+
         for sv in session_vols:
-            iso_path = Path(sv.iso_path)
-            if iso_path.exists():
+            iso_path = recorded_path(sv.iso_path)
+            if iso_path is not None and iso_path.is_file():
                 iso_path.unlink()
 
-        # Get session staging dir from the session
-        from lcsas.db.sessions import get_session
         session = get_session(self._conn, session_id)
-        staging_dir = Path(session.staging_dir)
-        if staging_dir.exists():
+        staging_dir = recorded_path(session.staging_dir)
+        if staging_dir is None:
+            _logger.info(
+                "The catalog records no staging folder for session %s (a "
+                "catalog rebuilt from discs): nothing to remove. 'lcsas "
+                "staging clean' removes a folder of it left in the staging "
+                "area.", session_id,
+            )
+        elif staging_dir.exists():
             safe_remove_tree(staging_dir)
 
         # Aborted sessions reuse CLEANED: the sessions.status CHECK allows

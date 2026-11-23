@@ -101,6 +101,25 @@ def get_repo_by_name(conn: sqlite3.Connection, name: str) -> Repository | None:
     return _row_to_repo(rows[0])
 
 
+def refresh_mirror_path(
+    conn: sqlite3.Connection, repo: Repository, mirror_path: str | Path,
+) -> bool:
+    """Record *mirror_path* as where *repo*'s mirror is, when the catalog
+    says otherwise (#958).  Returns whether it changed.
+
+    The config owns a mirror's path; the catalog column is the last path
+    ``lcsas scan`` saw, kept for the commands that run with no config.
+    """
+    if repo.mirror_path and same_mirror_path(repo.mirror_path, mirror_path):
+        return False
+    conn.execute(
+        "UPDATE repositories SET mirror_path = ? WHERE repo_id = ?",
+        (str(mirror_path), repo.repo_id),
+    )
+    conn.commit()
+    return True
+
+
 def same_mirror_path(a: str | Path, b: str | Path) -> bool:
     """Whether two mirror paths name the same directory, compared lexically.
 

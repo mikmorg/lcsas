@@ -679,48 +679,73 @@ def _use_rollback_journal(db: Path) -> None:
         )
 
 
-def _blank_snapshot_columns(db: Path) -> None:
-    """Blank the private snapshot columns in the disc catalog *db* (#733).
+# #958: the columns of the computer that staged a disc, blank ("") in
+# each disc catalog: a mirror's path, a session's staging folder and a
+# staged ISO's path.  No restore tier reads them; the owner's master
+# catalog keeps them (the config owns a mirror's path, and ``lcsas
+# scan`` writes it again on a catalog rebuilt from discs).  The columns
+# stay, so the schema is unchanged.
+DISC_BLANKED_PATH_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("repositories", "mirror_path"),
+    ("burn_sessions", "staging_dir"),
+    ("session_volumes", "iso_path"),
+)
 
-    Sets each column of ``DISC_BLANKED_SNAPSHOT_COLUMNS`` to its blank
-    value in every snapshot row, then rebuilds the file with ``VACUUM``.
-    An UPDATE alone leaves the old text in the file's free space, where
-    any hex viewer would find it; ``secure_delete`` zeroes what the
-    UPDATE frees and ``VACUUM`` drops every free page, including those
-    the master catalog had before the copy.  Raises if a row keeps a
-    value, so a disc never carries one by accident.  A file with no
-    ``snapshots`` table is only vacuumed.
+
+def _blank_disc_columns(db: Path) -> None:
+    """Blank the private columns in the disc catalog *db* (#733, #958).
+
+    Sets each snapshot column of ``DISC_BLANKED_SNAPSHOT_COLUMNS`` to its
+    blank value in every snapshot row, and each path column of
+    ``DISC_BLANKED_PATH_COLUMNS`` to "", then rebuilds the file with
+    ``VACUUM``.  An UPDATE alone leaves the old text in the file's free
+    space, where any hex viewer would find it; ``secure_delete`` zeroes
+    what the UPDATE frees and ``VACUUM`` drops every free page, including
+    those the master catalog had before the copy.  Raises if a row keeps
+    a value, so a disc never carries one by accident.  A table or column
+    the file does not have is left out.
     """
     conn = sqlite3.connect(db)
     try:
         conn.execute("PRAGMA secure_delete=ON")
-        cols = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(snapshots)")
-        }
-        blanks = [
+
+        def columns(table: str) -> set[str]:
+            return {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+
+        # (table, [(column, blank value)]) for each table that has some.
+        blanks: list[tuple[str, list[tuple[str, str]]]] = []
+        snap_cols = columns("snapshots")
+        snap = [
             (col, value)
             for col, value in DISC_BLANKED_SNAPSHOT_COLUMNS.items()
-            if col in cols
+            if col in snap_cols
         ]
-        if blanks:
-            assignments = ", ".join(f"{col} = ?" for col, _ in blanks)
+        if snap:
+            blanks.append(("snapshots", snap))
+        for table, col in DISC_BLANKED_PATH_COLUMNS:
+            if col in columns(table):
+                blanks.append((table, [(col, "")]))
+        for table, cols in blanks:
+            assignments = ", ".join(f"{col} = ?" for col, _ in cols)
             conn.execute(
-                f"UPDATE snapshots SET {assignments}",
-                [value for _, value in blanks],
+                f"UPDATE {table} SET {assignments}",
+                [value for _, value in cols],
             )
-            conn.commit()
+        conn.commit()
         conn.execute("VACUUM")
-        if blanks:
-            kept = " OR ".join(f"{col} IS NOT ?" for col, _ in blanks)
+        for table, cols in blanks:
+            kept = " OR ".join(f"{col} IS NOT ?" for col, _ in cols)
             left = conn.execute(
-                f"SELECT COUNT(*) FROM snapshots WHERE {kept}",
-                [value for _, value in blanks],
+                f"SELECT COUNT(*) FROM {table} WHERE {kept}",
+                [value for _, value in cols],
             ).fetchone()[0]
             if left:
                 raise RuntimeError(
-                    f"{left} snapshot row(s) in {db} still carry source "
-                    "folders, tags or a description after blanking"
+                    f"{left} {table} row(s) in {db} still carry "
+                    f"{', '.join(col for col, _ in cols)} after blanking"
                 )
     finally:
         conn.close()
@@ -851,8 +876,11 @@ class HolographicInjector:
         The copy does not carry the snapshots' source folders, tags and
         descriptions (#733): those columns are blanked, so a disc shows
         them only to someone with the repository password, inside
-        rustic's encrypted snapshot files.  The master catalog keeps them.
-        The blanking ends with ``VACUUM``, so the copy has no free pages.
+        rustic's encrypted snapshot files.  Nor does it carry this
+        computer's paths (#958): mirror paths, staging folders and ISO
+        paths are blank (``DISC_BLANKED_PATH_COLUMNS``).  The master
+        catalog keeps them.  The blanking ends with ``VACUUM``, so the
+        copy has no free pages.
         """
         dst = self._root / "catalog.db"
         if isinstance(source, Path):
@@ -869,7 +897,7 @@ class HolographicInjector:
         else:
             _backup_to(source, dst)
         _use_rollback_journal(dst)
-        _blank_snapshot_columns(dst)
+        _blank_disc_columns(dst)
 
     def write_volume_info(
         self,
