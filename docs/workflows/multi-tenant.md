@@ -40,11 +40,16 @@ key ID from the mirror's `keys/` directory.
 
 **Steps:**
 
-1. `lcsas repo add <name> <mirror_path>` — refuse a name or mirror path
-   another repository already has (the error names that repository; the
-   schema has no UNIQUE index, so the command checks, #685), generate
-   UUID, scan `keys/` for the first key filename, INSERT into
-   `repositories`. (`cmd_repo_add` in `src/lcsas/cli/commands/repo.py`)
+1. `lcsas repo add <name> <mirror_path>` — scan `keys/` for the first
+   key filename; refuse a mirror that is a **retired** repository (its
+   recorded key is in the mirror's `keys/`, or, when either side has no key, its
+   mirror path is the same): the error names that repository and offers
+   `lcsas repo activate <name>`, because its packs are on discs under its
+   catalog ID and a new ID would burn every pack again (#962). Then refuse
+   a name or mirror path another repository already has (the error names
+   that repository; the schema has no UNIQUE index, so the command checks,
+   #685), generate the UUID, INSERT into `repositories`.
+   (`cmd_repo_add` in `src/lcsas/cli/commands/repo.py`)
 2. `register_repo()` writes `repo_id`, `name`, absolute `mirror_path`,
    and `encryption_key_id`. (`register_repo` in `src/lcsas/db/repos.py`)
 3. The key ID is auto-detected from `mirror_path/keys/`.
@@ -54,6 +59,19 @@ key ID from the mirror's `keys/` directory.
 **Expected outcome:** New row with fresh UUID and absolute mirror path;
 log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
 `lcsas scan --repo <name>` can associate packs with this repository.
+
+**One repository is registered once.** The catalog ID minted here is the
+repository's identity for its whole life: it is on every disc
+(`metadata/<repo_id>/`, `packs.repo_id` in the disc catalog). It is not
+the repository's own Rustic id, so LCSAS cannot tell two mirrors of one
+repository apart from two repositories. A copy (clone) of a repository's
+mirror registered as a second repository is not supported: a pack ID is
+unique across the catalog, so the second registration finds every pack
+already owned by the first and gets none. Register each repository once;
+if its mirror moves, keep its catalog row. A retired repository is
+brought back with `lcsas repo activate`, never with `repo add`; nothing
+yet updates a recorded mirror path, so put a moved mirror back at the path
+`lcsas repo list` shows before activating it.
 
 **Variant axes that apply:**
 
@@ -72,6 +90,10 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
     name or mirror path is refused (#685).
   - `tests/unit/test_multi_tenant.py::test_repos_registered_independently`
     — five repositories registered directly.
+  - `tests/integration/test_repo_remove_guard.py::test_repo_add_of_a_retired_repository_offers_activate`
+    — the retired repository's mirror, at its path or copied elsewhere, is
+    refused with the `repo activate` hint; activate keeps its ID and
+    queues no pack again (#962).
 - Gaps:
   - No CLI-level test asserts `encryption_key_id` is populated from a
     real `keys/` layout.
@@ -145,12 +167,11 @@ gone (see [meta-disc.md](meta-disc.md#key-gate-when-a-missing-repo-key-fails-the
 Retiring is how the owner answers that question once, in the catalog,
 instead of passing an override flag on every build.
 
-Retirement is **not** removal. `lcsas repo remove --force` deletes the
-repository's packs and snapshots from the catalog — an owner whose data is
-on burned discs must never be pushed toward that verb just to quiet a
-gate. `retire` only flips a flag, keeps every row, and is undone by
-`lcsas repo activate <repo>`. Because it destroys nothing, it does
-not prompt for confirmation.
+Retirement is **not** removal. `lcsas repo remove` deletes a repository
+from the catalog, so it refuses one with packs on burned volumes (#962);
+retirement is the verb for such a repository. `retire` only flips a flag,
+keeps every row, and is undone by `lcsas repo activate <repo>`. Because it
+destroys nothing, it does not prompt for confirmation.
 
 **Prerequisites:** A registered repository, given by its name or its
 catalog ID (the UUID from `lcsas repo list`) (#581).
@@ -214,47 +235,61 @@ not `estate` — retirement narrows exactly one gate and nothing more.
 
 ## Remove a repository (`lcsas repo remove`)
 
-**Purpose:** Delete a repository from the catalog, optionally marking its
-packs pruned and cascade-deleting snapshots and `volume_packs` links. No
-separate `deprecate` subcommand exists for repositories; the DEPRECATED state
-lives on `volumes` (managed by `consolidate --deprecate`).
+**Purpose:** Delete a repository that never reached a burned volume — one
+added by mistake — from the catalog, with its packs, snapshots,
+`volume_packs` links and recorded split. A repository with packs on a
+burned volume is never deleted: its catalog ID is on those discs, and
+added again it would get a new ID and every pack would be burned a second
+time under it (#962). Retire it instead. No separate `deprecate`
+subcommand exists for repositories; the DEPRECATED state lives on
+`volumes` (managed by `consolidate --deprecate`).
 
 **Prerequisites:**
 
-- A registered repository (UUID from `lcsas repo list`).
+- A registered repository (its name, or the UUID from `lcsas repo list`).
+- None of its packs, pruned or not, on a burned volume.
 - For `--force`: interactive TTY (`yes` confirmation read from stdin).
 
 **Steps:**
 
-1. `lcsas repo remove <repo> [--force]` — look up by catalog ID, then by
-   name (`_find_repo`); exit 1 with `not found` if missing. (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
-2. List active (non-pruned) packs. Refuse without `--force` if any are
-   linked to active volumes, then refuse without `--force` if any
-   active packs exist at all. (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
-3. With `--force`, prompt `Type 'yes' to confirm`; EOF on stdin
-   returns exit 1. (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
-4. `bulk_mark_pruned` active packs → `DELETE FROM volume_packs` per
-   pack → `DELETE FROM packs WHERE repo_id = ?` → delete snapshots →
-   delete the `repositories` row. (`cmd_repo_remove` in
-   `src/lcsas/cli/commands/repo.py`, `delete_repo` in `src/lcsas/db/repos.py`)
-5. Whole teardown runs inside `locked_connection` (single transaction).
-   (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
+1. `lcsas repo remove <repo> [--force]` — look up by name or catalog ID
+   (`_find_repo`); exit 1 with `not found` if missing. (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`)
+2. Refuse, with or without `--force`, when any of its packs (pruned
+   included: a pruned pack is still on its discs) is on a burned volume:
+   one that has left STAGING, or that has a disc recorded. The error
+   counts and names those volumes, says nothing was deleted, and points
+   at `lcsas repo retire <repo>`. (`_burned_volume_labels` in
+   `src/lcsas/cli/commands/repo.py`)
+3. Without `--force`, refuse when it has any pack in the catalog.
+4. With `--force`, prompt `This deletes from the catalog: repository …,
+   N pack(s) and M snapshot(s)`, then `Type 'yes' to confirm`; EOF on
+   stdin returns exit 1.
+5. Delete its `volume_packs` links and packs, recompute `used_bytes` of
+   each staged volume that held them, delete its snapshots and recorded
+   split, then the `repositories` row. Log `Deleted repository '<name>'
+   from the catalog, with N pack(s) and M snapshot(s).`
+   (`cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`, `delete_repo`
+   in `src/lcsas/db/repos.py`)
 
 **Expected outcome:**
 
-- Without `--force` on a repository with packs or volume links: exit 1 with a
-  message naming how many block removal.
-- With `--force` after confirmation: row and all FK-related rows for
-  `repo_id` gone.
-- Mirror's key file is **not** touched. Packs already burned to
-  discs are **not** touched (still decryptable by anyone with the password).
+- A repository with packs on a burned volume: exit 1, catalog unchanged,
+  whatever the flags.
+- Without `--force` on a repository with packs: exit 1.
+- With `--force` after confirmation: row and every row for its `repo_id`
+  gone; staged volumes' `used_bytes` count only the packs they still hold.
+- Mirror's key file is **not** touched. An ISO image already staged with
+  its packs is not touched either: the command warns, naming the staged
+  volumes, and `lcsas session abort` and a new `stage` rebuild the session
+  without them. Burned as it is, such a disc would carry packs the catalog
+  no longer records.
 
 **Variant axes that apply:**
 
 - Multi-repository: removing one repository must leave the others intact
   (`test_deleting_repo_does_not_affect_others`).
-- Storage stage: catalog removal does **not** touch the discs —
-  intentional, owner-relevant.
+- Storage stage: catalog removal does **not** touch the discs, which is
+  why a repository on burned discs is refused.
 - All others: N/A.
 
 **Test coverage:**
@@ -263,20 +298,20 @@ lives on `volumes` (managed by `consolidate --deprecate`).
   - `tests/unit/test_cli_repo.py::TestCmdRepoRemoveEdges::test_remove_nonexistent_repo`
   - `tests/unit/test_cli_repo.py::TestCmdRepoRemove::test_repo_remove_happy_path`
   - `tests/unit/test_cli_repo.py::TestCmdRepoRemoveEdges::test_remove_with_packs_needs_force`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoRemove::test_repo_remove_rejects_packs_on_a_burned_volume`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoRemove::test_repo_remove_refuses_pruned_packs_on_a_burned_volume`
+  - `tests/unit/test_cli_repo.py::TestCmdRepoRemove::test_repo_remove_with_force_purges_packs`
+  - `tests/integration/test_repo_remove_guard.py` — real rustic and
+    xorriso: a burned repository is refused with and without `--force`;
+    a staged one is deleted with no orphan row and correct `used_bytes`.
   - `tests/unit/test_multi_tenant.py::test_deleting_repo_does_not_affect_others`
 - Gaps:
-  - `--force` interactive confirmation path untested (needs
-    `builtins.input` monkeypatch).
-  - "Packs on active volumes" branch not asserted distinct from "active
-    packs".
   - EOFError path (piped automation) untested.
-  - No soft-deprecate at the repository level; an owner retiring a
-    repository has no option short of full removal.
 
 **Source refs:**
 
 - CLI parser: `build_parser()` (`repo remove`) in `src/lcsas/cli/parser.py`
-- Handler: `cmd_repo_remove` in `src/lcsas/cli/commands/repo.py`
+- Handler: `cmd_repo_remove`, `_burned_volume_labels` in `src/lcsas/cli/commands/repo.py`
 - Catalog delete: `delete_repo` in `src/lcsas/db/repos.py`
 - Snapshot cascade: `delete_snapshots_for_repo` in `src/lcsas/db/snapshots.py`
 

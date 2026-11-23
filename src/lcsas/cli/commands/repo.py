@@ -32,11 +32,42 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()
 
+        # Auto-detect the key ID from the repository's keys/ dir
+        key_ids = read_repo_key_ids(mirror)
+        encryption_key_id = key_ids[0] if key_ids else ""
+
+        # #962: a retired repository is not registered again: its id is on
+        # its discs, and a new id would burn every pack a second time.
+        # encryption_key_id holds the first key file name `repo add` saw in
+        # the mirror's keys/, so a mirror holding that key is that
+        # repository, wherever it now lives and whatever it is called (its
+        # recorded mirror path stands in when either side has no key).
+        from lcsas.db.repos import REPO_STATUS_RETIRED, list_repos, same_mirror_path
+        existing_repos = list_repos(conn)
+        for existing in existing_repos:
+            if existing.status != REPO_STATUS_RETIRED:
+                continue
+            if existing.encryption_key_id and key_ids:
+                same_repo = existing.encryption_key_id in key_ids
+            else:
+                same_repo = same_mirror_path(existing.mirror_path, mirror)
+            if same_repo:
+                logger.error(
+                    f"The mirror {mirror} is the retired repository "
+                    f"'{existing.name}' (id: {existing.repo_id}, mirror: "
+                    f"{existing.mirror_path}). Its packs are on discs under "
+                    f"that id, so it is not registered again under a new "
+                    f"one. Nothing was registered. To back it up again, run "
+                    f"`lcsas repo activate {existing.name}`; if its mirror "
+                    f"has moved, put it back at {existing.mirror_path} "
+                    f"first."
+                )
+                return 1
+
         # #685: names and mirror paths must be unique.  The schema has no
         # UNIQUE index on either (v10 is burned on discs), so check here:
         # a second 'photos' made every later `--repo photos` ambiguous.
-        from lcsas.db.repos import list_repos, same_mirror_path
-        for existing in list_repos(conn):
+        for existing in existing_repos:
             if existing.name == args.name:
                 clash = f"name '{args.name}'"
             elif same_mirror_path(existing.mirror_path, mirror):
@@ -51,10 +82,6 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
                 f"repositories."
             )
             return 1
-
-        # Auto-detect the key ID from the repository's keys/ dir
-        key_ids = read_repo_key_ids(mirror)
-        encryption_key_id = key_ids[0] if key_ids else ""
 
         register_repo(
             conn,
@@ -222,12 +249,41 @@ def _find_repo(conn: Any, ref: str, mirror_path: Path | None = None) -> Any:
     return resolve_repo(conn, ref, mirror_path)
 
 
+def _burned_volume_labels(conn: Any, repo_id: str) -> list[str]:
+    """Labels of the burned volumes holding a pack of *repo_id* (#962).
+
+    Pruned packs count: a pack pruned from the mirror is still on its
+    discs.  A volume counts as burned once it has left STAGING (a disc may
+    exist from BURNING on, and DEPRECATED, CONSOLIDATING and DESTROYED
+    volumes were all burned) or once any disc of it is recorded.
+    """
+    rows = conn.execute(
+        """SELECT DISTINCT v.label FROM volumes v
+           JOIN volume_packs vp ON vp.volume_id = v.volume_id
+           JOIN packs p ON p.pack_id = vp.pack_id
+           WHERE p.repo_id = ?
+             AND (v.status != 'STAGING'
+                  OR EXISTS (SELECT 1 FROM volume_copies c
+                             WHERE c.volume_id = v.volume_id))
+           ORDER BY v.label""",
+        (repo_id,),
+    ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
 def cmd_repo_remove(args: argparse.Namespace) -> int:
-    """Remove a repository from the catalog."""
-    from lcsas.db.packs import bulk_mark_pruned, list_packs
+    """Delete a repository from the catalog.
+
+    Refused, with or without --force, once any of its packs is on a burned
+    volume (#962): its id is on those discs, and a repository added again
+    gets a new one, so every pack would be burned a second time under a
+    second identity.  `repo retire` is the verb for a repository whose
+    mirror is gone for good.  --force is for a repository whose packs are
+    on no burned volume, such as one added by mistake.
+    """
+    from lcsas.db.packs import list_packs
     from lcsas.db.repos import delete_repo
     from lcsas.db.snapshots import delete_snapshots_for_repo
-    from lcsas.db.volume_packs import get_volume_ids_for_pack
 
     with _open_catalog(args) as conn:
         try:
@@ -242,41 +298,41 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
             logger.error(f"Repository '{args.repo_id}' not found.")
             return 1
 
-        # Check for active (non-pruned) packs
-        active_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=False)
-
-        # Check if any active packs are on active volumes
-        packs_on_volumes = []
-        for p in active_packs:
-            vols = get_volume_ids_for_pack(conn, p.pack_id)
-            if vols:
-                packs_on_volumes.append(p)
-
-        if packs_on_volumes and not args.force:
+        burned = _burned_volume_labels(conn, repo.repo_id)
+        if burned:
+            shown = ", ".join(burned[:5]) + (", ..." if len(burned) > 5 else "")
             logger.error(
-                f"Repository '{repo.name}' has {len(packs_on_volumes)} "
-                f"pack(s) on active volumes. Use --force to remove anyway."
+                f"Repository '{repo.name}' has packs on {len(burned)} burned "
+                f"volume(s) ({shown}). Its catalog ID {repo.repo_id} is on "
+                f"those discs, so it cannot be deleted from the catalog: "
+                f"added again, it would get a new ID and every pack would be "
+                f"burned a second time. Nothing was deleted. If its mirror "
+                f"is gone for good, run `lcsas repo retire {repo.name}`, "
+                f"which keeps its packs and snapshots."
             )
             return 1
 
-        if active_packs and not args.force:
+        all_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=True)
+        snap_count = conn.execute(
+            "SELECT COUNT(*) FROM snapshots WHERE repo_id = ?",
+            (repo.repo_id,),
+        ).fetchone()[0]
+
+        if all_packs and not args.force:
             logger.error(
-                f"Repository '{repo.name}' has {len(active_packs)} "
-                f"active pack(s). Use --force to mark them pruned and remove."
+                f"Repository '{repo.name}' has {len(all_packs)} pack(s) in "
+                f"the catalog, none on a burned volume. Use --force to "
+                f"delete them, its snapshots and the repository from the "
+                f"catalog."
             )
             return 1
 
-        # Confirmation prompt when using --force
         if args.force:
-            all_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=True)
-            snap_count = conn.execute(
-                "SELECT COUNT(*) FROM snapshots WHERE repo_id = ?",
-                (repo.repo_id,),
-            ).fetchone()[0]
             logger.warning("")
             logger.warning(
-                "This will DELETE from the catalog: %d pack(s) and %d snapshot(s).",
-                len(all_packs), snap_count,
+                "This deletes from the catalog: repository '%s', %d pack(s) "
+                "and %d snapshot(s).",
+                repo.name, len(all_packs), snap_count,
             )
             try:
                 prompt = "Type 'yes' to confirm deletion, or anything else to cancel: "
@@ -287,25 +343,36 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
                 logger.error("No terminal available for confirmation (redirected input).")
                 return 1
 
-        # Force mode: mark all packs as pruned
-        if active_packs:
-            pack_ids = [p.pack_id for p in active_packs]
-            pruned = bulk_mark_pruned(conn, pack_ids)
-            logger.info(f"Marked {pruned} pack(s) as pruned.")
-
-        # Delete packs (including pruned), snapshots, then the repository itself.
-        # Packs must be removed before the repository to satisfy FK constraints.
-        all_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=True)
+        # Delete packs, snapshots, then the repository itself.  Packs must
+        # be removed before the repository to satisfy FK constraints.
+        staged: list[tuple[int, str]] = []
         if all_packs:
-            all_pack_ids = [p.pack_id for p in all_packs]
-            # Remove volume_packs links first (FK on pack_id)
-            for pid in all_pack_ids:
-                conn.execute(
-                    "DELETE FROM volume_packs WHERE pack_id = ?", (pid,)
-                )
+            # Only staged (never-burned) volumes can hold them here; each
+            # one's used_bytes is recomputed once its links are gone.
+            staged = [(int(r[0]), str(r[1])) for r in conn.execute(
+                "SELECT DISTINCT v.volume_id, v.label FROM volumes v "
+                "JOIN volume_packs vp ON vp.volume_id = v.volume_id "
+                "JOIN packs p ON p.pack_id = vp.pack_id WHERE p.repo_id = ? "
+                "ORDER BY v.label",
+                (repo.repo_id,),
+            ).fetchall()]
+            conn.execute(
+                "DELETE FROM volume_packs WHERE pack_id IN "
+                "(SELECT pack_id FROM packs WHERE repo_id = ?)",
+                (repo.repo_id,),
+            )
             conn.execute(
                 "DELETE FROM packs WHERE repo_id = ?", (repo.repo_id,)
             )
+            from lcsas.db.volumes import update_used_bytes
+            for volume_id, _label in staged:
+                used = conn.execute(
+                    "SELECT COALESCE(SUM(p.size_bytes), 0) FROM volume_packs vp "
+                    "JOIN packs p ON p.pack_id = vp.pack_id "
+                    "WHERE vp.volume_id = ?",
+                    (volume_id,),
+                ).fetchone()[0]
+                update_used_bytes(conn, volume_id, int(used), commit=False)
         snap_count = delete_snapshots_for_repo(conn, repo.repo_id)
         # #573: the repository's recorded password split goes with it, under
         # its repo_id and under its name (splits recorded before #571).
@@ -319,7 +386,15 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
         delete_repo(conn, repo.repo_id)
 
     logger.info(
-        f"Removed repository '{repo.name}' "
-        f"({snap_count} snapshot(s) deleted)."
+        f"Deleted repository '{repo.name}' from the catalog, with "
+        f"{len(all_packs)} pack(s) and {snap_count} snapshot(s)."
     )
+    if staged:
+        logger.warning(
+            "The ISO images of staged volume(s) %s still hold its packs. "
+            "Run `lcsas session abort <session>` for their burn session and "
+            "`lcsas stage` again before burning, or the discs will carry "
+            "packs the catalog no longer records.",
+            ", ".join(label for _vid, label in staged),
+        )
     return 0

@@ -14,8 +14,8 @@ from lcsas.db.models import Repository
 #              reachable and `lcsas meta build` requires its Rustic keys to
 #              be bundled.
 #   retired  — the mirror is gone for good.  The catalog row must stay
-#              (its packs are on burned discs and `repo remove --force`
-#              would destroy that pack/snapshot history), but the owner
+#              (its packs are on burned discs, so `repo remove` refuses
+#              it, #962), but the owner
 #              has said so explicitly, so the meta-build key gate skips it.
 #
 # Enforced here rather than by a SQL CHECK: SQLite cannot retro-apply a

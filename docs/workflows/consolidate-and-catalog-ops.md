@@ -43,6 +43,17 @@ silent rot — pack files lost to media decay, content that no longer
 hashes to its filename (`--content`), or catalog entries that have
 drifted out of sync.
 
+A repository keeps one catalog ID for its life, because that ID is on
+every disc (`metadata/<repo_id>/`, `packs.repo_id` in the disc catalog).
+So the catalog never forgets a repository whose packs are on burned
+volumes (#962): `lcsas repo remove` refuses it, with or without
+`--force`, and `lcsas repo retire` is the verb for one whose mirror is
+gone for good: it keeps every pack, snapshot and `volume_packs` row, so
+consolidation and `volume impact` still see them. `lcsas repo add` of a
+retired repository's mirror offers `lcsas repo activate` instead of
+minting a second ID that would burn every pack again. See
+[multi-tenant.md](multi-tenant.md#remove-a-repository-lcsas-repo-remove).
+
 The broader system design lives in [`docs/architecture.md`](../architecture.md).
 
 ## Table of contents
