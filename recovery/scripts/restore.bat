@@ -1614,7 +1614,10 @@ if defined SH_DUP (
     echo That is a card you already typed.  Type a different card.
     goto :share_next
 )
-if %SI% gtr 1 if /i not "!SK2!"=="!SK2_FIRST!" goto :share_other_split
+REM One test per line: wine's cmd cannot parse "if ... if /i not ...".
+if %SI% equ 1 goto :share_first
+if /i not "!SK2!"=="!SK2_FIRST!" goto :share_other_split
+:share_first
 set "SKEY%SI%=!SK!"
 if %SI% equ 1 set "SK2_FIRST=!SK2!"
 if %SI% equ 1 set "SKW_FIRST=!SKW!"
