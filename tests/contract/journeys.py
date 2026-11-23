@@ -130,7 +130,17 @@ class Folder:
     n: int = 1
 
 
-Typed = str | Newest | Pick | Password | Card | Rebuilt | Folder
+@dataclass(frozen=True)
+class Insert:
+    """Put a disc in the drive at the newest data disc question (or at
+    the question an older disc asks, #952), then ENTER: ``"oldest"``,
+    the oldest data disc of the archive; ``"newest"``; or
+    ``"foreign"``, the disc of another archive (:attr:`Archive.foreign`)."""
+
+    which: str
+
+
+Typed = str | Newest | Pick | Password | Card | Rebuilt | Folder | Insert
 NEWEST = Newest()
 
 
@@ -176,6 +186,11 @@ TIER1_BOX_END = r"Type 'q' then ENTER to stop for now\.[\s\S]*?\n\+-+\+\r?\n> "
 
 PROMPTS: tuple[Phrase, ...] = (
     Phrase("newest data disc", sh=r"ENTER, S or Q: ", bat=r"Newest data disc: "),
+    # #952: the disc put in knows fewer backups of a set than the copy in
+    # hand (the META disc's, or one read from a newer disc).
+    Phrase("fewer backups",
+           sh=r"ENTER \(this disc\), S \(the copy\) or Q: ",
+           bat=r"ENTER \(this disc\), S \(the copy\) or Q: "),
     Phrase("which set",
            sh=r"Choose a backup set \(number or name\): ",
            bat=r"Which one do you want to restore\? \[1\]: "),
@@ -405,6 +420,8 @@ class Journey(_PerScript):
     skip_at_disc: int | None = None
     #: What happens when the person carries on.
     then: Leg | None = None
+    #: A second drive holds the disc of another archive (#952).
+    foreign_in_reach: bool = False
 
 
 # ── The archives: real rustic sets, burned, unpacked ────────────────
@@ -485,10 +502,18 @@ class Archive:
     #: Each data disc (a read-only folder), by label.
     discs: dict[str, Path]
     sets: dict[str, ArchiveSet]
+    #: Data discs of ANOTHER archive (#952), by label.
+    foreign: dict[str, Path] = field(default_factory=dict)
 
     @property
     def newest(self) -> str:
         return sorted(self.discs)[-1]
+
+    def disc(self, which: str) -> Path:
+        """The disc :class:`Insert` names."""
+        if which == "foreign":
+            return next(iter(self.foreign.values()))
+        return self.discs[sorted(self.discs)[0 if which == "oldest" else -1]]
 
 
 def _read_only(root: Path) -> None:
@@ -590,6 +615,91 @@ def build_archive(spec: ArchiveSpec, workdir: Path) -> Archive:
     for scrap in ("mirror", "staging", "sources", "meta_stage.iso"):
         shutil.rmtree(workdir / scrap, ignore_errors=True)
     return Archive(meta=meta, discs=discs, sets=sets)
+
+
+@dataclass(frozen=True)
+class SessionsSpec:
+    """An archive burned in two sessions by the owner's own commands
+    (:class:`tests.integration.scratch_install.ScratchInstall`): one
+    backup of each set, a burn, a second backup that changes every file,
+    a second burn, then the META disc (#952).  So the first data disc
+    knows one backup of each set, and the second disc and the META disc
+    know both.  ``sets[name]`` is the latest backup;
+    ``sets[f"{name}, first backup"]`` the first.  With ``foreign``, a disc
+    of another archive (its own set, ``label_prefix`` OTHER) as well."""
+
+    names: tuple[str, ...]
+    foreign: bool = False
+
+
+SESSIONS: dict[str, SessionsSpec] = {
+    "two sessions": SessionsSpec(("documents",)),
+    "two sessions, another archive's disc": SessionsSpec(("documents",), foreign=True),
+}
+
+#: The first backup of a set of a :class:`SessionsSpec` archive.
+FIRST = "{}, first backup"
+
+
+def build_sessions(spec: SessionsSpec, workdir: Path) -> Archive:
+    """Build ``spec`` under ``workdir`` (needs rustic and xorriso)."""
+    from lcsas.meta.builder import MetaVolumeBuilder
+    from lcsas.staging.repo_marker import cmd_name
+    from tests.integration.scratch_install import ScratchInstall
+
+    inst = ScratchInstall(workdir / "install", repos=spec.names)
+    manifests: list[dict[str, str]] = []
+    for n in (1, 2):
+        for name in spec.names:
+            # Both files new each time; one backup (one snapshot).
+            (inst.data(name) / "f2.bin").write_bytes(os.urandom(9000))
+            inst.backup(name, "f1.bin")
+        manifests.append({name: _manifest(inst.data(name)) for name in spec.names})
+        if n == 1:
+            inst.add_repos()
+        assert inst.lcsas("scan") == 0
+        assert inst.lcsas("stage") == 0
+        inst.mark_burned(inst.sessions()[-1])
+    discs: dict[str, Path] = {}
+    for label, tree in sorted(inst.disc_trees().items()):
+        discs[label] = workdir / "discs" / label
+        shutil.copytree(tree, discs[label])
+    meta = workdir / "meta" / "LCSAS_META"
+    meta.parent.mkdir()
+    MetaVolumeBuilder(meta, catalog_db_path=inst.db,
+                      allow_no_dvdisaster_source=True).build()
+    sets: dict[str, ArchiveSet] = {}
+    for name in spec.names:
+        repo_id = inst.repo_id(name)
+        password = inst.key(name).read_text().strip()
+        for key, manifest in ((FIRST.format(name), manifests[0][name]),
+                              (name, manifests[1][name])):
+            sets[key] = ArchiveSet(repo_id=repo_id, name=name,
+                                   name_cmd=cmd_name(name, repo_id),
+                                   password=password, manifest=manifest)
+    foreign: dict[str, Path] = {}
+    if spec.foreign:
+        other = ScratchInstall(workdir / "other", repos=("photos",))
+        other.config.write_text(other.config.read_text().replace(
+            'label_prefix = "LCSAS"', 'label_prefix = "OTHER"'))
+        other.backup("photos", "f1.bin")
+        other.add_repos()
+        assert other.lcsas("scan") == 0
+        assert other.lcsas("stage") == 0
+        # (disc_trees knows the LCSAS_ prefix only.)
+        for tree in (t for t in other.staging.glob("*/OTHER_*") if t.is_dir()):
+            foreign[tree.name] = workdir / "foreign" / tree.name
+            shutil.copytree(tree, foreign[tree.name])
+        assert foreign, "the other archive staged no disc"
+    for d in (*discs.values(), *foreign.values(), meta):
+        writable(d)
+        _read_only(d)
+    return Archive(meta=meta, discs=discs, sets=sets, foreign=foreign)
+
+
+def _manifest(folder: Path) -> dict[str, str]:
+    return {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(folder.rglob("*")) if p.is_file()}
 
 
 # ── The result, and the comparison ──────────────────────────────────
@@ -799,12 +909,21 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
     mount = work / "mnt"
     drive = mount / "drive"
     drive.mkdir(parents=True)
+    # (The folders of the drives are named so that none sorts as a disc.)
     for d in ("home", "tmp"):
         (work / d).mkdir()
     tools = work / "tools"
     targets = [work / ("restored" if n == 1 else f"restored-{n}")
                for n in range(1, FOLDERS + 1)]
     in_drive: list[str] = []
+
+    for label, disc in archive.foreign.items():
+        shutil.copytree(disc, shelf / label)
+        writable(shelf / label)
+    if journey.foreign_in_reach:
+        # A second drive that holds the other archive's disc all along.
+        (mount / "drive2").parent.mkdir(parents=True, exist_ok=True)
+        os.rename(shelf / next(iter(archive.foreign)), mount / "drive2")
 
     def eject() -> None:
         if in_drive:
@@ -818,6 +937,9 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
         drive.rmdir()
         os.rename(shelf / label, drive)
         in_drive.append(label)
+
+    def insert_which(which: str) -> None:
+        insert(archive.disc(which).name)
 
     env = build_restore_env(home=work / "home", tools_dir=tools, mount_dir=mount,
                             meta_disc=archive.meta, tmpdir=work / "tmp")
@@ -858,6 +980,9 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
             item = typed.pop(0)
             if isinstance(item, Newest):
                 insert(archive.newest)
+                return ENTER
+            if isinstance(item, Insert):
+                insert_which(item.which)
                 return ENTER
             return (type_line(item, "sh", archive, "") + "\n").encode()
 
@@ -935,6 +1060,9 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
     targets = [wine.drive_c / t[3:] for t in targets_win]
     _bat_tools_copy(archive, tools)
     _map_drive(wine.prefix, "d", archive.meta)  # the one drive: META in
+    if journey.foreign_in_reach:
+        # A second drive, E:, holds the other archive's disc all along.
+        _map_drive(wine.prefix, "e", archive.disc("foreign"))
 
     def leg(cmd: str | list[str], env: dict[str, str], typed_: tuple[Typed, ...],
             quit_at: int | None, skip_at: int | None = None) -> JourneyResult:
@@ -989,6 +1117,9 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
                     if isinstance(item, Newest):
                         _map_drive(wine.prefix, "d", archive.discs[archive.newest])
                         run.send("")
+                    elif isinstance(item, Insert):
+                        _map_drive(wine.prefix, "d", archive.disc(item.which))
+                        run.send("")
                     else:
                         run.send(type_line(item, "bat", archive, text[:hit.end]))
         finally:
@@ -1034,6 +1165,7 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
 
 PHOTOS = "Holiday photos"
 DOCS = "Family documents"
+DOC = "documents"
 #: A set no archive has (not one of its names in other letters: a name
 #: matched case-blind is #627 item 8).
 UNKNOWN_SET = "Garden photos"
@@ -1315,6 +1447,71 @@ JOURNEYS: tuple[Journey, ...] = (
         expect=Expect(exit=ScriptExit.OK, asked=(), says=(r"lcsas-restore\.sh ",)),
         differs={"bat": Differs(because=("version",), exit=ScriptExit.USAGE,
                                 says=(r'does not know the argument "--version"',))},
+    ),
+    # #952: a data disc that knows fewer backups than the META disc's
+    # copy, put in at the newest data disc question.  The person is
+    # asked; S restores the newest backup (tier 1 then asks for the
+    # newer disc, which holds its packs), ENTER this disc's.
+    Journey(
+        name="older disc at the question, S: the META disc's copy",
+        archive="two sessions",
+        typed=(Insert("oldest"), "s", Password(DOC)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "fewer backups", "folder",
+                             "password"),
+                      restored=DOC, tools_folder="removed",
+                      says=(r"This disc carries 1 backup of 'documents'; "
+                            r"the copy from the META disc knows 2",)),
+    ),
+    Journey(
+        name="older disc at the question, ENTER: this disc's backup",
+        archive="two sessions",
+        typed=(Insert("oldest"), "", Password(DOC)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "fewer backups", "folder",
+                             "password"),
+                      restored=FIRST.format(DOC), tools_folder="removed"),
+    ),
+    Journey(
+        name="older disc at the question, then the newer one put in",
+        archive="two sessions",
+        typed=(Insert("oldest"), Insert("newest"), Password(DOC)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "fewer backups", "folder",
+                             "password"),
+                      restored=DOC, tools_folder="removed"),
+    ),
+    Journey(
+        name="the newest data disc knows as many backups: no question",
+        archive="two sessions",
+        typed=(NEWEST, Password(DOC)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "folder", "password"),
+                      restored=DOC, tools_folder="removed"),
+    ),
+    # #952: a disc of another archive is refused: at the question, and
+    # in a second drive; its set is never listed.
+    Journey(
+        name="a disc of another archive put in at the question",
+        archive="two sessions, another archive's disc",
+        typed=(Insert("foreign"), NEWEST, Password(DOC)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "newest data disc", "folder",
+                             "password"),
+                      restored=DOC, tools_folder="removed",
+                      says=(r"The disc labelled OTHER_\w+ belongs to a\s+different "
+                            r"LCSAS archive",)),
+    ),
+    Journey(
+        name="a disc of another archive in reach",
+        archive="two sessions, another archive's disc",
+        foreign_in_reach=True,
+        typed=(NEWEST, Password(DOC)),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "folder", "password"),
+                      restored=DOC, tools_folder="removed",
+                      says=(r"The disc labelled OTHER_\w+ belongs to a\s+different "
+                            r"LCSAS archive",)),
     ),
     Journey(
         name="--snapshot names the snapshot",

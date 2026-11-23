@@ -1237,6 +1237,11 @@ def test_disc_text_with_a_quote_is_never_run(fresh: _Wine, tmp_path: Path) -> No
         (dst / "LCSAS_BACKUP_SET.txt").write_text(
             "# LCSAS backup set marker. Restore works without this file.\n"
             f"format=1\nid={set_id}\n{lines}")
+    # It carries the META disc's set too, as every disc of an archive
+    # does: a disc that shares no set with it is another archive's, and
+    # is left out (#952).
+    for part in ("keys", "index", "snapshots"):
+        (odd / "metadata" / docs.repo_id / part).mkdir(parents=True)
     _make_read_only(meta)
     try:
         _map_drive(wine.prefix, "d", meta)

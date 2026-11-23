@@ -560,6 +560,19 @@ backup set: files of the two sets with the same names would be mixed.
 Type YES to restore into it anyway; anything else stops (exit code
 65), and nothing is written.  Choose a new, empty folder instead.
 
+A data disc that knows fewer backups of a set than the copy in hand
+(the META disc's, or one read from a newer disc) is not used without a
+word:
+
+     This disc carries 1 backup of 'documents'; the copy from the META disc knows 2.
+     It may be an older disc, or a newer one from which a backup was removed.
+
+Put in a newer data disc if you have one, then press ENTER.  ENTER
+with that disc still in uses it; S then ENTER uses the copy in hand
+(the newest backup).  A disc of ANOTHER LCSAS archive, none of whose
+backup sets is this archive's, is refused: its sets are not listed.
+See RESTORE.txt, "A WRONG OR MIXED-UP DISC".
+
 ────────────────────────────────────────────────────────────────────
 RESTORE FOLDER NOTES
 ────────────────────────────────────────────────────────────────────

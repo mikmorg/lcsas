@@ -619,6 +619,11 @@ call :find_newest
 if defined NEWEST_ROOT goto :newest_found
 set /a ND_TRIES+=1
 if defined DATA_SEEN goto :newest_unlabelled
+if not defined FOREIGN_ROOT goto :newest_none
+REM #952: a disc of another archive is refused.
+call :say_foreign "!FOREIGN_ROOT!"
+goto :newest_again
+:newest_none
 echo  No data disc is in a drive yet.  Wait until File Explorer shows
 echo  it, then press ENTER again.
 goto :newest_again
@@ -640,7 +645,9 @@ goto :newest_done
 if not defined NEWEST_ROOT goto :newest_done
 echo.
 echo [lcsas-restore] newest data disc: !NEWEST_LABEL! in drive !NEWEST_ROOT:~0,2!
+set "OC_QUIT="
 call :merge_newest
+if defined OC_QUIT goto :newest_quit
 :newest_done
 
 REM ----- Find the restic repository ---------------------------------
@@ -679,8 +686,9 @@ call :scan_metadata "%DISC_ROOT%\metadata"
 call :scan_metadata "%RECOVERY%\metadata"
 REM -- Repository metadata on every other mounted disc (data discs carry
 REM    metadata\<repo>\ too).
+REM    A disc of another archive is left out, and said so (#952).
 for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-    call :scan_metadata "%%L:\metadata"
+    call :scan_drive %%L
 )
 
 if !NCAND! equ 0 (
@@ -905,6 +913,19 @@ goto :eof
 set "MK_K="
 set "MK_N="
 set "MK_SID="
+goto :eof
+
+:scan_drive
+REM %1 = a drive letter: its sets, unless it holds a disc of another
+REM archive (#952), which is said once.
+call :disc_foreign "%1:\"
+if not defined DF_FOREIGN goto :scan_drive_ours
+if defined FOREIGN_SAID_%1 goto :eof
+set "FOREIGN_SAID_%1=1"
+call :say_foreign "%1:\"
+goto :eof
+:scan_drive_ours
+call :scan_metadata "%1:\metadata"
 goto :eof
 
 :scan_metadata
@@ -1242,10 +1263,9 @@ if exist "%TOOLS%\merged-from.txt" goto :catalog_picked
 :catalog_scan
 if exist "%RECOVERY%\catalog.db" set "CATALOG_PICK=%RECOVERY%\catalog.db"
 if exist "%REPO%\catalog.db"     set "CATALOG_PICK=%REPO%\catalog.db"
+REM Not the catalog of a disc of another archive (#952).
 for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-    if exist "%%L:\catalog.db" (
-        set "CATALOG_PICK=%%L:\catalog.db"
-    )
+    if exist "%%L:\catalog.db" call :catalog_drive %%L
 )
 :catalog_picked
 if not defined CATALOG_PICK goto :catalog_done
@@ -2271,6 +2291,7 @@ REM DATA_SEEN = a drive D: to Z: holds a data disc.  NEWEST_ROOT ("E:\")
 REM and NEWEST_LABEL = the one whose label is newest, by year, then by
 REM number (C2); nothing when no data disc has a label.
 set "DATA_SEEN="
+set "FOREIGN_ROOT="
 set "NEWEST_ROOT="
 set "NEWEST_LABEL="
 set "NEWEST_Y=-1"
@@ -2286,6 +2307,12 @@ set "CD_DATA="
 if exist "%1:\data\" set "CD_DATA=1"
 if exist "%1:\volume_info.json" if not exist "%1:\recovery\scripts\restore.bat" set "CD_DATA=1"
 if not defined CD_DATA goto :eof
+REM A disc of another archive (#952): FOREIGN_ROOT = the first one.
+call :disc_foreign "%1:\"
+if not defined DF_FOREIGN goto :consider_ours
+if not defined FOREIGN_ROOT set "FOREIGN_ROOT=%1:\"
+goto :eof
+:consider_ours
 set "DATA_SEEN=1"
 call :read_label "%1:\"
 if not defined RL_LABEL goto :eof
@@ -2305,6 +2332,143 @@ set "NEWEST_ROOT=%1:\"
 set "NEWEST_LABEL=!RL_LABEL!"
 set "NEWEST_Y=%PL_YEAR%"
 set "NEWEST_S=%PL_SEQ%"
+goto :eof
+
+:disc_foreign
+REM %~1 = a disc root ("E:\").  DF_FOREIGN = 1 when it holds backup sets
+REM and none of them is this archive's (#952).  A disc carries no
+REM archive id (the owner's decision on #952): an archive is known by its
+REM sets' ids, which every disc carries as metadata\<id>\.  This
+REM archive's sets are those of the META disc (or its copy in the tools
+REM folder, DISC_ROOT_S) and, once merged, of the tools folder's copy.  A
+REM META disc that carries none says nothing: then the first data disc
+REM accepted defines the archive, as its sets are merged.
+set "DF_FOREIGN="
+set "DF_ANY="
+set "DF_OURS="
+set "DF_KNOWN="
+for /f "delims=" %%T in ('dir /ad /b "%DISC_ROOT_S%metadata" 2^>nul ^<nul') do set "DF_KNOWN=1"
+if defined METADATA_SET_HERE for /f "delims=" %%T in ('dir /ad /b "%TOOLS%\metadata" 2^>nul ^<nul') do set "DF_KNOWN=1"
+if not defined DF_KNOWN goto :eof
+for /f "delims=" %%T in ('dir /ad /b "%~1metadata" 2^>nul ^<nul') do call :df_one "%~1" "%%T"
+if defined DF_OURS goto :eof
+if defined DF_ANY set "DF_FOREIGN=1"
+goto :eof
+:df_one
+REM %~1 = a disc root, %~2 = a folder in its metadata\.
+if not exist "%~1metadata\%~2\keys\" goto :eof
+set "DF_ANY=1"
+if exist "%DISC_ROOT_S%metadata\%~2\keys\" set "DF_OURS=1"
+if defined METADATA_SET_HERE if exist "%TOOLS%\metadata\%~2\keys\" set "DF_OURS=1"
+goto :eof
+
+:say_foreign
+REM %~1 = the root of a disc of another archive (#952).
+call :read_label "%~1"
+echo.
+if defined RL_LABEL echo  The disc labelled !RL_LABEL! belongs to a
+if not defined RL_LABEL echo  The disc in drive %~d1 belongs to a
+echo  different LCSAS archive ^(it has none of this archive's backup
+echo  sets^).  Take it out and insert a disc of this archive.
+goto :eof
+
+:catalog_drive
+REM %1 = a drive letter with a catalog.db: CATALOG_PICK, unless the disc
+REM is of another archive (#952).
+call :disc_foreign "%1:\"
+if not defined DF_FOREIGN set "CATALOG_PICK=%1:\catalog.db"
+goto :eof
+
+:older_check
+REM #952.  The newest data disc in reach, NEWEST_ROOT, may know fewer
+REM backups of a set than the copy in hand: the META disc's, or the one
+REM read from an earlier disc (merged-from.txt).  It is the authority for
+REM the set's snapshots, and they are never merged across discs (a
+REM backup the owner removed would come back), but it may be an older
+REM disc, or a newer one from which a backup was removed: the script
+REM cannot tell, so it asks.  Snapshot files are named by their content,
+REM so the lists compare by name.  ENTER: this disc (also when the input
+REM has ended), after looking again, as a newer disc may have been put
+REM in.  S: the copy in hand stays for those sets (KEPT_<id>, for the
+REM rest of the run).  Q: OC_QUIT.  Labels are not compared: they are
+REM numbered across all locations.
+set "OC_QUIT="
+:older_again
+set "OC_ANY="
+set "OC_LIST="
+set "OC_LABEL=!NEWEST_LABEL!"
+set "OC_ROOT=!NEWEST_ROOT!"
+for /f "delims=" %%T in ('dir /ad /b "!NEWEST_ROOT!metadata" 2^>nul ^<nul') do call :older_one "%%T"
+if not defined OC_ANY goto :eof
+echo  It may be an older disc, or a newer one from which a backup was removed.
+:older_ask
+echo.
+echo  Insert a newer data disc if you have one, then press ENTER.
+echo  ENTER: use this disc.  S then ENTER: use that copy.  Q then ENTER: quit.
+set "OC_ANS="
+set /p "OC_ANS=ENTER (this disc), S (the copy) or Q: "
+if /i "!OC_ANS!"=="q" goto :older_quit
+if /i "!OC_ANS!"=="s" goto :older_keep
+if not defined OC_ANS goto :older_look
+echo  Press ENTER, or type S or Q, then ENTER.
+goto :older_ask
+:older_look
+call :find_newest
+if not defined NEWEST_ROOT goto :older_gone
+if "!NEWEST_LABEL!"=="!OC_LABEL!" goto :eof
+echo.
+echo [lcsas-restore] newest data disc: !NEWEST_LABEL! in drive !NEWEST_ROOT:~0,2!
+goto :older_again
+:older_gone
+REM The disc was taken out: the copy in hand is used as it is.
+set "NEWEST_ROOT=%OC_ROOT%"
+goto :eof
+:older_keep
+for %%T in (%OC_LIST%) do set "KEPT_%%T=1"
+echo  Using that copy: the restore asks for the discs it needs.
+goto :eof
+:older_quit
+set "OC_QUIT=1"
+goto :eof
+
+:older_one
+REM %~1 = a backup set's folder on the disc NEWEST_ROOT.  When its
+REM snapshots are a strict subset of the copy in hand's, say so, and add
+REM it to OC_LIST.
+set "OS_SRC=!NEWEST_ROOT!metadata\%~1"
+if not exist "!OS_SRC!\keys\" goto :eof
+if not exist "!OS_SRC!\snapshots\" goto :eof
+if "!KEPT_%~1!"=="1" goto :eof
+set "OS_WHERE=the copy from the META disc"
+set "OS_COPY=%DISC_ROOT_S%metadata\%~1"
+if not defined LCSAS_RELOCATED goto :older_copy_known
+set "OS_COPY=%TOOLS%\metadata\%~1"
+if defined MF_LABEL set "OS_WHERE=the copy read from the disc labelled !MF_LABEL!"
+:older_copy_known
+if not exist "!OS_COPY!\snapshots\" goto :eof
+set "OS_N=0"
+set "OS_M=0"
+set "OS_BAD="
+for /f "delims=" %%F in ('dir /b /a-d "%OS_SRC%\snapshots" 2^>nul') do call :older_file "%%F"
+if defined OS_BAD goto :eof
+for /f "delims=" %%F in ('dir /b /a-d "%OS_COPY%\snapshots" 2^>nul') do set /a OS_M+=1
+if %OS_M% leq %OS_N% goto :eof
+call :read_marker "%OS_SRC%"
+set "OS_NAME=!MK_NC!"
+if not defined OS_NAME set "OS_NAME=%~1"
+set "OS_B=backups"
+if %OS_N% equ 1 set "OS_B=backup"
+if not defined OC_ANY echo.
+echo  This disc carries !OS_N! !OS_B! of '!OS_NAME!'; !OS_WHERE! knows !OS_M!.
+set "OC_ANY=1"
+set "OC_LIST=!OC_LIST! %~1"
+goto :eof
+
+:older_file
+REM %~1 = a snapshot file's name on the disc: counted, and OS_BAD when the
+REM copy in hand has no file of that name.
+set /a OS_N+=1
+if not exist "%OS_COPY%\snapshots\%~1" set "OS_BAD=1"
 goto :eof
 
 :file_newer
@@ -2431,6 +2595,8 @@ echo [lcsas-restore] keeping the backup sets read from !MF_LABEL!, a newer disc
 set "NEWEST_ROOT="
 goto :eof
 :merge_fresh
+call :older_check
+if defined OC_QUIT goto :eof
 if not exist "!NEWEST_ROOT!metadata\" goto :eof
 if defined LCSAS_RELOCATED goto :merge_into
 REM Not relocated: TOOLS is TOOLS\in-place, this run's own.
@@ -2463,6 +2629,8 @@ REM it replaces added: keys are named by their content, so a name in
 REM both is the same key.  Then the old copy moves aside and the new one
 REM into place, and back again if that fails: a disc that cannot be read
 REM leaves the copy that was there as it was.
+REM A set whose copy in hand the reader chose to keep (#952) stays.
+if "!KEPT_%~1!"=="1" goto :eof
 set "MS_SRC=!NEWEST_ROOT!metadata\%~1"
 set "MS_DST=!TOOLS!\metadata\%~1"
 set "MS_NEW=!TOOLS!\metadata-new\%~1"

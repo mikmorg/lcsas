@@ -477,8 +477,12 @@ def test_sets_only_on_the_meta_disc_or_only_on_a_data_disc_are_offered(tmp_path:
     the META disc only keeps its META copy (the fallback)."""
     recovery = _meta(tmp_path / "meta")
     _set(tmp_path / "meta", DOCS_ID, DOCS)
+    # The disc shares a set with the META disc: one that shares none is
+    # another archive's, and is refused (#952).
+    _set(tmp_path / "meta", PHOTOS_ID, PHOTOS)
     disc = _data_disc(tmp_path / "media", "DISC", "LCSAS_TEST_TINY_2026_0003")
     _set(disc, LATE_ID, "added later", tag="disc")
+    _set(disc, PHOTOS_ID, PHOTOS, tag="disc")
     # A META disc found under the mount dirs (not the one we run from)
     # ranks below every data disc.
     other_meta = tmp_path / "media" / "OLDMETA"
@@ -488,7 +492,7 @@ def test_sets_only_on_the_meta_disc_or_only_on_a_data_disc_are_offered(tmp_path:
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW), stdin="1\n")
     assert res.returncode == 0, res.stderr
     # Best copy first: the data disc's sets, then the META-only ones.
-    assert _menu(res.stderr) == ["1) added later", f"2) {DOCS}"], res.stderr
+    assert _menu(res.stderr) == ["1) added later", f"2) {DOCS}", f"3) {PHOTOS}"], res.stderr
     assert f"repo={disc}/metadata/{LATE_ID} " in _runs(tmp_path)[0]
     # Another set: another folder (the first one's marker names that set).
     res = _run(recovery, tmp_path / "out2",

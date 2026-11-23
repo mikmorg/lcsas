@@ -95,7 +95,10 @@ def test_restore_bat_probes_holographic_metadata_layout():
     # The drive-letter scan (D..Z) for other mounted discs must be present,
     # so a data disc carrying metadata\<tenant>\ is discoverable when the
     # meta disc itself ships no repo.
-    assert "%%L:\\metadata" in content, (
+    # (Through :scan_drive, which leaves out a disc of another archive,
+    # #952.)
+    assert "call :scan_drive %%L" in content
+    assert 'call :scan_metadata "%1:\\metadata"' in content, (
         "no per-drive-letter metadata probe (other mounted discs)"
     )
 
@@ -1192,3 +1195,23 @@ def test_restore_bat_takes_password_file():
     assert 'set "LCSAS_PASSWORD_FILE=%~f2"' in code
     assert ('if defined PWFILE_ARG if not exist "!LCSAS_PASSWORD_FILE!" '
             'goto :arg_pwfile_bad') in code
+
+
+def test_restore_bat_refuses_a_disc_of_another_archive_and_asks_about_an_older_one():
+    """#952: a data disc none of whose sets is this archive's was taken
+    as one of its discs (its sets listed, its catalog used); an older
+    data disc replaced the META disc's snapshot list without a word.
+    Functional proof: the #952 rows of tests/contract/journeys.py (wine,
+    and real cmd in windows-e2e)."""
+    code = _code(RESTORE_BAT.read_text())
+    text = "\n".join(code)
+    # Left out of the newest-disc step, the set list and the catalog.
+    assert text.count('call :disc_foreign "%1:\\"') == 3
+    assert 'call :say_foreign "!FOREIGN_ROOT!"' in code
+    assert "different LCSAS archive ^(it has none of this archive's backup" in text
+    # The older-disc question before the merge, and S keeps the copy.
+    i = code.index(":merge_fresh")
+    assert code[i + 1] == "call :older_check"
+    assert 'set /p "OC_ANS=ENTER (this disc), S (the copy) or Q: "' in code
+    assert 'if "!KEPT_%~1!"=="1" goto :eof' in code
+    assert "if defined OC_QUIT goto :newest_quit" in code

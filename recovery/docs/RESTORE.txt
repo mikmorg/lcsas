@@ -736,6 +736,32 @@ password.  Rebuild it first, by hand:
 Format + re-implementation details: docs/SHARE_FORMAT.md on the
 meta disc.
 
+A WRONG OR MIXED-UP DISC
+
+The restore takes each backup set's list of backups from the newest
+data disc in reach.  Two things can go wrong, and the script says so:
+
+  * A disc that knows fewer backups of a set than the copy in hand
+    (the META disc's, or one read from a newer disc):
+
+        This disc carries 1 backup of 'documents'; the copy from the META disc knows 2.
+        It may be an older disc, or a newer one from which a backup was removed.
+
+    Put in a newer data disc if you have one, then press ENTER: it is
+    looked at again.  ENTER with that disc still in uses it (and so
+    its older backup).  S then ENTER uses the copy in hand instead:
+    the newest backup, whose data may be on discs you are then asked
+    for (type s at a disc you do not have; see A DISC IS MISSING OR
+    WILL NOT READ).  The script cannot tell an older disc from a newer
+    one from which the owner removed a backup, so it asks.  With
+    nobody to answer, the disc is used.
+  * A disc of ANOTHER LCSAS archive (none of its backup sets is this
+    archive's): it is refused, its backup sets are not listed and its
+    catalog is not used.  Take it out and put in a disc of this
+    archive.  Discs of different archives (a real one, a drill) are
+    told apart by their label's first word when the owner gave each
+    archive its own label prefix.
+
 DISCS WITH THE SAME LABEL
 
 If you have more than one disc with the same label (as is the

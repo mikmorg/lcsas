@@ -30,10 +30,12 @@ from tests.contract.journeys import (
     ALTERED,
     ARCHIVES,
     JOURNEYS,
+    SESSIONS,
     Archive,
     Journey,
     alter_archive,
     build_archive,
+    build_sessions,
     mismatches,
     run_journey_bat,
     run_journey_sh,
@@ -77,13 +79,15 @@ class _Archives:
             if key in ALTERED:
                 alt = ALTERED[key]
                 self._built[key] = alter_archive(self[alt.base], alt.how, work)
+            elif key in SESSIONS:
+                self._built[key] = build_sessions(SESSIONS[key], work)
             else:
                 self._built[key] = build_archive(ARCHIVES[key], work)
         return self._built[key]
 
     def close(self) -> None:
         for archive in self._built.values():
-            for d in (archive.meta, *archive.discs.values()):
+            for d in (archive.meta, *archive.discs.values(), *archive.foreign.values()):
                 writable(d)
 
 

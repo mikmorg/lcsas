@@ -1688,12 +1688,81 @@ key_newer() {
     awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'
 }
 
+# ── This archive's backup sets, and a disc of another archive (#952) ─
+#
+# A disc carries no archive id (owner decision on #952: none for v1.0).
+# An archive is known by its backup sets' ids, which every disc carries
+# as metadata/<id>/: ARCHIVE_SETS are the META disc's (the tools
+# folder's .lcsas-sets, else the META disc's metadata/).  A data disc
+# none of whose sets is among them belongs to another archive: its sets
+# are not listed, its metadata is not copied and its catalog is not
+# taken.  With a META disc that carries no sets there is nothing to
+# compare with: the first data disc accepted defines the archive (below).
+ARCHIVE_SETS=""
+if [ -n "$TOOLS" ] && [ -s "$TOOLS/.lcsas-sets" ]; then
+    ARCHIVE_SETS="$(cat "$TOOLS/.lcsas-sets" 2>/dev/null || true)"
+fi
+[ -n "$ARCHIVE_SETS" ] || ARCHIVE_SETS="$(meta_sets "$META_ROOT/metadata")"
+
+# in_archive ID: 0 when ID is one of ARCHIVE_SETS.
+in_archive() {
+    case "$NL$ARCHIVE_SETS$NL" in *"$NL$1$NL"*) return 0 ;; esac
+    return 1
+}
+
+# disc_foreign DIR: 0 when the data disc at DIR holds backup sets and
+# none of them is this archive's.
+disc_foreign() {
+    [ -n "$ARCHIVE_SETS" ] || return 1
+    _df_any=0
+    for _df in "$1/metadata"/*; do
+        [ -d "$_df/keys" ] || continue
+        _df_any=1
+        if in_archive "${_df##*/}"; then return 1; fi
+    done
+    [ "$_df_any" = 1 ]
+}
+
+# foreign_discs: the folders under the mount directories that hold a
+# disc of another archive, one a line.
+foreign_discs() {
+    _fd_ifs="$IFS"; IFS=":"
+    for _fd_parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
+        IFS="$_fd_ifs"
+        if [ -z "$_fd_parent" ] || [ ! -d "$_fd_parent" ]; then IFS=":"; continue; fi
+        for _fd_mnt in "$_fd_parent" "$_fd_parent"/*; do
+            [ -d "$_fd_mnt/metadata" ] || continue
+            is_meta_mount "$_fd_mnt" && continue
+            is_meta_root "$_fd_mnt" && continue
+            if disc_foreign "$_fd_mnt"; then printf '%s\n' "$_fd_mnt"; fi
+        done
+        IFS=":"
+    done
+    IFS="$_fd_ifs"
+    return 0
+}
+
+# say_foreign DIR: say that the disc at DIR is not this archive's (once
+# a run for each disc, unless ALWAYS is given as $2).
+FOREIGN_SAID=""
+say_foreign() {
+    case "$NL$FOREIGN_SAID$NL" in
+        *"$NL$1$NL"*) [ "${2:-}" = always ] || return 0 ;;
+    esac
+    FOREIGN_SAID="$FOREIGN_SAID$NL$1"
+    _sf_lab="$(disc_label "$1")"
+    printf 'The disc labelled %s belongs to a\n' "${_sf_lab:-(no label, at $1)}" >&2
+    printf 'different LCSAS archive (it has none of this archive'"'"'s backup\n' >&2
+    printf 'sets).  Take it out and insert a disc of this archive.\n' >&2
+}
+
 # disc_copies: every folder under the mount directories (each one itself,
 # and its children) that holds a metadata/ folder, one "KEY<TAB>DIR" line
 # each, best first.  A data disc ranks by its label's year, then number,
 # then by its catalog.db's mtime (C2); a META disc found there ranks
 # below every data disc.  Ties keep the scan order.  The meta disc this
-# script came from is left out while it is in the drive.
+# script came from is left out while it is in the drive, and so is a
+# disc of another archive (#952).
 disc_copies() {
     _disc_copies_scan | sort -r
 }
@@ -1709,6 +1778,8 @@ _disc_copies_scan() {
             _dc_i=$((_dc_i + 1))
             if is_meta_root "$_dc_mnt"; then
                 _dc_key="1$(label_key '')000000000000"
+            elif disc_foreign "$_dc_mnt"; then
+                continue
             else
                 _dc_key="2$(label_key "$(disc_label "$_dc_mnt")")"
                 _dc_key="$_dc_key$(printf '%012d' "$(file_mtime "$_dc_mnt/catalog.db")")"
@@ -1880,6 +1951,9 @@ EOF
         elif [ -n "$_nd_top" ]; then
             printf 'The disc at %s has no label in a VOLUME_INFO.txt, so\n' "$_nd_dir" >&2
             printf 'it is not an LCSAS data disc.  Put in a data disc.\n' >&2
+        elif [ -n "$(foreign_discs)" ]; then
+            # #952: a disc of another archive is refused.
+            say_foreign "$(foreign_discs | sed -n 1p)" always
         elif meta_disc_is_live; then
             printf 'The META disc is still in the drive (%s).\n' "$META_DISC" >&2
             printf 'Take it out first, then put in the newest data disc.\n' >&2
@@ -1889,6 +1963,164 @@ EOF
             printf '    sudo mount /dev/sr0 /mnt\n' >&2
         fi
     done
+fi
+
+# A META disc with no backup sets (#952): the first data disc accepted
+# defines this archive for the rest of the run, the next set's and a
+# resumed one too (.lcsas-sets).
+if [ -z "$ARCHIVE_SETS" ]; then
+    _as_top="$(data_discs | sed -n 1p)"
+    if [ -n "$_as_top" ]; then
+        ARCHIVE_SETS="$(meta_sets "${_as_top#*"$TAB"}/metadata")"
+        if [ -n "$TOOLS" ] && [ -n "$ARCHIVE_SETS" ]; then
+            printf '%s\n' "$ARCHIVE_SETS" > "$TOOLS/.lcsas-sets" 2>/dev/null || true
+        fi
+    fi
+    unset _as_top
+fi
+
+# ── A data disc that knows fewer backups than the copy in hand (#952) ─
+#
+# The newest data disc is the authority for a set's snapshot list, and
+# snapshot files are never merged across discs: a backup the owner
+# removed (rustic forget) is still on older discs, and a union would
+# bring it back as "latest".  But the disc in the drive may be older
+# than the copy in hand: the META disc's, or one read from a newer disc.
+# Snapshot files are named by their content, so the two lists compare
+# by name, with no password.  When the disc's list is a strict subset of
+# the copy's, and the disc's copy would be used (the copy is the META
+# disc's, or was read from an older disc), the person is asked: it may
+# be an older disc, or a newer one from which a backup was removed, and
+# the script cannot tell which.  ENTER uses the disc (as before; also
+# with nobody to answer, with a note); S keeps the copy in hand for
+# those sets (KEEP_IDS, and <tools>/metadata/.kept-sets for the next set
+# and a resumed run); a newer disc put in first is looked at again.
+# Labels are not compared: they are numbered across all locations, so
+# the newest disc in one box may rightly be older than the META disc.
+KEEP_IDS=""
+KEEP_FILE=""
+if [ -n "$TOOLS" ]; then
+    KEEP_FILE="$TOOLS/metadata/.kept-sets"
+    if [ -f "$KEEP_FILE" ]; then KEEP_IDS="$(cat "$KEEP_FILE" 2>/dev/null || true)"; fi
+fi
+
+# kept ID: 0 when the person chose the copy in hand of set ID.
+kept() {
+    case "$NL$KEEP_IDS$NL" in *"$NL$1$NL"*) return 0 ;; esac
+    return 1
+}
+
+# copy_in_hand ID: the copy of set ID that a data disc would replace:
+# the tools folder's, else the META disc's.
+copy_in_hand() {
+    if [ -n "$TOOLS" ] && [ -d "$TOOLS/metadata/$1/snapshots" ]; then
+        printf '%s' "$TOOLS/metadata/$1"
+    elif [ -d "$META_ROOT/metadata/$1/snapshots" ]; then
+        printf '%s' "$META_ROOT/metadata/$1"
+    fi
+}
+
+# fewer_backups DISC_SET COPY: 0 when every snapshot of DISC_SET is in
+# COPY and COPY has more; FB_DISC and FB_COPY are the two counts.
+fewer_backups() {
+    FB_DISC=0; FB_COPY=0
+    [ -d "$1/snapshots" ] || return 1
+    for _fb in "$1/snapshots"/*; do
+        [ -f "$_fb" ] || continue
+        FB_DISC=$((FB_DISC + 1))
+        [ -f "$2/snapshots/${_fb##*/}" ] || return 1
+    done
+    for _fb in "$2/snapshots"/*; do
+        if [ -f "$_fb" ]; then FB_COPY=$((FB_COPY + 1)); fi
+    done
+    [ "$FB_COPY" -gt "$FB_DISC" ]
+}
+
+# older_sets DIR LABEL: the sets of the data disc at DIR whose copy on
+# it knows fewer backups than the copy in hand, which it would replace:
+# one "ID<TAB>DISC COUNT<TAB>COPY COUNT<TAB>WHERE THE COPY CAME FROM"
+# line each (an empty last field: the META disc).
+older_sets() {
+    for _os_set in "$1/metadata"/*; do
+        [ -d "$_os_set/keys" ] || continue
+        _os_id="${_os_set##*/}"
+        kept "$_os_id" && continue
+        _os_copy="$(copy_in_hand "$_os_id")"
+        [ -n "$_os_copy" ] || continue
+        _os_from=""
+        if [ -n "$TOOLS" ] && [ "$_os_copy" = "$TOOLS/metadata/$_os_id" ] \
+           && [ -f "$TOOLS/metadata/.from/$_os_id" ]; then
+            _os_from="$(clean_text < "$TOOLS/metadata/.from/$_os_id")"
+            key_newer "$(label_key "$2")" "$(label_key "$_os_from")" || continue
+        fi
+        fewer_backups "$_os_set" "$_os_copy" || continue
+        printf '%s\t%s\t%s\t%s\n' "$_os_id" "$FB_DISC" "$FB_COPY" "$_os_from"
+    done
+    return 0
+}
+
+if [ "${LCSAS_RESUME:-0}" != 1 ]; then
+    while :; do
+        _od_top="$(data_discs | sed -n 1p)"
+        [ -n "$_od_top" ] || break
+        _od_dir="${_od_top#*"$TAB"}"
+        _od_lab="$(disc_label "$_od_dir")"
+        _od_list="$(older_sets "$_od_dir" "$_od_lab")"
+        [ -n "$_od_list" ] || break
+        printf '\n' >&2
+        while IFS="$TAB" read -r _od_id _od_n _od_m _od_from; do
+            [ -n "$_od_id" ] || continue
+            _od_b=backups
+            [ "$_od_n" != 1 ] || _od_b=backup
+            if [ -n "$_od_from" ]; then
+                _od_where="the copy read from the disc labelled $_od_from"
+            else
+                _od_where="the copy from the META disc"
+            fi
+            printf "This disc carries %s %s of '%s'; %s knows %s.\n" \
+                   "$_od_n" "$_od_b" "$(set_label "$_od_dir/metadata/$_od_id")" \
+                   "$_od_where" "$_od_m" >&2
+        done <<ODEOF
+$_od_list
+ODEOF
+        printf 'It may be an older disc, or a newer one from which a backup was removed.\n' >&2
+        if ! is_interactive; then
+            printf 'Nobody is here to answer, so this disc (%s) is used.\n' "${_od_lab:-$_od_dir}" >&2
+            break
+        fi
+        printf '\nInsert a newer data disc if you have one, then press ENTER.\n' >&2
+        printf 'ENTER: use this disc.  S then ENTER: use that copy.  Q then ENTER: quit.\n' >&2
+        printf 'ENTER (this disc), S (the copy) or Q: ' >&2
+        _od_ans=""
+        if ! IFS= read -r _od_ans; then
+            printf '\n' >&2
+            break
+        fi
+        case "$_od_ans" in
+            '')
+                # A newer disc put in is looked at again.
+                [ "$(data_discs | sed -n 1p)" != "$_od_top" ] || break ;;
+            s|S)
+                while IFS="$TAB" read -r _od_id _od_rest; do
+                    [ -n "$_od_id" ] || continue
+                    KEEP_IDS="$KEEP_IDS${KEEP_IDS:+$NL}$_od_id"
+                done <<ODEOF
+$_od_list
+ODEOF
+                if [ -n "$KEEP_FILE" ]; then
+                    mkdir -p "$TOOLS/metadata" 2>/dev/null || true
+                    printf '%s\n' "$KEEP_IDS" > "$KEEP_FILE" 2>/dev/null || true
+                fi
+                printf 'Using that copy: the restore asks for the discs it needs.\n' >&2
+                break ;;
+            q|Q)
+                printf 'Stopped at your request.\n' >&2
+                exit "$EXIT_USER_ABORT" ;;
+            *)
+                printf 'Press ENTER, or type S or Q, then ENTER.\n' >&2 ;;
+        esac
+    done
+    unset _od_top _od_dir _od_lab _od_list _od_ans
 fi
 
 # The newest data disc mounted now refreshes the tools folder's copy of
@@ -1908,6 +2140,7 @@ if [ -n "$TOOLS" ] && [ "$META_HERE" = 1 ] && [ "${LCSAS_RESUME:-0}" != 1 ]; the
         _nd_copy=0
         for _nd_set in "$_nd_dir/metadata"/*; do
             if [ ! -d "$_nd_set/keys" ] || [ ! -d "$_nd_set/index" ]; then continue; fi
+            kept "${_nd_set##*/}" && continue
             _nd_tag="$TOOLS/metadata/.from/${_nd_set##*/}"
             if [ ! -f "$_nd_tag" ] || key_newer "$(label_key "$_nd_lab")" \
                     "$(label_key "$(clean_text < "$_nd_tag")")"; then
@@ -1919,6 +2152,7 @@ if [ -n "$TOOLS" ] && [ "$META_HERE" = 1 ] && [ "${LCSAS_RESUME:-0}" != 1 ]; the
             printf '                %s to %s/metadata...\n' "$_nd_lab" "$TOOLS" >&2
             for _nd_set in "$_nd_dir/metadata"/*; do
                 if [ ! -d "$_nd_set/keys" ] || [ ! -d "$_nd_set/index" ]; then continue; fi
+                kept "${_nd_set##*/}" && continue
                 merge_set_metadata "$_nd_set" "$_nd_lab" || true
             done
         fi
@@ -1947,6 +2181,15 @@ fi
 # multi-repository archive), LCSAS_BACKUP_SET selects one by its id or its
 # name.  If exactly one candidate exists we use it; otherwise we list
 # them by name and ask.
+
+# A disc of another archive in reach is left out (disc_copies), and
+# said so here, once (#952).
+while IFS= read -r _fd_dir; do
+    [ -n "$_fd_dir" ] || continue
+    say_foreign "$_fd_dir"
+done <<EOF
+$(foreign_discs)
+EOF
 
 REPO=""
 REPO_CANDIDATES=""
@@ -1983,12 +2226,16 @@ $_dc_list
 EOF
 # The tools folder's copies (relocated, this is also <META_ROOT>/metadata):
 # ranked like the data disc each was refreshed from, else as a META copy.
+# A copy the person chose at the older-disc question (#952, kept) ranks
+# above every disc.
 _tools_md=""
 if [ -n "$TOOLS" ] && [ -d "$TOOLS/metadata" ]; then
     _tools_md="$TOOLS/metadata"
     for cand in "$_tools_md"/*; do
         [ -d "$cand" ] || continue
-        if [ -f "$_tools_md/.from/${cand##*/}" ]; then
+        if kept "${cand##*/}"; then
+            add_repo_candidate "$cand" "4$_key_none"
+        elif [ -f "$_tools_md/.from/${cand##*/}" ]; then
             add_repo_candidate "$cand" \
                 "2$(label_key "$(clean_text < "$_tools_md/.from/${cand##*/}")")000000000000"
         else
@@ -2010,7 +2257,11 @@ for _meta_md in "$META_ROOT/metadata" "$RECOVERY/metadata" \
     fi
     for cand in "$_meta_md"/*; do
         [ -d "$cand" ] || continue
-        add_repo_candidate "$cand" "1$_key_none"
+        if kept "${cand##*/}"; then
+            add_repo_candidate "$cand" "4$_key_none"
+        else
+            add_repo_candidate "$cand" "1$_key_none"
+        fi
     done
 done
 
@@ -2511,6 +2762,7 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     if [ -z "$parent" ] || [ ! -d "$parent" ]; then IFS=":"; continue; fi
     for mnt in "$parent" "$parent"/*; do
         [ -d "$mnt" ] || continue
+        disc_foreign "$mnt" && continue
         catalog_consider "$mnt/catalog.db"
     done
     IFS=":"
@@ -3439,6 +3691,8 @@ add_pack_search() {
             "$META_DISC"|"$META_DISC"/*) return ;;
         esac
     fi
+    # Not a disc of another archive (#952).
+    disc_foreign "$1" && return
     # Add it if data/ exists, or if the path itself contains pack files.
     if [ -d "$1/data" ]; then
         PACK_SEARCH_ARGS="$PACK_SEARCH_ARGS${PACK_SEARCH_ARGS:+$NL}--pack-search$NL$1"
