@@ -637,11 +637,13 @@ class TestCombinerPerShareValidation:
     def test_card_with_no_share_line_says_so(self, tmp_path, capsys):
         """#844: a card file whose share line is missing says no share
         words were found in it, not that a prose word is not a share word."""
-        from lcsas.cli.main import _share_card_text
+        from lcsas.cli.main import _share_card_text, _share_word_rows
 
         mns = _make_2of5()
         card = _share_card_text("alpha", 1, 2, 5, mns[0], "2026-01-01", 1)
-        lines = [ln for ln in card.splitlines() if mns[0] not in ln]
+        rows = _share_word_rows(mns[0])
+        lines = [ln for ln in card.splitlines() if ln not in rows]
+        assert len(lines) < len(card.splitlines())
         bad = tmp_path / "card1.txt"
         bad.write_text("\n".join(lines) + "\n")
         rc = combine_shares.main([str(bad)])
@@ -651,9 +653,10 @@ class TestCombinerPerShareValidation:
         assert "is not a share word" not in err
 
     def test_stdin_split_share_hints_one_line(self, monkeypatch, capsys):
-        """#844: a share wrapped over two stdin lines is skipped; when too
-        few shares remain, the error says how many lines were skipped and
-        that each card's words go on one line."""
+        """#844: a share broken over stdin lines with blank lines between
+        them is skipped; when too few shares remain, the error says how
+        many lines were skipped and that each card's words go on one line
+        (or in rows with no blank line between them, #955)."""
         import io
 
         mns = _make_2of5()
@@ -661,7 +664,7 @@ class TestCombinerPerShareValidation:
         # Lines too short to be taken for a share with typing mistakes.
         chunks = [words[i:i + 11] for i in range(0, len(words), 11)]
         assert len(chunks) == 3 and all(len(c) < 13 for c in chunks)
-        piped = (" ".join(chunks[0]) + "\n\n" + " ".join(chunks[1]) + "\n"
+        piped = (" ".join(chunks[0]) + "\n\n" + " ".join(chunks[1]) + "\n\n"
                  + " ".join(chunks[2]) + "\n" + mns[1] + "\n")
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
         rc = combine_shares.main([])
@@ -676,7 +679,7 @@ class TestCombinerPerShareValidation:
         mns = _make_2of5()
         words = mns[0].split()
         piped = "".join(
-            " ".join(words[i:i + 11]) + "\n" for i in range(0, len(words), 11)
+            " ".join(words[i:i + 11]) + "\n\n" for i in range(0, len(words), 11)
         )
         monkeypatch.setattr("sys.stdin", io.StringIO(piped))
         assert combine_shares.main([]) == combine_shares.EXIT_USAGE
@@ -694,3 +697,37 @@ class TestCombinerPerShareValidation:
         err = capsys.readouterr().err
         for code in ("  0  ", "  1  ", "  2  ", "  3  "):
             assert code in err
+
+
+class TestNumberedCards:
+    """#955: a card prints its words in numbered rows of four; the numbers
+    are skipped, rows next to each other are one share, and "word N" is
+    the word numbered N on the card."""
+
+    def test_rows_on_stdin_are_one_share(self, monkeypatch, capsysbinary):
+        import io
+
+        from lcsas.cli.main import _share_word_rows
+
+        mns = _make_2of5()
+        piped = ("\n".join(_share_word_rows(mns[0])) + "\n\nprose\n\n"
+                 + "\n".join(_share_word_rows(mns[3])) + "\n")
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        assert combine_shares.main([]) == 0
+        assert capsysbinary.readouterr().out == _PASSWORD
+
+    def test_typo_in_a_row_is_named_by_its_number(self, tmp_path, capsys):
+        from lcsas.cli.main import _share_card_text
+
+        mns = _make_2of5()
+        words = mns[0].split()
+        words[9] = "qqqq"
+        bad = tmp_path / "card1.txt"
+        bad.write_text(_share_card_text("alpha", 1, 2, 5, " ".join(words),
+                                        "2026-01-01", 1))
+        good = tmp_path / "card2.txt"
+        good.write_text(_share_card_text("alpha", 2, 2, 5, mns[1], "2026-01-01", 1))
+        rc = combine_shares.main([str(bad), str(good)])
+        err = capsys.readouterr().err
+        assert rc == combine_shares.EXIT_BAD_SHARE, err
+        assert f"share ({bad}): word 10 'qqqq' is not a share word" in err

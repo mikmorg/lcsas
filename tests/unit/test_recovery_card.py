@@ -88,7 +88,7 @@ def test_builder_split_shows_kn_and_combiner() -> None:
     assert "Any 2 of 5 share cards" in card
     # On-disc combiner path, not the installed-lcsas `password combine`.
     assert "python3 combine_shares.py" in card
-    assert "8 disc(s), labeled SMITH_*" in card
+    assert "Data discs  : 8, labeled SMITH_*" in card
 
 
 def test_builder_non_split_omits_kn() -> None:
@@ -195,7 +195,7 @@ def test_cli_disc_count_from_catalog(tmp_path: Path) -> None:
     out = tmp_path / "card.txt"
     rc = main(["--config", str(cfg), "estate", "card", "--output", str(out)])
     assert rc == 0
-    assert "2 disc(s), labeled SMITH_*" in out.read_text(encoding="utf-8")
+    assert "Data discs  : 2, labeled SMITH_*" in out.read_text(encoding="utf-8")
     # Sanity: STATUS_STAGING constant referenced so the count rule is pinned.
     assert STATUS_STAGING == "STAGING"
 
@@ -230,7 +230,7 @@ def test_cli_disc_count_skips_superseded_destroyed_volumes(
 
     out = tmp_path / "card.txt"
     assert main(["--config", str(cfg), "estate", "card", "--output", str(out)]) == 0
-    assert "3 disc(s), labeled SMITH_*" in out.read_text(encoding="utf-8")
+    assert "Data discs  : 3, labeled SMITH_*" in out.read_text(encoding="utf-8")
 
 
 def test_cli_ensure_schema_runs_under_the_catalog_lock(
@@ -297,7 +297,7 @@ def test_card_commands_pass_restore_sh_flag_contract() -> None:
 
 
 def test_cli_no_burned_disc_leaves_the_count_blank(tmp_path: Path) -> None:
-    """A card printed before the first burn must not say "0 disc(s)"."""
+    """A card printed before the first burn must not say "0" data discs."""
     from lcsas.constants import STATUS_STAGING
     from lcsas.db.connection import get_connection
     from lcsas.db.schema import ensure_schema
@@ -316,5 +316,5 @@ def test_cli_no_burned_disc_leaves_the_count_blank(tmp_path: Path) -> None:
     out = tmp_path / "card.txt"
     assert main(["--config", str(cfg), "estate", "card", "--output", str(out)]) == 0
     card = out.read_text(encoding="utf-8")
-    assert "0 disc(s)" not in card
-    assert "______________________________  (labeled SMITH_*)" in card
+    assert "Data discs  : 0," not in card
+    assert "Data discs  : ______________________________, labeled SMITH_*" in card

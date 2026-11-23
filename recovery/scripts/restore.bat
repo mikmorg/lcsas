@@ -1486,8 +1486,9 @@ if not defined SHARE goto :share_empty
 if /i "!SHARE!"=="q" goto :shares_gave_up
 if /i "!SHARE!"=="p" goto :shares_own
 set "PW_EMPTY=0"
-REM One word cannot be a card (a card has 20 or 33), and `echo on`
-REM would act on echo itself.
+REM One word cannot be a card (a card has 20 words or more), and
+REM `echo on` would act on echo itself.  The line is handed on as typed:
+REM lcsas-shares skips the numbers a card prints beside its words (#955).
 if "!SHARE!"=="!SHARE: =!" goto :share_one_word
 > "%SH_DIR%\card%SI%.txt" echo !SHARE!
 set "SHARE="

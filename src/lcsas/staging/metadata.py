@@ -1319,11 +1319,16 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
                 if repo.encryption_key_id:
                     lines.append(f"  Key ID: {repo.encryption_key_id}")
                 if repo.password_file:
+                    # #955: the owner's file, which the heir does not
+                    # have; the heir types the password itself.
                     lines.append(
-                        f"  Password file name: {repo.password_file.name}"
+                        "  The owner's password file (not on these discs): "
+                        f"{repo.password_file.name}"
                     )
                 else:
-                    lines.append("  Password file: (not specified in config)")
+                    lines.append(
+                        "  The owner's password file: (not named in the config)"
+                    )
                 if mixed and view is not None:
                     if name in view.by_repo:
                         k, n = view.by_repo[name]

@@ -3112,8 +3112,20 @@ drop_shares() {
     SHARE_DIR=""
 }
 
+# share_words: the words of a typed share card (standard input),
+# lowercased, one space apart, without the numbers a card prints beside
+# them (digits, with an optional . or ), #955), as lcsas-shares reads
+# them.
+share_words() {
+    tr '[:upper:]' '[:lower:]' | awk '{
+        for (i = 1; i <= NF; i++)
+            if ($i !~ /^[0-9]+[.)]?$/) printf "%s%s", (n++ ? " " : ""), $i
+    } END { print "" }'
+}
+
 # ask_shares K N: the share card prompts (C7).  Each card is typed on one
-# line, checked alone with lcsas-shares (a typo is named and that card
+# line (with or without the numbers the card prints, #955: lcsas-shares
+# skips them), checked alone with lcsas-shares (a typo is named and that card
 # asked again), and kept in its own file in a private temporary folder,
 # never the tools folder.  Exactly K cards are combined into $PWFILE.
 # Returns 1 when the reader types P: they will type the password.
@@ -3155,11 +3167,12 @@ ask_shares() {
             chmod 600 "$_as_f"
             printf '%s\n' "$_as_line" > "$_as_f"
             # The same card twice counts once, so the cards could not
-            # be combined; say so now.
-            _as_norm="$(printf '%s\n' "$_as_line" | tr '[:upper:]' '[:lower:]' | tr -s ' 	' '  ')"
+            # be combined; say so now.  Typed with or without the
+            # card's numbers, it is the same card (#955).
+            _as_norm="$(printf '%s\n' "$_as_line" | share_words)"
             _as_dup=0
             for _as_g in "$@"; do
-                if [ "$(tr '[:upper:]' '[:lower:]' < "$_as_g" | tr -s ' 	' '  ')" = "$_as_norm" ]; then
+                if [ "$(share_words < "$_as_g")" = "$_as_norm" ]; then
                     _as_dup=1
                 fi
             done

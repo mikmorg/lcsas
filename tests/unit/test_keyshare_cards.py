@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from lcsas.cli.main import _share_card_text
+from lcsas.cli.main import _share_card_text, _share_word_rows
 from lcsas.keyshare import (
     KeyShareError,
     encode_master_secret,
@@ -242,8 +242,8 @@ def test_card_template_lines_unambiguous(repo: str, k: int, n: int) -> None:
         mnemonic_lines = [
             line for line in card.splitlines() if is_mnemonic_line(line)
         ]
-        # Exactly one share-word-only line: the share words themselves.
-        assert mnemonic_lines == [f"  {words}"]
+        # The share-word lines are the numbered rows of the words (#955).
+        assert mnemonic_lines == _share_word_rows(words)
         assert extract_mnemonic(card) == mnemonic
 
 

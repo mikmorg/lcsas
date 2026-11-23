@@ -1539,7 +1539,7 @@ class TestKeyCard:
         # 4-char check code = first 4 hex of SHA-256(PASSWORD).
         expected_code = hashlib.sha256(PASSWORD).hexdigest()[:4]
         assert expected_code in out
-        assert "TRANSCRIPTION CHECK CODE" in out
+        assert "Check code" in out
         # The password itself is NEVER printed.
         assert PASSWORD.decode("latin-1") not in out
         assert "correct horse" not in out

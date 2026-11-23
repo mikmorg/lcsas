@@ -99,14 +99,28 @@ class Password:
 @dataclass(frozen=True)
 class Card:
     """The words of share card ``n`` of the set ``name``, on one line;
-    with ``typo``, its fifth word replaced by :data:`TYPO_WORD`."""
+    with ``typo``, its fifth word replaced by :data:`TYPO_WORD`; with
+    ``numbered``, each word after its number, as the card prints them
+    (#955: "1 change 2 marathon ...")."""
 
     name: str
     n: int
     typo: bool = False
+    numbered: bool = False
 
 
-Typed = str | Newest | Pick | Password | Card
+@dataclass(frozen=True)
+class Rebuilt:
+    """The password of the set ``name`` as the person rebuilt it by
+    hand, as the share card's fallback says: the META disc's
+    ``lcsas-shares`` run on the printed cards ``cards`` (card numbers),
+    and what it printed typed (#955)."""
+
+    name: str
+    cards: tuple[int, ...] = (1, 2)
+
+
+Typed = str | Newest | Pick | Password | Card | Rebuilt
 NEWEST = Newest()
 
 
@@ -408,6 +422,8 @@ class ArchiveSet:
     manifest: dict[str, str]
     #: Each share card's words, card 1 first (a split set only).
     cards: tuple[str, ...] = ()
+    #: Each printed share card, as ``lcsas password split`` wrote it.
+    card_texts: tuple[str, ...] = ()
     #: The id of its one snapshot.
     snapshot: str = ""
 
@@ -510,15 +526,16 @@ def build_archive(spec: ArchiveSpec, workdir: Path) -> Archive:
                                       for i in range(1, len(fx.other_sets) + 1)]
     sets: dict[str, ArchiveSet] = {}
     for fs, pw in zip((fx.restore_set, *fx.other_sets), pw_files, strict=True):
-        cards = tuple(extract_mnemonic((workdir / c).read_text(encoding="utf-8"))
-                      for c in fs.cards)
+        card_texts = tuple((workdir / c).read_text(encoding="utf-8") for c in fs.cards)
+        cards = tuple(extract_mnemonic(t) for t in card_texts)
         snaps = sorted(p.name for p in (next(iter(discs.values())) / "metadata"
                                         / fs.repo_id / "snapshots").iterdir())
         sets[fs.name] = ArchiveSet(
             repo_id=fs.repo_id, name=fs.name, name_cmd=fs.name_cmd,
             password=pw.read_text().strip(),
             manifest=json.loads((workdir / fs.manifest).read_text()),
-            cards=cards, snapshot=snaps[0] if len(snaps) == 1 else "",
+            cards=cards, card_texts=card_texts,
+            snapshot=snaps[0] if len(snaps) == 1 else "",
         )
     for scrap in ("mirror", "staging", "sources", "meta_stage.iso"):
         shutil.rmtree(workdir / scrap, ignore_errors=True)
@@ -636,8 +653,42 @@ def type_line(item: Typed, script: str, archive: Archive, screen: str) -> str:
         words = archive.sets[item.name].cards[item.n - 1].split()
         if item.typo:
             words[4] = TYPO_WORD
+        if item.numbered:
+            return " ".join(f"{i} {w}" for i, w in enumerate(words, start=1))
         return " ".join(words)
+    if isinstance(item, Rebuilt):
+        return rebuild_password(archive, item)
     raise TypeError(f"cannot type {item!r}")
+
+
+#: The META disc's folder of programs for this computer.
+_HOST_TRIPLE = "x86_64-unknown-linux-musl"
+
+
+def rebuild_password(archive: Archive, item: Rebuilt) -> str:
+    """Run the META disc's ``lcsas-shares`` on the printed cards, as the
+    share card's fallback says, and return what it printed."""
+    import tempfile
+
+    on_disc = archive.meta / "recovery" / "bin" / _HOST_TRIPLE / "lcsas-shares"
+    texts = archive.sets[item.name].card_texts
+    with tempfile.TemporaryDirectory() as tmp:
+        # The disc folder here holds its files without the execute bit
+        # (_read_only); a copy runs as the program on a mounted disc does.
+        program = Path(tmp) / "lcsas-shares"
+        shutil.copyfile(on_disc, program)
+        program.chmod(0o755)
+        files = []
+        for n in item.cards:
+            f = Path(tmp) / f"card{n}.txt"
+            f.write_text(texts[n - 1], encoding="utf-8")
+            files.append(str(f))
+        proc = subprocess.run([str(program), *files], capture_output=True,
+                              timeout=60, check=False)
+    assert proc.returncode == 0, (
+        f"{program} could not rebuild the password of {item.name}: "
+        f"exit {proc.returncode}\n{proc.stderr.decode(errors='replace')}")
+    return proc.stdout.decode()
 
 
 # ── restore.sh under a pseudoterminal ───────────────────────────────
@@ -930,6 +981,32 @@ JOURNEYS: tuple[Journey, ...] = (
                              "card 1", "card 1", "card 2", "another set"),
                       restored=DOCS, tools_folder="removed",
                       says=(rf"'{TYPO_WORD}' is not a share word",)),
+        differs={"bat": Differs(because=("menu by number",))},
+    ),
+    # #955: the share card as printed: the words typed with their
+    # numbers, a card at each question.
+    Journey(
+        name="split password, the share card's words typed with their numbers",
+        archive="two sets",
+        typed=(NEWEST, Pick(DOCS), Card(DOCS, 2, numbered=True),
+               Card(DOCS, 3, numbered=True), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "card 1", "card 2", "another set"),
+                      restored=DOCS, tools_folder="removed"),
+        differs={"bat": Differs(because=("menu by number",))},
+    ),
+    # #955: the password rebuilt by hand from the printed cards with the
+    # META disc's lcsas-shares (the share card's fallback), then P at
+    # the share-card question and the password, as the estate card says.
+    Journey(
+        name="split password rebuilt by hand, P at the card question, then the password",
+        archive="two sets",
+        typed=(NEWEST, Pick(DOCS), "P", Rebuilt(DOCS, (1, 3)), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "card 1", "password", "another set"),
+                      restored=DOCS, tools_folder="removed"),
         differs={"bat": Differs(because=("menu by number",))},
     ),
     Journey(

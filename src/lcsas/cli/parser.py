@@ -1066,7 +1066,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--share-file", action="append", default=None, dest="share_files",
         type=Path,
         help="A file containing one share mnemonic (repeatable). "
-             "If omitted, shares are read from stdin, one per line.",
+             "If omitted, shares are read from stdin, one per line or "
+             "as a card's rows of words.",
     )
     key_combine.add_argument(
         "--out", type=Path, default=None,

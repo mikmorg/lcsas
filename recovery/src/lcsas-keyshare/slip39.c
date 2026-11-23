@@ -941,9 +941,32 @@ static int lower_token(const char *tok, size_t len, char *buf, size_t cap)
     return 0;
 }
 
-/* A line is a "mnemonic line" iff it is non-blank and every
- * whitespace-separated token is a SLIP-0039 wordlist word.  `line`
- * points at the start; `len` is its length (newline excluded). */
+int lcsas_keyshare_is_number(const char *tok, size_t len)
+{
+    size_t digits = len;
+    size_t i;
+
+    if (tok == NULL || len == 0) {
+        return 0;
+    }
+    if (tok[len - 1] == '.' || tok[len - 1] == ')') {
+        digits = len - 1;
+    }
+    if (digits == 0) {
+        return 0;
+    }
+    for (i = 0; i < digits; i++) {
+        if (tok[i] < '0' || tok[i] > '9') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A line is a "mnemonic line" iff it holds a share word and every other
+ * whitespace-separated token is a SLIP-0039 wordlist word or a number
+ * (#955: the numbers a card prints beside its words).  `line` points at
+ * the start; `len` is its length (newline excluded). */
 static int line_is_mnemonic(const char *line, size_t len)
 {
     size_t i = 0;
@@ -965,6 +988,9 @@ static int line_is_mnemonic(const char *line, size_t len)
             i++;
         }
         wlen = i - start;
+        if (lcsas_keyshare_is_number(line + start, wlen)) {
+            continue;
+        }
         if (lower_token(line + start, wlen, word, sizeof(word)) != 0) {
             return 0;
         }
@@ -1024,6 +1050,9 @@ int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
                     while (i < tlen &&
                            line[i] != ' ' && line[i] != '\t') {
                         i++;
+                    }
+                    if (lcsas_keyshare_is_number(line + start, i - start)) {
+                        continue;
                     }
                     if (outlen > 0) {
                         if (outlen + 1 >= cap) {
@@ -1216,6 +1245,11 @@ int lcsas_keyshare_check_share(const char *mnemonic, char *errbuf, size_t errcap
         }
         wlen = (size_t)(p - tok);
 
+        /* #955: a number printed beside a word is not a word, and is
+         * not counted, so "word N" is the word numbered N on the card. */
+        if (lcsas_keyshare_is_number(tok, wlen)) {
+            continue;
+        }
         if (wlen >= sizeof(word)) {
             /* Too long to be any wordlist word: report it as not a word. */
             if (errbuf != NULL && errcap > 0) {

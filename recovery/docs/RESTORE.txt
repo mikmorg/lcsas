@@ -672,6 +672,7 @@ split:
 
 Type the words of exactly K different cards, one card per line; the
 words show as you type, and a word may be cut to its first 4 letters.
+The numbers a card prints beside its words may be typed or left out.
 Each card is checked on its own as you type it: a mistyped word is
 named, and that card is asked for again.  The cards are then combined
 with the bundled lcsas-shares.  If they cannot be combined (cards

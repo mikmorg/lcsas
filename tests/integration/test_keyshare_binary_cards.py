@@ -126,8 +126,7 @@ def test_committed_binary_accepts_more_than_k_cards(tmp_path: Path) -> None:
 
 def test_committed_binary_typo_is_exit_3_and_named(tmp_path: Path) -> None:
     cards = _split_cards(tmp_path)
-    words = [ln for ln in cards[1].read_text().splitlines()
-             if ln.startswith("  ") and len(ln.split()) >= 20][0].split()
+    words = _share_words(cards[1])
     words[6] = "buidling"
     bad = tmp_path / "typed-share.txt"
     bad.write_text(" ".join(words) + "\n")
@@ -165,8 +164,7 @@ def test_committed_binary_stdin_typo_is_named_not_skipped(tmp_path: Path) -> Non
     """On stdin a mistyped share line used to be dropped as prose."""
     cards = _split_cards(tmp_path)
     good = cards[0].read_bytes()
-    words = [ln for ln in cards[3].read_text().splitlines()
-             if ln.startswith("  ") and len(ln.split()) >= 20][0].split()
+    words = _share_words(cards[3])
     words[4] = "zzzz"
     piped = good + (" ".join(words) + "\n").encode()
     proc = _run([], stdin=piped)
@@ -189,17 +187,20 @@ def test_committed_binary_help_documents_exit_status() -> None:
 
 
 def _share_words(card: Path) -> list[str]:
-    return [ln for ln in card.read_text().splitlines()
-            if ln.startswith("  ") and len(ln.split()) >= 20][0].split()
+    """The card's share words, without the numbers it prints (#955)."""
+    from lcsas.keyshare import extract_mnemonic
+
+    return extract_mnemonic(card.read_text()).split()
 
 
 def test_committed_binary_card_without_share_line_says_so(tmp_path: Path) -> None:
     """A card file whose share line is missing says no share words were
     found in it (it said word 1 'tip:' is not a share word)."""
+    from lcsas.keyshare import is_mnemonic_line
+
     cards = _split_cards(tmp_path)
-    words = " ".join(_share_words(cards[0]))
     kept = [ln for ln in cards[0].read_text().splitlines()
-            if " ".join(ln.split()) != words]
+            if not is_mnemonic_line(ln)]
     nosh = tmp_path / "no-share-line.txt"
     nosh.write_text("\n".join(kept) + "\n")
     proc = _run([str(nosh), str(cards[1])])
@@ -210,14 +211,15 @@ def test_committed_binary_card_without_share_line_says_so(tmp_path: Path) -> Non
 
 
 def test_committed_binary_stdin_split_share_hints_one_line(tmp_path: Path) -> None:
-    """A share typed over several short lines is skipped; when too few
-    shares remain, the binary says how many lines were skipped and that
-    each card's words go on one line."""
+    """A share typed over several short lines with blank lines between
+    them is skipped; when too few shares remain, the binary says how many
+    lines were skipped and that each card's words go on one line (or in
+    rows with no blank line between them, #955)."""
     cards = _split_cards(tmp_path)
     words = _share_words(cards[0])
     chunks = [words[i:i + 11] for i in range(0, len(words), 11)]
     assert len(chunks) == 3
-    piped = "".join(" ".join(c) + "\n" for c in chunks) + "\n"
+    piped = "".join(" ".join(c) + "\n\n" for c in chunks)
     piped += " ".join(_share_words(cards[1])) + "\n"
     proc = _run([], stdin=piped.encode())
     assert proc.returncode == 1, proc.stderr

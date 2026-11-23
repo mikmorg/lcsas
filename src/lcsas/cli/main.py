@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import textwrap
 import traceback
 from typing import TYPE_CHECKING
 
@@ -60,6 +61,36 @@ def dispatch(args: argparse.Namespace) -> int:
     return func(args)
 
 
+#: The widest line of a printed card (#955).
+_CARD_WIDTH = 66
+
+
+def _card_lines(text: str, first: str, rest: str) -> list[str]:
+    """*text* after *first*, wrapped to the card width, later lines
+    indented by *rest*.  A name is never broken: a word longer than the
+    width stays whole on its own line."""
+    return textwrap.wrap(
+        text, width=_CARD_WIDTH, initial_indent=first, subsequent_indent=rest,
+        break_long_words=False, break_on_hyphens=False,
+    ) or [first.rstrip()]
+
+
+def _share_word_rows(mnemonic: str) -> list[str]:
+    """The share words in numbered rows of four (#955), every row under
+    66 characters: ``    1 change      2 marathon    3 academic    4 acid``.
+
+    The combiners skip the numbers (digits, with an optional ``.`` or
+    ``)``), so the card combines as printed and a card typed with its
+    numbers does too; "word N" in their messages is the word numbered N.
+    """
+    words = mnemonic.split()
+    return [
+        "  " + "".join(f"{n:>3} {w:<9}"
+                       for n, w in enumerate(words[i:i + 4], start=i + 1)).rstrip()
+        for i in range(0, len(words), 4)
+    ]
+
+
 def _share_card_text(
     repo: str,
     index: int,
@@ -74,39 +105,57 @@ def _share_card_text(
     The ``Split on`` date and ``Split ID`` (SLIP-0039 identifier, shared by
     every card of one split) let a share holder spot a superseded card set
     after a new split — see docs/ESTATE_PLANNING.md "ROTATION".
+
+    #955: the card describes the restore the heir meets: start the
+    restore, which asks for the share cards (since #607); rebuilding the
+    password by hand is the fallback.  The words are numbered in rows of
+    four, with their count; no line is over 66 characters.
     """
-    return (
-        "=============== LCSAS SHARE CARD ===============\n"
-        f"Backup set : {repo}\n"
-        f"Share      : {index} of {count}\n"
-        f"Split on   : {split_date}\n"
-        f"Split ID   : {split_id:05d}\n"
-        "\n"
-        "WHAT THIS IS\n"
-        "  This card holds ONE share of the password that unlocks the\n"
-        f"  backup set '{repo}'.  The password was split into {count}\n"
-        "  shares using Shamir Secret Sharing (SLIP-0039).\n"
-        "\n"
-        "HOW TO USE IT\n"
-        f"  You need ANY {threshold} of the {count} shares to rebuild the\n"
-        "  password.  Fewer than that reveal NOTHING about it.  Gather at\n"
-        f"  least {threshold} share cards and, on the META disc, run:\n"
-        "      recovery/bin/<machine>/lcsas-shares <card1> <card2> ...\n"
-        "  If that program will not run, the fallback is:\n"
-        "      python3 combine_shares.py <card1> <card2> ...\n"
-        "  (or follow the META disc's instructions).\n"
-        "\n"
-        "  Other people each hold one of the remaining shares.  Losing more\n"
-        f"  than {count - threshold} of the {count} shares means the\n"
-        "  password can never be rebuilt.\n"
-        "\n"
-        "THE SHARE WORDS (keep every word, in order)\n"
-        f"  {mnemonic}\n"
-        "\n"
-        "  Tip: you may type just the first 4 letters of each word — the\n"
-        "  combiner expands any unambiguous prefix to the full word.\n"
-        "================================================\n"
-    )
+    words = mnemonic.split()
+    lines = [
+        "=============== LCSAS SHARE CARD ===============",
+        f"Backup set : {repo}",
+        f"Share      : {index} of {count}",
+        f"Split on   : {split_date}",
+        f"Split ID   : {split_id:05d}",
+        "",
+        "WHAT THIS IS",
+        "  This card holds ONE share of the password that unlocks the",
+        f"  backup set '{repo}'.",
+        f"  The password was split into {count} shares using Shamir",
+        "  Secret Sharing (SLIP-0039).",
+        "",
+        "HOW TO USE IT",
+        f"  You need ANY {threshold} of the {count} shares to rebuild the",
+        "  password.  Fewer than that reveal NOTHING about it.",
+        "",
+        "  Start the restore as the estate card says (or as START_HERE.txt",
+        "  on any disc says).  When it asks for share card 1, type the",
+        "  words of this card in order, then ENTER (the first 4 letters",
+        f"  of each word are enough).  It asks for {threshold} cards: type a",
+        "  different card at each question.",
+        "",
+        "  If the restore does not ask for the share cards, rebuild the",
+        "  password by hand: put each card's words in a text file, then",
+        "  on the LCSAS_META disc run",
+        "      recovery/bin/<machine>/lcsas-shares <card1> <card2>",
+        "  or, if that will not run,",
+        "      python3 combine_shares.py <card1> <card2>",
+        "  RESTORE.txt (RESTORE_WINDOWS.txt on Windows), \"SHARE CARDS\",",
+        "  names the <machine> folder for your computer.  Type the",
+        "  password it prints when the restore asks for the password.",
+        "",
+        "  Other people each hold one of the remaining shares.  Losing",
+        f"  more than {count - threshold} of the {count} shares means the password",
+        "  can never be rebuilt.",
+        "",
+        f"THE SHARE WORDS ({len(words)} words; keep every word, in order)",
+        *_share_word_rows(mnemonic),
+        "",
+        "  Type the words only; the numbers are there to keep your place.",
+        "================================================",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _check_code(password: bytes) -> str:
@@ -134,22 +183,24 @@ def _recovery_card_text(
 
     Mirrors the visual style of ``_share_card_text``.  The password itself
     is NEVER rendered — the owner writes it by hand into the PASSWORD box.
-    When *check_code* is given, an heir can confirm a correct transcription
-    with ``lcsas password card --check <typed-file> --code <code>``.
+    The heir types it when the restore asks for it.  The password file's
+    name and the transcription check (``lcsas password card --check
+    <typed-file> --code <code>``) are the owner's, under FOR THE OWNER
+    (#955: the heir has neither the file nor ``lcsas``).
     """
     hints = storage_hints if storage_hints else "(fill in where copies are kept)"
     lines = [
         "=============== LCSAS PASSWORD CARD ===============",
         f"Backup set    : {repo}",
-        f"Password file : {key_file_name}",
         f"Made on       : {card_date}",
-        f"Discs         : labeled {label_prefix}_*",
+        f"Data discs    : labeled {label_prefix}_*",
         "",
         "WHAT THIS IS",
-        "  This card records the password that unlocks the",
-        f"  backup set '{repo}'.  WITHOUT it the discs cannot",
-        "  be decrypted — nobody can restore the files.  Store",
-        "  this card physically SEPARATE from the discs.",
+        "  This card records the password that unlocks the backup set",
+        f"  '{repo}'.",
+        "  WITHOUT it the discs cannot be decrypted — nobody can",
+        "  restore the files.  Store this card physically SEPARATE",
+        "  from the discs.",
         "",
         "THE PASSWORD (write it here by hand — do NOT type it into a",
         "computer to print this card)",
@@ -159,17 +210,20 @@ def _recovery_card_text(
         "  └────────────────────────────────────────────────────┘",
         "",
         "WHERE COPIES ARE KEPT",
-        f"  {hints}",
+        *_card_lines(hints, "  ", "  "),
         "",
         "HOW TO USE IT",
-        "  Mount any archive disc and follow START_HERE.txt; supply",
-        f"  the password above for backup set '{repo}'.",
+        "  Start the restore as the estate card (or START_HERE.txt on",
+        "  any disc) says, choose the backup set",
+        f"  '{repo}',",
+        "  and type this password when the restore asks for it.",
+        "",
+        "FOR THE OWNER (not needed for a restore)",
+        f"  Your password file : {key_file_name}",
     ]
     if check_code is not None:
         lines += [
-            "",
-            "TRANSCRIPTION CHECK CODE",
-            f"  {check_code}",
+            f"  Check code         : {check_code}",
             "  After writing the password, save it to a file and run:",
             "      lcsas password card --check <file> --code "
             f"{check_code}",
@@ -223,10 +277,17 @@ def _estate_card_text(
 
     Unlike the per-repo password card (``password card``, which records ONE
     password), this is the heir's starting sheet for the entire estate: who
-    owns it, what is on the discs, how many discs there are, how the password
-    is stored, and the literal first command to run.  No secret is ever
-    printed.  Every field degrades to a fill-in blank when its source
-    (config or catalog) is absent, so the card is always printable.
+    owns it, what is on the discs, how many data discs there are (the META
+    disc named apart), how the password is stored, and the literal first
+    command to run.  No secret is ever printed.  Every field degrades to a
+    fill-in blank when its source (config or catalog) is absent, so the
+    card is always printable.
+
+    #955: the card describes the restore the heir meets: the first step
+    starts the restore, which asks for the share cards of a split set;
+    rebuilding the password by hand is the fallback, and its password is
+    typed after P at the share-card question.  No line is over 66
+    characters.
     """
     blank = "______________________________"
 
@@ -234,15 +295,12 @@ def _estate_card_text(
         return value if value else blank
 
     repos_line = ", ".join(repositories) if repositories else blank
-    if disc_count is None:
-        disc_line = f"{blank}  (labeled {label_prefix}_*)"
-    else:
-        disc_line = f"{disc_count} disc(s), labeled {label_prefix}_*"
+    count = blank if disc_count is None else str(disc_count)
 
     lines = [
         "=================== LCSAS ESTATE CARD ====================",
-        f"Owner       : {or_blank(owner)}",
-        f"Description : {or_blank(description)}",
+        *_card_lines(or_blank(owner), "Owner       : ", " " * 14),
+        *_card_lines(or_blank(description), "Description : ", " " * 14),
         f"Made on     : {card_date}",
         "",
         "WHAT THIS IS",
@@ -252,34 +310,66 @@ def _estate_card_text(
         "  be decrypted — nobody can restore the files.",
         "",
         "WHAT IS ON THE DISCS",
-        f"  Backup sets : {repos_line}",
-        f"  Discs       : {disc_line}",
+        *_card_lines(repos_line, "  Backup sets : ", " " * 16),
+        f"  Data discs  : {count}, labeled {label_prefix}_*",
+        "                (copies of a disc have the same label)",
+        "  META disc   : LCSAS_META, the restore tools (use the newest)",
         *_retired_card_lines(retired_sets),
         "",
         "WHERE THE PASSWORD IS KEPT",
-        f"  {or_blank(key_storage_hints)}",
+        *_card_lines(or_blank(key_storage_hints), "  ", "  "),
+        "",
+        "FIRST STEP — start the restore",
+        "  Insert the newest META disc, then for your computer:",
+        "    Windows : open the LCSAS_META disc and double-click",
+        "              restore.bat",
+        "    macOS   : open Terminal and type",
+        "                sh /Volumes/LCSAS_META/restore.sh",
+        "    Linux   : open a terminal and type",
+        "                sh /media/$USER/LCSAS_META/restore.sh",
+        "  Then answer its questions (START_HERE.txt on any disc has",
+        "  the full walkthrough): the newest data disc, the backup set,",
+        "  the folder to restore into, then the password.",
+    ]
+    by_hand = [
+        "  If the restore does not ask for the cards, rebuild the",
+        "  password by hand: put each card's words in a text file,",
+        "  then on the LCSAS_META disc run",
+        "      recovery/bin/<machine>/lcsas-shares <card1> <card2>",
+        "  or, if that will not run,",
+        "      python3 combine_shares.py <card1> <card2>",
+        "  (RESTORE.txt or RESTORE_WINDOWS.txt names <machine>).",
+        "  If you rebuilt the password by hand, type P at the",
+        "  share-card question and then the password.",
+    ]
+    holders = [
+        "    1. ______________________   2. ______________________",
+        "    3. ______________________   4. ______________________",
+        "    5. ______________________",
     ]
     if split_repos:
         lines += [
             "",
             "SOME PASSWORDS ARE SPLIT INTO SHARE CARDS",
             *[
-                f"  {name}: any {k} of {n} share cards rebuild its password"
+                line
                 for name, (k, n) in split_repos.items()
+                for line in _card_lines(
+                    f"{name}: any {k} of {n} share cards rebuild its password",
+                    "  ", "    ")
             ],
             *[
-                f"  {name}: an ordinary password (not split)"
+                line
                 for name in unsplit_repos
+                for line in _card_lines(
+                    f"{name}: an ordinary password (not split)", "  ", "    ")
             ],
             "  Fewer cards reveal nothing.  Share holders (and backup set):",
-            "    1. ______________________   2. ______________________",
-            "    3. ______________________   4. ______________________",
-            "    5. ______________________",
-            "  Gather one backup set's cards and, on the LCSAS_META disc, run:",
-            "      recovery/bin/<machine>/lcsas-shares <card1> <card2>",
-            "  If that program will not run, the fallback is:",
-            "      python3 combine_shares.py <card1> <card2>",
-            "  It prints the password; enter it at the restore prompt.",
+            *holders,
+            "  For a split backup set, when the restore gets to the",
+            "  password it asks for the share cards instead: type the words",
+            "  of one card at each question (each share card says how).",
+            *by_hand,
         ]
     elif key_split:
         lines += [
@@ -287,27 +377,13 @@ def _estate_card_text(
             "THE PASSWORD IS SPLIT INTO SHARE CARDS",
             f"  Any {key_threshold} of {key_shares} share cards reconstruct the",
             "  password; fewer reveal nothing.  Share holders:",
-            "    1. ______________________   2. ______________________",
-            "    3. ______________________   4. ______________________",
-            "    5. ______________________",
-            "  Gather any K share cards and, on the LCSAS_META disc, run:",
-            "      recovery/bin/<machine>/lcsas-shares <card1> <card2>",
-            "  If that program will not run, the fallback is:",
-            "      python3 combine_shares.py <card1> <card2>",
-            "  It prints the password; enter it at the restore prompt.",
+            *holders,
+            "  When the restore gets to the password, it asks for the share",
+            "  cards instead: type the words of one card at each question",
+            "  (each share card says how).",
+            *by_hand,
         ]
     lines += [
-        "",
-        "FIRST STEP — restore the files",
-        "  Insert the newest META disc, then for your computer:",
-        "    Windows : open the LCSAS_META disc and double-click",
-        "              restore.bat",
-        "    macOS   : open Terminal and run",
-        "              sh /Volumes/LCSAS_META/restore.sh --restore-folder ~/restored",
-        "    Linux   : open a terminal and run",
-        "              sh /media/$USER/LCSAS_META/restore.sh --restore-folder ~/restored",
-        "  Then follow the on-screen prompts (START_HERE.txt on any",
-        "  disc has the full walkthrough).",
         "",
         "IF YOU GET STUCK",
         f"  Technical contact: {or_blank(technical_contact)}",

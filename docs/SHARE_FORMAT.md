@@ -23,14 +23,45 @@ checksummed, word-mnemonic share format.
 
 The **secret being split is the repository password itself** (the "master
 secret" in SLIP-0039 terms). SLIP-0039 also has a separate optional
-*passphrase* — LCSAS leaves that empty by default; if used, it is an extra
-factor the heir must also supply.
+*passphrase*: LCSAS always leaves it empty (`lcsas password split` has no
+option for one), and its combiners read none, so the heir needs only the
+cards.
 
-If you are holding **share cards** (20 or 33 words each), you have SLIP-0039
-shares — read on. If you are holding a single password (no shares), this
-document does not apply; use the password directly.
+If you are holding **share cards** (20 words or more each), you have
+SLIP-0039 shares — read on. If you are holding a single password (no shares),
+this document does not apply; use the password directly.
+
+**How many words a card has.** A share is 7 words of header and checksum
+plus one word per 10 bits of the framed password (§5 "Secret constraints":
+a 2-byte length, the password, zero-padded to an even length of at least 16
+bytes). So a password of up to 14 bytes gives 20 words, 30 bytes 33 words, a
+64-character password 60 words, an 88-character one 79 words. Every card of
+one split has the same number of words, and the card prints it: "THE SHARE
+WORDS (60 words; ...)".
+
+**The card's layout.** A card printed since rc12 (#955) shows its words in
+numbered rows of four:
+
+```
+THE SHARE WORDS (44 words; keep every word, in order)
+    1 change      2 marathon    3 academic    4 acid
+    5 curly       6 frozen      7 likely      8 advance
+  ...
+```
+
+The numbers only keep the reader's place: every LCSAS combiner skips a token
+that is only digits with an optional `.` or `)`, so the words may be typed
+with or without their numbers, and "word N" in an error is the word numbered
+N on the card. Older cards print the words on one line, unnumbered; they are
+read the same way.
 
 ## 2. How to reconstruct (summary)
+
+The restore scripts on the meta disc (`restore.sh`, `restore.bat`) ask for
+the share cards themselves when a backup set's password is split: type the
+words of one card at each question. The steps below are the fallback, for a
+restore that does not ask (discs made by an older LCSAS) or for a person
+doing it by hand.
 
 1. Gather **any K** shares (default K=2). Each share is an ordered list of
    words from the LCSAS/SLIP-0039 wordlist (1024 words, each uniquely
@@ -39,14 +70,16 @@ document does not apply; use the password directly.
    `lcsas-shares` as `wordlist.c`). You may type just the first 4
    letters of each word — the bundled combiners (`lcsas-shares`,
    `combine_shares.py`, and `lcsas password combine`) expand any unambiguous
-   prefix to the full word.
-2. Run the combiner bundled on the meta disc:
+   prefix to the full word — and the card's numbers may be left in.
+2. Put each card's words in a text file of its own (or use the printed
+   card's text as it is) and run the combiner bundled on the meta disc:
    `recovery/bin/<machine>/lcsas-shares <card1> <card2> ...`
    If that binary won't run, use the Python fallback:
    `python3 combine_shares.py <card1> <card2> ...`
    Any SLIP-0039-compatible tool also works, **or** re-implement §4 below.
-3. The output bytes are the repository password. Feed it to `restore.sh` at the
-   `Password:` prompt exactly as for an archive whose password is not split.
+3. The output bytes are the repository password. Type it when the restore
+   asks for the password; if the restore asks for share cards instead, type
+   `P` at the share-card question and then the password.
 
 A wrong or incomplete share set **fails loudly** (checksum/digest mismatch or
 "insufficient shares") rather than returning garbage — see §4.6. Before

@@ -730,6 +730,13 @@ coverage-c-run:
 	    $(BUILD)/lcsas-shares-cov /nonexistent/card.txt >/dev/null 2>&1 || true; \
 	    echo "not a share" > $$ksdir/junk.txt; \
 	    $(BUILD)/lcsas-shares-cov $$ksdir/junk.txt >/dev/null 2>&1 || true; \
+	    sed 's/^\(    5 \)[a-z]*/\1zqzq/' $$ksdir/shares/cov-share-1-card.txt \
+	        > $$ksdir/typo.txt 2>/dev/null; \
+	    $(BUILD)/lcsas-shares-cov $$ksdir/typo.txt >/dev/null 2>&1 || true; \
+	    iconv -f UTF-8 -t UTF-16 $$ksdir/shares/cov-share-2-card.txt \
+	        > $$ksdir/utf16.txt 2>/dev/null \
+	      && $(BUILD)/lcsas-shares-cov $$ksdir/shares/cov-share-1-card.txt \
+	            $$ksdir/utf16.txt >/dev/null 2>&1 || true; \
 	else \
 	    echo "[coverage-c] keyshare main.c exercise skipped (no python3/binary)"; \
 	fi

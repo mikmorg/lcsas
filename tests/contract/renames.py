@@ -61,7 +61,9 @@ RENAMES: tuple[Rename, ...] = (
     Rename("LCSAS_FORCE_NONEMPTY_TARGET", "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER", "env",
            "restore.sh, restore.bat"),
     Rename("LCSAS_KEYSHARE_PASSPHRASE", "LCSAS_SHARE_PASSPHRASE", "env",
-           "lcsas-shares"),
+           "lcsas-shares, combine_shares.py",
+           "#967: the cards have no passphrase, so the new name is not read "
+           "either; the old one is still refused"),
     Rename("RECOVER.txt", "RESTORE.txt", "file", "the meta disc"),
     Rename("RECOVER_WINDOWS.txt", "RESTORE_WINDOWS.txt", "file", "the meta disc"),
     Rename("lcsas-keyshare", "lcsas-shares", "program",

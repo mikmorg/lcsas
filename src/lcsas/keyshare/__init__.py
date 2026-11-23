@@ -16,11 +16,15 @@ Public API:
 from __future__ import annotations
 
 from .cards import (
+    decode_share_text,
     extract_mnemonic,
     is_mistyped_share_line,
     is_mnemonic_line,
+    is_number_token,
     is_share_line,
     normalize_share_line,
+    read_share_stream,
+    split_shares,
 )
 from .codec import decode_master_secret, encode_master_secret
 from .slip39 import (
@@ -38,14 +42,18 @@ __all__ = [
     "check_share",
     "combine_mnemonics",
     "decode_master_secret",
+    "decode_share_text",
+    "read_share_stream",
     "encode_master_secret",
     "extract_mnemonic",
     "generate_mnemonics",
     "is_mistyped_share_line",
     "is_mnemonic_line",
+    "is_number_token",
     "is_share_line",
     "normalize_share_line",
     "recover_secret",
     "share_identifier",
     "split_secret",
+    "split_shares",
 ]

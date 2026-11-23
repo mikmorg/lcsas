@@ -864,6 +864,13 @@ def share_identifier(mnemonic: str) -> int:
     return Share.from_mnemonic(mnemonic).identifier
 
 
+def _is_number(token: str) -> bool:
+    """A number as a card prints it beside a word: ASCII digits, with an
+    optional trailing ``.`` or ``)`` (``lcsas.keyshare.cards.is_number_token``)."""
+    digits = token[:-1] if token.endswith((".", ")")) else token
+    return digits != "" and all("0" <= c <= "9" for c in digits)
+
+
 def check_share(mnemonic: str) -> str | None:
     """Validate ONE share mnemonic independently, for actionable diagnostics.
 
@@ -882,8 +889,12 @@ def check_share(mnemonic: str) -> str | None:
     A pass means the share is internally consistent; it does *not* mean the
     share belongs to the same split as the others (that mismatch surfaces only
     when the shares are combined).
+
+    The numbers a card prints beside its words (digits, with an optional
+    ``.`` or ``)``, #955) are skipped and not counted, as in the C check, so
+    "word N" is the N-th share word: the word numbered N on the card.
     """
-    tokens = mnemonic.split()
+    tokens = [t for t in mnemonic.split() if not _is_number(t)]
     indices: list[int] = []
     for position, token in enumerate(tokens, start=1):
         try:
