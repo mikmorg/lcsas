@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import textwrap
 import traceback
 from typing import TYPE_CHECKING
 
@@ -58,6 +59,20 @@ def dispatch(args: argparse.Namespace) -> int:
         logger.error(f"Command '{args.command}' not yet implemented.")
         return 1
     return func(args)
+
+
+#: The widest line of a printed card (#955).
+_CARD_WIDTH = 66
+
+
+def _card_lines(text: str, first: str, rest: str) -> list[str]:
+    """*text* after *first*, wrapped to the card width, later lines
+    indented by *rest*.  A name is never broken: a word longer than the
+    width stays whole on its own line."""
+    return textwrap.wrap(
+        text, width=_CARD_WIDTH, initial_indent=first, subsequent_indent=rest,
+        break_long_words=False, break_on_hyphens=False,
+    ) or [first.rstrip()]
 
 
 def _share_word_rows(mnemonic: str) -> list[str]:
@@ -181,10 +196,11 @@ def _recovery_card_text(
         f"Data discs    : labeled {label_prefix}_*",
         "",
         "WHAT THIS IS",
-        "  This card records the password that unlocks the",
-        f"  backup set '{repo}'.  WITHOUT it the discs cannot",
-        "  be decrypted — nobody can restore the files.  Store",
-        "  this card physically SEPARATE from the discs.",
+        "  This card records the password that unlocks the backup set",
+        f"  '{repo}'.",
+        "  WITHOUT it the discs cannot be decrypted — nobody can",
+        "  restore the files.  Store this card physically SEPARATE",
+        "  from the discs.",
         "",
         "THE PASSWORD (write it here by hand — do NOT type it into a",
         "computer to print this card)",
@@ -194,12 +210,13 @@ def _recovery_card_text(
         "  └────────────────────────────────────────────────────┘",
         "",
         "WHERE COPIES ARE KEPT",
-        f"  {hints}",
+        *_card_lines(hints, "  ", "  "),
         "",
         "HOW TO USE IT",
         "  Start the restore as the estate card (or START_HERE.txt on",
-        f"  any disc) says, choose the backup set '{repo}', and",
-        "  type this password when the restore asks for it.",
+        "  any disc) says, choose the backup set",
+        f"  '{repo}',",
+        "  and type this password when the restore asks for it.",
         "",
         "FOR THE OWNER (not needed for a restore)",
         f"  Your password file : {key_file_name}",
@@ -282,8 +299,8 @@ def _estate_card_text(
 
     lines = [
         "=================== LCSAS ESTATE CARD ====================",
-        f"Owner       : {or_blank(owner)}",
-        f"Description : {or_blank(description)}",
+        *_card_lines(or_blank(owner), "Owner       : ", " " * 14),
+        *_card_lines(or_blank(description), "Description : ", " " * 14),
         f"Made on     : {card_date}",
         "",
         "WHAT THIS IS",
@@ -293,14 +310,14 @@ def _estate_card_text(
         "  be decrypted — nobody can restore the files.",
         "",
         "WHAT IS ON THE DISCS",
-        f"  Backup sets : {repos_line}",
+        *_card_lines(repos_line, "  Backup sets : ", " " * 16),
         f"  Data discs  : {count}, labeled {label_prefix}_*",
         "                (copies of a disc have the same label)",
         "  META disc   : LCSAS_META, the restore tools (use the newest)",
         *_retired_card_lines(retired_sets),
         "",
         "WHERE THE PASSWORD IS KEPT",
-        f"  {or_blank(key_storage_hints)}",
+        *_card_lines(or_blank(key_storage_hints), "  ", "  "),
         "",
         "FIRST STEP — start the restore",
         "  Insert the newest META disc, then for your computer:",
@@ -335,12 +352,17 @@ def _estate_card_text(
             "",
             "SOME PASSWORDS ARE SPLIT INTO SHARE CARDS",
             *[
-                f"  {name}: any {k} of {n} share cards rebuild its password"
+                line
                 for name, (k, n) in split_repos.items()
+                for line in _card_lines(
+                    f"{name}: any {k} of {n} share cards rebuild its password",
+                    "  ", "    ")
             ],
             *[
-                f"  {name}: an ordinary password (not split)"
+                line
                 for name in unsplit_repos
+                for line in _card_lines(
+                    f"{name}: an ordinary password (not split)", "  ", "    ")
             ],
             "  Fewer cards reveal nothing.  Share holders (and backup set):",
             *holders,

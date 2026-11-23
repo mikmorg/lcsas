@@ -53,13 +53,31 @@ def _password_card(check_code: str | None = "fdcc") -> str:
     )
 
 
+#: A backup set name of 30 characters, and six sets.
+LONG = "Grandmother's letters and maps"
+SIX = ["Family documents", "Holiday photos", LONG, "Tax records 1990-2025",
+       "Recipes", "Home videos"]
+
+
 def _all_cards() -> list[tuple[str, str]]:
     cards = []
     for pw_len in (8, 16, 32, 64, 88, 128):
         cards.append((f"share card, {pw_len}-byte password", _share_card(pw_len)[0]))
     cards.append(("share card, 9 of 16", _share_card(64, k=9, n=16)[0]))
+    cards.append(("share card, long name", _share_card(64, repo=LONG)[0]))
     cards.append(("password card", _password_card()))
     cards.append(("password card, no check code", _password_card(None)))
+    cards.append(("password card, long name", _recovery_card_text(
+        repo=LONG, key_file_name="grandmothers-letters.pw",
+        storage_hints="One copy in the safe at home, one with the solicitor "
+                      "in town, one in the bank's deposit box",
+        card_date="2026-11-23", label_prefix="LCSAS", check_code="fdcc")))
+    cards.append(("estate card, six sets", _estate(repositories=SIX)))
+    cards.append(("estate card, six sets mixed", _estate(
+        repositories=SIX, key_split=False,
+        split_repos={LONG: (2, 5), "Family documents": (3, 5)},
+        unsplit_repos=("Holiday photos", "Tax records 1990-2025", "Recipes",
+                       "Home videos"))))
     cards.append(("estate card, split", _estate()))
     cards.append(("estate card, not split", _estate(key_split=False)))
     cards.append(("estate card, no disc count", _estate(disc_count=None)))

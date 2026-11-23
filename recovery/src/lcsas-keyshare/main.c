@@ -242,11 +242,11 @@ static int find_candidate(const char *text, struct block *best)
         size_t len = line_length(p);
         size_t tokens;
         size_t words;
-        int near;
+        int in_share;
 
         (void)line_stats(p, len, &tokens, &words);
-        near = is_near_line(tokens, words);
-        if (near) {
+        in_share = is_near_line(tokens, words);
+        if (in_share) {
             if (run.start == NULL) {
                 run.start = p;
                 run.tokens = 0;
@@ -256,7 +256,7 @@ static int find_candidate(const char *text, struct block *best)
             run.words += words;
             run.end = p + len;
         }
-        if (!near || p[len] == '\0') {
+        if (!in_share || p[len] == '\0') {
             if (run.start != NULL && is_share_like(run.tokens, run.words) &&
                 run.tokens > best->tokens) {
                 *best = run;
@@ -522,20 +522,20 @@ int main(int argc, char **argv)
             size_t tokens;
             size_t words;
             int any;
-            int near;
+            int in_share;
 
             lineno++;
             any = line_stats(p, len, &tokens, &words);
-            near = is_near_line(tokens, words);
+            in_share = is_near_line(tokens, words);
             /* A line that is not part of the group ends it, and so does
              * a line that is a share on its own. */
-            if (group.start != NULL && (!near || tokens >= 13)) {
+            if (group.start != NULL && (!in_share || tokens >= 13)) {
                 if (end_group(&group, storage, labels, mnemonics,
                               &n, &skipped) != 0) {
                     return EXIT_USAGE;
                 }
             }
-            if (near) {
+            if (in_share) {
                 if (group.start == NULL) {
                     group.start = p;
                     group.tokens = 0;

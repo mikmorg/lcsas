@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from lcsas.cli.main import _share_card_text
-from lcsas.keyshare import encode_master_secret, split_secret
+from lcsas.keyshare import encode_master_secret, extract_mnemonic, split_secret
 from tests.recovery_hardening._wine_helpers import stop_wineserver
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -85,8 +85,8 @@ def test_password_bytes_exact_from_more_than_k_cards(cards) -> None:
 
 
 def test_typo_is_exit_3_and_too_few_is_exit_1(cards, tmp_path) -> None:
-    words = [ln for ln in cards[1].read_text().splitlines()
-             if ln.startswith("  ") and len(ln.split()) >= 20][0].split()
+    # The card's words, without the numbers it prints (#955).
+    words = extract_mnemonic(cards[1].read_text()).split()
     words[2] = "qqqq"
     bad = tmp_path / "typed.txt"
     bad.write_text(" ".join(words) + "\n")
