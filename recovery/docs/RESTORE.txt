@@ -181,10 +181,15 @@ in this order.  Each one says how to answer.
   4. The discs, one by one, while the restore runs (see "MULTI-DISC
      RESTORE").
 
-  5. After a restore that succeeds, when the discs hold another set:
+  5. After a restore that succeeds, the end says where the files are
+     and how many:
+         Restore complete.  4 files restored to:
+             /home/alice/restored
+     Then, when the discs hold a set not restored yet:
          Restore another backup set from these discs? [y/N]
-     At [y/N]: N or ENTER ends the restore, and the tools folder is
-     deleted (see "THE TOOLS FOLDER").  y asks for the folder to
+     At [y/N]: N ends the restore, and the tools folder is deleted
+     (see "THE TOOLS FOLDER").  ENTER alone asks again: a stray ENTER
+     (pressed for a disc that then mounted by itself) does not end it.  y asks for the folder to
      restore the next set into, and then starts again at question 2,
      with no META disc and nothing copied again.
      At the folder question: ENTER takes a NEW folder beside the
@@ -271,6 +276,14 @@ and you would get nothing.
 
 LIST AVAILABLE SNAPSHOTS
 
+The simplest way: restore.sh lists them, with their dates, and
+restores nothing.  It asks for the newest data disc, the backup set
+and its password as usual:
+
+  sh /mnt/restore.sh --list-snapshots
+
+(restore.bat takes --list-snapshots too.)  By hand:
+
 Each backup set's keys, index and snapshots are in its own folder,
 metadata/<id>/, on every disc.  <id> is the set's id; to see which
 folder is which set, run:
@@ -310,7 +323,10 @@ RESTORE A SPECIFIC SNAPSHOT
   sh /mnt/restore.sh --restore-folder ~/restored --snapshot a1b2c3d4
 
 The snapshot may be 'latest', an exact ID, or the first few
-characters of one.  The restore folder and the snapshot are named with
+characters of one.  When no snapshot of the backup set starts with
+it, the script says so and stops (exit code 1); run it again with an
+ID from --list-snapshots.  An ID is made of the digits 0-9 and the
+letters a-f: anything else is refused at once (exit code 2).  The restore folder and the snapshot are named with
 --restore-folder and --snapshot; a bare folder or snapshot after
 restore.sh is refused (exit code 2).
 restore.sh handles the disc cascade, password prompt, and pack-cache
@@ -971,13 +987,10 @@ still carries the old catalog.
                          (about 130 MB) from the disc to ...
          [lcsas-restore] copied recovery binaries to ~/lcsas-tools
          [lcsas-restore] copying the backup-set metadata (about 2 MB) ...
-         [lcsas-restore] you may eject the meta disc when the
-                         binary prompts for a data disc.
   4. It asks you to take the META disc out and put in the data disc
      with the newest label, as described above, and then for the
-     backup set and its password.  This question comes sooner than
-     the line above says: the copy is done, so the META disc can come
-     out now.
+     backup set and its password.  The copy is done, so the META disc
+     can come out now.
   5. When the binary has loaded the index and needs a pack that lives
      on another DATA disc, it pauses and prints a prompt (see below).
 

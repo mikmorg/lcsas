@@ -324,6 +324,14 @@ DIFFERENCES: dict[str, Difference] = {
              "flags; RESTORE_WINDOWS.txt documents its arguments"),
         deliberate=True,
     ),
+    "empty at the menu": Difference(
+        what=("ENTER with nothing typed at the set menu: restore.sh asks "
+              "again; restore.bat takes set 1, its default"),
+        why=("kept (#966): restore.bat shows its default in brackets "
+             "([1]), and cmd cannot tell an empty answer from the end of "
+             "its input"),
+        deliberate=True,
+    ),
     "too big to count": Difference(
         what=("restore.bat cannot compare a size of 100 TB or more with the "
               "free space (set /a counts to 2147483647 MB); it says it "
@@ -1369,20 +1377,20 @@ JOURNEYS: tuple[Journey, ...] = (
     Journey(
         name="another set into a folder of its own",
         archive="two sets",
+        # Both sets restored: "another set?" is not asked again (#966).
         typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
-               Folder(2), Pick(DOCS), Card(DOCS, 1), Card(DOCS, 3), "n"),
+               Folder(2), Pick(DOCS), Card(DOCS, 1), Card(DOCS, 3)),
         expect=Expect(exit=ScriptExit.OK,
                       asked=("newest data disc", "which set", "folder",
                              "password", "another set", "folder", "which set",
-                             "card 1", "card 2", "another set"),
+                             "card 1", "card 2"),
                       restored=(PHOTOS, DOCS), tools_folder="removed"),
         differs={"bat": Differs(
             because=("menu by number", "folder before the set"),
             asked=("newest data disc", "which set", "folder", "password",
-                   "another set", "which set", "folder", "card 1", "card 2",
-                   "another set"),
+                   "another set", "which set", "folder", "card 1", "card 2"),
             typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
-                   Pick(DOCS), Folder(2), Card(DOCS, 1), Card(DOCS, 3), "n"))},
+                   Pick(DOCS), Folder(2), Card(DOCS, 1), Card(DOCS, 3)))},
     ),
     # #953: the second set typed into the first set's folder: both
     # scripts warn and ask; anything but YES stops with 65, and the
@@ -1512,6 +1520,60 @@ JOURNEYS: tuple[Journey, ...] = (
                       restored=DOC, tools_folder="removed",
                       says=(r"The disc labelled OTHER_\w+ belongs to a\s+different "
                             r"LCSAS archive",)),
+    ),
+    # #966 item 1: an ENTER pressed late (after a disc mounted by itself)
+    # answered "another set?" with No, and the tools folder and the pack
+    # cache went.  An empty answer asks again; only n ends.  Item 2: the
+    # end says where the files are and how many.
+    Journey(
+        name="a stray ENTER at 'another set?' asks again",
+        archive="two sets",
+        typed=(NEWEST, Pick(PHOTOS), Password(PHOTOS), "", "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "password", "another set", "another set"),
+                      restored=PHOTOS, tools_folder="removed",
+                      says=(r"Please type y or n",
+                            r"Restore complete\.  4 files restored to:")),
+        differs={"bat": Differs(because=("menu by number",))},
+    ),
+    # #966 item 6: the set question takes a loose answer: spaces, any
+    # case, the start of a name; an empty line asks again.
+    Journey(
+        name="the set menu takes a loose answer",
+        archive="two sets",
+        typed=(NEWEST, "", "  holiday ", Password(PHOTOS), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "which set",
+                             "folder", "password", "another set"),
+                      restored=PHOTOS, tools_folder="removed"),
+        differs={"bat": Differs(
+            because=("menu by number", "empty at the menu"),
+            asked=("newest data disc", "which set", "folder", "password",
+                   "another set"),
+            typed=(NEWEST, Pick(PHOTOS), Password(PHOTOS), "n"))},
+    ),
+    # #966 item 5: --list-snapshots lists the set's snapshots, with
+    # their dates, and restores nothing.
+    Journey(
+        name="--list-snapshots",
+        archive="one set",
+        args=("--list-snapshots",),
+        typed=(NEWEST, Password(PHOTOS)),
+        expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "password"),
+                      says=(r"ID +TIME +PATH", r"\n[0-9a-f]{8}  20\d\d-")),
+    ),
+    # #966 item 5: --snapshot naming no snapshot of the set is said as
+    # such, and no command to carry on is offered (it would fail again).
+    Journey(
+        name="--snapshot of no snapshot: said, nothing to carry on",
+        archive="one set",
+        args=("--snapshot", "abcdef12"),
+        typed=(NEWEST, Password(PHOTOS)),
+        expect=Expect(exit=ScriptExit.FAILED,
+                      asked=("newest data disc", "folder", "password"),
+                      says=(r"No snapshot of Holiday photos starts with abcdef12",
+                            r"--list-snapshots")),
     ),
     Journey(
         name="--snapshot names the snapshot",

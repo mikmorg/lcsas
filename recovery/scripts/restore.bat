@@ -52,7 +52,10 @@ REM own environment; without this a later run from the same prompt
 REM would think it had already been relocated.
 for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")
 REM The script's own state, never taken from the caller's environment.
-for %%V in (CACHE_SET_HERE ANOTHER_PASS STAYING_ON_DISC METADATA_SET_HERE PW_NOTE_SAID NEWEST_ROOT) do set "%%V="
+for %%V in (CACHE_SET_HERE ANOTHER_PASS STAYING_ON_DISC METADATA_SET_HERE PW_NOTE_SAID NEWEST_ROOT LIST_SNAPSHOTS) do set "%%V="
+REM The ids of the backup sets restored in this run, and how many (#966).
+set "RESTORED_LIST= "
+set "RESTORED_N=0"
 
 REM A retired environment variable, set, is refused before anything else
 REM happens (#934): its value would be silently ignored otherwise.  Top
@@ -753,6 +756,10 @@ echo Type the number of the one to restore, or Q then ENTER to quit.
 :pick_repo
 set "REPO_PICK="
 set /p "REPO_PICK=Which one do you want to restore? [1]: "
+REM Spaces around the number, and "1)" or "1.", are taken (#966).
+if defined REPO_PICK set "REPO_PICK=!REPO_PICK: =!"
+if defined REPO_PICK if "!REPO_PICK:~-1!"==")" set "REPO_PICK=!REPO_PICK:~0,-1!"
+if defined REPO_PICK if "!REPO_PICK:~-1!"=="." set "REPO_PICK=!REPO_PICK:~0,-1!"
 if "!REPO_PICK!"=="" set "REPO_PICK=1"
 if /i "!REPO_PICK!"=="q" goto :menu_quit
 set "SEL="
@@ -979,6 +986,9 @@ if exist "%RECOVERY%\bin\%ARCH%\lcsas-restore.exe" goto :tier1_present
 if exist "%REPO%\data\" goto :tier1_present
 goto :tier1_missing
 :tier1_present
+REM --list-snapshots (#966): nothing is restored, so no folder is asked
+REM for: straight to the password, then the list.
+if defined LIST_SNAPSHOTS goto :pw_section
 REM A restore that carries on goes into the folder it was going into.
 if not defined RESUME goto :ask_target
 set "TARGET=!RESUME_TARGET!"
@@ -1348,6 +1358,7 @@ set "RESUME_CMD="
 set "DESK_LAUNCHER="
 if defined LCSAS_RELOCATED call :save_resume
 
+:pw_section
 REM ----- The password (#607, #608) -----------------------------------
 REM The password reaches the programs in a file in %TEMP%, PWFILE, which
 REM is deleted on every way out.  It comes from the first of:
@@ -1687,6 +1698,37 @@ pause
 goto :wrong_password
 
 :pw_ok
+if defined LIST_SNAPSHOTS goto :list_snapshots
+REM --snapshot ID that is the start of no snapshot of the set (#966): said
+REM now, and no way to carry on is offered, as it would fail the same
+REM way.  The list prints the first 8 letters of each id.  Only a list
+REM that came out (its "ID" header line) is judged: else tier 1 says.
+REM findstr with /c and /i only, the forms wine's findstr takes too: an
+REM id found anywhere in the list counts as found (tier 1 then says).
+if /i "!SNAP!"=="latest" goto :snap_found
+if not exist "%BIN%" goto :snap_found
+set "SNAP8=%SNAP:~0,8%"
+set "SNAP_LIST=%TEMP%\lcsas-snaps-%RANDOM%.txt"
+"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots >"%SNAP_LIST%" 2>nul <nul
+set "SNAP_MISSING="
+findstr /c:"ID " "%SNAP_LIST%" >nul 2>nul <nul
+if errorlevel 1 goto :snap_listed
+findstr /i /c:"%SNAP8%" "%SNAP_LIST%" >nul 2>nul <nul
+if errorlevel 1 set "SNAP_MISSING=1"
+:snap_listed
+del /f /q "%SNAP_LIST%" >nul 2>nul
+if not defined SNAP_MISSING goto :snap_found
+del /f /q "%PWFILE%" >nul 2>nul
+if defined DESK_LAUNCHER del /f /q "!DESK_LAUNCHER!" >nul 2>nul
+del /f /q "%TOOLS%\resume.cfg" >nul 2>nul
+del /f /q "%TOOLS%\Resume LCSAS restore.bat" >nul 2>nul
+echo.
+echo No snapshot of !SET_NAME! starts with !SNAP!.  List them with
+echo     restore.bat --list-snapshots
+echo and give one with --snapshot ID ^(or leave --snapshot out: the latest^).
+pause
+exit /b 1
+:snap_found
 
 REM ----- Tier 1: prebuilt lcsas-restore.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
@@ -1806,9 +1848,16 @@ REM row says "pack not found": see :restore_discs_missing.
 :restore_done
 set "PARTIAL="
 del /f /q "%PWFILE%" >nul 2>nul
+REM Where the files are and how many (#966); the marker is not one.
+set "RC_N=0"
+for /f "delims=" %%F in ('dir /s /b /a-d "%TARGET%" 2^>nul ^<nul') do set /a RC_N+=1
+if exist "%MARKER%" set /a RC_N-=1
+set "RC_F=files"
+if "%RC_N%"=="1" set "RC_F=file"
 echo.
 echo ============================================================
-echo  Restore complete.  Files restored to: !TARGET!
+echo  Restore complete.  !RC_N! !RC_F! restored to:
+echo     !TARGET!
 echo ============================================================
 goto :restore_asked
 :restore_partial
@@ -1830,13 +1879,33 @@ REM tools folder, the pack cache (the discs read so far) and the
 REM catalog copy as they are.  Only no (or LCSAS_ANOTHER_SET=0) ends the
 REM run, and only then is the tools folder deleted (C6).  The end of the
 REM input reads as no.
+REM Not when every set has been restored (#966).  An empty answer asks
+REM again: an ENTER pressed late, after a disc that mounted by itself,
+REM ended the run and deleted the tools folder and the pack cache.  Only
+REM n (or Q) ends.  cmd cannot tell an empty answer from the end of its
+REM input, so the third empty answer in a row ends too.
+set "_T=!RESTORED_LIST: %SET_ID% =!"
+if not "!_T!"=="!RESTORED_LIST!" goto :restored_counted
+set "RESTORED_LIST=!RESTORED_LIST!%SET_ID% "
+set /a RESTORED_N+=1
+:restored_counted
+if %NCAND% leq 1 goto :all_done
+if "%LCSAS_ANOTHER_SET%"=="0" goto :all_done
+if %RESTORED_N% geq %NCAND% goto :all_done
+set "AN_EMPTY=0"
+:another_ask
 set "ANOTHER_ANS="
-if %NCAND% gtr 1 if not "%LCSAS_ANOTHER_SET%"=="0" (
-    echo.
-    set /p "ANOTHER_ANS=Restore another backup set from these discs? [y/N]: "
-)
+echo.
+set /p "ANOTHER_ANS=Restore another backup set from these discs? [y/N]: "
 if /i "!ANOTHER_ANS!"=="y" goto :another_set
 if /i "!ANOTHER_ANS!"=="yes" goto :another_set
+if /i "!ANOTHER_ANS!"=="n" goto :all_done
+if /i "!ANOTHER_ANS!"=="no" goto :all_done
+if /i "!ANOTHER_ANS!"=="q" goto :all_done
+if not defined ANOTHER_ANS set /a AN_EMPTY+=1
+if %AN_EMPTY% geq 3 goto :all_done
+echo Please type y or n, then ENTER.
+goto :another_ask
 :all_done
 REM The pack cache is no longer needed.  Only remove a folder this
 REM script chose; one named in LCSAS_PACK_CACHE_DIR stays.
@@ -1914,6 +1983,7 @@ if /i "%~1"=="--snapshot" goto :pa_snapshot
 if /i "%~1"=="--backup-set" goto :pa_repo
 if /i "%~1"=="--restore-folder" goto :pa_folder
 if /i "%~1"=="--password-file" goto :pa_password_file
+if /i "%~1"=="--list-snapshots" goto :pa_list
 if /i "%~1"=="--repo" goto :pa_old_repo
 if /i "%~1"=="--target" goto :pa_old_target
 if defined PA_FIRST if /i "%~1"=="--resume" goto :pa_resume
@@ -1965,6 +2035,11 @@ goto :pa_next
 :pa_password_file_missing
 set "ARG_MISSING=--password-file"
 goto :eof
+:pa_list
+set "PA_FIRST="
+set "LIST_SNAPSHOTS=1"
+shift
+goto :pa_next
 :pa_old_repo
 set "ARG_OLD=--repo"
 set "ARG_OLD_NEW=--backup-set"
@@ -2003,6 +2078,7 @@ echo    --backup-set NAME  restore the backup set NAME ^(its name or its id^)
 echo    --restore-folder DIR  restore into the folder DIR
 echo    --snapshot ID      restore that snapshot, not the latest one
 echo    --password-file FILE  the password is in the file FILE
+echo    --list-snapshots   list the backup set's snapshots, restore nothing
 echo    --check-disc IMAGE check a disc image for damage, and repair it
 echo See RESTORE_WINDOWS.txt.
 goto :eof
@@ -2748,6 +2824,21 @@ echo itself.  Set LCSAS_TOOLS_DIR to a new or empty folder, or leave it
 echo unset to use the usual one, %%LOCALAPPDATA%%\lcsas-tools.
 pause
 exit /b 1
+
+REM Reached only via `goto` from :pw_ok: --list-snapshots (#966), the
+REM set's snapshots with their dates, from lcsas-restore.exe.
+:list_snapshots
+set "LS_RC=1"
+echo.
+if not exist "%BIN%" echo No reader here can list them ^(see RESTORE_WINDOWS.txt^).
+if not exist "%BIN%" goto :list_done
+echo The snapshots of !SET_NAME! ^(give one to --snapshot ID^):
+"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots <nul
+set "LS_RC=%ERRORLEVEL%"
+:list_done
+del /f /q "%PWFILE%" >nul 2>nul
+pause
+exit /b %LS_RC%
 
 REM Reached only via `goto` from the newest-data-disc step: Q (C5: 65).
 :newest_quit

@@ -756,7 +756,9 @@ def test_restore_bat_tries_the_password_before_tier1():
     answer asks again, Q quits with 77."""
     content = RESTORE_BAT.read_text()
     code = _code(content)
-    check = [ln for ln in code if "--list-snapshots" in ln]
+    # (--list-snapshots also lists them for the reader, and checks a
+    # --snapshot ID, #966: the check is the one whose output goes nowhere.)
+    check = [ln for ln in code if "--list-snapshots >nul" in ln]
     head = '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" '
     assert check == [head + "--list-snapshots >nul 2>nul <nul"], check
     tier1 = [i for i, ln in enumerate(code)
@@ -799,7 +801,12 @@ def test_restore_bat_asks_for_another_set_before_cleaning_up():
     assert ask[0] < done.index(rm_cache)
     assert ask[0] < done.index('(2>nul > "%TOOLS%\\.done" echo.) 2>nul')
     assert 'if /i "!ANOTHER_ANS!"=="y" goto :another_set' in done
-    assert 'if not "%LCSAS_ANOTHER_SET%"=="0"' in "\n".join(done)
+    assert 'if "%LCSAS_ANOTHER_SET%"=="0" goto :all_done' in done
+    # #966: an empty answer asks again (three at most), only n ends, and
+    # with every set restored it is not asked.
+    assert 'if /i "!ANOTHER_ANS!"=="n" goto :all_done' in done
+    assert "goto :another_ask" in done
+    assert "if %RESTORED_N% geq %NCAND% goto :all_done" in done
 
 
 def test_restore_bat_c4_variables_are_documented():
@@ -1006,7 +1013,8 @@ def test_restore_bat_helpers_never_read_the_scripts_input():
         ln.strip() for ln in RESTORE_BAT.read_text().splitlines()
         if ln.strip() and not ln.strip().upper().startswith(("REM", "::"))
     ]
-    hits = [ln for ln in lines if calls.search(ln) and not ln.startswith("echo")]
+    hits = [ln for ln in lines if calls.search(ln) and not ln.startswith("echo")
+            and not ln.startswith('if /i "%~1"==')]
     assert len(hits) >= 13, f"self-check: only {len(hits)} calls found:\n" + "\n".join(hits)
     missing = [ln for ln in hits
                if "<nul" not in ln.replace(" ", "") and "^<nul" not in ln]
@@ -1215,3 +1223,27 @@ def test_restore_bat_refuses_a_disc_of_another_archive_and_asks_about_an_older_o
     assert 'set /p "OC_ANS=ENTER (this disc), S (the copy) or Q: "' in code
     assert 'if "!KEPT_%~1!"=="1" goto :eof' in code
     assert "if defined OC_QUIT goto :newest_quit" in code
+
+
+def test_restore_bat_heir_inputs_966():
+    """#966: --list-snapshots lists the set's snapshots and restores
+    nothing (no folder asked); a --snapshot ID that starts no snapshot is
+    said before tier 1, with no way to carry on left behind; the end
+    says how many files and where; the menu takes " 2 ", "2)" and "2.".
+    Functional proof: the #966 rows of tests/contract/journeys.py (wine,
+    and real cmd in windows-e2e)."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert 'if /i "%~1"=="--list-snapshots" goto :pa_list' in code
+    assert code[code.index(":tier1_present") + 1] == "if defined LIST_SNAPSHOTS goto :pw_section"
+    assert code[code.index(":pw_ok") + 1] == "if defined LIST_SNAPSHOTS goto :list_snapshots"
+    listing = _label_body(content, ":list_snapshots")
+    assert '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots <nul' in listing
+    i = code.index(":pw_ok")
+    snap = code[i:code.index(":snap_found")]
+    assert 'del /f /q "%TOOLS%\\resume.cfg" >nul 2>nul' in snap
+    assert "echo No snapshot of !SET_NAME! starts with !SNAP!.  List them with" in snap
+    assert "exit /b 1" in snap
+    done = _label_body(content, ":restore_done")
+    assert "echo  Restore complete.  !RC_N! !RC_F! restored to:" in done
+    assert 'if defined REPO_PICK set "REPO_PICK=!REPO_PICK: =!"' in code

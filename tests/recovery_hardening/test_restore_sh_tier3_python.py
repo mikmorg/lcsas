@@ -375,8 +375,10 @@ def test_tier3_temporary_files_honour_tmpdir(tmp_path: Path) -> None:
     """#806's class: tier 3's two capture files (its stderr and its exit
     code) were made in a hard-coded /tmp, which may be read-only or
     missing on a rescue system, while every other temporary file of
-    restore.sh honoured TMPDIR.  They are now made in $TMPDIR, as is the
-    password file, and all three are gone after the run."""
+    restore.sh honoured TMPDIR.  They are now made in $TMPDIR, and are
+    gone after the run.  The password file is not there: it lives in the
+    tools folder (#966), removed with it, so a run that is killed does
+    not leave it in a shared temporary folder."""
     recovery = _fixture(tmp_path, None)
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir()
@@ -398,8 +400,8 @@ def test_tier3_temporary_files_honour_tmpdir(tmp_path: Path) -> None:
     names = seen.read_text().split()
     # The exit code comes back through a pipe (#799: a full disk could
     # not hold it in a file), so only the copy of the messages is a file.
-    for prefix in ("lcsas-tier-err.", "lcsas-pw."):
-        assert any(n.startswith(prefix) for n in names), (prefix, names)
+    assert any(n.startswith("lcsas-tier-err.") for n in names), names
+    assert not any(n.startswith("lcsas-pw.") for n in names), names
     assert sorted(p.name for p in tmpdir.iterdir()) == []
     src = RESTORE_SH.read_text()
     assert "mktemp /tmp/" not in src, "a temporary file in a hard-coded /tmp"

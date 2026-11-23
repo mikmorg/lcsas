@@ -691,8 +691,6 @@ relocate_to_ram() {
 EOF
             ;;
     esac
-    printf '[lcsas-restore] you may eject the meta disc when the ' >&2
-    printf 'binary prompts for a data disc.\n' >&2
 
     LCSAS_RELOCATED="$orig_mount"
     LCSAS_TOOLS_DIR="$ramdir"
@@ -726,6 +724,7 @@ TARGET_FLAG=""
 SNAP="latest"
 # --snapshot ID.
 SNAP_FLAG=""
+LIST_SNAPSHOTS=0
 # --check-disc IMAGE: the heir-facing "my disc is scratched" path.  When
 # set, restore.sh runs the bundled in-house RS03 ECC tool (lcsas-ecc) on
 # IMAGE to check and, on damage, offer/perform a repair -- then exits.
@@ -754,14 +753,14 @@ while [ $# -gt 0 ]; do
         -h|--help)
             cat <<EOF
 usage: $0 [--backup-set NAME] [--restore-folder DIR] [--snapshot ID]
-         [--password-file FILE] [--version] [--check-disc IMAGE]
-         [RECOVERY_ROOT]
+         [--password-file FILE] [--list-snapshots] [--version]
+         [--check-disc IMAGE] [RECOVERY_ROOT]
 
 SCRATCHED / DAMAGED DISC?
   sh restore.sh --check-disc /path/to/disc.iso
   Runs the bundled in-house RS03 ECC tool (lcsas-ecc) to scan the disc
   image for damage and, if any is found, offers to REPAIR it using the
-  ~15%% parity that was burned alongside your data.  No externally
+  ~15% parity that was burned alongside your data.  No externally
   installed dvdisaster or ddrescue is required -- the repair tool ships
   on this meta disc.  (Image a damaged optical disc first with, e.g.,
   'dd if=/dev/sr0 of=disc.iso conv=noerror,sync bs=2048'.)
@@ -797,6 +796,9 @@ FLAGS AND ENVIRONMENT VARIABLES:
   --password-file FILE    Path to a file whose contents are the password
                           (same as LCSAS_PASSWORD_FILE=FILE).  Skips the
                           Password: prompt.
+  --list-snapshots        List the backup set's snapshots, with their
+                          dates, and restore nothing (asks the set and
+                          its password).  Give one to --snapshot.
   --version               Print the build commit SHA and date, then exit.
   LCSAS_PASSWORD          The backup set's password (skips the Password: prompt).
                           Mutually exclusive with LCSAS_PASSWORD_FILE.
@@ -948,6 +950,9 @@ EOF
             fi
             export LCSAS_PASSWORD_FILE
             shift 2 ;;
+        --list-snapshots)
+            LIST_SNAPSHOTS=1
+            shift ;;
         --version)
             printf 'lcsas-restore.sh %s (built %s)\n' \
                 "$LCSAS_RESTORE_BUILD_SHA" "$LCSAS_RESTORE_BUILD_DATE"
@@ -959,7 +964,7 @@ EOF
         --) shift; break ;;
         -*)
             printf "restore.sh: unknown flag '%s'\n" "$1" >&2
-            printf 'valid flags: --backup-set NAME, --restore-folder DIR, --snapshot ID, --password-file FILE, --version, --check-disc IMAGE, --help\n' >&2
+            printf 'valid flags: --backup-set NAME, --restore-folder DIR, --snapshot ID, --password-file FILE, --list-snapshots, --version, --check-disc IMAGE, --help\n' >&2
             exit 2 ;;
         *) break ;;
     esac
@@ -1190,6 +1195,13 @@ abs_path() {
 # (#625): the copy that runs from the tools folder starts in /, where
 # "restored" would be /restored and a relative --password-file FILE would name
 # nothing.
+# A "~/..." that reached the script unexpanded (typed in quotes) is the
+# home folder, not a folder named "~" (#966).
+# shellcheck disable=SC2088  # the text "~/", not a path
+case "$TARGET" in
+    '~') TARGET="${HOME:-}" ;;
+    '~/'*) TARGET="${HOME:-}/${TARGET#'~/'}" ;;
+esac
 if [ -n "$TARGET" ]; then TARGET="$(abs_path "$TARGET")"; fi
 if [ -n "${LCSAS_PASSWORD_FILE:-}" ]; then LCSAS_PASSWORD_FILE="$(abs_path "$LCSAS_PASSWORD_FILE")"; fi
 if [ -n "${LCSAS_SHARES_DIR:-}" ]; then LCSAS_SHARES_DIR="$(abs_path "$LCSAS_SHARES_DIR")"; fi
@@ -1199,6 +1211,7 @@ if [ -n "${LCSAS_SHARES_DIR:-}" ]; then LCSAS_SHARES_DIR="$(abs_path "$LCSAS_SHA
 relocate_with_args() {
     _rw_mount="$1"
     set -- --snapshot "$SNAP"
+    if [ "$LIST_SNAPSHOTS" = 1 ]; then set -- --list-snapshots "$@"; fi
     if [ -n "$TARGET" ]; then set -- --restore-folder "$TARGET" "$@"; fi
     if [ -n "${LCSAS_BACKUP_SET:-}" ]; then set -- --backup-set "$LCSAS_BACKUP_SET" "$@"; fi
     if [ "$RECOVERY_GIVEN" = 1 ]; then set -- "$@" -- "$RECOVERY"; fi
@@ -1358,8 +1371,10 @@ _restore_exit_handler() {
     # A signal can land while IFS is changed (the set list splits on
     # newlines, the mount-dir walks on colons): put it back.
     set +e
-    IFS=' 	
+    IFS='
 '
+    # --list-snapshots' stand-in folder (#966), however the run ends.
+    if [ -n "${LIST_DIR:-}" ]; then rm_tree "$LIST_DIR"; fi
 
     if [ -n "${_stty_saved:-}" ]; then
         stty "$_stty_saved" 2>/dev/null
@@ -1468,6 +1483,13 @@ else
 fi
 STATE_DIR="${TOOLS:-$RUN_TMP}"
 unset _tools_want
+# A password file a run left when it was killed (kill -9, a power cut):
+# in the tools folder, or in the temporary folder older builds used
+# (#966).  One restore at a time on a computer, as restore.bat says.
+for _pw_old in ${TOOLS:+"$TOOLS"/lcsas-pw.*} "${TMPDIR:-/tmp}"/lcsas-pw.* /tmp/lcsas-pw.*; do
+    if [ -f "$_pw_old" ] && [ -O "$_pw_old" ]; then rm -f "$_pw_old"; fi
+done
+unset _pw_old
 
 # tmp_file NAME: make a new private file NAME.XXXXXX and print its path:
 # in $TMPDIR (else /tmp), else /tmp, else this run's own folder.  1 when
@@ -1861,6 +1883,45 @@ merge_set_metadata() {
     return 1
 }
 
+# ── The restore folder named with --restore-folder (#966) ─────────
+#
+# It is checked before any question: a folder that cannot be made or
+# written to failed only after the password (the marker, then tier 1),
+# and the resume command it printed failed the same way.
+# folder_problem DIR: why the restore cannot write into the folder DIR
+# (#966), in words, or nothing when it can: DIR, or the nearest folder
+# above it that exists, must be a folder this user can write in.  A
+# folder on the META disc (a relative --restore-folder given while
+# working in the disc's folder) is said as such.
+folder_problem() {
+    _fp="$1"
+    while [ ! -e "$_fp" ] && [ ! -L "$_fp" ] && [ "$_fp" != / ]; do
+        _fp="$(dirname "$_fp")"
+    done
+    if [ ! -d "$_fp" ]; then
+        printf '%s is a file, not a folder' "$_fp"
+    elif [ ! -w "$_fp" ] || [ ! -x "$_fp" ]; then
+        if [ -n "${LCSAS_RELOCATED:-}" ] && path_inside "$_fp" "$LCSAS_RELOCATED"; then
+            printf 'it is on the META disc, which cannot be written to'
+        elif path_inside "$_fp" "$META_ROOT"; then
+            printf 'it is on the META disc, which cannot be written to'
+        else
+            printf 'this computer does not let you write in %s' "$_fp"
+        fi
+    fi
+    return 0
+}
+if [ -n "$RESTORE_FOLDER" ] && [ "$LIST_SNAPSHOTS" != 1 ]; then
+    _fp_why="$(folder_problem "$RESTORE_FOLDER")"
+    if [ -n "$_fp_why" ]; then
+        printf 'restore.sh: cannot restore into %s:\n' "$RESTORE_FOLDER" >&2
+        printf '    %s.\n' "$_fp_why" >&2
+        printf 'Name another folder with --restore-folder, for example ~/restored.\n' >&2
+        exit 2
+    fi
+    unset _fp_why
+fi
+
 # ── Step 0: the newest data disc (#605, C2, C7) ───────────────────
 #
 # Each disc holds every backup set's keys, index and snapshots as they
@@ -1892,7 +1953,9 @@ newest_disc_wanted() {
     is_interactive || return 1
     [ -z "$(data_discs)" ]
 }
+_nd_asked=0
 if newest_disc_wanted; then
+    _nd_asked=1
     printf '\n========================================================================\n' >&2
     if [ -n "${META_DISC:-}" ]; then
         printf '  Take the META disc out and put in your NEWEST data disc: the one\n' >&2
@@ -1963,6 +2026,14 @@ EOF
             printf '    sudo mount /dev/sr0 /mnt\n' >&2
         fi
     done
+fi
+
+# Relocated off the META disc and not asked for the newest data disc
+# (that question says to take the META disc out): say it may come out.
+# Said once (#966: it was said twice, one line apart).
+if [ -n "${META_DISC:-}" ] && [ "$_nd_asked" = 0 ] && [ "${LCSAS_ANOTHER_PASS:-0}" != 1 ]; then
+    printf '[lcsas-restore] you may eject the meta disc when the ' >&2
+    printf 'binary prompts for a data disc.\n' >&2
 fi
 
 # A META disc with no backup sets (#952): the first data disc accepted
@@ -2319,6 +2390,46 @@ set_match() {
     return 0
 }
 
+# set_match_loose WANT: the set a looser answer at the menu means (#966),
+# tried after set_match: its name, name_cmd or id in any case; else the
+# one set whose name (or name_cmd) starts with WANT, in any case.  Says
+# so when the answer fits more than one.  Expects IFS to be a newline.
+set_match_loose() {
+    _ml_want="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    [ -n "$_ml_want" ] || return 0
+    for _ml_how in whole start; do
+        _ml_hit=""
+        _ml_n=0
+        for _ml_c in $REPO_CANDIDATES; do
+            _ml_is=0
+            for _ml_s in "$(set_label "$_ml_c")" "$(set_field "$_ml_c" name_cmd)" \
+                         "${_ml_c##*/}"; do
+                [ -n "$_ml_s" ] || continue
+                _ml_low="$(printf '%s' "$_ml_s" | tr '[:upper:]' '[:lower:]')"
+                if [ "$_ml_how" = whole ]; then
+                    [ "$_ml_low" != "$_ml_want" ] || _ml_is=1
+                else
+                    case "$_ml_low" in "$_ml_want"*) _ml_is=1 ;; esac
+                fi
+            done
+            if [ "$_ml_is" = 1 ]; then
+                _ml_hit="$_ml_c"
+                _ml_n=$((_ml_n + 1))
+            fi
+        done
+        if [ "$_ml_n" -eq 1 ]; then
+            printf '%s' "$_ml_hit"
+            return 0
+        fi
+        if [ "$_ml_n" -gt 1 ]; then
+            printf 'More than one backup set fits %s; type more of its name, or its number.\n' \
+                   "$1" >&2
+            return 0
+        fi
+    done
+    return 0
+}
+
 # another_pass_done: in the run that "Restore another backup set?" started
 # (offer_another_set sets LCSAS_ANOTHER_PASS), Q or the end of the input
 # at the set list means no other set.  The sets chosen before are
@@ -2402,6 +2513,22 @@ EOF
                     another_pass_done
                     exit "$EXIT_USER_ABORT"
                 fi
+                # A looser answer (#966): spaces around it, "1)" or "1.",
+                # any case, the start of a name; an empty line asks again
+                # (it printed "no backup set named ;").
+                repo_choice="$(printf '%s' "$repo_choice" \
+                               | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+                if [ -z "$repo_choice" ]; then
+                    printf 'Type the number or the name of a backup set (Q then ENTER to quit).\n' >&2
+                    continue
+                fi
+                case "$repo_choice" in
+                    *[0-9].|*[0-9]')')
+                        case "${repo_choice%?}" in
+                            *[!0-9]*) ;;
+                            *) repo_choice="${repo_choice%?}" ;;
+                        esac ;;
+                esac
                 # Number form: positional-arg lookup avoids `eval` on input.
                 case "$repo_choice" in
                     ''|*[!0-9]*) ;;
@@ -2424,6 +2551,8 @@ EOF
                         printf 'Stopped at your request.\n' >&2
                         exit "$EXIT_USER_ABORT" ;;
                 esac
+                REPO="$(set_match_loose "$repo_choice")"
+                [ -z "$REPO" ] || break
                 printf 'no backup set named %s; choose from: %s\n' \
                        "$repo_choice" "$REPO_NAMES" >&2
                 if ! is_interactive; then
@@ -2842,6 +2971,12 @@ ask_folder() {
             printf 'deleted at the end.  Choose a folder outside it.\n' >&2
             continue
         fi
+        _af_why="$(folder_problem "$ASK_DIR")"
+        if [ -n "$_af_why" ]; then
+            printf 'Cannot restore into %s: %s.\n' "$ASK_DIR" "$_af_why" >&2
+            printf 'Choose another folder.\n' >&2
+            continue
+        fi
         return 0
     done
 }
@@ -2850,6 +2985,18 @@ ask_folder() {
 # settled before the space check and the password, where restore.bat
 # asks it.  The default is ~/restored, not /tmp/restored: /tmp is in RAM
 # on many live systems, and the files would go at the next reboot.
+LIST_DIR=""
+if [ "$LIST_SNAPSHOTS" = 1 ]; then
+    # --list-snapshots (#966): nothing is restored, so no folder is
+    # asked for; an empty temporary one stands in, and goes at the end.
+    LIST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lcsas-list.XXXXXX" 2>/dev/null)" || LIST_DIR=""
+    if [ -z "$LIST_DIR" ]; then
+        printf 'Cannot make a temporary folder in %s.\n' "${TMPDIR:-/tmp}" >&2
+        exit 1
+    fi
+    RESTORE_FOLDER="$LIST_DIR"
+    LCSAS_SKIP_SPACE_CHECK=1
+fi
 if [ -z "$RESTORE_FOLDER" ]; then
     if [ -n "${HOME:-}" ]; then
         _rf_default="${HOME%/}/restored"
@@ -3151,7 +3298,7 @@ TARGET_ABS="$(cd "$RESTORE_FOLDER" && pwd)"
 # no question but the password.  Tier 1 skips every file that is
 # already complete (#92) and the pack cache keeps the discs already
 # read.  resume.sh NEVER holds the password.
-if [ -n "$TOOLS" ]; then
+if [ -n "$TOOLS" ] && [ "$LIST_SNAPSHOTS" != 1 ]; then
     # The chosen set's copy in the tools folder is brought to match the
     # one used (merge_set_metadata, above; it is that copy when
     # relocated).  When it does, resume.sh carries on with that copy
@@ -3557,7 +3704,15 @@ shares_from_dir() {
 # new_pwfile: PWFILE becomes a new private temporary file (removed on
 # every exit), never the reader's own LCSAS_PASSWORD_FILE.
 new_pwfile() {
-    if ! PWFILE_TMP="$(tmp_file lcsas-pw)"; then
+    # In the tools folder first (#966): private, and removed with it.  A
+    # file left by a run that was killed (kill -9 cannot be trapped) is
+    # removed by the next run (below, with the tools folder).
+    PWFILE_TMP=""
+    if [ -n "$STATE_DIR" ]; then
+        PWFILE_TMP="$(mktemp "$STATE_DIR/lcsas-pw.XXXXXX" 2>/dev/null)" || PWFILE_TMP=""
+        [ -z "$PWFILE_TMP" ] || chmod 600 "$PWFILE_TMP" 2>/dev/null || true
+    fi
+    if [ -z "$PWFILE_TMP" ] && ! PWFILE_TMP="$(tmp_file lcsas-pw)"; then
         printf 'Cannot make a private temporary file for the password in %s or /tmp.\n' \
                "${TMPDIR:-/tmp}" >&2
         exit 1
@@ -3611,6 +3766,30 @@ if [ -n "$_pw_given" ] && ! password_ok; then
     ask_typed
 fi
 unset _pw_given
+
+# --list-snapshots (#966): the set's snapshots, with their dates, from
+# tier 1, else tier 3; then stop.
+if [ "$LIST_SNAPSHOTS" = 1 ]; then
+    printf 'The snapshots of %s (give one to --snapshot ID):\n' "$SET_NAME" >&2
+    _ls_rc=0
+    if [ -x "$_RESTORE_BIN_PROBE" ] && bin_preflight_ok "$_RESTORE_BIN_PROBE"; then
+        "$_RESTORE_BIN_PROBE" --repo "$REPO" --password-file "$PWFILE" \
+            --list-snapshots </dev/null || _ls_rc=$?
+    else
+        find_tier3_python
+        if [ -n "$TIER3_PYBIN" ] && [ -n "$_tier3_script_probe" ]; then
+            # (Tier 3 wants a --restore-folder even to list: the empty one.)
+            ${TIER3_PYLOADER:+"$TIER3_PYLOADER"} "$TIER3_PYBIN" "$_tier3_script_probe" \
+                --repo "$REPO" --password-file "$PWFILE" --list-snapshots \
+                --restore-folder "$LIST_DIR" </dev/null || _ls_rc=$?
+        else
+            printf 'No reader here can list them (see RESTORE.txt, LIST AVAILABLE SNAPSHOTS).\n' >&2
+            _ls_rc=1
+        fi
+    fi
+    [ "$_ls_rc" -ne 0 ] || RESTORE_DONE=1
+    exit "$_ls_rc"
+fi
 
 mkdir -p "$RESTORE_FOLDER"
 
@@ -3824,22 +4003,44 @@ write_session_log() {
 # photos).  Asking here, before the exit handler deletes the tools
 # folder, keeps its copies and its pack cache for that set: the script
 # starts again from the set list with no META disc.  Only when there is
-# another set, and someone can answer (is_interactive);
-# LCSAS_ANOTHER_SET=0 skips it.  No (the default), Q or the end of the
-# input ends the run, and the tools folder goes.  The next set goes into
+# another set not restored yet, and someone can answer (is_interactive);
+# LCSAS_ANOTHER_SET=0 skips it.  N, Q or the end of the input ends the
+# run, and the tools folder goes; an empty answer asks again (#966).  The next set goes into
 # a NEW folder by default (<target>-2, -3, ...): restored on top of this
 # one, the two sets' files would be mixed (the target guard says so too).
 offer_another_set() {
     [ "${LCSAS_ANOTHER_SET:-1}" != 0 ] || return 0
     [ "$REPO_COUNT" -gt 1 ] || return 0
+    # The sets this run (and the runs before it, LCSAS_SETS_RESTORED) have
+    # restored: with none left, no question (#966).
+    LCSAS_SETS_RESTORED="${LCSAS_SETS_RESTORED:-}${LCSAS_SETS_RESTORED:+$NL}$SET_ID"
+    _os_left=0
+    _os_ifs="$IFS"; IFS="$NL"
+    for _os_c in $REPO_CANDIDATES; do
+        case "$NL$LCSAS_SETS_RESTORED$NL" in
+            *"$NL${_os_c##*/}$NL"*) ;;
+            *) _os_left=1 ;;
+        esac
+    done
+    IFS="$_os_ifs"
+    [ "$_os_left" = 1 ] || return 0
     is_interactive || return 0
-    printf '\nRestore another backup set from these discs? [y/N] ' >&2
-    _os_ans=""
-    IFS= read -r _os_ans || return 0
-    case "$_os_ans" in
-        y|Y|yes|Yes|YES) ;;
-        *) return 0 ;;
-    esac
+    # The password is not needed any more (#966).
+    [ -z "${PWFILE_TMP:-}" ] || rm -f "$PWFILE_TMP"
+    # An empty answer asks again (#966): an ENTER pressed late, after a
+    # disc mounted by itself, ended the run and deleted the tools folder
+    # and the pack cache.  Only n (or Q) ends; so does the end of the
+    # input, so a run nobody answers cannot loop.
+    while :; do
+        printf '\nRestore another backup set from these discs? [y/N] ' >&2
+        _os_ans=""
+        IFS= read -r _os_ans || return 0
+        case "$_os_ans" in
+            y|Y|yes|Yes|YES) break ;;
+            n|N|no|No|NO|q|Q) return 0 ;;
+            *) printf 'Please type y or n, then ENTER.\n' >&2 ;;
+        esac
+    done
     _os_base="$TARGET_ABS"
     case "${_os_base##*-}" in
         ''|*[!0-9]*) ;;
@@ -3867,7 +4068,7 @@ offer_another_set() {
     LCSAS_NEWEST_DISC_PROMPT=0
     # Q at the next run's set list then ends with 0 (another_pass_done).
     LCSAS_ANOTHER_PASS=1
-    export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_PASS
+    export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_PASS LCSAS_SETS_RESTORED
     if [ -n "$TOOLS" ]; then
         LCSAS_TOOLS_DIR="$TOOLS"
         export LCSAS_TOOLS_DIR
@@ -3890,8 +4091,22 @@ restore_done() {
 restore_succeeded() {
     write_session_log "$1" ok
     restore_done
+    say_restored
     offer_another_set
     exit 0
+}
+
+# say_restored: the end of a restore that worked says where the files
+# are and how many (#966).  (The backup's date is the reader's to print.)
+say_restored() {
+    _sr_n="$(find "$TARGET_ABS" -type f ! -name .lcsas-restore-marker 2>/dev/null \
+             | wc -l | tr -d ' ')"
+    _sr_f=files
+    [ "$_sr_n" != 1 ] || _sr_f="file"
+    printf '\n============================================================\n' >&2
+    printf ' Restore complete.  %s %s restored to:\n' "${_sr_n:-0}" "$_sr_f" >&2
+    printf '    %s\n' "$TARGET_ABS" >&2
+    printf '============================================================\n' >&2
 }
 
 # EXIT_NOT_ALL_RESTORED: the restore finished, but some items could not
@@ -4040,6 +4255,16 @@ tier_ended() {
     [ "$_te_rc" -ne 0 ] || restore_succeeded "$1"
     case "$2" in
         lcsas|python)
+            # --snapshot named no snapshot of the set (#966): an argument
+            # error, so no resume.sh (it would carry the same id).
+            if [ "$SNAP" != latest ] && tier_said "snapshot not found"; then
+                write_session_log "$1" "failed-$_te_rc"
+                if [ -n "$TOOLS" ]; then rm -f "$TOOLS/resume.sh"; fi
+                printf 'No snapshot of %s starts with %s.  List them with\n' "$SET_NAME" "$SNAP" >&2
+                printf '    sh restore.sh --list-snapshots\n' >&2
+                printf 'and give one with --snapshot ID (or leave --snapshot out: the latest).\n' >&2
+                exit 1
+            fi
             if [ "$_te_rc" -eq 77 ]; then
                 write_session_log "$1" wrong-password
                 say_wrong_password "$1"

@@ -1107,7 +1107,8 @@ def test_another_set_restores_the_next_set_then_removes_the_tools(tmp_path: Path
                _env(tmp_path, LCSAS_INTERACTIVE="on", HOME=str(home)),
                stdin=f"1\n{GOOD_PW}\ny\nsecond\n~/second\n2\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
-    assert res.stderr.count("Restore another backup set from these discs? [y/N]") == 2
+    # Asked once: after the second set no set is left (#966).
+    assert res.stderr.count("Restore another backup set from these discs? [y/N]") == 1
     assert "Type the full path of the folder" in res.stderr
     assert "starting again for the next backup set" in res.stderr
     assert _runs(tmp_path) == [
@@ -1583,3 +1584,71 @@ def test_a_share_combiner_that_does_not_work_asks_for_the_password(
                _env(tmp_path, LCSAS_BACKUP_SET=PHOTOS, LCSAS_SHARES_DIR=str(cards)))
     assert res.returncode == 77, res.stderr
     assert "the cards are not to blame" in res.stderr
+
+
+# ── #952, #966: the heir's answers, through a pipe (traced) ─────────
+
+
+def test_a_disc_of_another_archive_is_refused_at_the_newest_disc_step(
+        tmp_path: Path) -> None:
+    """#952: at the newest data disc question, a disc none of whose sets
+    is this archive's is refused, and the question asked again."""
+    meta, recovery = _single_drive(tmp_path)
+    other = _data_disc(tmp_path / "media", "OTHER", "OTHER_TEST_TINY_2026_0009")
+    _set(other, LATE_ID, "someone else's", tag="other")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_NEWEST_DISC_PROMPT="1",
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_BACKUP_SET=DOCS_ID),
+               stdin="\ns\n")
+    assert res.returncode == 0, res.stderr
+    assert ("The disc labelled OTHER_TEST_TINY_2026_0009 belongs to a\n"
+            "different LCSAS archive") in res.stderr
+    assert "Skipped: using the copies on the META disc." in res.stderr
+    assert f"repo={tmp_path}/meta/metadata/{DOCS_ID} " in _runs(tmp_path)[0]
+
+
+@pytest.mark.parametrize(("answers", "picked"), [
+    ("\n  2.  \n", PHOTOS_ID),       # an empty line asks again; "2." and spaces
+    ("2)\n", PHOTOS_ID),
+    ("FAMILY PHOTOS\n", PHOTOS_ID),  # any case
+    ("fam\n", PHOTOS_ID),            # the unique start of a name
+    ("Doc\n", DOCS_ID),
+])
+def test_the_set_menu_takes_a_loose_answer(tmp_path: Path, answers: str, picked: str) -> None:
+    """#966 item 6: trimmed, any case, "1)" and "1.", the unique start
+    of a name; an empty line asks again (it printed "no backup set
+    named ;")."""
+    recovery = _two_sets(tmp_path)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_INTERACTIVE="on",
+                    LCSAS_ANOTHER_SET="0"),
+               stdin=answers)
+    assert res.returncode == 0, res.stderr
+    assert "no backup set named" not in res.stderr
+    assert f"repo={tmp_path}/meta/metadata/{picked} " in _runs(tmp_path)[0]
+
+
+def test_the_set_menu_says_when_the_start_of_a_name_fits_two(tmp_path: Path) -> None:
+    recovery = _meta(tmp_path / "meta")
+    _set(tmp_path / "meta", DOCS_ID, "photos 2024")
+    _set(tmp_path / "meta", PHOTOS_ID, "photos 2025")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_INTERACTIVE="on",
+                    LCSAS_ANOTHER_SET="0"),
+               stdin="photos\nphotos 2025\n")
+    assert res.returncode == 0, res.stderr
+    assert "More than one backup set fits photos" in res.stderr
+    assert f"repo={tmp_path}/meta/metadata/{PHOTOS_ID} " in _runs(tmp_path)[0]
+
+
+def test_an_empty_answer_at_another_set_asks_again(tmp_path: Path) -> None:
+    """#966 item 1: a stray ENTER does not end the run; n does, and the
+    end says where the files went."""
+    recovery = _two_sets(tmp_path)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on"),
+               stdin=f"1\n{GOOD_PW}\n\nmaybe\nn\n")
+    assert res.returncode == 0, res.stderr
+    assert res.stderr.count("Restore another backup set from these discs? [y/N]") == 3
+    assert res.stderr.count("Please type y or n, then ENTER.") == 2
+    assert f"restored to:\n    {tmp_path}/out\n" in res.stderr

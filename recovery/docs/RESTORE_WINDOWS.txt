@@ -533,7 +533,8 @@ Type Y and press Enter to choose the next set from the same list.
 The copy on this computer is kept, and so are the copies of the
 discs read so far, so those discs are not asked for again.  The next
 set goes into a folder of its own by default
-(Documents\restored-<its name>).  Enter alone, or N, ends the run,
+(Documents\restored-<its name>).  N ends the run (Enter alone asks
+again; after three it ends too),
 and only then is the tools folder deleted.
 
 To choose a set without the menu, give its name or its code to
@@ -934,8 +935,10 @@ Example, with the meta disc in D: and the newest data disc in E:
         --verbose
 
 To restore an older snapshot instead of the latest one, list the
-snapshots as above (--list-snapshots) and give the ID, or the first
-eight characters of it, to restore.bat:
+snapshots (restore.bat --list-snapshots asks for the set and its
+password, lists them with their dates and restores nothing; or run
+lcsas-restore.exe --list-snapshots as above) and give the ID, or the
+first eight characters of it, to restore.bat:
 
     restore.bat --snapshot a1b2c3d4
 

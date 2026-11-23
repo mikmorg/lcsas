@@ -773,6 +773,12 @@ LCSAS_ANOTHER_PASS
   no other set: the run ends with 0 and the tools folder goes, as
   in restore.bat.  Not a knob; do not set manually.
 
+LCSAS_SETS_RESTORED
+  Internal: restore.sh passes the ids of the backup sets restored so
+  far, one a line, to its run for the next set, so that "Restore
+  another backup set?" is not asked once every set is restored.  Not
+  a knob; do not set manually.
+
 ────────────────────────────────────────────────────────────────────
 QUICK REFERENCE (knobs you may set)
 ────────────────────────────────────────────────────────────────────

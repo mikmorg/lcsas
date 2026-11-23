@@ -869,9 +869,10 @@ def test_another_set_then_the_tools_folder_goes(fresh: _Wine, tmp_path: Path) ->
     """After a good restore the script asks "Restore another backup set
     from these discs?".  Yes goes back to the menu with the tools folder
     as it is (no .done yet, the pack cache still there), and the second
-    set goes into a folder of its own by default.  Only "no" ends the
-    run: then the pack cache goes and .done tells the relaunch line to
-    delete the tools folder (C6)."""
+    set goes into a folder of its own by default.  Once every set is
+    restored the question is not asked again (#966): the run ends, the
+    pack cache goes and .done tells the relaunch line to delete the
+    tools folder (C6)."""
     wine = fresh
     docs, photos = _docs(), _photos()
     for s in (docs, photos):
@@ -903,15 +904,15 @@ def test_another_set_then_the_tools_folder_goes(fresh: _Wine, tmp_path: Path) ->
         folder += run.expect("]: ")
         run.send("")  # the default: a folder of its own
         run.answer("Password: ", photos.password)
-        run.answer("Restore another backup set from these discs? [y/N]: ", "n")
         run.expect("Press any key")
     finally:
         rc = run.finish()
     out = run.text
+    assert out.count("Restore another backup set from these discs? [y/N]: ") == 1, out
     _assert_clean(out)
     assert rc == 0, f"rc={rc}\n{out}"
-    assert not between_done, "the tools folder was marked for deletion before 'no'"
-    assert between_cache, "the pack cache was removed before 'no'"
+    assert not between_done, "the tools folder was marked for deletion before the end"
+    assert between_cache, "the pack cache was removed before the end"
     _assert_restored(wine.drive_c / "docs", docs, out)
     own = wine.user_dir / "Documents" / f"restored-{photos.name_cmd}"
     assert f"\\Documents\\restored-{photos.name_cmd}]" in folder, folder
