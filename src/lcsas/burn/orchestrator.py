@@ -1193,6 +1193,10 @@ class BurnOrchestrator:
                 f"(at {self._config.staging_path})"
             )
 
+        # #947: after the space check, which tests drive with packs that
+        # are not in the mirror; still before any side effect.
+        self._lost_pack_preflight(volume_plans)
+
         # 4. Create the burn session.  FUP-02: commit the burn_sessions row
         # BEFORE the directory exists on disk.  Invariant: any session-named dir on disk
         # has a non-CLEANED row (never flagged orphan by staging-clean); the
@@ -1356,28 +1360,36 @@ class BurnOrchestrator:
             mirror_path = mirror_paths.get(repo_id)
             if mirror_path is None or not (mirror_path / "data").is_dir():
                 raise MirrorUnavailableError(repo_id, mirror_path, shas)
-        # #947: a pack to stage whose file is gone from the mirror (a
-        # consolidation of a volume whose pack the mirror lost, or an
-        # unarchived pack lost after scan).  Named with its discs, before
-        # any side effect.
+
+    def _lost_pack_preflight(
+        self, volume_plans: list[tuple[list[Pack], int]],
+    ) -> None:
+        """#947: refuse when a pack to stage has no file in the mirror.
+
+        A consolidation of a volume whose pack the mirror lost, or an
+        unarchived pack lost after scan.  Named with the discs that hold
+        it, before the burn session exists.
+        """
+        from lcsas.db.repos import get_repo
+        from lcsas.packs.mirror_damage import (
+            MirrorDamageError,
+            damage_message,
+            discs_holding,
+        )
+
+        mirror_paths = self._get_mirror_paths()
         lost: dict[str, list[str]] = {}
         for packs, _bytes in volume_plans:
             for p in packs:
-                mirror_path = mirror_paths[p.repo_id]
-                data = mirror_path / "data"
+                data = mirror_paths[p.repo_id] / "data"
                 if not ((data / p.sha256[:2] / p.sha256).is_file()
                         or (data / p.sha256).is_file()):
                     lost.setdefault(p.repo_id, []).append(p.sha256)
         if lost:
-            from lcsas.db.repos import get_repo
-            from lcsas.packs.mirror_damage import (
-                MirrorDamageError,
-                damage_message,
-                discs_holding,
-            )
             raise MirrorDamageError("\n".join(
                 damage_message(get_repo(self._conn, rid).name,
-                               discs_holding(self._conn, shas))
+                               discs_holding(self._conn, shas),
+                               to_stage=True)
                 for rid, shas in sorted(lost.items())
             ))
 

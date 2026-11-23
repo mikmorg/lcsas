@@ -85,19 +85,25 @@ def discs_holding(
 
 def damage_message(
     repo_name: str, discs: dict[str, list[str]], *, unreadable: bool = False,
+    to_stage: bool = False,
 ) -> str:
     """The block ``scan`` and ``stage`` print for a damaged mirror.
 
     *discs* maps each lost pack to the labels of the discs holding it.
     *unreadable*: the pack file may be present but cannot be read (what
     ``stage`` sees when a tree cannot be read), not only missing.
+    *to_stage*: the files are missing although this stage must copy them
+    (the index was not read).
     """
     n = len(discs)
     what = "missing or unreadable" if unreadable else "missing"
     files = "pack file is" if n == 1 else "pack files are"
+    them = "it" if n == 1 else "them"
+    need = (f"this stage must copy {them}" if to_stage
+            else f"its index still needs {them}")
     lines = [
-        f"Mirror of '{repo_name}' is damaged: {n} {files} {what} but its "
-        f"index still needs {'it' if n == 1 else 'them'}:"
+        f"Mirror of '{repo_name}' is damaged: {n} {files} {what} but "
+        f"{need}:"
     ]
     for sha, labels in sorted(discs.items()):
         where = (f"on disc(s) {', '.join(labels)}" if labels
