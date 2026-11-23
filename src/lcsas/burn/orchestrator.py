@@ -1340,6 +1340,30 @@ class BurnOrchestrator:
             mirror_path = mirror_paths.get(repo_id)
             if mirror_path is None or not (mirror_path / "data").is_dir():
                 raise MirrorUnavailableError(repo_id, mirror_path, shas)
+        # #947: a pack to stage whose file is gone from the mirror (a
+        # consolidation of a volume whose pack the mirror lost, or an
+        # unarchived pack lost after scan).  Named with its discs, before
+        # any side effect.
+        lost: dict[str, list[str]] = {}
+        for packs, _bytes in volume_plans:
+            for p in packs:
+                mirror_path = mirror_paths[p.repo_id]
+                data = mirror_path / "data"
+                if not ((data / p.sha256[:2] / p.sha256).is_file()
+                        or (data / p.sha256).is_file()):
+                    lost.setdefault(p.repo_id, []).append(p.sha256)
+        if lost:
+            from lcsas.db.repos import get_repo
+            from lcsas.packs.mirror_damage import (
+                MirrorDamageError,
+                damage_message,
+                discs_holding,
+            )
+            raise MirrorDamageError("\n".join(
+                damage_message(get_repo(self._conn, rid).name,
+                               discs_holding(self._conn, shas))
+                for rid, shas in sorted(lost.items())
+            ))
 
     def _after_failed_stage(
         self,
@@ -1529,6 +1553,20 @@ class BurnOrchestrator:
                     repo.name, exc,
                 )
                 continue
+            # #947: a tree that cannot be read although its pack is on a
+            # burned disc: the mirror lost (or broke) that pack.  Never
+            # report it as "packs not on any disc yet".
+            damaged = cov.unreadable_tree_packs & held
+            if damaged:
+                from lcsas.packs.mirror_damage import (
+                    MirrorDamageError,
+                    damage_message,
+                    discs_holding,
+                )
+                raise MirrorDamageError(damage_message(
+                    repo.name, discs_holding(self._conn, damaged),
+                    unreadable=True,
+                ))
             needs[repo_id] = dict(cov.missing)
             rest = [
                 LeftOutSnapshot(snapshot_id=sid, time=cov.times.get(sid, ""),

@@ -43,6 +43,9 @@ class SnapshotCoverage:
     left_out: list[LeftOutSnapshot] = field(default_factory=list)
     missing: dict[str, frozenset[str]] = field(default_factory=dict)
     times: dict[str, str] = field(default_factory=dict)
+    # #947: the packs (by the index) of the trees that could not be read.
+    # When one of them is on a burned disc, the mirror is damaged.
+    unreadable_tree_packs: set[str] = field(default_factory=set)
 
 
 def snapshot_coverage(
@@ -66,7 +69,13 @@ def snapshot_coverage(
     result = SnapshotCoverage()
     with quiet_log():
         per_snapshot = restorer.missing_packs_by_snapshot(held_packs)
+    index = restorer._blob_index or {}
     for snap, missing in per_snapshot:
+        for m in missing:
+            if m.startswith("?tree:"):
+                loc = index.get(m[len("?tree:"):])
+                if loc is not None:
+                    result.unreadable_tree_packs.add(loc.pack_id)
         result.missing[snap.snapshot_id] = missing
         result.times[snap.snapshot_id] = snap.time
         if missing:

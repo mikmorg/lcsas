@@ -133,3 +133,22 @@ class DeltaAnalyzer:
 
         mirror_hashes = set(self._scanner_result.keys())
         return [p for p in all_active if p.sha256 not in mirror_hashes]
+
+    @staticmethod
+    def split_gone(
+        gone: list[Pack], live: set[str] | None,
+    ) -> tuple[list[Pack], list[Pack]]:
+        """Split packs gone from the mirror into (pruned, damaged) (#947).
+
+        *live* is the pack IDs the mirror's index lists as live packs
+        (``packs.mirror_damage.live_pack_ids``).  A gone pack the index
+        still lists is damage: the repository still needs it.  One the
+        index no longer lists, or lists "to delete", was pruned.  With
+        *live* None (the index could not be read) every gone pack counts
+        as pruned, as before.
+        """
+        if live is None:
+            return list(gone), []
+        pruned = [p for p in gone if p.sha256 not in live]
+        damaged = [p for p in gone if p.sha256 in live]
+        return pruned, damaged

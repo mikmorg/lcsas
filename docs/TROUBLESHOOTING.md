@@ -246,6 +246,30 @@ holder-identity stamp the next waiter would have read.
 
 ---
 
+## `Mirror of '<set>' is damaged: N pack file(s) are missing but its index still needs ...`
+
+(Owner side: `lcsas scan`, `lcsas stage`, consolidation.)  A pack file
+went missing from a mirror's `data/` folder while the mirror's index
+still lists it: a disk fault, an fsck, a stray delete.  It is not a
+prune, so LCSAS does not record it as pruned (#947): `scan` exits 1,
+and `stage` refuses when the lost file holds a tree of a snapshot, or
+when it would have to stage the lost file.
+
+The message lists each lost pack with its path and the discs that hold
+it.  To repair, mount one of those discs and copy each file back:
+
+    cp /mnt/disc/data/98/98f010e8...  <mirror>/data/98/98f010e8...
+    rustic -r <mirror> --password-file <key> check
+    lcsas scan
+
+`rustic check` must report no missing pack, and `lcsas scan` then runs
+clean.  A pack that is on no disc cannot be copied back; repair the
+mirror from its own backup, or let rustic rebuild what it can
+(`rustic repair index`, then a new backup) and expect the snapshots
+that needed the pack to be incomplete.
+
+---
+
 ## When everything fails — the bare-metal escape hatch
 
 The on-disc data format is documented in
