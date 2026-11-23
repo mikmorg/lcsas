@@ -816,7 +816,8 @@ options:
 ===== lcsas password split --help =====
 usage: lcsas password split [-h] --repo REPO [--threshold THRESHOLD]
                             [--shares SHARES] [--password-file PASSWORD_FILE]
-                            [--out OUT] [--no-verify-repo]
+                            [--out OUT] [--no-verify-repo] [--record-existing]
+                            [--share-file SHARE_FILES]
 
 options:
   -h, --help            show this help message and exit
@@ -836,6 +837,14 @@ options:
                         repository's key files. Splitting an unchecked
                         password is dangerous; use only when the mirror's
                         keys/ is unavailable at split time.
+  --record-existing     Make no new shares: record in the catalog a split
+                        already made, read from its share cards (--share-
+                        file), e.g. after a catalog rebuild that found no
+                        record of it. The cards handed out stay valid.
+  --share-file SHARE_FILES
+                        With --record-existing: a share card of that split
+                        (repeatable). With K cards the password is also
+                        checked against the repository.
 ===== lcsas password verify --help =====
 usage: lcsas password verify [-h] --repo REPO [--share-file SHARE_FILES]
                              [--password-file PASSWORD_FILE]

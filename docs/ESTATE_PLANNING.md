@@ -125,6 +125,14 @@ theft.
   > `split = false` and run `lcsas --config ... password unsplit --repo R`.
   > It asks first, clears the recorded split, and logs an `AUDIT` line
   > naming what it cleared (#681). It does not touch any card.
+  >
+  > A catalog rebuilt from discs has no record of a split made after the
+  > newest disc read was staged, and `stage` then refuses. Do not split
+  > again: that would void the cards you handed out. Record the existing
+  > split from one of its cards instead:
+  > `lcsas --config ... password split --repo R --record-existing
+  > --share-file CARD`. It reads K, N and the split ID from the card,
+  > checks them against lcsas.toml, and makes no new shares (#963).
 
 - [ ] **Tell heirs the reconstruction is a two-step pre-step**, in your
   letter (template below):

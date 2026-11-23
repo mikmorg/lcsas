@@ -1257,3 +1257,64 @@ class TestRebuildDamagedDisc:
         lines = [ln for ln in text.splitlines()
                  if "LCSAS_BD25_2026_0002" in ln and "damaged" in ln]
         assert lines
+
+
+def test_known_values_are_the_schema_checks() -> None:
+    """#963: the values rebuild accepts from a disc are exactly those the
+    schema's CHECK constraints (and the repository statuses) allow, so a
+    value only a newer LCSAS knows refuses its disc instead of dropping
+    its row."""
+    import re
+
+    from lcsas.db.repos import REPO_STATUSES
+
+    ddl = {
+        "volumes": schema.SQL_CREATE_VOLUMES,
+        "volume_copies": schema.SQL_CREATE_VOLUME_COPIES,
+        "burn_sessions": schema.SQL_CREATE_BURN_SESSIONS,
+        "volume_events": schema.SQL_CREATE_VOLUME_EVENTS,
+    }
+    seen = set()
+    for table, column, known in rebuild._KNOWN_VALUES:
+        seen.add(table)
+        if table == "repositories":
+            assert known == set(REPO_STATUSES)
+            continue
+        m = re.search(rf"CHECK\s*\(\s*{column}\s+IN\s*\((.*?)\)\s*\)",
+                      ddl[table], re.S)
+        assert m, table
+        assert set(re.findall(r"'([^']+)'", m.group(1))) == known, table
+    assert seen == {*ddl, "repositories"}
+
+
+def test_disc_catalog_states(tmp_path: Path) -> None:
+    """#963: the opener's worded verdicts: unreadable, newer, fine."""
+    import sqlite3
+
+    from lcsas.db.disc_catalog import inspect_disc_catalog
+
+    empty = tmp_path / "empty.db"
+    empty.write_bytes(b"")
+    state = inspect_disc_catalog(empty)
+    assert state.kind == "unreadable"
+    assert "not an LCSAS catalog" in state.describe()
+
+    junk = tmp_path / "junk.db"
+    junk.write_bytes(b"not a database at all" * 100)
+    assert inspect_disc_catalog(junk).kind == "unreadable"
+
+    good = tmp_path / "good.db"
+    conn = get_connection(good)
+    schema.ensure_schema(conn)
+    conn.close()
+    state = inspect_disc_catalog(good)
+    assert (state.kind, state.version) == ("fine", schema.CURRENT_SCHEMA_VERSION)
+
+    conn = sqlite3.connect(good)
+    conn.execute("INSERT INTO schema_version (version) VALUES (?)",
+                 (schema.CURRENT_SCHEMA_VERSION + 1,))
+    conn.commit()
+    conn.close()
+    state = inspect_disc_catalog(good)
+    assert state.kind == "newer"
+    assert f"schema v{schema.CURRENT_SCHEMA_VERSION + 1}" in state.describe()

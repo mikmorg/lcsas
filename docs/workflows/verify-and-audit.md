@@ -163,7 +163,7 @@ one place that decides it
 
 > Listed here because it shares the verify/audit conceptual scope, even though the command lives under `catalog`. Owners routinely combine it with `lcsas verify` when a disc fails ECC.
 
-**Purpose:** Mount a disc, compare the pack files actually present in its `data/` directory against the pack IDs recorded in its disc catalog (`catalog.db`) / `volume_info.json`, and report any packs that are missing or orphaned. Where `verify` answers "is the ECC layer still good?", `catalog validate` answers "did all the files we *thought* were on this disc actually land here?"
+**Purpose:** Mount a disc, and check that its disc catalog (`catalog.db`), the manifest in `volume_info.json` and the pack files in its `data/` directory list the same packs for this disc's volume (#963). A catalog that cannot be read fails; so do missing, orphaned and disagreeing packs. Where `verify` answers "is the ECC layer still good?", `catalog validate` answers "did all the files we *thought* were on this disc actually land here?"
 
 **Prerequisites:**
 - A mounted LCSAS disc at `disc_path` containing a `catalog.db` and a `data/` directory.
@@ -172,21 +172,21 @@ one place that decides it
 **Steps:**
 1. Argparse exposes `lcsas catalog validate <disc>` with an optional `--content` flag (`build_parser()`, `src/lcsas/cli/parser.py`).
 2. `cmd_catalog_validate` calls `validate_disc(disc_path, content=args.content)` (`src/lcsas/cli/commands/catalog.py`).
-3. `validate_disc` requires `catalog.db` and `data/` to exist; raises `FileNotFoundError` / `ValueError` otherwise (`src/lcsas/db/verify.py`).
-4. Walk `data/` recursively, collecting any filename that is exactly 64 lowercase hex chars — this handles both flat (`data/HASH`) and two-level (`data/ab/abcdef...`) layouts.
-5. Open the disc catalog read-only (`mode=ro` URI).
-6. Prefer `volume_info.json` `sha256_manifest` as the source of truth; fall back to a SQL query over `volumes`/`volume_packs`/`packs` filtered to volumes whose status is `VERIFIED`, `BURNED`, `STAGING`, or `BURNING`.
-7. Compute set differences: `missing_from_disc = catalog - disc`, `orphaned_on_disc = disc - catalog`.
+3. `validate_disc` requires `catalog.db`, `data/` and a `volume_info.json` naming the volume's uuid; raises `FileNotFoundError` / `ValueError` otherwise (`src/lcsas/db/verify.py`).
+4. Open the disc catalog with `open_disc_catalog` (`src/lcsas/db/disc_catalog.py`): read-only and immutable, `PRAGMA quick_check`, schema version. A zero-length, truncated or damaged file, one with no schema version, or one of a newer schema fails with the reason.
+5. Take the packs the catalog places on the volume with that uuid (`volume_packs`); a catalog that does not list the volume fails.
+6. Walk `data/` recursively, collecting any filename that is exactly 64 lowercase hex chars — this handles both flat (`data/HASH`) and two-level (`data/ab/abcdef...`) layouts.
+7. Compare the three lists: `missing_from_disc` (listed, not in `data/`), `orphaned_on_disc` (in `data/`, listed by neither), `not_in_catalog` and `not_in_manifest` (catalog and manifest disagree).
 8. **With `--content`:** additionally read every pack file on the disc and check its SHA-256 against its pack ID (the filename), collecting `corrupt_on_disc` (detects bit-rot; reads the full data payload).
-9. `cmd_catalog_validate` logs each missing / orphaned / corrupt pack ID and returns `0` only if all sets are empty.
+9. `cmd_catalog_validate` logs each pack ID that disagrees and returns `0` only if catalog, manifest and data agree.
 
 **Expected outcome:**
-- `Catalog validation PASSED` (exit 0) or `Catalog validation FAILED — N missing, M orphaned, K corrupt.` (exit 1).
+- `Catalog validation PASSED` (exit 0) or `Catalog validation FAILED — N missing, M orphaned, K corrupt, …` (exit 1), or the reason the catalog could not be read (exit 1).
 - No mutation of the master catalog (this command is read-only against the disc catalog on the disc *itself*; it does *not* write a `volume_events` row — see "Gaps").
 
 **Variant axes that apply:**
 - **Media type:** Reads files from a mount point; works for any media that presents a filesystem.
-- **Multi-repository:** A single disc can contain packs from several repositories — the SQL fallback query joins `volume_packs` so every repository on the disc is validated in one pass.
+- **Multi-repository:** A single disc can contain packs from several repositories — the volume's `volume_packs` rows cover every repository on the disc in one pass.
 - **Multi-copy:** Validate one disc at a time by mounting each.
 - **ECC:** Independent of the ECC layer — without `--content` this is a filesystem-level presence check; with `--content` it's a content SHA-256 check (still distinct from the sector-level RS03 ECC `verify` runs). Useful when ECC reports OK but you suspect a write-side regression.
 - **Storage stage:** The discs; this is exactly what you run on the computer you restore on before trusting a disc's contents.
@@ -195,7 +195,7 @@ one place that decides it
 - Existing: `tests/unit/test_db_verify.py` covers every branch of `validate_disc` — `volume_info`-driven (`test_single_disc_all_packs_present`, `tests/unit/test_db_verify.py:126-151`), missing packs (`tests/unit/test_db_verify.py:153-171`), orphaned packs (`tests/unit/test_db_verify.py:173-195`), missing catalog (`tests/unit/test_db_verify.py:197-204`), missing data dir (`tests/unit/test_db_verify.py:206-210`), empty manifest (`tests/unit/test_db_verify.py:212-222`), and the `ok` property (`tests/unit/test_db_verify.py:224-238`). Both layout shapes (flat / two-level) are tested.
 - Gaps:
   - Mixed-case hex pack names are explicitly *not* matched (`tests/unit/test_db_verify.py:71-87` documents this). If a downstream tool writes uppercase pack files they will appear as missing — that is a real, currently-tested-as-known limitation.
-  - The fallback SQL query (`validate_disc`, `src/lcsas/db/verify.py`) is not unit-tested in isolation; the `volume_info.json`-present path is the only one covered.
+  - `tests/integration/test_catalog_validate_rebuild.py` runs it on staged discs: a zero-length, truncated or wrong-magic catalog fails, and so does a catalog that lost one of the volume's packs (#963).
   - `cmd_catalog_validate` does **not** record a `volume_events` entry — a successful validate doesn't move a volume's status. If you want the cross-check to count toward the audit trail, currently you have to follow it with a separate `lcsas verify <label> --mark-verified --detail "catalog validate ok"`.
 
 **Source refs:**

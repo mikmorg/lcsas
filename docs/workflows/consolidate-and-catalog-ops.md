@@ -368,18 +368,24 @@ two-phase consolidation.
 
 ## `lcsas catalog validate`
 
-**Purpose:**  Cross-check a mounted (or extracted) LCSAS disc's
-`data/` directory against the disc catalog (`catalog.db`) on the same disc.
-Detects missing pack files (media decay, accidental deletion) and
-orphaned pack files (catalog drift, partial restores).  With
-`--content`, additionally reads every pack on disc and flags any whose
-content no longer hashes to its filename (CORRUPT).
+**Purpose:**  Check that a mounted (or extracted) LCSAS disc agrees
+with itself: the disc catalog (`catalog.db`), the manifest in
+`volume_info.json` and the pack files under `data/` must list the same
+packs for this disc's volume (#963).  Detects a catalog that cannot be
+read (zero-length, truncated, not a database), missing pack files
+(media decay, accidental deletion), orphaned pack files, and a catalog
+or manifest that disagrees with the rest.  With `--content`,
+additionally reads every pack on disc and flags any whose content no
+longer hashes to its filename (CORRUPT).
 
 **Prerequisites:**
-- Disc is mounted or extracted to a directory containing both
-  `catalog.db` and a `data/` subdirectory (`src/lcsas/db/verify.py`).
-- Read access to `catalog.db` (opened with `mode=ro` URI —
-  `src/lcsas/db/verify.py`).
+- Disc is mounted or extracted to a directory containing `catalog.db`,
+  `volume_info.json` and a `data/` subdirectory
+  (`src/lcsas/db/verify.py`).
+- Read access to `catalog.db`.  It is opened read-only and immutable
+  by `open_disc_catalog` (`src/lcsas/db/disc_catalog.py`), the one
+  opener every reader of a disc catalog uses: nothing is written on or
+  beside the disc.
 
 **Steps:**
 1. Argparse routes `lcsas catalog validate <disc> [--content]` to
@@ -391,29 +397,38 @@ content no longer hashes to its filename (CORRUPT).
       `FileNotFoundError` otherwise (`src/lcsas/db/verify.py`).
    2. Confirm `data/` exists; raise `ValueError` otherwise
       (`src/lcsas/db/verify.py`).
-   3. Walk `data/**` collecting every 64-char-hex filename into a
+   3. Read `volume_info.json`; it must name the disc's volume uuid
+      (`ValueError` otherwise: without it the catalog cannot be
+      checked).
+   4. Open `catalog.db` with `open_disc_catalog`: read-only and
+      immutable, `PRAGMA quick_check`, schema version by its highest
+      row.  A file that cannot be read, has no schema version or is of
+      a newer schema is a `DiscCatalogError` with the reason, and the
+      command fails ("the disc catalog was not checked").
+   5. Find the volume by that uuid and take its packs from
+      `volume_packs`.  A catalog that does not list the volume fails.
+   6. Walk `data/**` collecting every 64-char-hex filename into a
       set (`disc_hashes`).  Handles both flat (`data/HASH`) and
       two-level (`data/ab/abcdef…`) layouts (`src/lcsas/db/verify.py`).
-   4. If `volume_info.json` exists at the disc root, read its
-      `sha256_manifest` for the expected set.  If the manifest is
-      absent or missing, fall back to querying the disc
-      catalog: find every volume that contains any disc-present
-      pack, then collect that volume's full pack list
-      (`src/lcsas/db/verify.py`).
-   5. Compute `catalog - disc` (missing) and `disc - catalog`
-      (orphaned), sorted lexicographically.  When `content=True`,
-      also read each on-disc pack and record any whose content does
-      not hash to its filename in `corrupt_on_disc`
-      (`src/lcsas/db/verify.py`).
-4. Log per-category results (volume label, pack counts, then each
-   missing/orphaned/corrupt pack ID) (`cmd_catalog_validate`).
-5. Return 0 if `result.ok` (all three sets empty), 1 otherwise
+   7. Compare the three lists: packs listed (by the catalog or the
+      manifest) but not in `data/` are missing; files in `data/`
+      listed by neither are orphaned; manifest packs the catalog does
+      not place on the volume, and catalog packs the manifest lacks,
+      are reported apart.  When `content=True`, also read each on-disc
+      pack and record any whose content does not hash to its filename
+      in `corrupt_on_disc` (`src/lcsas/db/verify.py`).
+4. Log per-category results (volume label, catalog schema, the three
+   pack counts, then each pack ID that disagrees)
    (`cmd_catalog_validate`).
+5. Return 0 if `result.ok` (catalog, manifest and data agree), 1
+   otherwise (`cmd_catalog_validate`).
 
 **Expected outcome:**
-- Exit 0 + "Catalog validation PASSED" log when in sync.
-- Exit 1 + per-pack `MISSING:`/`ORPHAN:`/`CORRUPT:` log lines when out
-  of sync (CORRUPT only appears under `--content`).
+- Exit 0 + "Catalog validation PASSED" log when all three agree.
+- Exit 1 + the reason when the catalog cannot be read.
+- Exit 1 + per-pack `MISSING:`/`ORPHAN:`/`NOT IN CATALOG`/`NOT IN
+  MANIFEST`/`CORRUPT:` log lines when they disagree (CORRUPT only
+  appears under `--content`).
 - No mutations to the master catalog or to the disc itself.
 - No automatic `volume_events` recording — if a `VERIFY_FAIL` should
   be logged, the owner must run `lcsas verify --mark-failed` as a
@@ -423,8 +438,8 @@ content no longer hashes to its filename (CORRUPT).
 - **Media type** — works on any disc; the two-level pack layout is
   the convention for large media (MDISC100, BDXL100).
 - **Multi-repository** — the disc catalog (`catalog.db`) contains every
-  repository the disc carries; the query filters by which packs are
-  present, so multi-repository discs are handled transparently.
+  repository the disc carries; the check takes the packs of this disc's
+  volume, whatever repository each belongs to.
 - **Optical-drive count** — one drive at a time; the command takes a
   filesystem path, not a device — mounting/extraction is upstream.
 - **Multi-copy** — validates exactly one disc at a time.
@@ -434,6 +449,9 @@ content no longer hashes to its filename (CORRUPT).
   own disc catalog).  Does not touch the master catalog.
 
 **Test coverage:**
+- `tests/integration/test_catalog_validate_rebuild.py` — a staged disc
+  passes; a zero-length, truncated or wrong-magic catalog fails; a
+  catalog that lost one of the volume's packs fails (#963).
 - `tests/unit/test_db_verify.py::TestCollectDiscPacks` (flat +
   two-level layouts).
 - Additional unit cases in `tests/unit/test_db_verify.py` cover
@@ -554,7 +572,14 @@ rebuilds the master.
 
 **Prerequisites:**
 - One or more disc directories mounted/extracted; each contains a
-  readable `catalog.db` at its root (`src/lcsas/db/rebuild.py`).
+  readable `catalog.db` at its root (`src/lcsas/db/rebuild.py`).  The
+  discs are never written: every source is opened read-only and
+  immutable (`disc_catalog_uri` in `src/lcsas/db/disc_catalog.py`), so
+  a `-wal` or hot `-journal` file a copy left beside a catalog is
+  neither replayed nor removed (#963).
+- `--config` is optional.  With it, the rebuild also names each
+  repository that lcsas.toml says is split but that no disc read
+  records a split for (see step 4).
 - Write access to the `--output` catalog path (created if missing, or
   merged into if it already exists — `src/lcsas/db/rebuild.py`).
 - SQLite ≥ 3.33.0 is *not* strictly required (the implementation
@@ -568,11 +593,31 @@ rebuilds the master.
    any is not (`cmd_catalog_rebuild`).
 3. Call `rebuild_catalog(disc_dirs, output_db)`
    (`cmd_catalog_rebuild`).  Internally:
-   1. Open (or create) `output_db` and run `ensure_schema` to install
-      the current (v10) schema.  Pre-existing master rows seed a
-      freshness baseline (the newest timestamp in its rows) for their
-      volumes and split records (`src/lcsas/db/rebuild.py`).
-   2. **Sort discs newest-first** by the source catalog's freshness
+   1. **Read every source first (#963)**, read-only, before anything
+      is merged (`_read_source`): `quick_check`, the schema version
+      (its highest row), the row freshness, the labels, and every value
+      of a column with a fixed set (`volumes.status`,
+      `volume_copies.status`, `burn_sessions.status`,
+      `volume_events.event_type`, `repositories.status`:
+      `_KNOWN_VALUES`).  A catalog that cannot be read is refused as
+      "damaged or unreadable".  One holding a value this LCSAS does not
+      know is refused: for a newer schema the error says "written by a
+      newer LCSAS (schema vN): rebuild with that version or newer" and
+      names the table and value, never "damaged".  A newer catalog
+      whose values all fit is merged, with a warning.
+   2. **Two volumes with one label stop the rebuild (#957, #963).**  If
+      one label belongs to two uuids across the sources (or the
+      existing output), nothing is merged: the error names the discs
+      that list each uuid.  This happens when a catalog rebuilt without
+      its newest disc numbered a later volume the same; the merge used
+      to keep one and drop the other without a word.
+   3. Open (or create) `output_db` and run `ensure_schema` to install
+      the current (v10) schema; it is then reopened on a connection
+      that reads URI file names, so sources attach read-only.
+      Pre-existing master rows seed a freshness baseline (the newest
+      timestamp in its rows) for their volumes and split records
+      (`src/lcsas/db/rebuild.py`).
+   4. **Sort discs newest-first** by the source catalog's freshness
       (FMA-06).  Freshness is the newest timestamp in the catalog's
       rows (volume created/closed/verified, disc burn and verify dates,
       event dates, burn sessions, password splits); the `catalog.db`
@@ -580,19 +625,24 @@ rebuilds the master.
       its mtime cannot outrank one with newer rows (#686).  Discs
       lacking `catalog.db` sort last and only emit a skip error
       (`src/lcsas/db/rebuild.py`).
-   3. For each disc (newest first):
-      1. Skip discs lacking `catalog.db`; record the skip in
-         `RebuildResult.errors` and bump `discs_skipped`.
+   5. For each disc (newest first):
+      1. Skip discs lacking `catalog.db` and discs refused in step 1;
+         record the skip in `RebuildResult.errors` and bump
+         `discs_skipped`.
       2. Call `_merge_one_disc(...)` (`src/lcsas/db/rebuild.py`).  This
-         ATTACHes the source catalog and runs INSERT-OR-IGNORE passes over
+         ATTACHes the source catalog read-only and immutable and runs
+         `INSERT … ON CONFLICT (natural key) DO NOTHING` passes over
          `repositories` (keyed on `repo_id`), `locations` (`name`),
          `packs` (`sha256`), `volumes` (`uuid`), `snapshots`
          (`snapshot_id`), `volume_packs` and `volume_copies` (both
          **ID-translated** via `uuid`/`sha256` joins because
          auto-increment IDs differ between catalogs), plus the audit tables
          `volume_events`, `burn_sessions`, and `session_volumes`.
-         Because discs are merged newest-first, INSERT-OR-IGNORE keeps
-         the freshest catalog's row for each natural key.
+         Because discs are merged newest-first, the row already there
+         is the freshest catalog's for each natural key.  No row is
+         dropped by a constraint (the old `INSERT OR IGNORE` dropped a
+         row whose value failed a CHECK, without a word): a failure is
+         an error for that disc, and its merge is rolled back.
       3. **Recency-aware volume-status resolution (FMA-06).**  For
          every volume the disc shares with the target, the *freshest*
          catalog that mentions it owns its status — **including
@@ -609,9 +659,9 @@ rebuilds the master.
          was cleared before a newer disc was staged stays cleared
          (#686).  A disc from before the table existed decides nothing.
       5. Tally per-table insert counts.
-   4. Append a summary warning if staler discs disagreed on
+   6. Append a summary warning if staler discs disagreed on
       `is_pruned`.
-   5. **The newest burn session (#678).**  A disc catalog is copied
+   7. **The newest burn session (#678).**  A disc catalog is copied
       onto its disc at staging time, so in every input the newest burn
       session's volumes are `STAGING` with no disc record.  A volume
       whose own disc was an input (its uuid is in that disc's
@@ -620,7 +670,7 @@ rebuilds the master.
       select its packs again.  It is listed in
       `RebuildResult.needs_verify`.  A volume with a `VERIFY_FAIL` event
       is left as it is, with a warning.
-   5. A volume the output catalog did not have before the rebuild that
+   8. A volume the output catalog did not have before the rebuild that
       is still `STAGING`/`BURNING` with no disc record and no burn
       evidence gets a `NOTE` starting "Catalog rebuild: burn state
       unknown" and is listed in `RebuildResult.burn_unknown` (#758).
@@ -638,7 +688,28 @@ rebuilds the master.
    never delete them; `lcsas session abort --volume <label>
    --never-burned` does, once the owner is sure no disc of it was
    burned.
-5. Log each error if any occurred; return 1 in that case, 0
+5. **A split on no disc (#963, L8).**  With `--config`: a repository
+   lcsas.toml says is split, with no split record in the rebuilt
+   catalog, is named with the command that records the existing split
+   again from one of its cards:
+   `lcsas --config … password split --repo <name> --record-existing
+   --share-file <card>`.  It reads K and the split ID from the card's
+   share words and N from its "Share : i of N" line, checks them
+   against each other and against lcsas.toml, and with K cards also
+   checks that the password they rebuild unlocks the repository.  It
+   makes no new shares, so the cards handed out stay valid.  A split
+   is on no disc when it was made after the newest disc read was
+   staged; `stage` refuses until it is recorded, and its refusal
+   names the same command.
+6. **What the rebuilt catalog cannot know (#963).**  The closing
+   paragraph gives the date of the newest disc read (the newest row
+   of its catalog) and its label: "This catalog is as of …".  Discs
+   destroyed, lost, moved, or burned later for another location after
+   that date are not in it.  Record them again (`lcsas copy destroy`,
+   with `--lost` for a lost disc; `lcsas location move`; `lcsas verify
+   <label> --disc --location <where>`).  Until then `lcsas location
+   list` can show a location behind by discs it already holds.
+7. Log each error if any occurred; return 1 in that case, 0
    otherwise (`cmd_catalog_rebuild`).
 
 **Expected outcome:**
@@ -656,7 +727,9 @@ rebuilds the master.
   their burn session (a burned volume is never deleted, even with
   `--force`), so it keeps its ISOs.
 - Exit 0 if all discs merged; 1 if any disc was skipped or errored
-  (master catalog still contains successfully-merged data).
+  (master catalog still contains successfully-merged data), or if one
+  label belongs to two volumes (nothing merged).
+- Every source folder is byte-identical afterwards, sidecars included.
 
 **Variant axes that apply:**
 - **Media type** — irrelevant.
@@ -674,6 +747,17 @@ rebuilds the master.
   fresh master catalog usable to drive future scan/burn/restore.
 
 **Test coverage:**
+- `tests/integration/test_catalog_validate_rebuild.py` (#963), on
+  staged discs of a scratch install: a newer disc with an unknown
+  volume status or event type is refused as newer; a newer disc whose
+  values fit is merged; a source with `-wal`/`-shm` or a hot
+  `-journal` stays byte-identical; the closing paragraph names the
+  date and the newest disc; one label with two uuids stops the
+  rebuild and names both discs; a split lost by a rebuild is recorded
+  again from a card and `stage` goes on, its discs naming the cards'
+  split ID.
+- `tests/unit/test_db_rebuild.py::test_known_values_are_the_schema_checks`
+  (the accepted values are the schema's CHECK lists).
 - `tests/unit/test_db_rebuild.py::TestRebuildMerge::test_merge_simple_volumes`
 - `…::test_merge_status_conflict_prefers_higher_quality`
   (BURNED ← VERIFIED upgrade).
@@ -700,8 +784,8 @@ rebuilds the master.
   silently resurrect destroyed records.
 - **Gap:** no test covers merging when the target catalog already
   contains rows the source disagrees with on *non-status* columns
-  (e.g. `repositories.name` drift) — INSERT OR IGNORE silently
-  retains the existing (newest-first) value.
+  (e.g. `repositories.name` drift) — `ON CONFLICT DO NOTHING`
+  retains the existing (newest-first) value without a word.
 - **Gap:** no test exercises the CLI handler `cmd_catalog_rebuild`
   end-to-end (only the underlying `rebuild_catalog` /
   `_merge_one_disc` API).
@@ -709,7 +793,12 @@ rebuilds the master.
 **Source refs:**
 - `build_parser()` (argparse) in `src/lcsas/cli/parser.py`
 - `cmd_catalog_rebuild` in `src/lcsas/cli/commands/catalog.py`
-- `rebuild_catalog` / `_merge_one_disc` in `src/lcsas/db/rebuild.py`
+- `rebuild_catalog` / `_read_source` / `_merge_one_disc` in
+  `src/lcsas/db/rebuild.py`
+- `open_disc_catalog` / `disc_catalog_uri` in
+  `src/lcsas/db/disc_catalog.py`
+- `_record_existing_split` (`password split --record-existing`) in
+  `src/lcsas/cli/commands/key.py`
 - `ensure_schema` in `src/lcsas/db/schema.py`
 
 ---

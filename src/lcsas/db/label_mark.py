@@ -17,9 +17,9 @@ from discs takes the highest mark and label it finds (``db/rebuild.py``).
 from __future__ import annotations
 
 import sqlite3
-import urllib.parse
 from pathlib import Path
 
+from lcsas.db.disc_catalog import disc_catalog_uri
 from lcsas.utils.labels import next_seq_num
 
 
@@ -71,10 +71,9 @@ def merge_label_high_water(
         mark = max(mark, label_seq(str(label)) or 0)
     for db in source_dbs:
         try:
-            # Percent-encoded, as in rebuild.py: mount paths may hold '?',
-            # '#' or spaces.
-            uri = "file:" + urllib.parse.quote(str(db)) + "?mode=ro"
-            src = sqlite3.connect(uri, uri=True)
+            # Read-only and immutable, as every disc catalog is read
+            # (#963): a -wal or -journal beside it is never touched.
+            src = sqlite3.connect(disc_catalog_uri(db), uri=True)
         except sqlite3.Error:
             continue
         try:

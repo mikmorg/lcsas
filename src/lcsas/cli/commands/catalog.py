@@ -568,7 +568,9 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
 
 def cmd_catalog_validate(args: argparse.Namespace) -> int:
-    """Cross-check a mounted disc's data files against its disc catalog."""
+    """Check a mounted disc: its catalog, its manifest and its data files
+    must agree (#963)."""
+    from lcsas.db.disc_catalog import DiscCatalogError
     from lcsas.db.verify import validate_disc
 
     disc_path = args.disc
@@ -579,17 +581,39 @@ def cmd_catalog_validate(args: argparse.Namespace) -> int:
     logger.info("Validating disc at: %s", disc_path)
     try:
         result = validate_disc(disc_path, content=getattr(args, "content", False))
-    except (FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, ValueError, DiscCatalogError) as exc:
         logger.error("%s", exc)
+        logger.error("Catalog validation FAILED: the disc catalog was not checked.")
         return 1
 
     logger.info("Volume label   : %s", result.volume_label or "(unknown)")
+    logger.info("Catalog schema : v%s", result.catalog_version)
     logger.info("Catalog packs  : %d", result.catalog_pack_count)
+    logger.info("Manifest packs : %d", result.manifest_pack_count)
     logger.info("Disc packs     : %d", result.disc_pack_count)
+
+    for problem in result.problems:
+        logger.error("%s", problem)
+
+    if result.not_in_catalog:
+        logger.error(
+            "%d pack(s) in volume_info.json's manifest but NOT placed on this "
+            "volume by the disc catalog:", len(result.not_in_catalog),
+        )
+        for sha in result.not_in_catalog:
+            logger.error("  NOT IN CATALOG : %s", sha)
+
+    if result.not_in_manifest:
+        logger.error(
+            "%d pack(s) placed on this volume by the disc catalog but NOT in "
+            "volume_info.json's manifest:", len(result.not_in_manifest),
+        )
+        for sha in result.not_in_manifest:
+            logger.error("  NOT IN MANIFEST: %s", sha)
 
     if result.missing_from_disc:
         logger.error(
-            "%d pack(s) in catalog but MISSING from disc:",
+            "%d pack(s) listed for this disc but MISSING from data/:",
             len(result.missing_from_disc),
         )
         for sha in result.missing_from_disc:
@@ -597,7 +621,8 @@ def cmd_catalog_validate(args: argparse.Namespace) -> int:
 
     if result.orphaned_on_disc:
         logger.warning(
-            "%d pack file(s) on disc but NOT in catalog (orphaned):",
+            "%d pack file(s) on disc but listed in neither the catalog nor "
+            "the manifest (orphaned):",
             len(result.orphaned_on_disc),
         )
         for sha in result.orphaned_on_disc:
@@ -613,16 +638,22 @@ def cmd_catalog_validate(args: argparse.Namespace) -> int:
             logger.error("  CORRUPT: %s", sha)
 
     if result.ok:
-        logger.info("Catalog validation PASSED — disc and catalog are in sync.")
-        return 0
-    else:
-        logger.error(
-            "Catalog validation FAILED — %d missing, %d orphaned, %d corrupt.",
-            len(result.missing_from_disc),
-            len(result.orphaned_on_disc),
-            len(result.corrupt_on_disc),
+        logger.info(
+            "Catalog validation PASSED — the disc catalog, the manifest and "
+            "the data files agree."
         )
-        return 1
+        return 0
+    logger.error(
+        "Catalog validation FAILED — %d missing, %d orphaned, %d corrupt, "
+        "%d not in the catalog, %d not in the manifest%s.",
+        len(result.missing_from_disc),
+        len(result.orphaned_on_disc),
+        len(result.corrupt_on_disc),
+        len(result.not_in_catalog),
+        len(result.not_in_manifest),
+        f", {len(result.problems)} other" if result.problems else "",
+    )
+    return 1
 
 
 def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
@@ -819,6 +850,54 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _warn_unrecorded_splits(args: argparse.Namespace, output_db: Path) -> None:
+    """Say how to record an existing password split again (#963, L8).
+
+    A split made after the newest disc was staged is on no disc, so the
+    rebuilt catalog has no record of it, and ``stage`` refuses while
+    lcsas.toml says the password is split.  Splitting again would void
+    the share cards already handed out; ``password split
+    --record-existing`` records the existing split from one card.  Needs
+    ``--config`` to know which repositories are split.
+    """
+    from lcsas.cli.common import _config_mirror
+    from lcsas.db.key_escrow import get_split_for_repo
+    from lcsas.db.repos import resolve_repo
+
+    config = _load_config_opt(args)
+    if config is None or not output_db.is_file():
+        return
+    split_repos = [n for n in sorted(config.repositories)
+                   if config.repo_split(n)[0]]
+    if not split_repos:
+        return
+    conn = sqlite3.connect(output_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        for name in split_repos:
+            try:
+                repo = resolve_repo(conn, name, _config_mirror(config, name))
+            except ValueError:
+                continue
+            if repo is None or get_split_for_repo(conn, repo.repo_id) is not None:
+                continue
+            _, k, n = config.repo_split(name)
+            logger.warning(
+                "The rebuilt catalog records no password split for '%s', but "
+                "lcsas.toml says its password is split %d-of-%d: no disc read "
+                "carries the record (the split was made after the newest of "
+                "them), and 'lcsas stage' refuses until it is recorded. If "
+                "its share cards were handed out, record that split again "
+                "from one card, which makes no new shares: lcsas --config "
+                "... password split --repo %s --record-existing --share-file "
+                "<card>.", name, k, n, name,
+            )
+    except sqlite3.Error:
+        return
+    finally:
+        conn.close()
+
+
 def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     """Rebuild the master catalog by merging disc catalogs."""
     from lcsas.db.rebuild import rebuild_catalog
@@ -907,6 +986,24 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
             "'lcsas catalog reconcile --fix' never delete them; if you are "
             "sure one was never burned, 'lcsas session abort --volume "
             "<label> --never-burned' deletes it."
+        )
+
+    # #963 (L8): a split made after the newest disc read is on no disc.
+    _warn_unrecorded_splits(args, output_db)
+
+    # #963: what a catalog rebuilt from discs cannot know.
+    if result.as_of:
+        logger.warning(
+            "This catalog is as of %s, the date of the newest disc read "
+            "(%s). It cannot know what happened after: discs destroyed, "
+            "lost, moved, or burned later for another location. Record those "
+            "again ('lcsas copy destroy <label> <location>' with --lost for a "
+            "lost disc, 'lcsas location move <label> --from <old> --to <new>', "
+            "'lcsas verify <label> --disc --location <where it is kept>'). "
+            "Until then 'lcsas location list' can show a location behind by "
+            "discs it already holds: check what each location holds before "
+            "burning copies.",
+            result.as_of, result.newest_disc,
         )
 
     if result.errors:

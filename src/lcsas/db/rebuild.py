@@ -7,10 +7,19 @@ import logging
 import sqlite3
 import urllib.parse
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
+from lcsas.db.disc_catalog import (
+    DiscCatalogError,
+    disc_catalog_uri,
+    open_disc_catalog,
+)
 from lcsas.db.lifecycle import VolumeLifecycle
+from lcsas.db.repos import REPO_STATUSES
+from lcsas.db.schema import CURRENT_SCHEMA_VERSION
 from lcsas.db.snapshots import DISC_BLANKED_SNAPSHOT_COLUMNS
+from lcsas.db.volume_events import VALID_EVENT_TYPES
 
 _logger = logging.getLogger(__name__)
 
@@ -27,6 +36,21 @@ _STATUS_RANK = {
     "DEPRECATED": 1,
     "DESTROYED": 0,
 }
+
+
+# The values this LCSAS knows in each column that has a fixed set: the
+# CHECK constraints in schema.py, and repositories.status, which is
+# checked in Python (#963).  A disc catalog holding any other value was
+# written by a newer LCSAS (or is damaged): its disc is refused, never
+# merged with the row silently dropped.
+_KNOWN_VALUES: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("volumes", "status", frozenset(_STATUS_RANK)),
+    ("volume_copies", "status", frozenset({"ACTIVE", "DEPRECATED", "DESTROYED"})),
+    ("burn_sessions", "status",
+     frozenset({"STAGED", "PARTIAL", "COMPLETE", "CLEANED"})),
+    ("volume_events", "event_type", VALID_EVENT_TYPES),
+    ("repositories", "status", frozenset(REPO_STATUSES)),
+)
 
 
 # julianday() of 1970-01-01T00:00:00Z.
@@ -92,10 +116,9 @@ def _source_freshness(catalog_db: Path) -> Freshness:
     """
     mtime = catalog_db.stat().st_mtime
     try:
-        # Percent-encode so mount paths containing '?', '#', or spaces
-        # survive SQLite's URI parsing.
-        uri = "file:" + urllib.parse.quote(str(catalog_db)) + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
+        # Read-only and immutable (#963): never replays or removes a
+        # -wal or -journal file beside the source.
+        conn = sqlite3.connect(disc_catalog_uri(catalog_db), uri=True)
         try:
             rows = _row_freshness(conn)
         finally:
@@ -121,6 +144,11 @@ class RebuildResult:
     sessions_merged: int = 0
     session_volumes_merged: int = 0
     splits_merged: int = 0
+    # #963: the date of the newest catalog read (its newest row) and the
+    # disc it came from.  The rebuilt catalog cannot know what happened
+    # after that date.
+    as_of: str = ""
+    newest_disc: str = ""
     # Labels of volumes this rebuild moved from STAGING to BURNED because
     # their own disc was one of the inputs (#678).  No disc record says
     # where those discs are kept; ``lcsas verify <label> --disc
@@ -197,7 +225,7 @@ def _merge_one_disc(
 ) -> dict[str, int]:
     """Attach *source_db* and merge its data into *target*.
 
-    Uses INSERT OR IGNORE on natural-key columns so records are only added
+    Inserts with ON CONFLICT (natural key) DO NOTHING, so records are only added
     when they do not already exist.  Volume-status conflicts are resolved
     by recency (FMA-06): the freshest catalog that mentions a volume owns
     its status — including downgrades to DEPRECATED/DESTROYED.
@@ -237,12 +265,29 @@ def _merge_one_disc(
     # Commit anything the caller left open: a failed merge rolls back to
     # here, and must not take the caller's work with it.
     target.commit()
-    target.execute(f"ATTACH DATABASE ? AS {alias}", (str(source_db),))
+    # #963: attached read-only and immutable.  A plain ATTACH opened the
+    # source read-write, and SQLite then replayed a hot -journal or
+    # checkpointed a -wal beside it: the rebuild changed a source.  The
+    # target connection takes URI file names (_open_output).
+    target.execute(
+        f"ATTACH DATABASE ? AS {alias}", (disc_catalog_uri(source_db),),
+    )
     try:
+        # A connection that does not read URI names would attach (and
+        # create) a file literally named "file:...": merge nothing then.
+        attached = {
+            str(r[1]): str(r[2])
+            for r in target.execute("PRAGMA database_list").fetchall()
+        }
+        if Path(attached.get(alias) or "/").resolve() != source_db.resolve():
+            raise DiscCatalogError(
+                f"could not attach {source_db} read-only: this connection "
+                "does not read SQLite URI file names"
+            )
         # 1. repositories — keyed on repo_id.
         #
         # `status` (schema v10) must travel with the row.  Discs are merged
-        # freshest-first and this is INSERT OR IGNORE, so the freshest
+        # freshest-first and a row already there is kept, so the freshest
         # catalog that mentions a repository owns its status — the same rule
         # volumes follow below.  Dropping the column instead would silently
         # resurrect every retired repository as 'active' (the table default),
@@ -261,11 +306,13 @@ def _merge_one_disc(
         status_expr = "status" if "status" in src_repo_cols else "'active'"
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO repositories (repo_id, name, mirror_path,
+            INSERT INTO repositories (repo_id, name, mirror_path,
                 encryption_key_id, created_at, status)
             SELECT repo_id, name, mirror_path, encryption_key_id, created_at,
                 {status_expr}
             FROM {alias}.repositories
+            WHERE true
+            ON CONFLICT (repo_id) DO NOTHING
             """
         )
         counts["repositories"] = cur.rowcount
@@ -273,16 +320,18 @@ def _merge_one_disc(
         # 2. locations — keyed on name
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO locations (name, description, created_at)
+            INSERT INTO locations (name, description, created_at)
             SELECT name, description, created_at
             FROM {alias}.locations
+            WHERE true
+            ON CONFLICT (name) DO NOTHING
             """
         )
         counts["locations"] = cur.rowcount
 
         # 3. packs — keyed on sha256.  rebuild_catalog() merges discs
         #    newest-first, so the row already in the target was written by
-        #    a fresher catalog and INSERT OR IGNORE keeps the freshest
+        #    a fresher catalog and ON CONFLICT DO NOTHING keeps the freshest
         #    view.  Count is_pruned disagreements from this (staler)
         #    source so the rebuild can emit one summary warning.
         row = target.execute(
@@ -297,10 +346,12 @@ def _merge_one_disc(
 
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id,
+            INSERT INTO packs (sha256, size_bytes, repo_id,
                 is_pruned, created_at)
             SELECT sha256, size_bytes, repo_id, is_pruned, created_at
             FROM {alias}.packs
+            WHERE true
+            ON CONFLICT (sha256) DO NOTHING
             """
         )
         counts["packs"] = cur.rowcount
@@ -322,12 +373,14 @@ def _merge_one_disc(
 
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO volumes
+            INSERT INTO volumes
                 (label, uuid, media_type, capacity_bytes, used_bytes,
                  location, status, created_at, closed_at, verified_at)
             SELECT label, uuid, media_type, capacity_bytes, used_bytes,
                    location, status, created_at, closed_at, verified_at
             FROM {alias}.volumes
+            WHERE true
+            ON CONFLICT (uuid) DO NOTHING
             """
         )
         counts["volumes"] = cur.rowcount
@@ -366,12 +419,14 @@ def _merge_one_disc(
         # 5. snapshots — keyed on snapshot_id
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO snapshots
+            INSERT INTO snapshots
                 (snapshot_id, repo_id, hostname, timestamp,
                  paths, tags, description)
             SELECT snapshot_id, repo_id, hostname, timestamp,
                    paths, tags, description
             FROM {alias}.snapshots
+            WHERE true
+            ON CONFLICT (snapshot_id) DO NOTHING
             """
         )
         counts["snapshots"] = cur.rowcount
@@ -382,13 +437,15 @@ def _merge_one_disc(
         #    IDs differ between catalogs.  Join on natural keys (uuid, sha256).
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO volume_packs (volume_id, pack_id)
+            INSERT INTO volume_packs (volume_id, pack_id)
             SELECT v.volume_id, p.pack_id
             FROM {alias}.volume_packs svp
             JOIN {alias}.volumes sv ON sv.volume_id = svp.volume_id
             JOIN {alias}.packs  sp ON sp.pack_id   = svp.pack_id
             JOIN volumes v ON v.uuid   = sv.uuid
             JOIN packs   p ON p.sha256 = sp.sha256
+            WHERE true
+            ON CONFLICT (volume_id, pack_id) DO NOTHING
             """
         )
         counts["volume_packs"] = cur.rowcount
@@ -409,7 +466,7 @@ def _merge_one_disc(
         )
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO volume_copies
+            INSERT INTO volume_copies
                 (volume_id, location, status, burn_date, notes, iso_sha256,
                  iso_size_bytes, last_verified_at, media_serial)
             SELECT v.volume_id, svc.location, svc.status, svc.burn_date,
@@ -418,6 +475,8 @@ def _merge_one_disc(
             FROM {alias}.volume_copies svc
             JOIN {alias}.volumes sv ON sv.volume_id = svc.volume_id
             JOIN volumes v ON v.uuid = sv.uuid
+            WHERE true
+            ON CONFLICT (volume_id, location) DO NOTHING
             """
         )
         counts["volume_copies"] = cur.rowcount
@@ -434,7 +493,7 @@ def _merge_one_disc(
 
         # 8a. volume_events — keyed on (volume uuid, event_type, event_date).
         #     The event_id autoincrement differs across catalogs, so translate
-        #     volume_id via uuid and let INSERT OR IGNORE dedupe on the
+        #     volume_id via uuid and dedupe on the
         #     natural triple (enforced by the unique index below at write
         #     time; here we guard with NOT EXISTS since the live schema's
         #     PK is the surrogate event_id).
@@ -466,10 +525,12 @@ def _merge_one_disc(
         if "burn_sessions" in src_tables:
             cur = target.execute(
                 f"""
-                INSERT OR IGNORE INTO burn_sessions
+                INSERT INTO burn_sessions
                     (session_id, created_at, media_type, status, staging_dir)
                 SELECT session_id, created_at, media_type, status, staging_dir
                 FROM {alias}.burn_sessions
+                WHERE true
+                ON CONFLICT (session_id) DO NOTHING
                 """
             )
             counts["burn_sessions"] = cur.rowcount
@@ -491,7 +552,7 @@ def _merge_one_disc(
             )
             cur = target.execute(
                 f"""
-                INSERT OR IGNORE INTO session_volumes
+                INSERT INTO session_volumes
                     (session_id, volume_id, iso_path, iso_sha256,
                      iso_size_bytes)
                 SELECT ssv.session_id, v.volume_id, ssv.iso_path,
@@ -499,6 +560,8 @@ def _merge_one_disc(
                 FROM {alias}.session_volumes ssv
                 JOIN {alias}.volumes sv ON sv.volume_id = ssv.volume_id
                 JOIN volumes v ON v.uuid = sv.uuid
+                WHERE true
+                ON CONFLICT (session_id, volume_id) DO NOTHING
                 """
             )
             counts["session_volumes"] = cur.rowcount
@@ -585,19 +648,196 @@ def _own_volume_uuid(disc_path: Path) -> str | None:
     return uuid_ if isinstance(uuid_, str) and uuid_ else None
 
 
-def _disc_name(disc_path: Path) -> str:
-    """How a message names a disc: its label (from ``volume_info.json``)
-    and the folder it was read from, or the folder alone."""
+def _disc_label(disc_path: Path) -> str | None:
+    """The label in a disc's ``volume_info.json`` (None if absent/unreadable)."""
     try:
         info = json.loads(
             (disc_path / "volume_info.json").read_text(encoding="utf-8")
         )
     except (OSError, ValueError):
-        info = None
+        return None
     label = info.get("label") if isinstance(info, dict) else None
-    if isinstance(label, str) and label:
+    return label if isinstance(label, str) and label else None
+
+
+def _disc_name(disc_path: Path) -> str:
+    """How a message names a disc: its label (from ``volume_info.json``)
+    and the folder it was read from, or the folder alone."""
+    label = _disc_label(disc_path)
+    if label is not None:
         return f"disc {label} ({disc_path})"
     return f"disc at {disc_path}"
+
+
+@dataclass
+class _Source:
+    """One disc catalog as read before anything is merged (#963)."""
+
+    disc_path: Path
+    catalog_db: Path
+    freshness: Freshness
+    version: int | None = None
+    # label -> uuid of every volume the catalog lists.
+    labels: dict[str, str] = field(default_factory=dict)
+    # Why the disc is not merged; empty when it is.
+    refusal: str = ""
+
+    @property
+    def name(self) -> str:
+        return _disc_name(self.disc_path)
+
+    @property
+    def newer(self) -> bool:
+        return self.version is not None and self.version > CURRENT_SCHEMA_VERSION
+
+    def merge_failure(self, exc: BaseException) -> str:
+        """The error line for a merge of this disc that failed."""
+        if self.newer:
+            return (
+                f"{self.name}: written by a newer LCSAS (schema "
+                f"v{self.version}): rebuild with that version or newer "
+                f"({exc}). Nothing from it was merged."
+            )
+        return (
+            f"{self.name}: its catalog is damaged or unreadable ({exc}). "
+            f"Nothing from it was merged."
+        )
+
+
+def _unknown_values(conn: sqlite3.Connection) -> list[tuple[str, str, object]]:
+    """``(table, column, value)`` for each value in *conn* that this LCSAS
+    does not know (``_KNOWN_VALUES``).  A table or column the catalog
+    lacks (an older schema) has none."""
+    tables = {
+        str(r[0]) for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    unknown: list[tuple[str, str, object]] = []
+    for table, column, known in _KNOWN_VALUES:
+        if table not in tables:
+            continue
+        cols = {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            continue
+        for (value,) in conn.execute(
+            f"SELECT DISTINCT {column} FROM {table} ORDER BY 1"
+        ):
+            if value not in known:
+                unknown.append((table, column, value))
+    return unknown
+
+
+def _read_source(disc_path: Path, catalog_db: Path) -> _Source:
+    """Read one disc catalog read-only, before any merge (#963): its
+    freshness, schema version and labels, and whether it can be merged.
+
+    A catalog that cannot be read, or that holds a value this LCSAS does
+    not know, gets a ``refusal``.  The wording says "newer" for a
+    catalog of a newer schema, never "damaged".
+    """
+    source = _Source(disc_path, catalog_db,
+                     (float("-inf"), catalog_db.stat().st_mtime))
+    try:
+        conn = open_disc_catalog(catalog_db, allow_newer=True)
+    except DiscCatalogError as exc:
+        reason = exc.__cause__ if exc.__cause__ is not None else exc
+        source.refusal = (
+            f"{source.name}: its catalog is damaged or unreadable "
+            f"({reason}). Nothing from it was merged."
+        )
+        return source
+    try:
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        source.version = int(row[0])
+        source.freshness = (_row_freshness(conn), source.freshness[1])
+        unknown = _unknown_values(conn)
+        source.labels = {
+            str(label): str(uuid_) for label, uuid_ in conn.execute(
+                "SELECT label, uuid FROM volumes"
+            )
+        }
+    except sqlite3.Error as exc:
+        source.refusal = source.merge_failure(exc)
+        return source
+    finally:
+        conn.close()
+    if unknown:
+        values = "; ".join(f"{t}.{c} holds {v!r}" for t, c, v in unknown)
+        if source.newer:
+            source.refusal = (
+                f"{source.name}: written by a newer LCSAS (schema "
+                f"v{source.version}): rebuild with that version or newer. "
+                f"Its catalog holds values this LCSAS does not know "
+                f"({values}). Nothing from it was merged."
+            )
+        else:
+            source.refusal = (
+                f"{source.name}: its catalog holds values this LCSAS does "
+                f"not know ({values}), though it says schema "
+                f"v{source.version}: it may be damaged. Nothing from it was "
+                f"merged."
+            )
+    return source
+
+
+def _label_clashes(
+    sources: list[_Source], existing: dict[str, tuple[str, str]],
+) -> list[str]:
+    """One message per label that names two different volumes (#957, #963).
+
+    *existing* maps a label to ``(uuid, where)`` for volumes the output
+    catalog already holds.  The catalog holds one volume per label; the
+    merge used to keep the first and drop the other without a word.
+    """
+    seen: dict[str, dict[str, list[str]]] = {}
+    for label, (uuid_, where) in existing.items():
+        seen.setdefault(label, {}).setdefault(uuid_, []).append(where)
+    for source in sources:
+        for label, uuid_ in source.labels.items():
+            seen.setdefault(label, {}).setdefault(uuid_, []).append(source.name)
+    messages = []
+    for label, by_uuid in sorted(seen.items()):
+        if len(by_uuid) < 2:
+            continue
+        found = "; ".join(
+            f"uuid {uuid_} in {', '.join(names)}"
+            for uuid_, names in sorted(by_uuid.items())
+        )
+        messages.append(
+            f"Label {label} names {len(by_uuid)} different volumes: {found}. "
+            f"Two discs carry one label: either a catalog rebuilt without "
+            f"its newest disc numbered a later volume the same, or a disc of "
+            f"another archive is among these discs (check its backup sets). "
+            f"A catalog holds one volume per label, so nothing was rebuilt. "
+            f"Rebuild again without the discs that list one of them (a disc "
+            f"of another archive, else the older disc of that label, which "
+            f"later discs do not list) and keep that disc: the rebuilt "
+            f"catalog will not know it."
+        )
+    return messages
+
+
+def _open_output(output_db: Path) -> sqlite3.Connection:
+    """The output catalog, created or brought to the current schema, on a
+    connection that reads URI file names, so a source can be attached
+    read-only and immutable (#963) whatever SQLite's build default."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import ensure_schema
+
+    # Source disc catalogs are attached read-only and are never migrated:
+    # only the output catalog goes through ensure_schema.
+    conn = get_connection(output_db)
+    try:
+        ensure_schema(conn)
+    finally:
+        conn.close()
+    uri = "file:" + urllib.parse.quote(str(Path(output_db).resolve()))
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=30000;")
+    return conn
 
 
 def _promote_read_discs(
@@ -697,6 +937,24 @@ def _mark_burn_unknown(
     conn.commit()
 
 
+def _existing_labels(output_db: Path) -> dict[str, tuple[str, str]]:
+    """label -> (uuid, where) of the volumes an existing output catalog
+    holds, read without writing it."""
+    conn = sqlite3.connect(
+        "file:" + urllib.parse.quote(str(Path(output_db).resolve())) + "?mode=ro",
+        uri=True,
+    )
+    try:
+        return {
+            str(label): (str(uuid_), f"the catalog at {output_db}")
+            for label, uuid_ in conn.execute("SELECT label, uuid FROM volumes")
+        }
+    except sqlite3.Error:
+        return {}  # a new or damaged output: _open_output reports it
+    finally:
+        conn.close()
+
+
 def rebuild_catalog(
     disc_paths: list[Path],
     output_db: Path,
@@ -714,7 +972,9 @@ def rebuild_catalog(
       burn sessions, splits); the file mtime only breaks a tie (#686).
       The merge result does not depend on the order discs are listed.
     - Records with the same natural key keep the freshest catalog's view
-      (newest-first ordering + INSERT OR IGNORE).
+      (newest-first ordering; a row already there is kept).  No row is
+      dropped by a constraint: a value a CHECK refuses is an error for
+      that disc, never an ignored row (#963).
     - Recorded password splits (``key_escrow``) follow the freshest
       catalog that knows the repository, including a split cleared since
       an older disc was staged (#573, #686).
@@ -731,6 +991,18 @@ def rebuild_catalog(
       state is unknown and is listed in
       :attr:`RebuildResult.burn_unknown` (#758).
 
+    Sources (#963):
+    - Every source is opened read-only and immutable: the rebuild never
+      writes a disc catalog, nor a ``-wal``/``-journal`` file beside it.
+    - Each is read before anything is merged.  One that cannot be read,
+      or that holds a value this LCSAS does not know, is refused in
+      words ("written by a newer LCSAS (schema vN)" for a newer schema);
+      a newer one whose values all fit is merged with a warning.
+    - Two volumes with one label and different uuids stop the rebuild
+      before the output is touched; the error names the discs of both.
+    - :attr:`RebuildResult.as_of` and :attr:`RebuildResult.newest_disc`
+      say how recent the rebuilt catalog is.
+
     Args:
         disc_paths: List of mounted disc root directories.
         output_db: Path to the new (or existing) master catalog.
@@ -738,16 +1010,31 @@ def rebuild_catalog(
     Returns:
         :class:`RebuildResult` with merge statistics, warnings, and errors.
     """
-    from lcsas.db.connection import get_connection
-    from lcsas.db.schema import ensure_schema
-
     result = RebuildResult()
 
-    # Ensure the output catalog is initialised with the current schema.
-    # Source disc catalogs are ATTACHed read-only below and are never
-    # migrated — only the output catalog goes through ensure_schema.
-    conn = get_connection(output_db)
-    ensure_schema(conn)
+    # #963: read every source before anything is merged: its schema
+    # version, whether every value fits this LCSAS, and its labels.  A
+    # disc that cannot be merged is refused here, in words.
+    sources: dict[Path, _Source] = {}
+    for disc_path in disc_paths:
+        catalog_db = disc_path / "catalog.db"
+        if catalog_db.is_file():
+            sources[disc_path] = _read_source(disc_path, catalog_db)
+    readable = [s for s in sources.values() if not s.refusal]
+
+    # Two volumes with one label: stop before the output is touched.
+    clashes = _label_clashes(readable, {})
+    if not clashes and Path(output_db).is_file():
+        existing = _existing_labels(output_db)
+        clashes = _label_clashes(readable, existing)
+    if clashes:
+        for message in clashes:
+            _logger.error("%s", message)
+        result.errors.extend(clashes)
+        result.discs_skipped = len(disc_paths)
+        return result
+
+    conn = _open_output(output_db)
 
     # Volumes already present in the output catalog get a freshness
     # baseline from its own rows (the file mtime is useless here — we
@@ -778,11 +1065,9 @@ def rebuild_catalog(
     # no catalog.db sort last (they only produce a skip error).
     ordered: list[tuple[Path, Path | None, Freshness]] = []
     for disc_path in disc_paths:
-        catalog_db = disc_path / "catalog.db"
-        if catalog_db.is_file():
-            ordered.append(
-                (disc_path, catalog_db, _source_freshness(catalog_db))
-            )
+        source = sources.get(disc_path)
+        if source is not None:
+            ordered.append((disc_path, source.catalog_db, source.freshness))
         else:
             ordered.append(
                 (disc_path, None, (float("-inf"), float("-inf")))
@@ -802,6 +1087,13 @@ def rebuild_catalog(
             result.errors.append(f"No catalog.db at {disc_path}")
             continue
 
+        source = sources[disc_path]
+        if source.refusal:
+            _logger.error("%s", source.refusal)
+            result.discs_skipped += 1
+            result.errors.append(source.refusal)
+            continue
+
         _logger.info("Merging catalog from: %s", disc_path)
         try:
             counts = _merge_one_disc(
@@ -816,17 +1108,27 @@ def rebuild_catalog(
             # #820: a damaged disc catalog (sqlite3.DatabaseError) or any
             # other failure.  Its merge was rolled back; the later discs
             # are still merged, and the error makes 'lcsas catalog
-            # rebuild' end with exit code 1.
-            message = (
-                f"{_disc_name(disc_path)}: its catalog is damaged or "
-                f"unreadable ({exc}). Nothing from it was merged."
-            )
+            # rebuild' end with exit code 1.  #963: a newer disc's
+            # failure says "newer", not "damaged".
+            message = source.merge_failure(exc)
             _logger.error("%s", message)
             result.discs_skipped += 1
             result.errors.append(message)
             continue
 
         result.discs_processed += 1
+        if not result.as_of:
+            # Newest first: the first disc merged is the newest read.
+            stamp = freshness[0] if freshness[0] != float("-inf") else freshness[1]
+            result.as_of = datetime.fromtimestamp(stamp, UTC).date().isoformat()
+            result.newest_disc = _disc_label(disc_path) or str(disc_path)
+        if source.newer:
+            result.warnings.append(
+                f"{source.name} was written by a newer LCSAS (schema "
+                f"v{source.version}). Every value in it fits this LCSAS and "
+                f"was merged, but a newer LCSAS may record more than this one "
+                f"reads: rebuild with that version if you have it."
+            )
         own_uuid = _own_volume_uuid(disc_path)
         if own_uuid is not None:
             own_uuids.add(own_uuid)

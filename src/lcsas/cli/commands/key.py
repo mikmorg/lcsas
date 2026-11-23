@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -361,6 +362,8 @@ def _record_split_by_name(
     shares: int,
     split_id: int,
     mirror_path: Path | None = None,
+    *,
+    split_at: str | None = None,
 ) -> None:
     """Record a split under the catalog repo_id of the repository *name*.
 
@@ -375,7 +378,8 @@ def _record_split_by_name(
     repo = resolve_repo(conn, name, mirror_path)
     if repo is None:
         raise ValueError(f"repository '{name}' is not registered in the catalog")
-    record_split(conn, repo.repo_id, threshold, shares, split_id, commit=False)
+    record_split(conn, repo.repo_id, threshold, shares, split_id,
+                 split_at=split_at, commit=False)
     name_is_an_id = conn.execute(
         "SELECT 1 FROM repositories WHERE repo_id = ?", (name,)
     ).fetchone()
@@ -393,9 +397,231 @@ def _existing_share_files(out_dir: Path, repo: str) -> list[Path]:
     return sorted(out_dir.glob(f"{glob.escape(repo)}-share-*"))
 
 
+_CARD_SHARE_RE = re.compile(r"^\s*Share\s*:\s*(\d+)\s+of\s+(\d+)\s*$", re.M)
+_CARD_SPLIT_ID_RE = re.compile(r"^\s*Split ID\s*:\s*(\d+)\s*$", re.M)
+_CARD_BACKUP_SET_RE = re.compile(r"^\s*Backup set\s*:\s*(\S.*?)\s*$", re.M)
+_CARD_SPLIT_ON_RE =re.compile(r"^\s*Split on\s*:\s*(\d{4}-\d\d-\d\d)\s*$", re.M)
+
+
+def _record_existing_split(args: argparse.Namespace) -> int:
+    """``password split --record-existing``: record a split already made,
+    read from its share cards, and make no new shares (#963, L8).
+
+    A catalog rebuilt from discs has no record of a split made after the
+    newest disc was staged, and ``stage`` then refuses.  Splitting again
+    would void the cards already handed out.  This reads K and the split
+    ID from the share words of each card (N from the card's "Share : i of
+    N" line, else lcsas.toml), checks them against each other and against
+    the config, and writes the record.  With K cards it also rebuilds the
+    password and checks that it unlocks the repository.
+    """
+    from lcsas.db.key_escrow import get_split_for_repo
+    from lcsas.db.repos import resolve_repo
+    from lcsas.keyshare import (
+        KeyShareError,
+        check_share,
+        decode_master_secret,
+        extract_mnemonic,
+        recover_secret,
+        share_identifier,
+    )
+    from lcsas.keyshare.slip39 import Share
+
+    name = args.repo
+    config = _load_config_opt(args)
+    if config is None:
+        logger.error("--config is required for password split --record-existing.")
+        return 1
+    if not args.share_files:
+        logger.error(
+            "password split --record-existing reads the split from its share "
+            "cards: pass at least one --share-file."
+        )
+        return 1
+    if args.threshold is not None or args.shares is not None:
+        logger.error(
+            "password split --record-existing reads K and N from the cards: "
+            "leave out --threshold/--shares."
+        )
+        return 1
+    if name not in config.repositories:
+        logger.error("Repository '%s' is not defined in the config file.", name)
+        return 1
+    split, cfg_k, cfg_n = config.repo_split(name)
+    if not split:
+        logger.error(
+            "lcsas.toml says the password of repository '%s' is not split. "
+            "Set split = true (with split_threshold and split_shares) under "
+            "[repos.%s] first, so the config and the recorded split agree. "
+            "Nothing was recorded.", name, name,
+        )
+        return 1
+
+    # ── Read every card ───────────────────────────────────────────────
+    mnemonics: list[str] = []
+    seen: set[tuple[int, int]] = set()
+    card_n: set[int] = set()
+    split_on: set[str] = set()
+    for card in args.share_files:
+        if not card.is_file():
+            logger.error("Share file does not exist: %s", card)
+            return 1
+        text = card.read_text(encoding="utf-8")
+        try:
+            mnemonic = extract_mnemonic(text, source=str(card))
+        except KeyShareError as e:
+            logger.error("%s", e)
+            return 1
+        problem = check_share(mnemonic)
+        if problem is not None:
+            logger.error("%s: %s", card, problem)
+            return 1
+        k = Share.from_mnemonic(mnemonic).member_threshold
+        split_id = share_identifier(mnemonic)
+        printed_id = _CARD_SPLIT_ID_RE.search(text)
+        if printed_id is not None and int(printed_id.group(1)) != split_id:
+            logger.error(
+                "%s prints Split ID %s, but its share words belong to split "
+                "%05d. The card is not one card of one split. Nothing was "
+                "recorded.", card, printed_id.group(1), split_id,
+            )
+            return 1
+        backup_set = _CARD_BACKUP_SET_RE.search(text)
+        if backup_set is not None and backup_set.group(1).strip() != name:
+            logger.error(
+                "%s is a card of backup set '%s', not '%s'. Nothing was "
+                "recorded.", card, backup_set.group(1).strip(), name,
+            )
+            return 1
+        share_line = _CARD_SHARE_RE.search(text)
+        if share_line is not None:
+            card_n.add(int(share_line.group(2)))
+        date_line = _CARD_SPLIT_ON_RE.search(text)
+        if date_line is not None:
+            split_on.add(date_line.group(1))
+        seen.add((k, split_id))
+        mnemonics.append(mnemonic)
+    if len(seen) != 1 or len(card_n) > 1 or len(split_on) > 1:
+        logger.error(
+            "These cards are of more than one split (split IDs %s). Pass "
+            "cards of the split that was handed out only. Nothing was "
+            "recorded.", ", ".join(f"{i:05d}" for _, i in sorted(seen)),
+        )
+        return 1
+    ((k, split_id),) = seen
+    if card_n:
+        n = next(iter(card_n))
+    else:
+        n = cfg_n
+        logger.info(
+            "The card does not print how many shares were made; taking N = "
+            "%d from lcsas.toml.", cfg_n,
+        )
+
+    # ── The cards against the config ──────────────────────────────────
+    if (k, n) != (cfg_k, cfg_n):
+        logger.error(
+            "The cards are of a %d-of-%d split, but lcsas.toml says %d-of-%d "
+            "for repository '%s'. Fix split_threshold/split_shares under "
+            "[repos.%s] (or [defaults]) to match the cards. Nothing was "
+            "recorded.", k, n, cfg_k, cfg_n, name, name,
+        )
+        return 1
+
+    # ── With K cards, the password they rebuild must unlock the repo ──
+    if len(mnemonics) >= k and not args.no_verify_repo:
+        try:
+            password = decode_master_secret(recover_secret(mnemonics))
+        except KeyShareError as e:
+            logger.error(
+                "The cards do not rebuild a password: %s. Nothing was "
+                "recorded.", e,
+            )
+            return 1
+        err = _verify_password_unlocks_repo(
+            config.repositories[name].mirror_path / "keys", password, name,
+        )
+        if err is not None:
+            logger.error("%s Nothing was recorded.", err)
+            return 1
+        logger.info("The %d cards rebuild the password of '%s'.", len(mnemonics), name)
+    elif len(mnemonics) < k:
+        logger.info(
+            "%d card(s) cannot rebuild the password (it takes %d); to check "
+            "the cards, run 'lcsas --config ... password verify --repo %s' "
+            "with %d of them.", len(mnemonics), k, name, k,
+        )
+
+    # ── Record ────────────────────────────────────────────────────────
+    with _open_catalog(args, config, mode="write-existing") as conn:
+        try:
+            repo = resolve_repo(conn, name, _config_mirror(config, name))
+        except ValueError as e:
+            logger.error("%s Nothing was recorded.", e)
+            return 1
+        if repo is None:
+            logger.error(
+                "Repository '%s' is not registered in the catalog. Register "
+                "it first with 'lcsas --config ... repo add %s <mirror>'. "
+                "Nothing was recorded.", name, name,
+            )
+            return 1
+        record = get_split_for_repo(conn, repo.repo_id)
+        if record is not None:
+            if (record.threshold, record.shares, record.slip39_id) == (k, n, split_id):
+                logger.info(
+                    "The catalog already records this %d-of-%d split (split "
+                    "ID %05d) of repository '%s'. Nothing to do.",
+                    k, n, split_id, name,
+                )
+                return 0
+            logger.error(
+                "The catalog records a different split of repository '%s' "
+                "(%d-of-%d, split ID %05d, on %s). If that split was "
+                "abandoned, clear it with 'lcsas --config ... password "
+                "unsplit --repo %s', then record these cards. Nothing was "
+                "recorded.", name, record.threshold, record.shares,
+                record.slip39_id, record.split_at, name,
+            )
+            return 1
+        # The split's own date, from the card, in the catalog's timestamp
+        # form (utc_now's); now when the card prints none.
+        when = next(iter(split_on)) if split_on else None
+        _record_split_by_name(
+            conn, name, k, n, split_id, _config_mirror(config, name),
+            split_at=f"{when}T00:00:00.000+00:00" if when else None,
+        )
+
+    from lcsas.utils.timestamps import utc_now
+    logger.warning(
+        "AUDIT %s password split --record-existing: recorded the existing "
+        "%d-of-%d split of repository '%s' (split ID %05d%s) from its cards. "
+        "No shares were made.",
+        utc_now(), k, n, name,
+        split_id, f", split on {when}" if when else "",
+    )
+    print(
+        f"Recorded the existing {k}-of-{n} split of repository '{name}' "
+        f"(split ID {split_id:05d}). No shares were made: the cards already "
+        "handed out stay valid, and burned discs will name this split."
+    )
+    return 0
+
+
 def cmd_key_split(args: argparse.Namespace) -> int:
     """Split a repository password into K-of-N SLIP-0039 shares."""
     from datetime import date
+
+    # #963: record a split already made, from its cards; no new shares.
+    if getattr(args, "record_existing", False):
+        return _record_existing_split(args)
+    if getattr(args, "share_files", None):
+        logger.error(
+            "--share-file goes with --record-existing (record a split "
+            "already made). A new split reads the password from the "
+            "repository's password_file or --password-file."
+        )
+        return 1
 
     # The card text is frozen in main.py (see cmd_key_card).
     from lcsas.cli.main import _share_card_text
