@@ -240,6 +240,7 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
             f"No catalog at {db_path}.",
             recovery_hint="Run `lcsas init` first.",
         )
+    _refuse_too_old_or_close(conn)
     return conn
 
 
@@ -256,6 +257,19 @@ def _note_newer_catalog(conn: sqlite3.Connection, db_path: Path | str) -> None:
             "(v%d). What this command shows may be incomplete; use a newer "
             "LCSAS.", db_path, version, CURRENT_SCHEMA_VERSION,
         )
+
+
+def _refuse_too_old_or_close(conn: sqlite3.Connection) -> None:
+    """Refuse a catalog older than this build migrates (#822), as
+    ``ensure_schema`` does for a write.  A command that reads without
+    migrating met it as "no such column" instead (#968)."""
+    from lcsas.db.schema import refuse_too_old
+
+    try:
+        refuse_too_old(conn)
+    except Exception:
+        conn.close()
+        raise
 
 
 _CatalogMode = Literal["write", "write-existing", "read", "unlocked-migrate", "unlocked"]
@@ -309,6 +323,8 @@ def _open_catalog(
             yield conn
         return
     conn = _open_existing_catalog(db_path) if mode == "read" else get_connection(db_path)
+    if mode == "unlocked":
+        _refuse_too_old_or_close(conn)
     try:
         if mode == "unlocked-migrate":
             ensure_schema(conn)

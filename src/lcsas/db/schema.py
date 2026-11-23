@@ -279,7 +279,7 @@ def _refuse_wedged(conn: sqlite3.Connection) -> None:
         )
 
 
-def _refuse_too_old(conn: sqlite3.Connection) -> None:
+def refuse_too_old(conn: sqlite3.Connection) -> None:
     """Raise if the catalog is older than this build migrates (#822).
 
     Version 0 is an uninitialized catalog, which ``create_all`` creates.
@@ -310,7 +310,7 @@ def create_all(conn: sqlite3.Connection) -> None:
     before any table is added (#822).
     """
     _refuse_wedged(conn)
-    _refuse_too_old(conn)
+    refuse_too_old(conn)
     cursor = conn.cursor()
 
     cursor.execute(SQL_CREATE_SCHEMA_VERSION)
@@ -434,7 +434,7 @@ def migrate(conn: sqlite3.Connection) -> int:
     with :class:`SchemaVersionError` before anything is changed (#822).
     """
     _refuse_wedged(conn)
-    _refuse_too_old(conn)
+    refuse_too_old(conn)
     current = get_schema_version(conn)
     if current >= CURRENT_SCHEMA_VERSION:
         return current

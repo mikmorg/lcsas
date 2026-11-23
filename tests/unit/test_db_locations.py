@@ -61,9 +61,10 @@ class TestLocationCRUD:
         assert list_locations(conn) == []
 
     def test_duplicate_raises(self, conn):
-        import sqlite3 as _sqlite3
+        from lcsas.exceptions import InputError
         create_location(conn, "Home_Shelf")
-        with pytest.raises(_sqlite3.IntegrityError):
+        # #968: worded, not the UNIQUE constraint's IntegrityError.
+        with pytest.raises(InputError, match="Location 'Home_Shelf' already exists"):
             create_location(conn, "Home_Shelf")
 
 

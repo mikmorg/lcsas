@@ -308,16 +308,17 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 logger.error(str(e))
                 return 1
 
-        # #656: a disc carries each mirror's snapshots as they are now,
-        # so the catalog must know every pack file in the mirrors first.
-        if not _sync_mirrors_before_stage(
-            conn, repo_ids, dry_run=getattr(args, "dry_run", False),
-            config=config,
-        ):
-            return 1
-
+        sessions_before = _session_ids(conn)
         from lcsas.db.key_escrow import EscrowDriftError
         try:
+            # #656: a disc carries each mirror's snapshots as they are
+            # now, so the catalog must know every pack file in the
+            # mirrors first.
+            if not _sync_mirrors_before_stage(
+                conn, repo_ids, dry_run=getattr(args, "dry_run", False),
+                config=config,
+            ):
+                return 1
             result = orch.stage(
                 media_type=media_type,
                 for_location=for_location,
@@ -327,6 +328,14 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 partial=getattr(args, "partial", False),
                 max_volumes=max_volumes,
             )
+        except KeyboardInterrupt:
+            # #968: stage() names the volumes it kept; with none kept,
+            # and before the session existed, nothing said so.
+            after = _session_ids(conn)
+            if after is not None and sessions_before is not None \
+                    and after <= sessions_before:
+                logger.error("Interrupted: nothing was staged.")
+            raise
         except EscrowDriftError as e:
             logger.error("%s", e)
             logger.error(
@@ -353,6 +362,18 @@ def cmd_stage(args: argparse.Namespace) -> int:
         logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
         _report_snapshot_coverage(result)
     return 0
+
+
+def _session_ids(conn: Any) -> set[str] | None:
+    """Every burn session id in the catalog, or None when it cannot be
+    read (only used to word an interrupt, #968)."""
+    import sqlite3
+
+    try:
+        return {str(r[0]) for r in conn.execute(
+            "SELECT session_id FROM burn_sessions")}
+    except sqlite3.Error:
+        return None
 
 
 def _report_snapshot_coverage(result: Any) -> None:

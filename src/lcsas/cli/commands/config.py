@@ -120,7 +120,7 @@ def _config_check_collections(
     The catalog is never created here.
     """
     from lcsas.config.settings import collection_password_errors
-    from lcsas.exceptions import CatalogError
+    from lcsas.exceptions import CatalogError, CatalogUnreadableError
 
     errors = collection_password_errors(config)
     db_path = _resolve_db_path(args, config)
@@ -129,6 +129,8 @@ def _config_check_collections(
             conn = stack.enter_context(
                 _open_catalog(args, mode="read", db_path=db_path)
             )
+        except CatalogUnreadableError as e:  # #968: there, but damaged
+            return [*errors, str(e)]
         except CatalogError:
             logger.warning(
                 "No catalog at %s yet: the collections' locations and "

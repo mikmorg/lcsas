@@ -28,17 +28,19 @@ def sanitize_name(value: str, field: str = "name") -> str:
         The stripped, validated string.
 
     Raises:
-        ValueError: If the value is invalid.
+        InputError: If the value is invalid (a ValueError, #968).
     """
+    from lcsas.exceptions import InputError
+
     value = value.strip()
     if not value:
-        raise ValueError(f"{field} must not be empty.")
+        raise InputError(f"{field} must not be empty.")
     if len(value) > _MAX_NAME_LENGTH:
-        raise ValueError(
+        raise InputError(
             f"{field} exceeds maximum length of {_MAX_NAME_LENGTH} characters."
         )
     if _UNSAFE_PATTERN.search(value):
-        raise ValueError(
+        raise InputError(
             f"{field} contains unsafe characters "
             f"(path separators, '..', or null bytes): {value!r}"
         )

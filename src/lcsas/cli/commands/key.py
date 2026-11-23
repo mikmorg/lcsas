@@ -360,7 +360,7 @@ def _check_split_repo_registered(
     read only logs a warning: the split goes ahead without being recorded.
     """
     from lcsas.db.repos import resolve_repo
-    from lcsas.exceptions import CatalogError
+    from lcsas.exceptions import CatalogError, CatalogUnreadableError
 
     name = args.repo
     repo_cfg = config.repositories.get(name)
@@ -369,6 +369,12 @@ def _check_split_repo_registered(
     try:
         with _open_catalog(args, mode="read", db_path=db_path) as conn:
             repo = resolve_repo(conn, name, _config_mirror(config, name))
+    except CatalogUnreadableError as e:  # a damaged file: there, not missing
+        logger.warning(
+            "Could not read the catalog at %s (%s). The split will go ahead, "
+            "but it may not be recorded.", db_path, e,
+        )
+        return
     except CatalogError:  # no file, or never initialised
         # An unmounted drive looks the same as a new archive here, so the
         # mount check comes first: 'init' on an empty mount point would

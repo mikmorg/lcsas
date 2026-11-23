@@ -78,7 +78,13 @@ def get_session(conn: sqlite3.Connection, session_id: str) -> BurnSession:
         (session_id,),
     ).fetchone()
     if row is None:
-        raise ValueError(f"Session '{session_id}' not found")
+        from lcsas.exceptions import InputError
+
+        # #968: an InputError (a ValueError) so `burn --session` words it.
+        raise InputError(
+            f"Session '{session_id}' not found",
+            recovery_hint="See 'lcsas session list'.",
+        )
     return _row_to_session(row)
 
 

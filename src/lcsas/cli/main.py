@@ -27,7 +27,7 @@ from lcsas.cli.common import (  # noqa: F401 - re-exported
     _resolve_repo_names_to_ids,
 )
 from lcsas.cli.parser import build_parser, renamed_message
-from lcsas.log import get_logger, setup_logging
+from lcsas.log import get_logger, setup_logging, silence_stdout, stdout_closed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -417,8 +417,23 @@ def main(argv: list[str] | None = None) -> int:
     set_lock_holder_label(_holder_label(args))
 
     try:
-        return dispatch(args)
+        rc = dispatch(args)
+        # print() output still in the buffer meets a closed pipe here, not
+        # as "Exception ignored ... BrokenPipeError" at exit (#968).
+        try:
+            sys.stdout.flush()
+        except BrokenPipeError:
+            silence_stdout()
+        return rc
+    except KeyboardInterrupt:
+        # #968: Ctrl-C ends the command quietly.  Whatever it was doing
+        # has already said what it left behind (stage, the lock wait).
+        return 130
     except Exception as e:
+        if isinstance(e, BrokenPipeError) and stdout_closed():
+            # #968: the reader of stdout went away (`lcsas ... | head`).
+            silence_stdout()
+            return 141
         from lcsas.exceptions import CatalogLockTimeout, LcsasError
         if isinstance(e, CatalogLockTimeout):
             logger.error("%s", e)
@@ -429,6 +444,15 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("%s", e)
             if e.recovery_hint:
                 logger.error("Hint: %s", e.recovery_hint)
+        elif isinstance(e, OSError) and e.filename is not None:
+            # #968: a file or folder the owner named that cannot be read
+            # or written: say which and why, not "Unexpected error".
+            where = e.filename if e.filename2 is None else (
+                f"{e.filename} -> {e.filename2}")
+            logger.error("Cannot use %s: %s.", where,
+                         e.strerror or e.__class__.__name__)
+            if getattr(args, "verbose", False):
+                traceback.print_exc()
         else:
             logger.error("Unexpected error: %s", e)
             if getattr(args, "verbose", False):

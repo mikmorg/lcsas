@@ -113,8 +113,8 @@ def test_interrupted_stage_then_stage_is_refused(
 
     monkeypatch.setattr(orch_mod.BurnOrchestrator, "_stage_single_volume",
                         stop_after_first)
-    with pytest.raises(KeyboardInterrupt):
-        inst.lcsas("stage")
+    # #968: main() ends a Ctrl-C quietly with 130.
+    assert inst.lcsas("stage") == 130
     monkeypatch.undo()
     assert len(inst.labels()) == 1
     (s1,) = inst.sessions()
