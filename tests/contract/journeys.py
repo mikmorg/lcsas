@@ -120,7 +120,17 @@ class Rebuilt:
     cards: tuple[int, ...] = (1, 2)
 
 
-Typed = str | Newest | Pick | Password | Card | Rebuilt
+@dataclass(frozen=True)
+class Folder:
+    """The folder typed at a folder question: the ``n``-th restore
+    folder of the run (1: the first, 2: another, ...).  Optional: a
+    folder question with no :class:`Folder` next in ``typed`` is
+    answered with folder 1 by the driver (#953)."""
+
+    n: int = 1
+
+
+Typed = str | Newest | Pick | Password | Card | Rebuilt | Folder
 NEWEST = Newest()
 
 
@@ -132,7 +142,16 @@ class Snapshot:
     name: str
 
 
-Arg = str | Snapshot
+@dataclass(frozen=True)
+class PasswordFile:
+    """On the command line: the path of a file that holds the set
+    ``name``'s password (the driver writes it, in the script's own
+    path form)."""
+
+    name: str
+
+
+Arg = str | Snapshot | PasswordFile
 
 
 # ── The questions, by key phrase per script ─────────────────────────
@@ -160,8 +179,13 @@ PROMPTS: tuple[Phrase, ...] = (
     Phrase("which set",
            sh=r"Choose a backup set \(number or name\): ",
            bat=r"Which one do you want to restore\? \[1\]: "),
+    # The second line of sh: the folder for another backup set (#953),
+    # asked before that set's menu.  restore.bat asks the same question
+    # for every set, after the menu.
     Phrase("folder",
-           sh=r"Restore to which folder\? \(ENTER: [^)\r\n]*; Q then ENTER: stop\): ",
+           sh=(r"(?:Restore to which folder\? \(ENTER: [^)\r\n]*; Q then ENTER: stop\): "
+               r"|Folder to restore it into \(ENTER: [^)\r\n]*; "
+               r"Q then ENTER: no other set\): )"),
            bat=r"Restore to which folder\? \[[^\]\r\n]*\]: ", by_driver=True),
     Phrase("password", sh=r"(?<![a-z])Password: ", bat=r"(?<![a-z])Password: "),
     Phrase("card {n}",
@@ -259,6 +283,32 @@ DIFFERENCES: dict[str, Difference] = {
              "the choosing are documented per script)"),
         deliberate=True,
     ),
+    "folder before the set": Difference(
+        what=("for another backup set, restore.sh asks the folder first, "
+              "then shows the set menu again; restore.bat shows the menu, "
+              "then asks the folder"),
+        why=("found by the second-pass journeys (#953): restore.sh starts "
+             "itself again with the folder it asked for; the questions and "
+             "their answers are the same"),
+        deliberate=False,
+    ),
+    "empty password": Difference(
+        what=("ENTER with no password: restore.sh asks again for as long "
+              "as it is pressed; restore.bat stops with exit 77 at the "
+              "third empty answer in a row"),
+        why=("kept (#953): cmd cannot tell an empty answer from the end of "
+             "its input, so restore.bat counts them and stops, and a run "
+             "whose input has ended does not ask for ever"),
+        deliberate=True,
+    ),
+    "version": Difference(
+        what=("restore.sh takes --version (and --help); restore.bat does "
+              "not know them and refuses them with exit 2, listing the "
+              "arguments it takes"),
+        why=("kept (#953): restore.bat is double-clicked, not run with "
+             "flags; RESTORE_WINDOWS.txt documents its arguments"),
+        deliberate=True,
+    ),
     "too big to count": Difference(
         what=("restore.bat cannot compare a size of 100 TB or more with the "
               "free space (set /a counts to 2147483647 MB); it says it "
@@ -275,15 +325,15 @@ class Expect:
     """What must hold after a journey; None: not compared.
 
     ``asked``: the questions in order, by key (tier 1's disc questions
-    left out).  ``restored``: the set whose every file must be in the
-    folder restored into, byte-exact.  ``tools_folder``: "removed" or
+    left out).  ``restored``: the set (or sets) whose every file must be
+    in the folders restored into, byte-exact.  ``tools_folder``: "removed" or
     "kept".  ``says``: regexes the output must match.  ``disc_asked``:
     whether tier 1 asked for a disc at least once.
     """
 
     exit: int
     asked: tuple[str, ...]
-    restored: str | None = None
+    restored: str | tuple[str, ...] | None = None
     tools_folder: str | None = None
     says: tuple[str, ...] = ()
     disc_asked: bool | None = None
@@ -583,11 +633,12 @@ def _leg_mismatches(want: Expect, got: JourneyResult, archive: Archive) -> list[
     if got.untyped:
         out.append(f"{got.untyped} typed line(s) left over" if got.untyped > 0
                    else f"{-got.untyped} question(s) after the last typed line")
-    if want.restored is not None:
-        files = archive.sets[want.restored].manifest
+    wanted = (want.restored,) if isinstance(want.restored, str) else want.restored or ()
+    for name in wanted:
+        files = archive.sets[name].manifest
         missing = sorted(p for p, sha in files.items() if sha not in got.restored)
         if missing:
-            out.append(f"not restored byte-exact: {missing}")
+            out.append(f"{name}: not restored byte-exact: {missing}")
     if want.tools_folder is not None and got.tools_folder != want.tools_folder:
         out.append(f"tools folder {got.tools_folder}, want {want.tools_folder}")
     for rx in want.says:
@@ -599,10 +650,20 @@ def _leg_mismatches(want: Expect, got: JourneyResult, archive: Archive) -> list[
     return out
 
 
-def _restored_shas(root: Path) -> set[str]:
+#: How many restore folders a journey may type (:class:`Folder`).
+FOLDERS = 3
+
+
+def _restored_shas(*roots: Path) -> set[str]:
     shas: set[str] = set()
-    if not root.is_dir():
-        return shas
+    for root in roots:
+        if root.is_dir():
+            shas |= _tree_shas(root)
+    return shas
+
+
+def _tree_shas(root: Path) -> set[str]:
+    shas: set[str] = set()
     for dirpath, _dirs, files in os.walk(root):
         for name in files:
             h = hashlib.sha256()
@@ -630,12 +691,17 @@ def _bat_menu_number(screen: str, set_: ArchiveSet) -> str:
     raise AssertionError(f"{set_.name_cmd!r} is not on restore.bat's menu:\n{menu}")
 
 
-def arg_text(item: Arg, archive: Archive) -> str:
-    """A command-line argument of a journey, as typed."""
+def arg_text(item: Arg, archive: Archive, pw_file: Any = None) -> str:
+    """A command-line argument of a journey, as typed.  ``pw_file(name)``
+    writes the set's password to a file and returns its path as the
+    script names it (:class:`PasswordFile`)."""
     if isinstance(item, Snapshot):
         snap = archive.sets[item.name].snapshot
         assert snap, f"{item.name} has not exactly one snapshot"
         return snap[:8]
+    if isinstance(item, PasswordFile):
+        assert pw_file is not None
+        return str(pw_file(item.name))
     return item
 
 
@@ -736,7 +802,8 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
     for d in ("home", "tmp"):
         (work / d).mkdir()
     tools = work / "tools"
-    target = work / "restored"
+    targets = [work / ("restored" if n == 1 else f"restored-{n}")
+               for n in range(1, FOLDERS + 1)]
     in_drive: list[str] = []
 
     def eject() -> None:
@@ -768,9 +835,13 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
             if prompt.kind == "ram":
                 return b"y\n"
             if prompt.kind == "folder":
-                # Asked as restore.bat asks it (#926); the driver answers.
+                # Asked as restore.bat asks it (#926): the folder the
+                # journey types (#953), else the first.
                 asked.append(prompt.kind)
-                return (str(target) + "\n").encode()
+                n = 1
+                if typed and isinstance(typed[0], Folder):
+                    n = typed.pop(0).n  # type: ignore[union-attr]
+                return (str(targets[n - 1]) + "\n").encode()
             if prompt.kind == "disc":
                 discs[0] += 1
                 if discs[0] == skip_at:
@@ -798,15 +869,20 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
             eject()
         return JourneyResult(
             script="sh", exit=rc, asked=asked, disc_prompts=discs[0],
-            restored=_restored_shas(target),
+            restored=_restored_shas(*targets),
             tools_folder="kept" if tools.exists() else "removed",
             untyped=len(typed) - over[0], seconds=time.monotonic() - t0, output=out,
         )
 
+    def pw_file(name: str) -> Path:
+        path = work / "pw.txt"
+        path.write_text(archive.sets[name].password)
+        return path
+
     # No --restore-folder: restore.sh asks for the folder, as restore.bat
     # does (#926), and the driver answers it.
     result = leg(["sh", str(archive.meta / "restore.sh"),
-                  *(arg_text(a, archive) for a in journey.args)],
+                  *(arg_text(a, archive, pw_file) for a in journey.args)],
                  journey.typed_for("sh"), journey.quit_at_disc,
                  journey.skip_at_disc)
     if journey.then is not None and (tools / "resume.sh").is_file():
@@ -854,8 +930,9 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
 
     name = f"lcsas-j{run_no}"
     tools = wine.drive_c / name
-    target_win = f"C:\\restored-{run_no}"
-    target = wine.drive_c / f"restored-{run_no}"
+    targets_win = [f"C:\\restored-{run_no}" + ("" if n == 1 else f"-{n}")
+                   for n in range(1, FOLDERS + 1)]
+    targets = [wine.drive_c / t[3:] for t in targets_win]
     _bat_tools_copy(archive, tools)
     _map_drive(wine.prefix, "d", archive.meta)  # the one drive: META in
 
@@ -898,7 +975,10 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
                         run.send("")
                 elif hit.key == "folder":
                     asked.append(hit.key)
-                    run.send(target_win)
+                    n = 1
+                    if typed and isinstance(typed[0], Folder):
+                        n = typed.pop(0).n  # type: ignore[union-attr]
+                    run.send(targets_win[n - 1])
                 else:
                     asked.append(hit.key)
                     if not typed:
@@ -920,15 +1000,19 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
             folder = "removed" if (tools / ".done").exists() else "kept"
         return JourneyResult(
             script="bat", exit=rc, asked=asked, disc_prompts=discs,
-            restored=_restored_shas(target), tools_folder=folder,
+            restored=_restored_shas(*targets), tools_folder=folder,
             untyped=len(typed) - over, seconds=time.monotonic() - t0,
             output=run.text,
         )
 
+    def pw_file(set_name: str) -> str:
+        (wine.drive_c / f"pw-{run_no}.txt").write_text(archive.sets[set_name].password)
+        return f"C:\\pw-{run_no}.txt"
+
     # One argv entry each (see _Run): inside one string, wine would pass
     # a '"' to cmd as \", and restore.bat would see \--backup-set\.
     result = leg([f"C:\\{name}\\recovery\\scripts\\restore.bat",
-                  *(arg_text(a, archive) for a in journey.args)],
+                  *(arg_text(a, archive, pw_file) for a in journey.args)],
                  {"LCSAS_RELOCATED": "D:\\", **journey.env},
                  journey.typed_for("bat"), journey.quit_at_disc,
                  journey.skip_at_disc)
@@ -939,9 +1023,10 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
         _map_drive(wine.prefix, "d", wine.prefix / "_no_drive")
         result.then = leg(_replay_launcher(wine, launcher), dict(journey.env),
                           journey.then.typed_for("bat"), None)
-    for d in (tools, target):
+    for d in (tools, *targets):
         writable(d)
         shutil.rmtree(d, ignore_errors=True)
+    (wine.drive_c / f"pw-{run_no}.txt").unlink(missing_ok=True)
     return result
 
 
@@ -1146,6 +1231,90 @@ JOURNEYS: tuple[Journey, ...] = (
         typed=(NEWEST,),
         expect=Expect(exit=ScriptExit.FAILED, asked=("newest data disc",),
                       says=(r"not among", re.escape(PHOTOS))),
+    ),
+    # #953: the second pass.  "Restore another backup set?" answered y,
+    # a folder of its own for the second set: both sets restored.
+    Journey(
+        name="another set into a folder of its own",
+        archive="two sets",
+        typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
+               Folder(2), Pick(DOCS), Card(DOCS, 1), Card(DOCS, 3), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "password", "another set", "folder", "which set",
+                             "card 1", "card 2", "another set"),
+                      restored=(PHOTOS, DOCS), tools_folder="removed"),
+        differs={"bat": Differs(
+            because=("menu by number", "folder before the set"),
+            asked=("newest data disc", "which set", "folder", "password",
+                   "another set", "which set", "folder", "card 1", "card 2",
+                   "another set"),
+            typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
+                   Pick(DOCS), Folder(2), Card(DOCS, 1), Card(DOCS, 3), "n"))},
+    ),
+    # #953: the second set typed into the first set's folder: both
+    # scripts warn and ask; anything but YES stops with 65, and the
+    # first set's files are as they were.
+    Journey(
+        name="another set into the first set's folder: warned, no stops",
+        archive="two sets",
+        typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
+               Folder(1), Pick(DOCS), "n"),
+        expect=Expect(exit=ScriptExit.USER_ABORT,
+                      asked=("newest data disc", "which set", "folder",
+                             "password", "another set", "folder", "which set",
+                             "overwrite"),
+                      restored=PHOTOS,
+                      says=(r"already holds the restore of ANOTHER backup set",
+                            r"Aborting; nothing was written")),
+        differs={"bat": Differs(
+            because=("menu by number", "folder before the set"),
+            asked=("newest data disc", "which set", "folder", "password",
+                   "another set", "which set", "folder", "overwrite"),
+            typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
+                   Pick(DOCS), Folder(1), "n"))},
+    ),
+    # #953: ENTER with nothing typed at the password.
+    Journey(
+        name="ENTER three times at the password",
+        archive="one set",
+        typed=(NEWEST, "", "", "", "q"),
+        expect=Expect(exit=ScriptExit.WRONG_PASSWORD,
+                      asked=("newest data disc", "folder", "password",
+                             "password", "password", "password")),
+        differs={"bat": Differs(
+            because=("empty password",),
+            asked=("newest data disc", "folder", "password", "password",
+                   "password"),
+            typed=(NEWEST, "", "", ""))},
+    ),
+    # #953: restore.sh refused an id that is no hex only after every
+    # question; both refuse it now, at once, as restore.bat did.
+    Journey(
+        name="--snapshot with an id that is not one",
+        archive="one set",
+        args=("--snapshot", "zzzz"),
+        typed=(),
+        expect=Expect(exit=ScriptExit.USAGE, asked=(),
+                      says=(r"--snapshot needs a snapshot id",)),
+    ),
+    # #953: restore.bat did not know --password-file.
+    Journey(
+        name="--password-file names the password file",
+        archive="one set",
+        args=("--password-file", PasswordFile(PHOTOS)),
+        typed=(NEWEST,),
+        expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "folder"),
+                      restored=PHOTOS, tools_folder="removed"),
+    ),
+    Journey(
+        name="--version",
+        archive="one set",
+        args=("--version",),
+        typed=(),
+        expect=Expect(exit=ScriptExit.OK, asked=(), says=(r"lcsas-restore\.sh ",)),
+        differs={"bat": Differs(because=("version",), exit=ScriptExit.USAGE,
+                                says=(r'does not know the argument "--version"',))},
     ),
     Journey(
         name="--snapshot names the snapshot",

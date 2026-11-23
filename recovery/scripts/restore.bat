@@ -117,12 +117,16 @@ set "ARG_OLD="
 set "ARG_OLD_NEW="
 set "FOLDER_ARG="
 set "FOLDER_BASE="
+set "PWFILE_ARG="
 call :parse_args %*
 REM Top level, not in a ( ) block: an exit /b inside one does not reach
 REM `cmd /c` on real Windows (see the exit 77 note at tier 1).
 if defined ARG_OLD goto :arg_old
 if defined ARG_MISSING goto :arg_missing
 if defined ARG_BAD goto :arg_bad
+REM A password file that is not there fails now, in one line, before
+REM any question, as in restore.sh (#953).
+if defined PWFILE_ARG if not exist "!LCSAS_PASSWORD_FILE!" goto :arg_pwfile_bad
 if not defined SNAP_BAD goto :snap_ok
 echo ERROR: --snapshot needs a snapshot id: the letters 0-9 and a-f,
 echo as the list of snapshots shows it, or the word latest.
@@ -134,6 +138,7 @@ pause
 exit /b 2
 :arg_missing
 if "!ARG_MISSING!"=="--restore-folder" goto :arg_missing_folder
+if "!ARG_MISSING!"=="--password-file" goto :arg_missing_pwfile
 echo ERROR: --backup-set needs the name or the id of a backup set.
 call :arg_usage
 pause
@@ -141,6 +146,15 @@ exit /b 2
 :arg_missing_folder
 echo ERROR: --restore-folder needs a folder.
 call :arg_usage
+pause
+exit /b 2
+:arg_missing_pwfile
+echo ERROR: --password-file needs a file.
+call :arg_usage
+pause
+exit /b 2
+:arg_pwfile_bad
+echo restore.bat: --password-file: cannot read '!LCSAS_PASSWORD_FILE!'
 pause
 exit /b 2
 :arg_bad
@@ -905,6 +919,7 @@ goto :eof
 
 :repo_selected
 set "REPO=!CAND_%SEL%!"
+set "SET_ID=!CAND_NAME_%SEL%!"
 set "SET_NAME=!CAND_NC_%SEL%!"
 if not defined SET_NAME set "SET_NAME=!CAND_NAME_%SEL%!"
 set "SPLIT_K=!CAND_K_%SEL%!"
@@ -1006,36 +1021,69 @@ REM Warn BEFORE the password prompt when %TARGET% already holds the
 REM heir's OWN files (same names would silently overwrite live data).
 REM Re-running into a prior LCSAS restore is the supported resume from
 REM an interrupted run, so we skip the prompt when the hidden marker
-REM file .lcsas-restore-marker is present (and when
+REM file .lcsas-restore-marker names this backup set (and when
 REM LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1).  The marker is written after
 REM confirmation/creation so subsequent re-runs are silent.
+REM The marker lists the ids of the sets restored into the folder, one a
+REM line, as restore.sh's does (#953): another set restored on top of one
+REM would keep (tier 1 skips a file of the same size and date) or
+REM overwrite the first set's files with no word, so a folder that holds
+REM ANOTHER set's restore is warned about too.  An empty marker, from an
+REM older restore.bat, names no set: it is warned about the same way.
+REM Not when carrying on a restore: that goes on into its own folder.
 set "MARKER=%TARGET%\.lcsas-restore-marker"
 REM An earlier restore wrote into this folder: the free-space check below
 REM counts what it wrote (#660).  Asked before the marker is written.
 set "TARGET_RESUMED="
 if exist "%MARKER%" set "TARGET_RESUMED=1"
-if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER%"=="1" (
-    dir /b "%TARGET%" 2>nul | findstr "." >nul
-    if not errorlevel 1 (
-        echo.
-        echo ==========================================================
-        echo   WARNING: the folder
-        echo       !TARGET!
-        echo   already contains files that do not look like a previous
-        echo   LCSAS restore.  Restored files with the same names will
-        echo   OVERWRITE what is there now.
-        echo.
-        echo   Safest choice: stop, and restore into a NEW, empty
-        echo   folder instead.
-        echo ==========================================================
-        set /p "OVERWRITE_ANS=Type YES to overwrite, anything else to stop: "
-        if /i not "!OVERWRITE_ANS!"=="YES" (
-            echo Aborting; nothing was written.
-            pause
-            exit /b 65
-        )
-    )
-)
+set "TG_OTHER="
+if "%LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER%"=="1" goto :target_guarded
+if not exist "%TARGET%\" goto :target_guarded
+if not exist "%MARKER%" goto :target_files
+if defined RESUME goto :target_guarded
+call :marker_read
+if defined MR_SAME goto :target_guarded
+set "TG_OTHER=1"
+if not defined MR_ANY set "TG_OTHER=2"
+:target_files
+REM Only files other than the marker count: a folder emptied but for it
+REM has nothing to overwrite.
+set "TG_FILES="
+for /f "delims=" %%F in ('dir /a /b "%TARGET%" 2^>nul ^<nul') do if /i not "%%F"==".lcsas-restore-marker" set "TG_FILES=1"
+if not defined TG_FILES goto :target_guarded
+echo.
+echo ==========================================================
+echo   WARNING: the folder
+echo       !TARGET!
+if "!TG_OTHER!"=="1" goto :target_warn_other
+if "!TG_OTHER!"=="2" goto :target_warn_unknown
+echo   already contains files that do not look like a previous
+echo   LCSAS restore.  Restored files with the same names will
+echo   OVERWRITE what is there now.
+echo.
+echo   Safest choice: stop, and restore into a NEW, empty
+echo   folder instead.
+goto :target_warned
+:target_warn_unknown
+echo   already holds an earlier LCSAS restore, which does not say
+echo   which backup set it was: it may be ANOTHER backup set.
+:target_warn_other
+if "!TG_OTHER!"=="1" echo   already holds the restore of ANOTHER backup set.  Files
+echo   of !SET_NAME! with the same names as that set's
+echo   would be mixed in with them: some OVERWRITE them, and
+echo   some are skipped as already restored.
+echo.
+echo   Safest choice: stop, and restore this set into a NEW,
+echo   empty folder instead.
+:target_warned
+echo ==========================================================
+set "OVERWRITE_ANS="
+set /p "OVERWRITE_ANS=Type YES to overwrite, anything else to stop: "
+if /i "!OVERWRITE_ANS!"=="YES" goto :target_guarded
+echo Aborting; nothing was written.
+pause
+exit /b 65
+:target_guarded
 
 if not exist "%TARGET%" mkdir "%TARGET%" 2>nul
 if not exist "%TARGET%" (
@@ -1043,9 +1091,11 @@ if not exist "%TARGET%" (
     pause
     exit /b 1
 )
-REM Mark this folder so a later resume into it does not re-prompt.
+REM Mark this folder so a later resume into it does not re-prompt: the
+REM set's id goes in, unless it is there already.
 REM Kept intentionally simple: a bare redirect, no `if`/`attrib` around
-REM it.  Anything more here sits between the target prompt and the
+REM it (the test is a goto on the line before).  Anything more here sits
+REM between the target prompt and the
 REM password prompt, and a subtle cmd parse of a conditional redirect
 REM can swallow the next piped stdin line -- which silently ate the
 REM password on the windows-e2e runner (issue #384).  The marker is a
@@ -1054,7 +1104,10 @@ REM negative case, the shell/wine tests) exclude it BY NAME rather than
 REM relying on a hidden attribute.  2>nul first, as for the probe: a
 REM folder that cannot be written to says so below, not with "Access is
 REM denied." here (#611).
-(2>nul > "%MARKER%" echo.) 2>nul
+call :marker_read
+if defined MR_SAME goto :target_marked
+(2>nul >> "%MARKER%" echo !SET_ID!) 2>nul
+:target_marked
 
 REM ----- Pack cache and the local copy of the catalog (#610) ---------
 REM Both live in the tools folder, TOOLS (see "The tools folder" above).
@@ -1806,13 +1859,30 @@ goto :choose_set
 
 REM ----- Subroutines --------------------------------------------------
 
+:marker_read
+REM MR_ANY = the restore folder's marker, MARKER, names a backup set;
+REM MR_SAME = one of them is this one, SET_ID (#953).  Read line by line
+REM with for /f (which skips empty lines), not findstr /x or /r, which
+REM wine's findstr does not take.
+set "MR_ANY="
+set "MR_SAME="
+if not exist "%MARKER%" goto :eof
+for /f "usebackq delims=" %%L in ("%MARKER%") do call :marker_line "%%L"
+goto :eof
+:marker_line
+REM %~1 = a line of the marker.
+set "MR_ANY=1"
+if "%~1"=="%SET_ID%" set "MR_SAME=1"
+goto :eof
+
 :parse_args
 REM %* = this script's arguments (#925).  SNAP = the ID of --snapshot ID
 REM (latest when none); SNAP_BAD = 1 when the ID is missing, or holds
 REM anything but 0-9 and a-f: it goes on the lcsas-restore.exe command
 REM line.  --backup-set NAME sets LCSAS_BACKUP_SET, and --restore-folder DIR
-REM sets FOLDER_ARG and FOLDER_BASE (ARG_MISSING = the flag, without its
-REM value).  The retired --repo and --target set ARG_OLD and ARG_OLD_NEW.
+REM sets FOLDER_ARG and FOLDER_BASE, --password-file FILE sets
+REM LCSAS_PASSWORD_FILE, as restore.sh takes it (#953) (ARG_MISSING = the
+REM flag, without its value).  The retired --repo and --target set ARG_OLD and ARG_OLD_NEW.
 REM --resume and --check-disc IMAGE are read where they are used, and
 REM only as the first argument; the IMAGE is checked there.  Any other
 REM word: ARG_BAD = it, and the rest is not read.  Flat, with goto: a
@@ -1823,6 +1893,7 @@ if "%~1"=="" goto :eof
 if /i "%~1"=="--snapshot" goto :pa_snapshot
 if /i "%~1"=="--backup-set" goto :pa_repo
 if /i "%~1"=="--restore-folder" goto :pa_folder
+if /i "%~1"=="--password-file" goto :pa_password_file
 if /i "%~1"=="--repo" goto :pa_old_repo
 if /i "%~1"=="--target" goto :pa_old_target
 if defined PA_FIRST if /i "%~1"=="--resume" goto :pa_resume
@@ -1858,6 +1929,21 @@ shift
 goto :pa_next
 :pa_folder_missing
 set "ARG_MISSING=--restore-folder"
+goto :eof
+:pa_password_file
+set "PA_FIRST="
+if "%~2"=="" goto :pa_password_file_missing
+REM As a full path: the copy in the tools folder runs from %SystemDrive%\
+REM and gets the same arguments, so it keeps the path this run made.
+set "PWFILE_ARG=1"
+if defined LCSAS_RELOCATED if defined LCSAS_PASSWORD_FILE goto :pa_password_file_kept
+set "LCSAS_PASSWORD_FILE=%~f2"
+:pa_password_file_kept
+shift
+shift
+goto :pa_next
+:pa_password_file_missing
+set "ARG_MISSING=--password-file"
 goto :eof
 :pa_old_repo
 set "ARG_OLD=--repo"
@@ -1896,6 +1982,7 @@ echo it, or run it on its own, and it asks its questions.  It also takes:
 echo    --backup-set NAME  restore the backup set NAME ^(its name or its id^)
 echo    --restore-folder DIR  restore into the folder DIR
 echo    --snapshot ID      restore that snapshot, not the latest one
+echo    --password-file FILE  the password is in the file FILE
 echo    --check-disc IMAGE check a disc image for damage, and repair it
 echo See RESTORE_WINDOWS.txt.
 goto :eof

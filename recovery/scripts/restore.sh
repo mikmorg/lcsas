@@ -926,6 +926,15 @@ EOF
         --snapshot)
             flag_value --snapshot 'an ID' "${2-}"
             SNAP_FLAG="$2"
+            # A snapshot id is hex: anything else is refused now, before
+            # any question, as restore.bat refuses it (#953).
+            case "$SNAP_FLAG" in
+                latest) ;;
+                *[!0-9a-fA-F]*)
+                    printf 'restore.sh: --snapshot needs a snapshot id: the letters 0-9 and a-f,\n' >&2
+                    printf 'as the list of snapshots shows it, or the word latest.\n' >&2
+                    exit 2 ;;
+            esac
             shift 2 ;;
         --password-file)
             flag_value --password-file 'a FILE' "${2-}"

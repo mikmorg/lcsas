@@ -423,7 +423,8 @@ def test_restore_bat_write_probes_send_errors_away_first():
     relocation leg check for "Access is denied"."""
     code = _code(RESTORE_BAT.read_text())
     assert '(2>nul > "%PROBE%" echo.) 2>nul' in code
-    assert '(2>nul > "%MARKER%" echo.) 2>nul' in code
+    # The marker lists the ids of the sets restored there (#953).
+    assert '(2>nul >> "%MARKER%" echo !SET_ID!) 2>nul' in code
     assert not [ln for ln in code if ln.startswith("2>nul >") or ln.startswith("(>")]
     names = ("%PROBE%", "%MARKER%", '%TOOLS%\\.done', '%~1\\.lcsas-tools',
              '%TOOLS%\\archive.txt', '%TOOLS%\\merged-from.txt')
@@ -1159,3 +1160,35 @@ def test_restore_bat_missing_disc_stop_exits_from_top_level():
     assert body[-1] == "exit /b 4", body
     assert 'echo    "!RESUME_CMD!"' in body, body
     assert not any(":all_done" in ln or ".done" in ln for ln in body), body
+
+
+def test_restore_bat_marker_names_the_set_and_guards_another_set():
+    """#953: the marker in the restore folder was an empty file, so a
+    second backup set typed into the first set's folder went in with no
+    word.  It now lists the ids of the sets restored there, as
+    restore.sh's does; a folder whose marker does not name this set (or
+    names none: an older restore.bat) is warned about, not when carrying
+    on.  Functional proof: the second-pass journeys of
+    tests/contract/journeys.py (wine, and real cmd in windows-e2e)."""
+    code = _code(RESTORE_BAT.read_text())
+    assert 'set "SET_ID=!CAND_NAME_%SEL%!"' in code
+    # Read with for /f, not findstr /x or /r (wine's findstr lacks them).
+    check = "call :marker_read"
+    assert code.count(check) == 2, "compared before the warning and before the write"
+    i = code.index(check)
+    assert code[i - 1] == "if defined RESUME goto :target_guarded"
+    assert code[i + 2] == 'set "TG_OTHER=1"'
+    assert 'if "%~1"=="%SET_ID%" set "MR_SAME=1"' in code
+    assert "already holds the restore of ANOTHER backup set.  Files" in "\n".join(code)
+
+
+def test_restore_bat_takes_password_file():
+    """#953: restore.sh takes --password-file FILE; restore.bat refused
+    it as an unknown argument.  It sets LCSAS_PASSWORD_FILE (a full
+    path, kept by the copy in the tools folder), and a file that is not
+    there stops at once with exit 2, as in restore.sh."""
+    code = _code(RESTORE_BAT.read_text())
+    assert 'if /i "%~1"=="--password-file" goto :pa_password_file' in code
+    assert 'set "LCSAS_PASSWORD_FILE=%~f2"' in code
+    assert ('if defined PWFILE_ARG if not exist "!LCSAS_PASSWORD_FILE!" '
+            'goto :arg_pwfile_bad') in code
