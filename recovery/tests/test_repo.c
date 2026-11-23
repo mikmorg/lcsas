@@ -54,6 +54,22 @@ file_has(const char *dir, const char *name, const char *text)
     return strstr(buf, text) != NULL;
 }
 
+/* #940: remove a test's mkdtemp folder at the end of the test, and fail
+ * if it is still there (the lab box had about 17,000 left in /tmp).  A
+ * folder that was never made (mkdtemp failed) is skipped. */
+static void
+rm_tmp_dir(const char *dir)
+{
+    char cmd[1200];
+    struct stat st;
+    if (stat(dir, &st) != 0) return;
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+    if (system(cmd) == -1 || stat(dir, &st) == 0) {
+        fprintf(stderr, "FAIL: test folder %s was not removed\n", dir);
+        fails++;
+    }
+}
+
 /* Fixture-pinned values (regenerate gen_fixture.py changes these). */
 #define FIXTURE_PASSWORD       "test"
 #define FIXTURE_DATA_BLOB_HEX  \
@@ -1261,6 +1277,7 @@ main(void)
                 lcsas_blob_index_free(&ix);
             }
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ── T1C-05 companion: a MAC-corrupt index alongside a valid one ────
@@ -1333,6 +1350,7 @@ main(void)
                 lcsas_blob_index_free(&ix);
             }
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ══════ #401: testable-but-exempt EXEMPTIONS lines → real tests ═════
@@ -1434,6 +1452,7 @@ main(void)
                 }
             }
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ── #401-C: read_blob open() errno classifier via a chmod-000 pack ─
@@ -1481,6 +1500,7 @@ main(void)
                 chmod(path, 0600);   /* let tmp-cleanup tools remove it */
             }
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ── #401-D: index with a VALID zstd header but corrupt body ────────
@@ -1531,6 +1551,7 @@ main(void)
                 lcsas_blob_index_free(&ix);
             }
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ── #662: an index file that cannot be read (mode 000) is skipped
@@ -1565,6 +1586,7 @@ main(void)
             lcsas_blob_index_free(&ix);
             chmod(idx_path, 0600);
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ── #401-E: load_snapshots error paths ───────────────────────────── */
@@ -1609,6 +1631,7 @@ main(void)
                 }
                 lcsas_snapshot_list_free(&snaps);
             }
+            rm_tmp_dir(tmp);   /* #940 */
         }
 
         /* #662 (a2): an unreadable (mode 000) snapshot file is a read
@@ -1643,6 +1666,7 @@ main(void)
                 lcsas_snapshot_list_free(&snaps);
                 chmod(spath, 0600);
             }
+            rm_tmp_dir(tmp);   /* #940 */
         }
 
         /* #662 (a3): a snapshot whose zstd frame is corrupt is counted
@@ -1686,6 +1710,7 @@ main(void)
                     lcsas_snapshot_list_free(&snaps);
                 }
             }
+            rm_tmp_dir(tmp);   /* #940 */
         }
 
         /* #663: snapshot times compare by instant, not by text. */
@@ -1745,6 +1770,7 @@ main(void)
                     lcsas_snapshot_list_free(&snaps);
                 }
             }
+            rm_tmp_dir(tmp);   /* #940 */
         }
 
         /* (c) too large for the clamped token ceiling → fatal (-1). */
@@ -1782,6 +1808,7 @@ main(void)
                     lcsas_snapshot_list_free(&snaps);
                 }
             }
+            rm_tmp_dir(tmp);   /* #940 */
         }
     }
 
@@ -1836,6 +1863,7 @@ main(void)
                 lcsas_blob_index_free(&ix);
             }
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ── #350/#401-D': load_index pass-1 invalid-JSON (ntoks<=0) ─────────
@@ -1880,6 +1908,7 @@ main(void)
                 lcsas_blob_index_free(&ix);
             }
         }
+        rm_tmp_dir(tmp);   /* #940 */
     }
 
     /* ── #789: a repository with no index/ folder fails the load and

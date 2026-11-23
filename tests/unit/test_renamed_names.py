@@ -7,6 +7,7 @@ or is an error naming the new one; it never runs.  The table of names is
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 from lcsas.cli.main import main
 from lcsas.cli.parser import build_parser, renamed_message
 from lcsas.config.settings import _xdg_db_path, load_config
-from tests.contract.renames import renamed
+from tests.contract.renames import RENAMES, renamed
 
 # ── the owner's command line ────────────────────────────────────────
 
@@ -181,3 +182,31 @@ def test_python_reader_refuses_the_old_target_flag(tmp_path):
         capture_output=True, text=True, check=False,
     )
     assert "--restore-folder" in r.stdout
+
+
+# ── the docs ────────────────────────────────────────────────────────
+
+
+def test_the_docs_name_no_retired_lcsas_command():
+    """No doc names a retired ``lcsas`` command, in prose or in code (#940:
+    docs/README.md still said "the `lcsas key` commands").  A line that
+    says the name was renamed is the exception."""
+    root = Path(__file__).resolve().parents[2]
+    docs = [root / "README.md", *sorted((root / "docs").rglob("*.md")),
+            *sorted(p for p in (root / "recovery" / "docs").iterdir() if p.is_file())]
+    assert len(docs) > 50, f"self-check: only {len(docs)} docs found"
+    commands = [r.old for r in RENAMES if r.kind == "command"]
+    assert "lcsas key" in commands
+    patterns = [(old, re.compile(r"(?<![\w.-])" + re.escape(old) + r"(?![\w-])"))
+                for old in commands]
+    problems = []
+    for doc in docs:
+        text = doc.read_text(encoding="utf-8", errors="replace")
+        for n, line in enumerate(text.splitlines(), 1):
+            if re.search(r"\brenamed\b", line):
+                continue
+            problems.extend(f"{doc.relative_to(root)}:{n}: {old!r}"
+                            for old, pat in patterns if pat.search(line))
+    assert not problems, (
+        "docs name a retired lcsas command (tests/contract/renames.py has its "
+        "replacement):\n" + "\n".join(problems))

@@ -122,4 +122,5 @@ detect a *fresh line-drift* red — only a coverage run can. The complete fix fo
 that is making the audit-gate CI job a **required status check**; this is
 *recommended* rather than done here because the pre-existing-red bin-parity gate
 (#381/#320) still forces `--admin` merges that would bypass a required check too.
-Flip it once #381 lands.
+Done since: #381 is closed, and #414 (2026-07-13) made `audit-gate-required` a
+required check, alongside `bin-parity-required`.

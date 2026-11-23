@@ -132,7 +132,7 @@ Neither is wired into `make gate` — both are explicit performance
 characterisation, not regression gates.  Use them when reasoning about
 how `lcsas-restore` will behave on real-world archive sizes.
 
-**Measured on this host (vm-desk1, 7.8 GiB RAM, 8 cores):**
+**Measured on the lab VM (7.8 GiB RAM, 8 cores):**
 
 | N entries | RSS (MiB) | per-find (ns) | per-find at 100× scale |
 |----------:|----------:|--------------:|------------------------|
