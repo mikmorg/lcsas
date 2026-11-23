@@ -95,7 +95,7 @@ def _box(labels: list[str], note: bool = False) -> str:
         lines += [f"|   {lab:<54} |" for lab in labels]
     lines += ["|                                                          |",
               "| Insert the right disc and press ENTER to retry.          |",
-              "| Type 'q' then ENTER to abort.                            |"]
+              "| Type 'q' then ENTER to stop for now.                     |"]
     if note:
         lines.append("| (A disc that mounts by itself is found without ENTER.)   |")
     lines += [frame, "> "]

@@ -3742,7 +3742,8 @@ not_all_restored() {
             fi
             printf 'It skips the files already restored.\n'
             printf 'Run in a terminal window, it asks for each disc it needs by\n'
-            printf 'its label.\n'
+            printf 'its label.  If you do not have one of them, type s at its\n'
+            printf 'question: that disc is skipped and the restore finishes.\n'
         } >&2
         exit "$EXIT_NOT_ALL_RESTORED"
     fi

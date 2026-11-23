@@ -119,11 +119,38 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->cap_seen_volumes    = 0;
     l->mid_prompt_line     = 0;
     l->reader_quit         = 0;
+    l->n_skipped           = 0;
+    l->stop_asking         = 0;
+    l->skipped_misses      = 0;
     l->auto_mount          = 1;
     /* 2 s: a desktop auto-mount takes a second or two, so a faster
      * poll gains nothing, and each tick costs one readdir per mount
      * parent plus a few stat()s per candidate disc. */
     l->poll_ms             = 2000;
+}
+
+void
+lcsas_disc_locator_report_skips(const lcsas_disc_locator *l, FILE *o)
+{
+    size_t i;
+    if (l->skipped_misses == 0) return;
+    if (l->n_skipped > 0) {
+        fputs("[lcsas-restore] Skipped discs:", o);
+        for (i = 0; i < l->n_skipped; i++) {
+            fprintf(o, "%s %s", i ? "," : "", l->skipped_labels[i]);
+        }
+        fputs(".\n", o);
+    }
+    if (l->stop_asking) {
+        fputs("[lcsas-restore] No disc was asked for after the answer "
+              "'s'.\n", o);
+    }
+    fprintf(o,
+            "[lcsas-restore] %lu item(s) need a disc that was not in a "
+            "drive; see RESTORE_FAILURES.txt.\n"
+            "[lcsas-restore] If you find a disc later, run the same restore "
+            "again with it in a drive; files already restored are "
+            "skipped.\n", l->skipped_misses);
 }
 
 void
@@ -1377,8 +1404,47 @@ print_catalog_error(FILE *o, lcsas_catalog *cat)
  * Print an interactive prompt naming the missing pack, using the
  * catalog (if any) to suggest a volume label.
  */
+/* #949: 1 when the reader answered 's' for disc `label` this run. */
+static int
+label_skipped(const lcsas_disc_locator *l, const char *label)
+{
+    size_t i;
+    for (i = 0; i < l->n_skipped; i++) {
+        if (strcmp(l->skipped_labels[i], label) == 0) return 1;
+    }
+    return 0;
+}
+
+/*
+ * #949: the discs a pack is on, per the catalog in use, without the
+ * ones the reader skipped.  Returns how many are left (copied to
+ * `vols`), or -1 when the catalog names no disc for it (none in use,
+ * the pack unknown or on no volume, or a query error).  `*all_skipped`
+ * is 1 when it names discs and every one of them was skipped.
+ */
+static int
+offered_discs(lcsas_disc_locator *l, const char *hex,
+              lcsas_catalog_volume vols[8], int *all_skipped)
+{
+    lcsas_catalog *cat = effective_catalog(l);
+    lcsas_catalog_pack pk;
+    int n;
+    int i;
+    int kept = 0;
+
+    *all_skipped = 0;
+    if (!cat || lcsas_catalog_find_pack(cat, hex, &pk) != 0) return -1;
+    n = lcsas_catalog_volumes_for_pack(cat, pk.pack_id, vols, 8);
+    if (n <= 0) return -1;
+    for (i = 0; i < n; i++) {
+        if (!label_skipped(l, vols[i].label)) vols[kept++] = vols[i];
+    }
+    *all_skipped = kept == 0;
+    return kept;
+}
+
 static void
-print_prompt(lcsas_disc_locator *l, const char *hex)
+print_prompt(lcsas_disc_locator *l, const char *hex, int names_discs)
 {
     FILE *o = l->prompt_out;
     lcsas_catalog *cat = effective_catalog(l);
@@ -1401,7 +1467,10 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
                 {
                     int j;
                     for (j = 0; j < n; j++) {
-                        print_search_path(o, vols[j].label);
+                        /* #949: not a disc the reader said is gone. */
+                        if (!label_skipped(l, vols[j].label)) {
+                            print_search_path(o, vols[j].label);
+                        }
                     }
                 }
             } else if (n == 0) {
@@ -1444,7 +1513,17 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
         fputs("|                                                          |\n", o);
     }
     fputs("| Insert the right disc and press ENTER to retry.          |\n", o);
-    fputs("| Type 'q' then ENTER to abort.                            |\n", o);
+    /* #949: the third answer.  Naming discs, 's' skips those discs;
+     * naming none, it stops all disc questions. */
+    if (names_discs) {
+        fputs("| If you do not have it: type 's' then ENTER.  The files   |\n", o);
+        fputs("| that need it are skipped and listed at the end.          |\n", o);
+    } else {
+        fputs("| If you have no more discs: type 's' then ENTER.  Files   |\n", o);
+        fputs("| on discs not in a drive are skipped and listed at the    |\n", o);
+        fputs("| end; no disc is asked for again.                         |\n", o);
+    }
+    fputs("| Type 'q' then ENTER to stop for now.                     |\n", o);
     if (auto_detect_active(l)) {
         fputs("| (A disc that mounts by itself is found without ENTER.)   |\n", o);
     }
@@ -1479,26 +1558,31 @@ next_answer_char(lcsas_disc_locator *l, int fd)
     return fgetc(l->prompt_in);
 }
 
+/* #949: read_response()'s answer 's' ("I do not have this disc"). */
+#define ANSWER_SKIP 2
+
 /*
  * Read one line of the heir's answer (see next_answer_char for
- * `fd`).  Returns 0 if the heir pressed Enter, -1 if they typed 'q'/'Q'
- * to abort, or -1 on EOF.
+ * `fd`).  Returns 0 if the heir pressed Enter, ANSWER_SKIP if they
+ * typed 's'/'S' (#949), -1 if they typed 'q'/'Q' to abort, or -1 on
+ * EOF.
  */
 static int
 read_response(lcsas_disc_locator *l, int fd)
 {
     int c;
-    int abort_req = 0;
+    int answer = 0;
     l->mid_prompt_line = 0;   /* the answer's newline ends the line */
     if (l->prompt_in == NULL) return -1;
     c = next_answer_char(l, fd);
     if (c == EOF) return -1;
-    if (c == 'q' || c == 'Q') abort_req = 1;
+    if (c == 'q' || c == 'Q') answer = -1;
+    if (c == 's' || c == 'S') answer = ANSWER_SKIP;
     /* Consume the rest of the line. */
     while (c != EOF && c != '\n') {
         c = next_answer_char(l, fd);
     }
-    return abort_req ? -1 : 0;
+    return answer;
 }
 
 /*
@@ -1506,7 +1590,7 @@ read_response(lcsas_disc_locator *l, int fd)
  * (#455), re-scan for the missing pack every poll_ms while waiting, so
  * a disc the OS mounts by itself resumes the restore with no ENTER.
  * Returns 1 if a re-scan found the pack (out_path filled), otherwise
- * read_response()'s 0 (ENTER) or -1 ('q' / EOF).
+ * read_response()'s 0 (ENTER), ANSWER_SKIP ('s') or -1 ('q' / EOF).
  */
 static int
 wait_for_answer_or_disc(lcsas_disc_locator *l, const char *hex,
@@ -1578,8 +1662,9 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
         if (scan_paths(l, hex, out_path, out_path_cap)) return 0;
     }
 
-    if (!l->interactive) {
+    if (!l->interactive || l->stop_asking) {
         fprintf(stderr, "pack not found: %s\n", hex);
+        if (l->stop_asking) l->skipped_misses++;
         return -1;
     }
 
@@ -1617,10 +1702,41 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
      * the same refresh also runs every poll_ms while waiting. */
     for (;;) {
         int answer;
+        lcsas_catalog_volume vols[8];
+        int all_skipped;
+        int n_vols = offered_discs(l, hex, vols, &all_skipped);
 
+        /* #949: every disc that holds the pack was skipped: not found
+         * at once, as in a run with no terminal. */
+        if (all_skipped) {
+            fprintf(stderr, "pack not found: %s (on a skipped disc)\n", hex);
+            l->skipped_misses++;
+            return -1;
+        }
         l->misses++;
-        print_prompt(l, hex);
+        print_prompt(l, hex, n_vols > 0);
         answer = wait_for_answer_or_disc(l, hex, out_path, out_path_cap);
+        if (answer == ANSWER_SKIP) {
+            int j;
+            begin_line(l);
+            l->skipped_misses++;
+            if (n_vols <= 0) {
+                l->stop_asking = 1;
+                fprintf(l->prompt_out,
+                        "[lcsas-restore] no disc is asked for again; files "
+                        "on discs not in a drive are listed at the end.\n");
+                return -1;
+            }
+            for (j = 0; j < n_vols; j++) {
+                if (l->n_skipped < LCSAS_SKIPPED_MAX) {
+                    strcpy(l->skipped_labels[l->n_skipped++], vols[j].label);
+                }
+                fprintf(l->prompt_out,
+                        "[lcsas-restore] skipping disc %s; the files that "
+                        "need it are listed at the end.\n", vols[j].label);
+            }
+            return -1;
+        }
         if (answer < 0) {
             fprintf(stderr, "[lcsas-restore] aborted by user\n");
             l->reader_quit = 1;

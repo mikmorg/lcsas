@@ -236,7 +236,7 @@ them interleaved with normal output.
   Disc-swap prompt (when a pack is not on any currently mounted disc):
       lcsas-restore prints a framed ASCII box to stderr ending with:
           Insert the right disc and press ENTER to retry.
-          Type 'q' then ENTER to abort.
+          Type 'q' then ENTER to stop for now.
       Use `disc-loader insert <label>` to load the disc, then
       send ENTER: `restore-shell send ""`.
       The binary re-enumerates mounted discs after each ENTER, so

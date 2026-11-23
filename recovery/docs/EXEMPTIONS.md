@@ -64,23 +64,23 @@ catalog.c:343   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:344   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:477   VOLATILE   consider_catalog path_dup malloc fail after a good catalog opened: only the fault-inject sweep can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries (#788 added allocations before it)
-disc_locator.c:478   VOLATILE   "
-disc_locator.c:479   VOLATILE   "
-disc_locator.c:1117  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
-disc_locator.c:1119  DEFENSIVE   "
-disc_locator.c:1126  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
-disc_locator.c:1128  DEFENSIVE   "
-disc_locator.c:1139  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
-disc_locator.c:1141  DEFENSIVE   "
-disc_locator.c:1146  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
-disc_locator.c:1148  DEFENSIVE   "
-disc_locator.c:1254   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
-disc_locator.c:1255   VOLATILE   "
-disc_locator.c:1263   VOLATILE   "
-disc_locator.c:1264   VOLATILE   "
-disc_locator.c:1266   VOLATILE   "  (#786: the disc that did not fit is remembered)
-disc_locator.c:1267   VOLATILE   "
+disc_locator.c:504   VOLATILE   consider_catalog path_dup malloc fail after a good catalog opened: only the fault-inject sweep can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries (#788 added allocations before it)
+disc_locator.c:505   VOLATILE   "
+disc_locator.c:506   VOLATILE   "
+disc_locator.c:1144  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:1146  DEFENSIVE   "
+disc_locator.c:1153  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:1155  DEFENSIVE   "
+disc_locator.c:1166  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
+disc_locator.c:1168  DEFENSIVE   "
+disc_locator.c:1173  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
+disc_locator.c:1175  DEFENSIVE   "
+disc_locator.c:1281   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
+disc_locator.c:1282   VOLATILE   "
+disc_locator.c:1290   VOLATILE   "
+disc_locator.c:1291   VOLATILE   "
+disc_locator.c:1293   VOLATILE   "  (#786: the disc that did not fit is remembered)
+disc_locator.c:1294   VOLATILE   "
 
 # lcsas_io.c
 lcsas_io.c:30   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection

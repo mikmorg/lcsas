@@ -1239,6 +1239,10 @@ class PurePythonRestorer:
         self._write_failure_manifest(target)
         if self._rows:
             _log(f"See {target}/{_FAILURES_NAME} for the list.")
+        # #949: the discs the reader answered 's' for (tier 1 prints the
+        # same lines at the end of an incomplete restore).
+        for line in self._search.report_skips():
+            _log(line)
         if not self._failures:
             _log("Restore complete.")
         return snap

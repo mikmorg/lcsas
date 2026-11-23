@@ -497,6 +497,53 @@ CASES: list[Case] = [
         replaces="new (#658; test_restore_sh_driver.py::"
                  "test_tier1_done_and_quit_code_are_real, the 75)",
     ),
+    # #949: the answer 's' ("I do not have this disc").  The discs the
+    # box named are skipped for the rest of the run: the item is listed
+    # as for a run with no prompt, the rest restored, exit 4, and the
+    # end names the skipped discs.  One answer, so a second box would
+    # read the end of input and stop with exit 75.
+    Case(
+        name="disc missing, s at the prompt",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(missing=(b"b",), answers=b"s\n",
+                      catalog=(Vol(_V1), Vol(_V2))),
+        expect=Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            restored={b"a": File(b"alpha\n")},
+            failures=(("b", _PACK_NOT_FOUND),),
+            summary=rf"Skipped discs: {_V2}, {_V1}\.",
+            discs=(_V2, _V1),
+        ),
+        replaces="new (#949)",
+    ),
+    Case(
+        name="two packs on skipped discs, one s",
+        repo="builder", pack_per_blob=True,
+        tree={"a": b"alpha\n", "b": b"beta\n", "c": b"gamma\n"},
+        faults=Faults(missing=(b"b", b"c"), answers=b"s\n",
+                      catalog=(Vol(_V1), Vol(_V2))),
+        expect=Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            restored={b"a": File(b"alpha\n")},
+            failures=(("b", _PACK_NOT_FOUND), ("c", _PACK_NOT_FOUND)),
+            summary=r"2 item\(s\) need a disc that was not in a drive",
+        ),
+        replaces="new (#949)",
+    ),
+    Case(
+        name="disc missing, s at a prompt that names no disc",
+        repo="builder", pack_per_blob=True,
+        tree={"a": b"alpha\n", "b": b"beta\n", "c": b"gamma\n"},
+        faults=Faults(missing=(b"b", b"c"), answers=b"s\n"),
+        expect=Outcome(
+            exit=ReaderExit.NOT_ALL_RESTORED,
+            restored={b"a": File(b"alpha\n")},
+            failures=(("b", _PACK_NOT_FOUND), ("c", _PACK_NOT_FOUND)),
+            summary=r"No disc was asked for after the answer 's'",
+        ),
+        replaces="new (#949)",
+    ),
     Case(
         name="disc missing, no prompt",
         before=_MISSING_PACK_BEFORE,

@@ -440,6 +440,32 @@ a NEW, empty folder.  To proceed non-interactively (no terminal to
 type YES on), set LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1.  A declined prompt
 exits with code 65 and writes nothing.
 
+A DISC IS MISSING OR WILL NOT READ
+
+The disc prompt names the discs that hold the data it needs next.  If
+you cannot give it one of them:
+
+  1. Every disc with the same label holds the same data.  If there is
+     another copy of that label (another box, another place), use it.
+  2. If you have no copy, type s then ENTER at the prompt.  The discs
+     it named are skipped for the rest of the restore: the files that
+     need them are not restored, everything the other discs hold is,
+     and the restore is never asked for those discs again.  When the
+     prompt names no disc (no catalog yet), s says you have no more
+     discs: no disc is asked for again.
+  3. At the end the restore names the skipped discs and says how many
+     items need them.  It ends with exit code 4, and the items are in
+     RESTORE_FAILURES.txt as "pack not found" (see ITEMS NOT
+     RESTORED).
+  4. If you find a skipped disc later, run the same restore again,
+     into the same folder, with that disc in a drive (restore.sh
+     prints the command: the tools folder's resume.sh).  Files already
+     restored are skipped.
+
+A disc that is in the drive but will not read is a different case: see
+REPAIRING A DAMAGED DISC.  q then ENTER stops the restore for now,
+with nothing skipped (see STOPPING AND CARRYING ON LATER).
+
 STOPPING AND CARRYING ON LATER
 
 You can stop a restore at any time:
@@ -942,7 +968,9 @@ mounted disc it prints (to stderr):
   | optical drive, eject the META disc first, then           |
   | insert the disc named above into the SAME drive.         |
   | Insert the right disc and press ENTER to retry.          |
-  | Type 'q' then ENTER to abort.                            |
+  | If you do not have it: type 's' then ENTER.  The files   |
+  | that need it are skipped and listed at the end.          |
+  | Type 'q' then ENTER to stop for now.                     |
   +----------------------------------------------------------+
 
 The catalog lines name the label of the DATA disc you need (e.g.
@@ -951,8 +979,10 @@ disc.  If you skipped that disc, the first box says
     (no disc catalog yet: insert your newest data disc)
 Do that: every data disc carries a catalog, and from then on the box
 names the disc it needs.  The three "Single-drive restore" lines show
-only while the META disc is still in its drive.  q then ENTER stops
-the restore with exit code 75 (see "STOPPING AND CARRYING ON LATER").
+only while the META disc is still in its drive.  s then ENTER says
+you do not have that disc (see "A DISC IS MISSING OR WILL NOT READ").
+q then ENTER stops the restore with exit code 75 (see "STOPPING AND
+CARRYING ON LATER").
 
 PHYSICAL SWAP STEPS (single optical drive)
 
@@ -1042,7 +1072,9 @@ to swap:
   | optical drive, eject the META disc first, then           |
   | insert the disc named above into the SAME drive.         |
   | Insert the right disc and press ENTER to retry.          |
-  | Type 'q' then ENTER to abort.                            |
+  | If you do not have it: type 's' then ENTER.  The files   |
+  | that need it are skipped and listed at the end.          |
+  | Type 'q' then ENTER to stop for now.                     |
   +----------------------------------------------------------+
 
 Set LCSAS_NO_RELOCATE=1 to suppress the relocation step (only

@@ -384,7 +384,9 @@ layout) or several.
     |   D:\                                                    |
     |                                                          |
     | Insert the right disc and press ENTER to retry.          |
-    | Type 'q' then ENTER to abort.                            |
+    | If you do not have it: type 's' then ENTER.  The files   |
+    | that need it are skipped and listed at the end.          |
+    | Type 'q' then ENTER to stop for now.                     |
     +----------------------------------------------------------+
     ```
 

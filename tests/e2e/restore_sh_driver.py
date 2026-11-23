@@ -25,7 +25,7 @@ The interface (``recovery/scripts/restore.sh``, since #689):
   NEWEST data disc", answered with ENTER once it is in.
 - Tier 1 asks for each disc in a framed box naming the labels the pack
   is on, then "Insert the right disc and press ENTER to retry." and
-  "Type 'q' then ENTER to abort."  ``q`` stops the restore with exit 75
+  "Type 'q' then ENTER to stop for now."  ``q`` stops the restore with exit 75
   (the files restored so far are kept).
 - After a restore that worked, with more than one set: "Restore another
   backup set from these discs? [y/N]", answered N.
@@ -59,7 +59,7 @@ OVERWRITE_PROMPT = b"Type YES to overwrite, anything else to stop: "
 TIER1_LABELS_LINE = b"It is on any disc labelled:"
 TIER1_NO_RECORD_LINE = b"(catalog has no record of this pack ID)"
 TIER1_RETRY_LINE = b"Insert the right disc and press ENTER to retry."
-TIER1_ABORT_LINE = b"Type 'q' then ENTER to abort."
+TIER1_ABORT_LINE = b"Type 'q' then ENTER to stop for now."
 TIER1_DONE = b"[lcsas-restore] restore complete"
 
 ENTER = b"\n"
