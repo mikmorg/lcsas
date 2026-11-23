@@ -74,6 +74,8 @@ class TestFirstVolumeFails:
         and its directory are removed."""
         orch, config, conn, packs, _x, _d = _single_env(tmp_path)
         monkeypatch.setattr(orch, "_mirror_preflight", lambda plans: None)
+        # #947: the lost-pack check is up front too.
+        monkeypatch.setattr(orch, "_lost_pack_preflight", lambda plans: None)
         shutil.rmtree(config.repositories["family"].mirror_path / "data")
         with pytest.raises(MirrorUnavailableError, match="family"):
             orch.stage()
