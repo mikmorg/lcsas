@@ -240,7 +240,9 @@ registered locations (e.g. quarterly rotation from `Home_Safe` to
 `location = to`, `notes` extended with the move record — plus one
 `LOCATION_MOVE` row in `volume_events`. No new disc row is
 created; the disc retains its `burn_date`, `iso_sha256`, and
-`media_serial`.
+`media_serial`. `volumes.location` is not changed: it is the location
+the volume was staged for, not where its discs are (see
+[How `volume_copies` and `locations` interact](#how-volume_copies-and-locations-interact)).
 
 **Variant axes that apply:**
 - Multi-copy — the entire workflow is multi-copy-specific.
@@ -465,6 +467,18 @@ Key behaviours derived from the schema (the `locations` and
 - `locations.name` is the primary key, used directly as the foreign key
   in `volume_copies` and `volume_events`. Renaming a location requires a
   cascading update (not implemented — see Gaps).
+- `volumes.location` is the location the volume was **staged for**
+  (`stage --for-location`, a collection's location, or
+  `[defaults] location`; the DDL default is `Home_Shelf`). Where the
+  volume's discs are is `volume_copies`, one row for each disc. The two
+  can differ, and that is not a contradiction: `location move` moves a
+  disc (its `volume_copies` row) and leaves `volumes.location` as it was
+  staged; a volume burned at a second location has one `volumes.location`
+  and two `volume_copies` rows. `location rename` updates both
+  (`rename_location()` in `src/lcsas/db/locations.py`). LCSAS reads
+  `volumes.location` only for volumes not burned yet (STAGING/BURNING:
+  "staged for" in `lcsas status`, and the `--for-location` delta); to
+  find a disc, read `volume_copies` (#958, `recovery/docs/FORMAT.txt`).
 - `volume_copies` has a `UNIQUE(volume_id, location)` constraint and the
   CRUD layer leans into it: `add_volume_copy` uses
   `INSERT … ON CONFLICT(volume_id, location) DO UPDATE SET burn_date=…,

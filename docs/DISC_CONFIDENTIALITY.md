@@ -26,7 +26,7 @@ following in the clear. The meta disc carries the same key files and
 
 - **The disc catalog** (`catalog.db`, a SQLite copy of the whole catalog
   on every data disc, current as of that disc's staging). That includes:
-  - every repository's **name, id and mirror path**;
+  - every repository's **name and id** (its mirror path is blank, see §2);
   - every snapshot's **id, time and hostname**, and which repository it
     belongs to;
   - every **disc label**, volume uuid, media type, size and status;
@@ -34,8 +34,8 @@ following in the clear. The meta disc carries the same key files and
   - every **location name and description**, and the full map of **which
     disc is where**, with each disc's **media serial** and **notes**;
   - the **volume_events audit trail** (dates, locations, free-text details);
-  - the **burn sessions**, with the staging folder and ISO image paths of
-    the burning computer;
+  - the **burn sessions** (id, date, media type, status) and which
+    volumes each one staged;
   - every recorded **password split**: K of N and the SLIP-0039 id
     (`key_escrow`), never a share or the password.
 - **Every repository's rustic `keys/` directory** — the scrypt-wrapped master
@@ -87,6 +87,18 @@ door (the wrapped keys) to attack offline at leisure.
   **Discs staged by an LCSAS older than v1.0.0-rc9** still carry the source
   folders, tags and descriptions in their disc catalog, in plaintext.
   Destroying those discs is the only way to remove them (§4).
+- **The catalog's paths of the computer that staged the disc** (#958):
+  each mirror's path, each burn session's staging folder and each
+  staged ISO's path. The disc catalog has the columns
+  `repositories.mirror_path`, `burn_sessions.staging_dir` and
+  `session_volumes.iso_path`, but blank.
+  No restore tier reads them. The owner's master catalog keeps them;
+  the config's `[repos.<name>] mirror_path` is where a mirror is, and
+  on a catalog rebuilt from discs the next `lcsas scan` writes each
+  mirror path again from the config.
+
+  **Discs staged by an LCSAS older than v1.0.0-rc12** still carry those
+  three paths in their disc catalog, in plaintext.
 
 So the entire confidentiality of your *data* reduces to one question: can the
 attacker guess the password?
@@ -214,7 +226,7 @@ records.
 ### 8.1 Repositories of different people
 
 **Every data disc carries every repository's** catalog rows: repository names
-and mirror paths, every snapshot's id, time and hostname, locations, and the
+(not mirror paths, since #958), every snapshot's id, time and hostname, locations, and the
 volume map. It also carries every repository's wrapped keys and encrypted
 metadata. So whoever holds one data disc sees every repository's metadata,
 and can brute-force any repository's password offline (§3). Repositories
@@ -270,6 +282,14 @@ catalog rebuilt from such discs has the snapshot rows with those columns
 blank; the rebuild fills them from an older disc that still has them, and
 the next `lcsas scan` writes paths and tags again from rustic. Snapshot
 hostnames stay on the disc for now.
+
+A second costs nothing either, and is made (#958, owner decision
+2026-11-23): the burning computer's paths (`repositories.mirror_path`,
+`burn_sessions.staging_dir`, `session_volumes.iso_path`) are blank in
+every disc catalog staged since. On a catalog rebuilt from such discs, a
+burn session's staging folder and ISOs read as "not on this computer"
+(`lcsas burn --session` says so, `stage --clean` and `session abort`
+remove nothing), and each mirror's path comes from the config.
 
 The mitigations stay as they are: opaque repository and location names, and
 custodian-style `password_hints` (§5). Revisit only as an explicit opt-in if

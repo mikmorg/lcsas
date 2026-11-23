@@ -16,7 +16,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     import json as _json
 
     from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.repos import resolve_repo
+    from lcsas.db.repos import list_repos, refresh_mirror_path, resolve_repo
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
@@ -62,15 +62,41 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 return 1
             db_repo_id = db_repo.repo_id if db_repo is not None else None
             if db_repo_id is None:
-                logger.warning(
-                    f"repository '{repo_name}' not registered in the catalog "
-                    f"(run 'repo add' first), skipping."
-                )
+                # #958: a catalog rebuilt from discs has no mirror paths,
+                # so a config key that differs from the catalog name finds
+                # nothing.  'repo add' would register the set twice.
+                unplaced = [r.name for r in list_repos(conn)
+                            if not r.mirror_path]
+                if unplaced:
+                    logger.warning(
+                        f"repository '{repo_name}' is not in the catalog by "
+                        f"that name, and the catalog has no mirror path for "
+                        f"{', '.join(repr(n) for n in unplaced)} (a catalog "
+                        f"rebuilt from discs). If [repos.{repo_name}] is one "
+                        f"of them, rename the [repos.{repo_name}] table to "
+                        f"its catalog name and scan again; do not 'repo add' "
+                        f"it. Skipping."
+                    )
+                else:
+                    logger.warning(
+                        f"repository '{repo_name}' not registered in the "
+                        f"catalog (run 'repo add' first), skipping."
+                    )
                 repos_unregistered.append(repo_name)
                 continue
             repos_db[repo_name] = db_repo_id
 
             mirror_path = repo_cfg.mirror_path
+            # #958: the config owns the mirror's path; the catalog keeps
+            # the last one scan saw, for the commands with no config.
+            if db_repo is not None and refresh_mirror_path(
+                    conn, db_repo, mirror_path):
+                logger.info(
+                    "  %s: the mirror is at %s (from the config); the "
+                    "catalog had %s. Catalog updated.",
+                    repo_name, mirror_path,
+                    db_repo.mirror_path or "no path (rebuilt from discs)",
+                )
             scan_result = scan_mirror_packs(mirror_path)
             packs_on_disk = scan_result.packs
             total_scanned += len(packs_on_disk)

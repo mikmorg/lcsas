@@ -26,6 +26,7 @@ def _sync_mirrors_before_stage(
     repo_ids: list[str] | None,
     *,
     dry_run: bool,
+    config: LCSASConfig | None = None,
 ) -> bool:
     """Register unscanned mirror packs before staging (#656).
 
@@ -34,7 +35,8 @@ def _sync_mirrors_before_stage(
     """
     from lcsas.packs.stage_sync import sync_unscanned_packs
 
-    sync = sync_unscanned_packs(conn, repo_ids, dry_run=dry_run)
+    sync = sync_unscanned_packs(conn, repo_ids, dry_run=dry_run,
+                                config=config)
     if sync.incomplete:
         for name, errors in sync.incomplete.items():
             logger.error(
@@ -291,6 +293,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
         # so the catalog must know every pack file in the mirrors first.
         if not _sync_mirrors_before_stage(
             conn, repo_ids, dry_run=getattr(args, "dry_run", False),
+            config=config,
         ):
             return 1
 

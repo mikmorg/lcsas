@@ -14,6 +14,29 @@ from lcsas.utils.fs import safe_remove_tree
 _SESSION_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}")
 
 
+def _active_session_dirs(
+    conn: sqlite3.Connection, staging_root: Path,
+) -> set[Path]:
+    """The staging folders of every burn session not CLEANED, resolved.
+
+    A catalog rebuilt from discs has blank ``staging_dir`` values (a disc
+    copy carries no paths, #958).  Such a session's folder, if it is
+    still here, is the one ``stage`` names after the session id; it is
+    not an orphan.  A blank value is never ``Path('')``, the cwd.
+    """
+    active: set[Path] = set()
+    for session_id, staging_dir in conn.execute(
+        "SELECT session_id, staging_dir FROM burn_sessions "
+        "WHERE status != 'CLEANED'"
+    ):
+        if staging_dir:
+            active.add(Path(staging_dir).resolve())
+        else:
+            active.add(
+                (staging_root / str(session_id).replace(":", "-")).resolve())
+    return active
+
+
 def detect_orphaned_staging(
     config: LCSASConfig,
     conn: sqlite3.Connection,
@@ -29,10 +52,7 @@ def detect_orphaned_staging(
         return []
 
     # Collect known active burn-session staging dirs from the catalog
-    rows = conn.execute(
-        "SELECT staging_dir FROM burn_sessions WHERE status != 'CLEANED'"
-    ).fetchall()
-    active_dirs = {Path(r[0]).resolve() for r in rows}
+    active_dirs = _active_session_dirs(conn, staging_root)
 
     orphans: list[Path] = []
     for child in sorted(staging_root.iterdir()):
@@ -69,10 +89,7 @@ def detect_unmanaged_staging(
     if not staging_root.is_dir():
         return []
 
-    rows = conn.execute(
-        "SELECT staging_dir FROM burn_sessions WHERE status != 'CLEANED'"
-    ).fetchall()
-    active_dirs = {Path(r[0]).resolve() for r in rows}
+    active_dirs = _active_session_dirs(conn, staging_root)
     catalog = config.db_path.resolve()
 
     unmanaged: list[Path] = []

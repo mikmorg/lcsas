@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lcsas.cli.common import _open_catalog, _reburn_hint
@@ -315,6 +314,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     )
     from lcsas.db.sessions import (
         list_sessions,
+        recorded_path,
         staged_iso_present,
         staging_incomplete,
     )
@@ -422,7 +422,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
         for s in list_sessions(conn):
             if s.status == SESSION_CLEANED:
                 continue
-            if unfinished_stage_refusal(Path(s.staging_dir), s.session_id) is None:
+            session_dir = recorded_path(s.staging_dir)
+            if (session_dir is None or unfinished_stage_refusal(
+                    session_dir, s.session_id) is None):
                 continue
             labels = [str(r["label"]) for r in conn.execute(
                 "SELECT v.label FROM session_volumes sv JOIN volumes v "

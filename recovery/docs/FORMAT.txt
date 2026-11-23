@@ -132,6 +132,14 @@ LCSAS CATALOG
     real values are in each snapshot file under
     metadata/<repo_id>/snapshots/, encrypted with the repository's
     password (see SNAPSHOT FILE).
+  - Paths of the computer that staged the disc are blank ("") on a
+    disc: repositories.mirror_path, burn_sessions.staging_dir and
+    session_volumes.iso_path (since v1.0.0-rc12, #958).  No restore
+    tier reads them.  The owner's own catalog keeps them.
+  - volumes.location is the location the volume was staged for.
+    Where its discs are kept is in volume_copies (one row for each
+    disc: location, status).  A reader that wants to know where a
+    disc is reads volume_copies, never volumes.location.
   - The file uses a rollback journal (journal_mode DELETE), not WAL,
     so it opens on a read-only disc.  Open it read-only (tier 1 uses
     the SQLite URI parameter immutable=1).
