@@ -329,7 +329,9 @@ LCSAS_BD25_2026_0003/
 ### Phase 1: Plan
 
 1. Start from a snapshot ID (or a list of pack IDs)
-2. `rustic restore --dry-run` determines required packs
+2. `packs_for_snapshot()` walks the snapshot's trees in the mirror with the
+   Python reader to determine the required packs (rustic 0.11 has no JSON
+   output for `restore --dry-run`, #948)
 3. `RestorePlanner` maps pack IDs → volume labels via catalog
 4. Generates a **pick list**: which volumes to load, in what order (minimize disc swaps)
 
@@ -675,9 +677,9 @@ required), `lcsas-shares` (SLIP-0039 share recombination), plus
 Both tools produce structurally compatible JSON output. The `rustic/parser.py`
 module handles minor field-name differences (e.g., `files_new` vs
 `files_changed`) and normalizes into shared `BackupResult` / `SnapshotInfo`
-dataclasses. A `restore_dry_run` compatibility note: restic uses `--dry-run`
-while rustic uses `--dry-run` as well, but field names in the output may vary.
-The parser gracefully handles both.
+dataclasses.  Which packs a snapshot needs is not asked of either tool: the
+snapshot's trees are walked with the Python reader (`packs_for_snapshot()` in
+`src/lcsas/packs/snapshot_coverage.py`, #948).
 
 ### Python Reader on Every Data Disc
 

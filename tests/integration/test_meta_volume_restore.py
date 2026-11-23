@@ -124,9 +124,7 @@ class _NoOpRustic:
     def init_repo(self, *a, **kw): pass
     def backup(self, *a, **kw): pass
     def snapshots(self, *a, **kw): return []
-    def restore_dry_run(self, *a, **kw): pass
     def restore(self, *a, **kw): pass
-    def prune_dry_run(self, *a, **kw): pass
 
 
 # ═════════════════════════════════════════════════════════════════

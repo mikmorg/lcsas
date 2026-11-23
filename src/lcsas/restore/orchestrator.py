@@ -54,7 +54,8 @@ def _is_tty(stdin_is_tty: Callable[[], bool] | None) -> bool:
 class PlannedRestore:
     """What a restore from the mirror's catalog needs before any disc is read.
 
-    ``plan`` is the rustic dry run (the packs the snapshot needs),
+    ``plan`` lists the packs the snapshot needs (``packs_for_snapshot``;
+    ``plan.snapshot_id`` is the full ID it resolved to),
     ``pick_list`` says which discs hold them, and ``iso_shas`` maps each
     picked disc label to its recorded ISO SHA-256 (``prepare_restore``
     only).
@@ -77,7 +78,9 @@ def plan_restore(
     """Build the pick list ``lcsas restore plan`` shows.
 
     Uses the repository's configured password file.  Logs the reason and
-    returns None when the repository or rustic is not usable.
+    returns None when the repository cannot be read or has no such
+    snapshot.  Needs no rustic: the snapshot's trees are walked with the
+    Python reader (#948).
     """
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
@@ -95,24 +98,24 @@ def plan_restore(
         )
         return None
 
-    # Get required pack IDs via rustic dry-run
-    from lcsas.utils.subprocess import check_binary_version
+    # Which packs the snapshot needs: a walk of its trees in the mirror
+    # (#948).  No rustic is needed to plan.
+    from lcsas.packs.snapshot_coverage import (
+        SnapshotPacksError,
+        packs_for_snapshot,
+    )
     try:
-        check_binary_version("rustic", min_version=(0, 9, 0))
-    except RuntimeError as exc:
+        plan = packs_for_snapshot(
+            repo_cfg.mirror_path, repo_cfg.password_file, snapshot_id,
+        )
+    except SnapshotPacksError as exc:
         logger.error("%s", exc)
         return None
-
-    runner = SubprocessRusticRunner(tmpdir=config.staging_path)
-    plan = runner.restore_dry_run(
-        snapshot_id=snapshot_id,
-        repo_path=repo_cfg.mirror_path,
-        password_file=repo_cfg.password_file,
-    )
 
     # Generate pick list with alternate-volume info (RST-07).
     planner = RestorePlanner(conn)
     pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
+    runner = SubprocessRusticRunner(tmpdir=config.staging_path)
     return PlannedRestore(plan, pick_list, runner, repo_cfg.mirror_path)
 
 
@@ -158,12 +161,19 @@ def prepare_restore(
 
     runner = SubprocessRusticRunner(tmpdir=config.staging_path)
 
-    # Get required pack IDs
-    plan = runner.restore_dry_run(
-        snapshot_id=snapshot_id,
-        repo_path=repo_cfg.mirror_path,
-        password_file=password_file,
+    # Which packs the snapshot needs (#948).  The plan carries the full
+    # ID that 'latest' or a prefix resolved to; rustic restores that one.
+    from lcsas.packs.snapshot_coverage import (
+        SnapshotPacksError,
+        packs_for_snapshot,
     )
+    try:
+        plan = packs_for_snapshot(
+            repo_cfg.mirror_path, password_file, snapshot_id,
+        )
+    except SnapshotPacksError as exc:
+        logger.error("%s", exc)
+        return None
 
     # Generate pick list with alternates for resilient restore
     planner = RestorePlanner(conn)
@@ -431,12 +441,13 @@ def run_restore(
             )
             return 1
 
-        # Execute restore
+        # Execute restore: the snapshot the plan resolved, so rustic
+        # restores the one whose packs were collected (#948).
         target = target_path.resolve()
-        logger.info(f"\nRestoring snapshot {snapshot_id} → {target}")
+        logger.info(f"\nRestoring snapshot {plan.snapshot_id} → {target}")
         executor.execute_restore(
             cache_dir=cache_dir,
-            snapshot_id=snapshot_id,
+            snapshot_id=plan.snapshot_id,
             target_path=target,
             password_file=password_file,
         )
@@ -466,28 +477,35 @@ def restore_from_disc(
 ) -> int:
     """Restore from optical discs without a config file or mirror.
 
-    The work of ``lcsas restore from-disc``.  Reads ``catalog.db`` (or
-    *catalog*) and repository metadata directly from the disc at
-    *disc_path*, then collects the packs from *volume_dir* or by asking
-    for each disc to be mounted.  Falls back to the Python reader
-    (tier 3) when rustic is not installed.  Returns the exit code;
-    raises :class:`~lcsas.restore.executor.PackCorruptionError` when
-    packs cannot be retrieved from any disc.
-    """
-    import shutil
-    import tempfile
+    The work of ``lcsas restore from-disc``: a front for the Python
+    reader (tier 3), whose own disc loop finds each pack (#948).  The
+    repository's keys, index and snapshots are read from the disc at
+    *disc_path*; packs are looked for on that disc and under
+    *volume_dir* (a folder of discs, one per sub-folder); the disc's
+    ``catalog.db`` (or *catalog*), opened read-only, names the disc a
+    missing pack is on.  Without *volume_dir*, and with a person at the
+    terminal, the reader asks for each further disc.
 
-    from lcsas.db.connection import get_connection
-    from lcsas.restore.executor import RestoreExecutor
-    from lcsas.restore.planner import RestorePlanner
-    from lcsas.rustic.wrapper import SubprocessRusticRunner
-    from lcsas.utils.fs import ensure_dir
+    *cache_dir* is the reader's pack cache: each disc's packs are copied
+    there the first time the disc is read, so each disc is needed once.
+    *skip_verify* has no effect: the reader authenticates every blob.
+
+    No rustic is used: on a multi-disc archive the tree packs are on
+    discs not yet read, so the packs cannot be planned before reading.
+
+    Returns the exit code, as the bundled python_reader.py exits: 0 done,
+    4 finished but some items not restored (#875), 74 the disk is full,
+    75 stopped at a disc prompt, 77 a key file rejected the password
+    (#805), 1 for any other failure.
+    """
+    import sqlite3
+
+    from lcsas.db.disc_catalog import DiscCatalogError, open_disc_catalog
 
     if not disc_path.is_dir():
         logger.error("Disc path '%s' is not a directory.", disc_path)
         return 1
 
-    # Early validation: password file must exist.
     if not password_file.exists():
         logger.error(
             "Password file not found: %s\n"
@@ -496,7 +514,6 @@ def restore_from_disc(
         )
         return 1
 
-    # Locate catalog.db on the disc
     catalog_path = catalog if catalog else disc_path / "catalog.db"
     if not catalog_path.is_file():
         logger.error(
@@ -506,325 +523,79 @@ def restore_from_disc(
             catalog_path,
         )
         return 1
+    if volume_dir is not None and not volume_dir.is_dir():
+        logger.error("--volume-dir '%s' is not a directory.", volume_dir)
+        return 1
 
-    # Use a temp directory for scratch files; keeps any --cache-dir separate.
-    tmp_dir_obj = tempfile.TemporaryDirectory(prefix="lcsas-fromdisc-")
+    # The disc is read-only (a mounted disc, or an extracted image whose
+    # files are 0444): open its catalog read-only, never copy it (#948).
     try:
-        from lcsas.utils.shutdown import ShutdownManager
-        tmp_dir = Path(tmp_dir_obj.name)
-
-        # Register cleanup on SIGINT/KeyboardInterrupt
-        shutdown = ShutdownManager()
-        shutdown.register(tmp_dir_obj.cleanup)
-        shutdown.install()
-
-        # Copy catalog.db to temp to avoid locking a mounted disc/ISO.
-        tmp_catalog = tmp_dir / "catalog.db"
-        shutil.copy2(str(catalog_path), str(tmp_catalog))
-
-        disc_conn = get_connection(tmp_catalog)
-        try:
-            repo_rows = disc_conn.execute(
-                "SELECT repo_id, name, mirror_path FROM repositories"
-            ).fetchall()
-        finally:
-            disc_conn.close()
-
-        if not repo_rows:
-            logger.error(
-                "Disc catalog contains no repositories.\n"
-                "This may not be a valid LCSAS disc."
-            )
-            return 1
-
-        repo_row = _select_disc_repo(repo_rows, repo)
-        if repo_row is None:
-            return 1
-        repo_name = repo_row["name"]
-
-        disc_meta = _find_disc_metadata(disc_path, repo_row)
-        if disc_meta is None:
-            return 1
-
-        logger.info("Found metadata for '%s' on disc.", repo_name)
-
-        # Build restore cache and populate it with disc metadata.
-        cache_dir = cache_dir if cache_dir else (tmp_dir / "cache")
-        ensure_dir(cache_dir)
-
-        from lcsas.exceptions import BinaryError
-        from lcsas.utils.subprocess import check_binary_version
-
-        rustic_available = True
-        try:
-            check_binary_version("rustic", min_version=(0, 9, 0))
-        except BinaryError:
-            rustic_available = False
-
-        runner = SubprocessRusticRunner(tmpdir=tmp_dir)
-        # FMT-01: ECC verify/repair on restore — dvdisaster if present,
-        # else the in-house lcsas-ecc fallback.
-        from lcsas.ecc.dvdisaster import select_ecc_runner
-        executor = RestoreExecutor(runner, ecc_runner=select_ecc_runner())
-
-        logger.info("Copying repository metadata from disc to cache...")
-        executor.prepare_cache(cache_dir, disc_meta)
-
-        if not rustic_available:
-            return _restore_with_python_reader(
-                disc_path, cache_dir, target_path, password_file, snapshot,
-            )
-
-        # Resolve "latest" to an actual snapshot ID so dry-run gets an
-        # explicit ID that rustic/restic can handle without ambiguity.
-        snapshot_id = snapshot
-        if snapshot_id == "latest":
-            resolved = _resolve_latest(runner, cache_dir, password_file, repo_name)
-            if resolved is None:
-                return 1
-            snapshot_id = resolved
-
-        # Run rustic dry-run against the cache to determine required packs.
-        logger.info(
-            "Determining required packs for snapshot '%s'...", snapshot_id
+        disc_conn = open_disc_catalog(catalog_path)
+    except DiscCatalogError as exc:
+        logger.error("%s", exc)
+        return 1
+    try:
+        repo_rows = disc_conn.execute(
+            "SELECT repo_id, name, mirror_path FROM repositories"
+        ).fetchall()
+    except sqlite3.Error as exc:
+        logger.error(
+            "Cannot read the repositories in the disc catalog %s: %s.\n"
+            "The disc may be damaged: try another disc from the same "
+            "archive.",
+            catalog_path, exc,
         )
-        try:
-            plan = runner.restore_dry_run(
-                snapshot_id=snapshot_id,
-                repo_path=cache_dir,
-                password_file=password_file,
-            )
-        except FileNotFoundError:
-            logger.error(
-                "rustic/restic binary not found.\n"
-                "Install rustic (https://rustic.cli.rs/) or "
-                "restic (https://restic.net/),\n"
-                "or use the Python reader (tier 3) bundled on the disc:\n"
-                "  python3 %s/python_reader.py "
-                "--password-file %s --restore-folder %s",
-                disc_path, password_file, target_path,
-            )
-            return 1
-        except Exception as exc:
-            logger.error(
-                "Failed to determine required packs: %s\n"
-                "Check the password file is correct and the disc's repository "
-                "metadata is intact.",
-                exc,
-            )
-            return 1
-
-        logger.info(
-            "Snapshot '%s' requires %d pack file(s).",
-            snapshot_id, len(plan.required_pack_hashes),
-        )
-
-        # Look up which disc has which pack via the disc's catalog.
-        disc_conn = get_connection(tmp_catalog)
-        try:
-            planner = RestorePlanner(disc_conn)
-            pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
-        finally:
-            disc_conn.close()
-
-        if pick_list.missing_packs:
-            missing_preview = ", ".join(pick_list.missing_packs[:5])
-            overflow = (
-                f" ... and {len(pick_list.missing_packs) - 5} more"
-                if len(pick_list.missing_packs) > 5 else ""
-            )
-            deprecated_hint = ""
-            if pick_list.deprecated_disc_labels:
-                disc_list = ", ".join(sorted(pick_list.deprecated_disc_labels))
-                deprecated_hint = (
-                    f"\n  These pack(s) were last seen on DEPRECATED disc(s): "
-                    f"{disc_list}. "
-                    "If you still have those physical discs, mount them and re-run."
-                )
-            logger.error(
-                "%d required pack(s) not found in the disc catalog. "
-                "If these packs are on other discs not yet mounted, "
-                "add them via --disc-dir and re-run.%s\n"
-                "  Missing pack IDs: %s%s",
-                len(pick_list.missing_packs),
-                deprecated_hint,
-                missing_preview,
-                overflow,
-            )
-            return 1
-
-        # Build alternates lookup for resilient pack collection.
-        alternates_map, primary_labels = _alternates_for(pick_list)
-
-        all_failed: list[str] = []
-
-        if volume_dir:
-            # Non-interactive mode: all discs pre-extracted into a directory tree.
-            vol_dir = volume_dir
-
-            # Always try the initial --disc path first.
-            result = executor.ingest_volume(
-                cache_dir, disc_path, plan.required_pack_hashes,
-                verify=not skip_verify, collect_failures=True,
-            )
-            if result.ingested:
-                logger.info("  Initial disc: ingested %d pack(s).", result.ingested)
-            all_failed.extend(result.failed)
-
-            for label, vol_sources in pick_list.volumes.items():
-                pack_hashes = [s.pack.sha256 for s in vol_sources]
-                vol_path = vol_dir / label
-                if not vol_path.is_dir():
-                    logger.warning(
-                        "Volume directory not found: %s — skipping", vol_path
-                    )
-                    vol_path = vol_dir
-                result = executor.ingest_volume(
-                    cache_dir, vol_path, pack_hashes,
-                    verify=not skip_verify, collect_failures=True,
-                )
-                if result.ingested:
-                    logger.info("  %s: ingested %d pack(s).", label, result.ingested)
-                if result.failed:
-                    logger.warning(
-                        "  %s: %d pack(s) failed verification.", label, len(result.failed)
-                    )
-                    all_failed.extend(result.failed)
-
-            # The cache is the source of truth: packs that live on a
-            # later disc were seeded into all_failed by the initial-disc
-            # ingest, then ingested for real in the loop above.  Drop
-            # them before any retry/raise so a multi-disc snapshot whose
-            # cache is complete never falsely fails (RST-01).
-            all_failed = prune_recovered(cache_dir, all_failed)
-            if all_failed:
-                still_failed = retry_from_alternates_batch(
-                    executor, cache_dir, vol_dir,
-                    all_failed, alternates_map,
-                    verify=not skip_verify,
-                )
-                _raise_if_unrecovered(cache_dir, pick_list, still_failed)
-
-        else:
-            # Interactive mode: prompt for each disc to be mounted.
-            if not _is_tty(stdin_is_tty):
-                logger.error(
-                    "Interactive restore requires a TTY.\n"
-                    "Use --volume-dir with a directory of extracted discs "
-                    "for non-interactive (scripted) restores."
-                )
-                return 1
-
-            # First: ingest from the initial disc named on the command line.
-            logger.info("\nIngesting packs from initial disc...")
-            result = executor.ingest_volume(
-                cache_dir, disc_path, plan.required_pack_hashes,
-                verify=not skip_verify, collect_failures=True,
-            )
-            logger.info("  Ingested %d pack(s) from initial disc.", result.ingested)
-            all_failed.extend(result.failed)
-
-            # Determine which volumes are still needed.
-            still_missing = RestoreExecutor.verify_cache_completeness(
-                cache_dir, plan.required_pack_hashes
-            )
-            if still_missing:
-                missing_set = set(still_missing)
-                for label, vol_sources in sorted(pick_list.volumes.items()):
-                    pack_hashes = [
-                        s.pack.sha256 for s in vol_sources
-                        if s.pack.sha256 in missing_set
-                    ]
-                    if not pack_hashes:
-                        continue
-                    logger.info(
-                        "\nNeed %d pack(s) from disc '%s'.",
-                        len(pack_hashes), label,
-                    )
-                    while True:
-                        mount_path = _ask(
-                            prompt,
-                            f"Mount disc '{label}' and enter its path "
-                            "(or 'skip'): "
-                        ).strip()
-                        if mount_path.lower() == "skip":
-                            logger.info("  Skipping %s", label)
-                            # RST-07: enqueue the skipped disc's packs so
-                            # the alternates retry can offer other volumes.
-                            all_failed.extend(pack_hashes)
-                            break
-                        vol_path = Path(mount_path)
-                        if not vol_path.is_dir():
-                            logger.info(
-                                "  '%s' is not a directory — try again.", mount_path
-                            )
-                            continue
-                        result = executor.ingest_volume(
-                            cache_dir, vol_path, pack_hashes,
-                            verify=not skip_verify, collect_failures=True,
-                        )
-                        logger.info(
-                            "  Ingested %d pack(s) from %s", result.ingested, label
-                        )
-                        if result.failed:
-                            logger.warning(
-                                "  %d pack(s) failed verification", len(result.failed)
-                            )
-                            all_failed.extend(result.failed)
-                        break
-
-            all_failed = prune_recovered(cache_dir, all_failed)
-            if all_failed:
-                still_failed = retry_from_alternates_interactive(
-                    executor, cache_dir,
-                    all_failed, alternates_map,
-                    verify=not skip_verify,
-                    primary_labels=primary_labels,
-                    prompt=prompt,
-                )
-                _raise_if_unrecovered(cache_dir, pick_list, still_failed)
-
-        # Completeness check before running rustic.
-        all_required = plan.required_pack_hashes
-        missing = RestoreExecutor.verify_cache_completeness(cache_dir, all_required)
-        if missing:
-            logger.error(
-                "\n%d of %d required pack(s) missing from cache.",
-                len(missing), len(all_required),
-            )
-            report_missing_by_label(pick_list, missing)
-            logger.error(
-                "\nRestore cannot proceed — mount the missing discs and retry,\n"
-                "or check for damaged discs."
-            )
-            return 1
-
-        # Execute restore.
-        target = target_path.resolve()
-        logger.info("\nRestoring snapshot '%s' \u2192 %s", snapshot_id, target)
-        try:
-            executor.execute_restore(
-                cache_dir=cache_dir,
-                snapshot_id=snapshot_id,
-                target_path=target,
-                password_file=password_file,
-            )
-        except FileNotFoundError:
-            logger.error(
-                "rustic/restic binary not found.\n"
-                "Use python_reader.py bundled on the disc as a fallback:\n"
-                "  python3 %s/python_reader.py "
-                "--password-file %s --restore-folder %s",
-                disc_path, password_file, target,
-            )
-            return 1
-
-        logger.info("Restore complete!")
-        return 0
-
+        return 1
     finally:
-        shutdown.uninstall()
-        tmp_dir_obj.cleanup()
+        disc_conn.close()
+
+    if not repo_rows:
+        logger.error(
+            "Disc catalog contains no repositories.\n"
+            "This may not be a valid LCSAS disc."
+        )
+        return 1
+
+    repo_row = _select_disc_repo(repo_rows, repo)
+    if repo_row is None:
+        return 1
+    repo_name = repo_row["name"]
+
+    disc_meta = _find_disc_metadata(disc_path, repo_row)
+    if disc_meta is None:
+        return 1
+    snap_dir = disc_meta / "snapshots"
+    if not snap_dir.is_dir() or not any(snap_dir.iterdir()):
+        logger.error(
+            "This disc carries no snapshot of repository '%s' (%s is "
+            "empty).\nA disc carries only the snapshots whose packs were "
+            "all on discs when it was staged: use a newer disc of the "
+            "archive.",
+            repo_name, snap_dir,
+        )
+        return 1
+    logger.info("Found metadata for '%s' on disc.", repo_name)
+    if skip_verify:
+        logger.info(
+            "--skip-verify has no effect: the Python reader checks every "
+            "blob it reads."
+        )
+
+    search = [disc_path]
+    if volume_dir is not None:
+        search.append(volume_dir)
+    interactive = volume_dir is None and _is_tty(stdin_is_tty)
+    return _restore_with_python_reader(
+        disc_meta,
+        target_path,
+        password_file,
+        snapshot,
+        search_paths=search,
+        catalog_path=catalog_path,
+        pack_cache_dir=cache_dir,
+        interactive=interactive,
+        prompt=prompt,
+    )
 
 
 def find_sibling_iso(vol_dir: Path, label: str) -> Path | None:
@@ -1278,22 +1049,26 @@ def _find_disc_metadata(disc_path: Path, repo_row: sqlite3.Row) -> Path | None:
 
 
 def _restore_with_python_reader(
-    disc_path: Path,
-    cache_dir: Path,
+    repo_meta: Path,
     target_path: Path,
     password_file: Path,
     snapshot: str,
+    *,
+    search_paths: list[Path],
+    catalog_path: Path | None,
+    pack_cache_dir: Path | None,
+    interactive: bool,
+    prompt: Prompt | None,
 ) -> int:
-    """Restore with the Python reader (tier 3) when rustic is not installed.
+    """Restore with the Python reader (tier 3), as ``restore.sh`` does.
 
-    Returns the exit code, as the bundled python_reader.py exits:
-    0 done, 4 finished but some items not restored (#875), 74 the disk
-    is full, 75 stopped at a disc prompt, 77 a key file rejected the
-    password (#805), 1 for any other failure.
+    *repo_meta* is the repository's keys/index/snapshots folder on the
+    disc; packs are found under *search_paths* (discs, or folders of
+    discs one level down).  Returns the exit code, as the bundled
+    python_reader.py exits: 0 done, 4 finished but some items not
+    restored (#875), 74 the disk is full, 75 stopped at a disc prompt,
+    77 a key file rejected the password (#805), 1 for any other failure.
     """
-    # Auto-fallback: use the Python reader (tier 3) bundled with LCSAS.
-    # Link the disc data dir into the cache so PurePythonRestorer can
-    # find the pack files without copying gigabytes.
     from lcsas.restore.restic_fallback import (
         EXIT_NOT_ALL_RESTORED,
         EXIT_WRONG_PASSWORD,
@@ -1307,42 +1082,31 @@ def _restore_with_python_reader(
     # (#774), as the standalone reader on the meta disc does.
     allow_openssl_command()
 
-    data_link = cache_dir / "data"
-    disc_data = disc_path / "data"
-    # If a stale symlink exists (e.g. resumed on a different system),
-    # remove it so we can re-link to the current disc.
-    if (data_link.is_symlink() and
-            (not data_link.exists() or
-             data_link.resolve() != disc_data.resolve())):
-        logger.warning(
-            "Stale data symlink detected (%s → %s). Re-linking to current disc.",
-            data_link, data_link.resolve(),
-        )
-        data_link.unlink()
-    if not data_link.exists() and disc_data.is_dir():
-        data_link.symlink_to(disc_data)
-    elif not disc_data.is_dir():
-        logger.error(
-            "Disc data directory not found at '%s'. "
-            "Ensure the disc is mounted and the path is correct.",
-            disc_data,
-        )
-        return 1
+    prompt_in: Callable[[], str] | None = None
+    if prompt is not None:
+        def prompt_in() -> str:
+            # The reader wants one line, "" at the end of input.
+            try:
+                return _ask(prompt, "") + "\n"
+            except EOFError:
+                return ""
 
-    logger.warning(
-        "rustic binary not found — falling back to the Python reader (tier 3).\n"
-        "  This is ~100x slower and only reads packs from the mounted disc.\n"
-        "  For multi-disc snapshots, mount all discs and copy their data/ "
-        "directories into %s/data/ before running.",
-        cache_dir,
-    )
     target = target_path.resolve()
     snap_arg = None if snapshot == "latest" else snapshot
-    restorer = PurePythonRestorer(
-        repo_path=cache_dir,
-        password_file=password_file,
+    logger.info(
+        "Restoring with the Python reader; looking for packs in: %s",
+        ", ".join(str(p) for p in search_paths),
     )
     try:
+        restorer = PurePythonRestorer(
+            repo_path=repo_meta,
+            password_file=password_file,
+            pack_search_paths=search_paths,
+            interactive=interactive,
+            catalog_path=catalog_path,
+            pack_cache_dir=pack_cache_dir,
+            prompt_in=prompt_in,
+        )
         meta = restorer.restore(target=target, snapshot_id=snap_arg)
     except RestoreAbortedError as exc:
         # q (or the end of input) at the disc prompt exits 75, a
@@ -1360,7 +1124,8 @@ def _restore_with_python_reader(
         logger.error("Python reader restore failed: wrong password: %s", exc)
         return EXIT_WRONG_PASSWORD
     except Exception as exc:
-        # Setup-level failure (wrong password, missing repo) — fail fast.
+        # Setup-level failure (a snapshot that is not there, a damaged
+        # index): fail fast.  Not a password verdict.
         logger.error("Python reader restore failed: %s", exc)
         return 1
     if restorer.failures:
@@ -1371,49 +1136,14 @@ def _restore_with_python_reader(
             "Python reader restore finished with %d item(s) not "
             "restored. "
             "See %s/RESTORE_FAILURES.txt; the rest of your data is "
-            "intact. Re-run from a newer meta disc or an undamaged "
-            "disc of the affected volume to restore them.",
+            "intact. Re-run with the missing discs at hand (--volume-dir, "
+            "or answer the disc prompt), or from an undamaged disc of the "
+            "affected volume.",
             restorer.failures, target,
         )
         return EXIT_NOT_ALL_RESTORED
     logger.info(
-        "Restore complete (Python reader fallback). Snapshot: %s, "
-        "hostname: %s",
+        "Restore complete (Python reader). Snapshot: %s, hostname: %s",
         meta.snapshot_id, meta.hostname,
     )
     return 0
-
-
-def _resolve_latest(
-    runner: RusticRunner, cache_dir: Path, password_file: Path, repo_name: str,
-) -> str | None:
-    """The newest snapshot's ID in the cache's repository, or None (logged)."""
-    try:
-        snap_list = runner.snapshots(
-            repo_path=cache_dir,
-            password_file=password_file,
-        )
-    except Exception as exc:
-        logger.error(
-            "Could not list snapshots to resolve 'latest': %s", exc
-        )
-        return None
-    if not snap_list:
-        logger.error(
-            "No snapshots found in repository '%s' on this disc.",
-            repo_name,
-        )
-        return None
-    # #821: compare instants, not text: times with different UTC
-    # offsets sort wrongly as strings.  The same key as tier 3
-    # (#663): a time that does not parse sorts first, so it is
-    # never taken as "latest".
-    from lcsas.restore.restic_fallback import time_sort_key
-
-    snap_list.sort(key=lambda snap: time_sort_key(snap.timestamp))
-    snapshot_id = snap_list[-1].snapshot_id
-    logger.info(
-        "Resolved 'latest' to snapshot %s (%s)",
-        snapshot_id, snap_list[-1].timestamp,
-    )
-    return snapshot_id

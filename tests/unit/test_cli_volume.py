@@ -154,41 +154,40 @@ class TestVolumeImpactSnapshots:
         finally:
             conn.close()
 
+    @staticmethod
+    def _walk(*entries):
+        """``snapshot_packs`` (#948) answering *entries*: (id, packs,
+        unreadable)."""
+        from lcsas.packs.snapshot_coverage import SnapshotPacks
+
+        return [
+            SnapshotPacks(snapshot_id=sid, time="", packs=frozenset(packs),
+                          unreadable=frozenset(bad))
+            for sid, packs, bad in entries
+        ]
+
     def test_volume_impact_snapshots_at_risk(self, tmp_path, capsys):
         """--snapshots lists exactly the snapshots whose required packs
         intersect the at-risk set (snapshot→pack mapping via the same
-        restore_dry_run machinery the restore planner uses)."""
-        from unittest.mock import MagicMock, patch
-
-        from lcsas.rustic.types import RestorePlan
+        walk ``restore plan`` uses, once per repository)."""
+        from unittest.mock import patch
 
         db = tmp_path / "test.db"
         _blast_radius_catalog(db)
         self._seed_snapshots(db)
         cfg = _write_impact_config(tmp_path, with_mirror=True)
 
-        def _dry_run(snapshot_id, repo_path, password_file):
-            if snapshot_id == "snapS":
-                # snapS needs s1 — the at-risk pack on VOL_SINGLE.
-                return RestorePlan(snapshot_id=snapshot_id,
-                                   required_pack_hashes=["51" * 32])
-            # snapT only needs the doubly-held pack.
-            return RestorePlan(snapshot_id=snapshot_id,
-                               required_pack_hashes=["d1" * 32])
-
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.side_effect = _dry_run
-
-        with (
-            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
-                  return_value=mock_runner),
-            patch("lcsas.utils.subprocess.check_binary_version",
-                  return_value="0.9.0"),
-        ):
+        walk = self._walk(
+            ("snapS", ["51" * 32], []),  # needs s1, at risk on VOL_SINGLE
+            ("snapT", ["d1" * 32], []),  # only the doubly-held pack
+        )
+        with patch("lcsas.packs.snapshot_coverage.snapshot_packs",
+                   return_value=walk) as walker:
             result = main(["--config", cfg, "--catalog", str(db),
                            "volume", "impact", "VOL_SINGLE", "--snapshots"])
 
         assert result == 0
+        walker.assert_called_once()  # one walk for the repository
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "snapS" in out
@@ -200,25 +199,68 @@ class TestVolumeImpactSnapshots:
         # config entry) → degrade message for it, never an exception.
         assert "catalog-only" in out
 
+    def test_volume_impact_unchecked_snapshot_is_not_called_safe(
+        self, tmp_path, capsys,
+    ):
+        """A snapshot whose trees cannot all be read, or that is not in
+        the mirror, is reported as unchecked: never "no snapshot
+        references an at-risk pack"."""
+        from unittest.mock import patch
+
+        db = tmp_path / "test.db"
+        _blast_radius_catalog(db)
+        self._seed_snapshots(db)
+        cfg = _write_impact_config(tmp_path, with_mirror=True)
+
+        walk = self._walk(("snapS", ["d1" * 32], ["?tree:" + "ee" * 32]))
+        with patch("lcsas.packs.snapshot_coverage.snapshot_packs",
+                   return_value=walk):
+            result = main(["--config", cfg, "--catalog", str(db),
+                           "volume", "impact", "VOL_SINGLE", "--snapshots"])
+
+        assert result == 0
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "no snapshot references an at-risk pack" not in out
+        assert "snapT: not in the mirror" in out
+        assert "2 could not be checked" in out
+
+    def test_volume_impact_unreadable_repository_degrades(
+        self, tmp_path, capsys,
+    ):
+        from unittest.mock import patch
+
+        from lcsas.packs.snapshot_coverage import SnapshotPacksError
+
+        db = tmp_path / "test.db"
+        _blast_radius_catalog(db)
+        self._seed_snapshots(db)
+        cfg = _write_impact_config(tmp_path, with_mirror=True)
+
+        with patch("lcsas.packs.snapshot_coverage.snapshot_packs",
+                   side_effect=SnapshotPacksError("no key file opens it")):
+            result = main(["--config", cfg, "--catalog", str(db),
+                           "volume", "impact", "VOL_SINGLE", "--snapshots"])
+
+        assert result == 0
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "cannot tell which snapshots are affected" in out
+        assert "no snapshot references an at-risk pack" not in out
+
     def test_volume_impact_snapshots_degrades_without_mirror(
         self, tmp_path, capsys
     ):
         """Mirror not mounted → clear degrade message, exit 0, and the
         pack-level report still prints."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         db = tmp_path / "test.db"
         _blast_radius_catalog(db)
         self._seed_snapshots(db)
         cfg = _write_impact_config(tmp_path, with_mirror=False)
 
-        mock_runner = MagicMock()
-        with (
-            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
-                  return_value=mock_runner),
-            patch("lcsas.utils.subprocess.check_binary_version",
-                  return_value="0.9.0"),
-        ):
+        with patch("lcsas.packs.snapshot_coverage.snapshot_packs") as walker:
             result = main(["--config", cfg, "--catalog", str(db),
                            "volume", "impact", "VOL_SINGLE", "--snapshots"])
 
@@ -228,4 +270,4 @@ class TestVolumeImpactSnapshots:
         assert ("snapshot impact needs the live mirror — pack-level "
                 "report above is catalog-only") in out
         assert "2 pack(s) (1.50 GB) become unrestorable" in out
-        mock_runner.restore_dry_run.assert_not_called()
+        walker.assert_not_called()

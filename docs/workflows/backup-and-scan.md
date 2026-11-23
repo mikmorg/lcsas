@@ -90,7 +90,7 @@ ECC, and burn.
 **Source refs:**
 - `src/lcsas/rustic/wrapper.py`: `RusticRunner` (Protocol) ·
   `SubprocessRusticRunner` (impl) · `init_repo` · `backup` · `snapshots` ·
-  `prune_dry_run`.
+  `restore`.
 - `src/lcsas/rustic/types.py`: `BackupResult` · `SnapshotInfo`.
 - `src/lcsas/packs/scanner.py`: `_PACK_NAME_RE` (pack-name regex).
 

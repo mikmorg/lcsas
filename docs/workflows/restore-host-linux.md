@@ -7,13 +7,13 @@ installed on a working Linux host, the host can mount the archive
 discs (or has access to extracted ISO trees), and the `rustic` binary is
 on `PATH`. The flow is:
 
-1. `lcsas restore plan` — read the catalog, ask `rustic` which packs the
-   target snapshot needs, then map those packs back to volumes
-   and emit a disc pick list.
-2. `lcsas restore exec` — re-run the same dry-run to learn the pack set,
-   ingest packs from each volume (interactive prompt or `--volume-dir`),
-   prepare a temporary rustic cache, then call `rustic restore` against
-   the cache.
+1. `lcsas restore plan` — work out which packs the target snapshot
+   needs by walking its trees in the live mirror with the Python reader
+   (`packs_for_snapshot()`, #948), then map those packs back to volumes
+   and emit a disc pick list.  No `rustic` is needed for this step.
+2. `lcsas restore exec` — work out the same pack set, ingest packs from
+   each volume (interactive prompt or `--volume-dir`), prepare a
+   temporary rustic cache, then call `rustic restore` against the cache.
 
 This is *not* the path for a restore after a disaster. Sibling docs
 cover the harder modes:
@@ -43,19 +43,21 @@ If the host is alive and the master catalog is intact, **start here**.
 ## Assumed environment
 
 - LCSAS installed (`pip install -e .` from source, or wheel).
-- `rustic >= 0.9.0` on `PATH` — checked up-front via
-  `check_binary_version("rustic", min_version=(0, 9, 0))` in both
-  `plan_restore()` and `prepare_restore()`
-  ([`src/lcsas/restore/orchestrator.py`](../../src/lcsas/restore/orchestrator.py)), which the
-  `restore plan` and `restore exec` handlers call.
+- `rustic >= 0.9.0` on `PATH` for `restore exec` — checked up-front via
+  `check_binary_version("rustic", min_version=(0, 9, 0))` in
+  `prepare_restore()`
+  ([`src/lcsas/restore/orchestrator.py`](../../src/lcsas/restore/orchestrator.py)).
+  `restore plan` does not need rustic.
 - A populated master catalog at `config.db_path` (the same SQLite file
   the burn pipeline writes to). Schema v10
   ([`recovery/docs/FORMAT.txt`](../../recovery/docs/FORMAT.txt), LCSAS CATALOG section).
 - A live rustic mirror for the repository at `repo_cfg.mirror_path` — the
-  planner *and* the executor both call `rustic restore --dry-run`
-  against the mirror to enumerate required pack IDs
-  (`SubprocessRusticRunner.restore_dry_run()` in
-  [`src/lcsas/rustic/wrapper.py`](../../src/lcsas/rustic/wrapper.py)).
+  planner *and* the executor both walk the snapshot's trees in the
+  mirror to enumerate required pack IDs (`packs_for_snapshot()` in
+  [`src/lcsas/packs/snapshot_coverage.py`](../../src/lcsas/packs/snapshot_coverage.py),
+  the walk `lcsas stage` uses to decide which snapshots go on a disc).
+  rustic 0.11 has no JSON output for `restore --dry-run`, so rustic is
+  not asked.
 - The repository password file from `repo_cfg.password_file` (used by
   `plan`) or supplied via `--password-file` (required by `exec`).
 - Enough free space under `config.staging_path` to hold every required
@@ -72,7 +74,7 @@ catalog), drop to the disc-only path documented in
 
 **Purpose:** Tell the owner which discs to fetch from
 storage before launching a restore. Pure read operation; no packs are
-copied and `rustic` is invoked only for `--dry-run`.
+copied and `rustic` is not run.
 
 **Prerequisites:**
 - `--config` pointing at a valid LCSAS TOML config
@@ -85,22 +87,23 @@ copied and `rustic` is invoked only for `--dry-run`.
   refuses to continue)
   (`plan_restore()`).
 - The rustic mirror at `repo_cfg.mirror_path` is online and the
-  snapshot ID resolves.
-- `rustic >= 0.9.0` on `PATH`
-  (`check_binary_version()` call in `plan_restore()`).
+  snapshot resolves: `latest` (the newest by time), a full ID, or an ID
+  prefix that only one snapshot has, as rustic accepts.
 
 **Steps:**
 1. The owner runs `lcsas --config /etc/lcsas/lcsas.toml restore plan
-   <snapshot_id> --repo <name>` — parser definitions in the
+   <snapshot> --repo <name>` — parser definitions in the
    `restore plan` subparser of
    [`build_parser()`](../../src/lcsas/cli/parser.py).
 2. `cmd_restore_plan()` loads config and opens the catalog
    ([`src/lcsas/cli/commands/restore.py`](../../src/lcsas/cli/commands/restore.py)).
-3. A `SubprocessRusticRunner` runs `rustic restore <id> --dry-run --json
-   /dev/null` against the live mirror to enumerate required pack IDs
+3. `packs_for_snapshot()` walks the snapshot's trees in the live mirror
+   with the Python reader (only tree blobs are read) to enumerate the
+   required pack IDs, and resolves `latest` or a prefix to the full ID
    (`plan_restore()` →
-   `SubprocessRusticRunner.restore_dry_run()` in
-   [`src/lcsas/rustic/wrapper.py`](../../src/lcsas/rustic/wrapper.py)).
+   [`src/lcsas/packs/snapshot_coverage.py`](../../src/lcsas/packs/snapshot_coverage.py)).
+   A wrong password, an unknown snapshot or a tree that cannot be read
+   stops the command with a sentence saying which.
 4. `RestorePlanner.generate_pick_list_v2()` joins those pack IDs against
    the `volume_packs` table to build `{volume_label -> [PackSource, ...]}`
    (each pack carrying its alternate volumes, RST-07) and flags missing
@@ -117,7 +120,8 @@ copied and `rustic` is invoked only for `--dry-run`.
   an active volume.
 - Exit `1` when one or more required packs cannot be found on any
   volume in the catalog (the owner must locate or rebuild the disc; see
-  the "missing discs" section).
+  the "missing discs" section), or when the snapshot's packs cannot be
+  worked out (wrong password, no such snapshot, damaged mirror).
 - A non-fatal `WARNING` block when packs only live on `DEPRECATED` /
   `DESTROYED` volumes — the discs may still exist and be readable,
   and can be passed to `restore exec` once mounted
@@ -141,16 +145,16 @@ copied and `rustic` is invoked only for `--dry-run`.
   alive); no disc is read.
 
 **Test coverage:** Existing —
+- `tests/integration/test_owner_restore_commands.py::test_restore_plan_prints_a_pick_list`
+  — a real rustic repository staged onto two TEST_TINY discs by real
+  xorriso; `restore plan latest` names both discs (#948).
 - `tests/unit/test_cli_restore.py::TestRestoreParser::test_restore_plan_parser`
 - `tests/unit/test_cli_restore.py::TestCmdRestorePlan::test_plan_displays_pick_list`
 - `tests/unit/test_restore.py::TestRestorePlanner::test_basic_pick_list`,
   `test_missing_packs_detected`, `test_multi_volume_pick_list`,
   `test_empty_request`, `test_deprecated_volumes_excluded`.
 
-  **Gaps:** No end-to-end test exercises `plan` against a real
-  `rustic` binary; the integration tests skip when `rustic` is absent
-  (`CLAUDE.md` in the source repository, "Pytest writes temp files…" line).
-  No test asserts the pretty-printed output format used for
+  **Gaps:** No test asserts the pretty-printed output format used for
   scripting.
 
 **Source refs:**
@@ -161,8 +165,8 @@ copied and `rustic` is invoked only for `--dry-run`.
   ([`src/lcsas/cli/parser.py`](../../src/lcsas/cli/parser.py))
 - Planner: `RestorePlanner.generate_pick_list_v2()` in
   [`src/lcsas/restore/planner.py`](../../src/lcsas/restore/planner.py)
-- Rustic dry-run: `SubprocessRusticRunner.restore_dry_run()` in
-  [`src/lcsas/rustic/wrapper.py`](../../src/lcsas/rustic/wrapper.py)
+- Packs of a snapshot: `packs_for_snapshot()` in
+  [`src/lcsas/packs/snapshot_coverage.py`](../../src/lcsas/packs/snapshot_coverage.py)
 
 ## Workflow: `lcsas restore exec`
 
@@ -199,9 +203,9 @@ assembling required packs into a local cache and running
    for config and catalog; `prepare_restore()` in
    [`src/lcsas/restore/orchestrator.py`](../../src/lcsas/restore/orchestrator.py)
    for the password file and rustic).
-3. `rustic restore --dry-run` enumerates required packs
-   (`prepare_restore()` →
-   `SubprocessRusticRunner.restore_dry_run()`).
+3. `packs_for_snapshot()` enumerates required packs from the mirror,
+   as for `restore plan`, and resolves `latest` or a prefix to the full
+   snapshot ID that step 12 restores (`prepare_restore()`).
 4. `RestorePlanner.generate_pick_list_v2()` builds a pick list **with
    alternates** so corrupted packs can be retried from another volume
    ([`src/lcsas/restore/planner.py`](../../src/lcsas/restore/planner.py)).
@@ -239,7 +243,7 @@ assembling required packs into a local cache and running
     [`src/lcsas/restore/executor.py`](../../src/lcsas/restore/executor.py)).
 12. `RestoreExecutor.execute_restore()` invokes
     `rustic -r <cache> --password-file <pw> restore <id> <target>` with
-    a 6-hour timeout
+    the full ID resolved in step 3 and a 6-hour timeout
     ([`src/lcsas/restore/executor.py`](../../src/lcsas/restore/executor.py),
     `SubprocessRusticRunner.restore()` in
     [`src/lcsas/rustic/wrapper.py`](../../src/lcsas/rustic/wrapper.py)).
@@ -281,6 +285,10 @@ assembling required packs into a local cache and running
   alive, mirrors online.
 
 **Test coverage:** Existing —
+- `tests/integration/test_owner_restore_commands.py::test_restore_exec_volume_dir_restores_byte_identical`
+  — real rustic, discs extracted from real ISOs with
+  `xorriso -osirrox` (read-only files), `--volume-dir`, a snapshot
+  given by an ID prefix; the restored files match byte for byte (#948).
 - `tests/unit/test_cli_restore.py::TestRestoreParser::test_restore_exec_parser`,
   `test_restore_exec_with_volume_dir`, `test_restore_exec_with_cache_dir`.
 - `tests/unit/test_restore_executor.py` — full coverage of
@@ -411,7 +419,7 @@ the rustic `--password-file` contract).
 **Steps:**
 1. *`restore plan`*: reads the password from
    `config.repositories[<repo>].password_file`
-   (password-file check + `restore_dry_run()` call in
+   (password-file check + `packs_for_snapshot()` call in
    `plan_restore()`,
    [`src/lcsas/restore/orchestrator.py`](../../src/lcsas/restore/orchestrator.py)).
    The config loader resolves the path (the `resolve()` helper inside
@@ -517,7 +525,7 @@ the rustic CLI directly using the cache LCSAS just built.
 
 **Expected outcome:** Only the requested file/subtree appears under the
 final destination. Note that **all packs the snapshot needs** are still
-materialised in the cache because the dry-run enumerates the full
+materialised in the cache because the plan enumerates the full
 snapshot's pack set; partial restore saves time on the
 rustic-decompression side, not on the disc-ingest side.
 

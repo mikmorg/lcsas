@@ -679,7 +679,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Restore from a mounted or extracted LCSAS disc without any config "
             "file or live mirror. Works offline from any disc that contains "
             "catalog.db and the repository metadata. "
-            "Falls back to the tier-3 Python reader if rustic is not available."
+            "The restore is done by the tier-3 Python reader: it reads packs "
+            "from this disc and the discs under --volume-dir, and asks for "
+            "any other disc it needs."
         ),
     )
     fromdisc_p.set_defaults(func=cmd_restore_from_disc)
@@ -705,7 +707,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fromdisc_p.add_argument(
         "--volume-dir", type=Path, default=None,
-        help="Directory containing all pre-extracted volumes (no disc prompts).",
+        help="Directory of further discs, one per sub-directory (mounted or "
+             "extracted); no disc prompts.",
     )
     fromdisc_p.add_argument(
         "--catalog", type=Path, default=None,
@@ -713,11 +716,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fromdisc_p.add_argument(
         "--cache-dir", type=Path, default=None,
-        help="Reuse an existing restore cache directory instead of a temp dir.",
+        help="Pack cache directory: each disc's packs are copied here the "
+             "first time the disc is read, so each disc is needed once.",
     )
     fromdisc_p.add_argument(
         "--skip-verify", action="store_true", default=False,
-        help="Skip SHA-256 verification of ingested packs.",
+        help="No effect: the Python reader checks every blob it reads.",
     )
 
     # --- consolidate ---

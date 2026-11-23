@@ -527,18 +527,20 @@ class TestStandaloneSubprocess:
 
 # ── lcsas restore from-disc's in-process Python reader ──────────────
 #
-# _restore_with_python_reader runs the same reader in process when rustic
-# is not installed.  It must give the exit codes the bundled
+# _restore_with_python_reader runs the same reader in process (the whole
+# of from-disc since #948).  It must give the exit codes the bundled
 # python_reader.py gives (#875).
 
 
 def _in_process(tmp_path: Path, pw_file: Path, repo: Path) -> int:
     from lcsas.restore.orchestrator import _restore_with_python_reader
 
-    # The repository folder stands in for the disc: its data/ is the
-    # disc's data/, so nothing is linked.
+    # The repository folder stands in for the disc: its keys/index/
+    # snapshots are the disc's metadata, its data/ the disc's data/.
     return _restore_with_python_reader(
-        repo, repo, tmp_path / "output", pw_file, "latest",
+        repo, tmp_path / "output", pw_file, "latest",
+        search_paths=[repo], catalog_path=None, pack_cache_dir=None,
+        interactive=False, prompt=None,
     )
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
-import subprocess
 from typing import TYPE_CHECKING
 
 from lcsas.cli.commands.copy import _print_lost_volume_packs
@@ -25,16 +24,16 @@ def _print_snapshot_impact(
 ) -> None:
     """List snapshots that reference at-risk packs (FMA-08 phase 2).
 
-    Snapshot→pack mapping needs the live mirror + rustic (the same
-    ``restore_dry_run`` machinery the restore planner uses); the catalog
-    alone cannot provide it.  Every missing prerequisite degrades to a
-    message — never an error — because the pack-level report already
-    printed is complete catalog-only truth.
+    Snapshot→pack mapping needs the live mirror and the repository
+    password: the snapshot trees are walked with the Python reader, once
+    per repository (``snapshot_packs``, the walk ``restore plan`` uses,
+    #948); the catalog alone cannot provide it.  Every missing
+    prerequisite degrades to a message — never an error — because the
+    pack-level report already printed is complete catalog-only truth.
     """
     from lcsas.config.settings import LCSASConfig
     from lcsas.db.snapshots import list_snapshots
-    from lcsas.exceptions import BinaryError
-    from lcsas.utils.subprocess import check_binary_version
+    from lcsas.packs.snapshot_coverage import SnapshotPacksError, snapshot_packs
 
     degrade = ("snapshot impact needs the live mirror — pack-level "
                "report above is catalog-only")
@@ -42,14 +41,6 @@ def _print_snapshot_impact(
     if not isinstance(config, LCSASConfig):
         logger.warning("%s (pass --config).", degrade)
         return
-    try:
-        check_binary_version("rustic", min_version=(0, 9, 0))
-    except BinaryError as exc:
-        logger.warning("%s (%s)", degrade, exc)
-        return
-
-    from lcsas.rustic.wrapper import SubprocessRusticRunner
-    runner = SubprocessRusticRunner(tmpdir=config.staging_path)
 
     logger.info("")
     for repo_id in sorted(at_risk_by_repo, key=lambda r: repo_names.get(r, r)):
@@ -75,27 +66,50 @@ def _print_snapshot_impact(
                 "'lcsas scan' first.", name,
             )
             continue
+        try:
+            walked = {
+                s.snapshot_id: s for s in snapshot_packs(
+                    repo_cfg.mirror_path, repo_cfg.password_file)
+            }
+        except SnapshotPacksError as exc:
+            logger.warning(
+                "repo %s: cannot tell which snapshots are affected: %s",
+                name, exc,
+            )
+            continue
         affected = []
+        unchecked = 0
         for snap in snaps:
-            try:
-                plan = runner.restore_dry_run(
-                    snapshot_id=snap.snapshot_id,
-                    repo_path=repo_cfg.mirror_path,
-                    password_file=repo_cfg.password_file,
-                )
-            except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+            found = walked.get(snap.snapshot_id)
+            if found is None:
+                unchecked += 1
                 logger.warning(
-                    "repo %s snapshot %s: dry-run failed (%s) — cannot "
-                    "tell whether it is affected.",
-                    name, snap.snapshot_id, exc,
+                    "repo %s snapshot %s: not in the mirror — cannot tell "
+                    "whether it is affected.", name, snap.snapshot_id,
                 )
                 continue
-            if at_risk_shas & set(plan.required_pack_hashes):
+            if at_risk_shas & found.packs:
                 affected.append(snap)
+            elif found.unreadable:
+                # Some of its trees could not be read: its pack list may
+                # be short, so "not affected" is not known.
+                unchecked += 1
+                logger.warning(
+                    "repo %s snapshot %s: %d of its trees or blobs cannot be "
+                    "read in the mirror — cannot tell whether it is "
+                    "affected.", name, snap.snapshot_id, len(found.unreadable),
+                )
         if not affected:
-            logger.info(
-                "repo %s: no snapshot references an at-risk pack.", name
-            )
+            if unchecked:
+                logger.warning(
+                    "repo %s: no snapshot that could be checked references "
+                    "an at-risk pack; %d could not be checked.",
+                    name, unchecked,
+                )
+            else:
+                logger.info(
+                    "repo %s: no snapshot references an at-risk pack.", name
+                )
             continue
         logger.warning(
             "repo %s: %d snapshot(s) would become unrestorable:",
@@ -106,6 +120,11 @@ def _print_snapshot_impact(
                 "  %s  %s  paths=%s",
                 snap.snapshot_id, snap.timestamp or "<no timestamp>",
                 snap.paths,
+            )
+        if unchecked:
+            logger.warning(
+                "repo %s: %d more snapshot(s) could not be checked.",
+                name, unchecked,
             )
 
 

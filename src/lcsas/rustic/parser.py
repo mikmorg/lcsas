@@ -11,7 +11,7 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-from lcsas.rustic.types import BackupResult, PruneResult, RestorePlan, SnapshotInfo
+from lcsas.rustic.types import BackupResult, SnapshotInfo
 
 _logger = logging.getLogger(__name__)
 
@@ -121,52 +121,3 @@ def _iter_snapshot_dicts(
         for snap in members:
             if isinstance(snap, dict):
                 yield snap, group_key
-
-
-def parse_restore_plan_output(
-    snapshot_id: str,
-    output: str,
-) -> RestorePlan:
-    """Parse the JSON output of ``rustic restore --dry-run --json``.
-
-    Extracts the list of pack IDs required for the restore.
-    """
-    try:
-        data = json.loads(output)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"parse_restore_plan_output: failed to parse JSON for snapshot {snapshot_id} — "
-            f"rustic output format may have changed: {exc}"
-        ) from exc
-
-    if isinstance(data, dict):
-        packs = data.get("packs", data.get("pack_ids", []))
-        return RestorePlan(
-            snapshot_id=snapshot_id,
-            required_pack_hashes=packs if isinstance(packs, list) else [],
-            total_size_bytes=data.get("total_size", 0),
-            file_count=data.get("file_count", 0),
-        )
-
-    return RestorePlan(snapshot_id=snapshot_id)
-
-
-def parse_prune_output(output: str) -> PruneResult:
-    """Parse the JSON output of ``rustic prune --dry-run --json``."""
-    try:
-        data = json.loads(output)
-    except json.JSONDecodeError:
-        _logger.warning(
-            "parse_prune_output: failed to parse JSON — "
-            "rustic output format may have changed"
-        )
-        return PruneResult()
-
-    if isinstance(data, dict):
-        return PruneResult(
-            packs_to_delete=data.get("packs_to_delete", []),
-            packs_to_repack=data.get("packs_to_repack", []),
-            space_freed_bytes=data.get("space_freed", 0),
-        )
-
-    return PruneResult()
