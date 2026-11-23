@@ -36,6 +36,11 @@ from pathlib import Path
 RECOVERY = Path(__file__).resolve().parents[1]
 BIN = RECOVERY / "bin"
 PARITY_BUILD = RECOVERY / "build" / "parity"
+# Each rebuilt binary is kept here at bin/'s layout (rebuild() empties
+# the per-arch build dir for the next tool of that arch).  CI uploads it
+# when parity fails, so a C change's binaries can be taken from the run
+# instead of cross-built locally (bin-parity.yml).
+PARITY_OUT = RECOVERY / "build" / "parity-out"
 EXEMPT_FILE = RECOVERY / "BIN_PARITY_EXEMPT"
 SOURCE_DATE_EPOCH = "1735689600"  # matches repro-check; keep in sync.
 
@@ -169,6 +174,9 @@ def rebuild(t: Target) -> None:
     args.append(str(t.rebuilt))
     env = dict(os.environ, SOURCE_DATE_EPOCH=SOURCE_DATE_EPOCH)
     subprocess.run(args, cwd=RECOVERY, env=env, check=True)
+    keep = PARITY_OUT / t.arch / t.exe
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(t.rebuilt, keep)
 
 
 @dataclass

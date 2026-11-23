@@ -15,6 +15,9 @@
 #include <stddef.h>
 #include <stdio.h>
 
+/* #949: how many skipped disc labels a run remembers. */
+#define LCSAS_SKIPPED_MAX 64
+
 /* Tagged so that `struct lcsas_disc_locator`, which repo.h and tree.h
  * forward-declare, names this same type (#467). */
 typedef struct lcsas_disc_locator {
@@ -138,6 +141,22 @@ typedef struct lcsas_disc_locator {
      * input ended), so main() can tell "paused by the reader" (exit
      * 75) from a real failure (exit 1). */
     int reader_quit;
+
+    /* #949: labels the reader answered 's' for at the disc prompt ("I
+     * do not have this disc").  A pack is asked for only while some
+     * disc that holds it is not here; one whose discs were all skipped
+     * is "pack not found" at once, as in a run with no terminal, so
+     * the reader is asked at most once per disc.  Fixed size, no
+     * allocation: past LCSAS_SKIPPED_MAX a skipped label is not
+     * remembered (its disc may be asked for again). */
+    char   skipped_labels[LCSAS_SKIPPED_MAX][64];
+    size_t n_skipped;
+    /* #949: 's' at a prompt that named no disc (no usable catalog):
+     * ask for no more discs; the rest of the run is as non-interactive. */
+    int    stop_asking;
+    /* #949: packs answered "not found" because of an 's' answer, the
+     * one at the prompt included (each fails the item that needed it). */
+    unsigned long skipped_misses;
 } lcsas_disc_locator;
 
 /*
@@ -152,6 +171,13 @@ void lcsas_disc_locator_init(lcsas_disc_locator *l,
                              size_t n_paths,
                              lcsas_catalog *catalog,
                              int interactive);
+
+/*
+ * #949: at the end of a restore that left items out, name the discs
+ * the reader answered 's' for and how many items needed them, on `o`.
+ * Prints nothing when no 's' was answered.
+ */
+void lcsas_disc_locator_report_skips(const lcsas_disc_locator *l, FILE *o);
 
 /*
  * Mark `meta_disc` as the meta disc so the locator (a) never

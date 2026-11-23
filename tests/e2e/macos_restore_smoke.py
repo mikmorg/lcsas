@@ -602,7 +602,7 @@ def check_prompt_text(box: str) -> None:
         PROMPT_MARK,
         "Currently searching:",
         "Insert the right disc and press ENTER to retry.",
-        "Type 'q' then ENTER to abort.",
+        "Type 'q' then ENTER to stop for now.",
         "Single-drive restore",  # restore.sh passed --meta-disc
     ):
         if want not in box:

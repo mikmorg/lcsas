@@ -144,7 +144,7 @@ def _box(*labels: str, auto: bool = True, no_record: bool = False) -> bytes:
         rows.append("| (catalog has no record of this pack ID)                  |")
     rows += ["|" + " " * 58 + "|",
              "| Insert the right disc and press ENTER to retry.          |",
-             "| Type 'q' then ENTER to abort.                            |"]
+             "| Type 'q' then ENTER to stop for now.                     |"]
     if auto:
         rows.append("| (A disc that mounts by itself is found without ENTER.)   |")
     rows.append("+" + "-" * 58 + "+")

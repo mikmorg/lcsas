@@ -480,8 +480,34 @@ class DiscSearch:
             else:
                 self._log(f"Cannot create the pack cache {pack_cache}: {err}; "
                           "the discs are read directly.")
+        # #949: the answer 's' ("I do not have this disc"), as tier 1's
+        # disc_locator.c: the labels skipped this run (in order), whether
+        # 's' at a box naming no disc stopped every disc question, and
+        # how many packs were not found because of an 's'.
+        self.skipped_labels: list[str] = []
+        self.stop_asking = False
+        self.skipped_misses = 0
 
     # ── Interface ────────────────────────────────────────────────
+
+    def report_skips(self) -> list[str]:
+        """#949: the end-of-restore lines naming the skipped discs (tier
+        1's ``lcsas_disc_locator_report_skips``); empty with no 's'."""
+        if not self.skipped_misses:
+            return []
+        lines: list[str] = []
+        if self.skipped_labels:
+            lines.append(
+                f"Skipped discs: {', '.join(self.skipped_labels)}.")
+        if self.stop_asking:
+            lines.append("No disc was asked for after the answer 's'.")
+        lines.append(
+            f"{self.skipped_misses} item(s) need a disc that was not in a "
+            "drive; see RESTORE_FAILURES.txt.")
+        lines.append(
+            "If you find a disc later, run the same restore again with it "
+            "in a drive; files already restored are skipped.")
+        return lines
 
     def set_index_packs(self, ids: Iterable[str]) -> None:
         """The pack ids this repository's index names: the only packs
@@ -1107,12 +1133,17 @@ class DiscSearch:
             text = "..." + text[-51:]
         return f"|   {text:<54s} |"
 
-    def _print_swap_prompt(self, pack_id: str) -> None:
+    def _print_swap_prompt(
+        self, pack_id: str,
+        cat_result: tuple[list[str], str] | None = None,
+    ) -> None:
         """Render the LCSAS disc-swap prompt to stderr.
 
         Mirrors the framed prompt printed by ``recovery/src/lcsas-restore/
         disc_locator.c::print_prompt`` so the blind-restore harness sees
         an identical PASS marker regardless of which tier ran.
+        *cat_result* is ``_lookup_volume_labels``'s answer with the
+        skipped discs taken out (#949); looked up here when not given.
         """
         bar = "+" + "-" * 58 + "+"
         lines = [
@@ -1124,7 +1155,9 @@ class DiscSearch:
         # The catalog only adds a hint; a disc or folder that cannot be
         # read must never stop the prompt (rc10 sweep): every probe of it
         # goes through _DiscFs, which says "not there" instead of raising.
-        cat_result = self._lookup_volume_labels(pack_id)
+        if cat_result is None:
+            cat_result = self._lookup_volume_labels(pack_id)
+        names_discs = cat_result is not None and bool(cat_result[0])
         if cat_result is None:
             # No --catalog supplied (or catalog unreadable).  Keep the
             # legacy "no catalog available" wording so backwards-compat
@@ -1188,7 +1221,21 @@ class DiscSearch:
         lines.extend([
             "|                                                          |",
             "| Insert the right disc and press ENTER to retry.          |",
-            "| Type 'q' then ENTER to abort.                            |",
+        ])
+        # #949: the third answer, as tier 1 words it.
+        if names_discs:
+            lines.extend([
+                "| If you do not have it: type 's' then ENTER.  The files   |",
+                "| that need it are skipped and listed at the end.          |",
+            ])
+        else:
+            lines.extend([
+                "| If you have no more discs: type 's' then ENTER.  Files   |",
+                "| on discs not in a drive are skipped and listed at the    |",
+                "| end; no disc is asked for again.                         |",
+            ])
+        lines.extend([
+            "| Type 'q' then ENTER to stop for now.                     |",
             bar,
             "> ",
         ])
@@ -1208,19 +1255,49 @@ class DiscSearch:
         if hit is not None:
             return hit
 
-        if not self.interactive:
-            searched = ", ".join(str(p) for p in self._pack_search_paths)
-            raise FileNotFoundError(
-                f"Pack file not found: {pack_id}\n"
-                f"Looked in: {searched}"
-            )
+        searched = ", ".join(str(p) for p in self._pack_search_paths)
+        not_found = FileNotFoundError(
+            f"Pack file not found: {pack_id}\n"
+            f"Looked in: {searched}"
+        )
+        if not self.interactive or self.stop_asking:
+            if self.stop_asking:
+                self.skipped_misses += 1
+            raise not_found
 
         # Interactive: prompt-and-retry loop, bounded.  'q' or the end of
         # input stops the WHOLE restore (#658), as in tier 1: failing
         # just this file would ask for a disc again for the next one.
         for _ in range(self._DISC_SWAP_MAX_RETRIES):
-            self._print_swap_prompt(pack_id)
+            # #949: the discs the box names, without the skipped ones; a
+            # pack whose discs were all skipped is not found at once.
+            cat_result = self._lookup_volume_labels(pack_id)
+            offered: list[str] = []
+            if cat_result is not None and cat_result[0]:
+                offered = [lbl for lbl in cat_result[0]
+                           if lbl not in self.skipped_labels]
+                if not offered:
+                    self._log(f"pack not found: {pack_id} (on a skipped disc)")
+                    self.skipped_misses += 1
+                    raise not_found
+                cat_result = (offered, cat_result[1])
+            self._print_swap_prompt(pack_id, cat_result)
             line = self._prompt_in()
+            # Tier 1 reads the answer's first character: 's', "skip".
+            if line[:1] in ("s", "S"):
+                self.skipped_misses += 1
+                if not offered:
+                    self.stop_asking = True
+                    self._prompt_out(
+                        "[lcsas-restore] no disc is asked for again; files "
+                        "on discs not in a drive are listed at the end.\n")
+                    raise not_found
+                for lbl in offered:
+                    self.skipped_labels.append(lbl)
+                    self._prompt_out(
+                        f"[lcsas-restore] skipping disc {lbl}; the files "
+                        "that need it are listed at the end.\n")
+                raise not_found
             if not line or line.strip().lower() == "q":
                 if line:
                     self._prompt_out("[lcsas-restore] aborted by user\n")
@@ -1244,11 +1321,7 @@ class DiscSearch:
                 "(still not found -- check the disc label and try again)\n"
             )
 
-        searched = ", ".join(str(p) for p in self._pack_search_paths)
-        raise FileNotFoundError(
-            f"Pack file not found: {pack_id}\n"
-            f"Looked in: {searched}"
-        )
+        raise not_found
 
     def read_pack_range(self, pack_id: str, offset: int, length: int) -> bytes:
         """Read *length* bytes at *offset* of the first copy of *pack_id*

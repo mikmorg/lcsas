@@ -191,6 +191,8 @@ When the restore needs a data disc, it shows a box like this:
 
 Take the disc that is in the drive out, put in the disc the box
 names, and press Enter.  Use the same drive the meta disc was in.
+If you do not have that disc, type S and press Enter (see "A DISC IS
+MISSING OR WILL NOT READ").
 
 The box names the disc from the catalog of the newest data disc.
 If you skipped that disc (S), the first box may not name a disc yet.
@@ -203,6 +205,32 @@ The first time the restore reads from a data disc, it copies all of
 that disc's packs to this computer, so you put each disc in about
 once.  The copy sits in the tools folder (usually on drive C:) and
 is deleted when the restore has finished.
+
+────────────────────────────────────────────────────────────────────
+A DISC IS MISSING OR WILL NOT READ
+────────────────────────────────────────────────────────────────────
+
+The disc box names the discs that hold the data it needs next.  If
+you cannot give it one of them:
+
+  1. Every disc with the same label holds the same data.  If there is
+     another copy of that label, use it.
+  2. If you have no copy, type S and press Enter at the disc box.  The
+     discs it named are skipped for the rest of the restore: the files
+     that need them are not restored, everything the other discs hold
+     is, and those discs are not asked for again.  When the box names
+     no disc, S says you have no more discs: no disc is asked for
+     again.
+  3. At the end the restore names the skipped discs and how many items
+     need them (code 4).  The items are listed in RESTORE_FAILURES.txt
+     as "pack not found".
+  4. If you find a skipped disc later, double-click "Resume LCSAS
+     restore.bat" on your Desktop and put the disc in when it is asked
+     for.  Files already restored are skipped.
+
+A disc that is in the drive but will not read: see PHYSICAL DISC
+PROBLEMS.  Q then Enter stops the restore for now, with nothing
+skipped (see STOPPING AND CARRYING ON).
 
 ────────────────────────────────────────────────────────────────────
 STOPPING AND CARRYING ON

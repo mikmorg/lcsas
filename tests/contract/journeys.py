@@ -139,7 +139,7 @@ class Phrase:
 
 #: Tier 1's disc question (the same program under both scripts): its
 #: box ends with the abort line, perhaps a note, the frame, then "> ".
-TIER1_BOX_END = r"Type 'q' then ENTER to abort\.[\s\S]*?\n\+-+\+\r?\n> "
+TIER1_BOX_END = r"Type 'q' then ENTER to stop for now\.[\s\S]*?\n\+-+\+\r?\n> "
 
 PROMPTS: tuple[Phrase, ...] = (
     Phrase("newest data disc", sh=r"ENTER, S or Q: ", bat=r"Newest data disc: "),
@@ -336,6 +336,9 @@ class Journey(_PerScript):
     args: tuple[Arg, ...] = ()
     #: Type q at tier 1's n-th disc question (1 = the first).
     quit_at_disc: int | None = None
+    #: Type s ("I do not have this disc", #949) at tier 1's n-th disc
+    #: question (1 = the first).
+    skip_at_disc: int | None = None
     #: What happens when the person carries on.
     then: Leg | None = None
 
@@ -703,7 +706,7 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
     env.update(journey.env)
 
     def leg(cmd: list[str], typed_: tuple[Typed, ...],
-            quit_at: int | None) -> JourneyResult:
+            quit_at: int | None, skip_at: int | None = None) -> JourneyResult:
         typed = list(typed_)
         asked: list[str] = []
         discs = [0]
@@ -719,6 +722,8 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
                 return (str(target) + "\n").encode()
             if prompt.kind == "disc":
                 discs[0] += 1
+                if discs[0] == skip_at:
+                    return b"s\n"
                 label = picker.pick(prompt.labels)
                 if label is None or discs[0] == quit_at:
                     return b"q\n"
@@ -751,7 +756,8 @@ def run_journey_sh(journey: Journey, archive: Archive, work: Path,
     # does (#926), and the driver answers it.
     result = leg(["sh", str(archive.meta / "restore.sh"),
                   *(arg_text(a, archive) for a in journey.args)],
-                 journey.typed_for("sh"), journey.quit_at_disc)
+                 journey.typed_for("sh"), journey.quit_at_disc,
+                 journey.skip_at_disc)
     if journey.then is not None and (tools / "resume.sh").is_file():
         result.then = leg(["sh", str(tools / "resume.sh")],
                           journey.then.typed_for("sh"), None)
@@ -803,7 +809,7 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
     _map_drive(wine.prefix, "d", archive.meta)  # the one drive: META in
 
     def leg(cmd: str | list[str], env: dict[str, str], typed_: tuple[Typed, ...],
-            quit_at: int | None) -> JourneyResult:
+            quit_at: int | None, skip_at: int | None = None) -> JourneyResult:
         typed = list(typed_)
         asked: list[str] = []
         discs = 0
@@ -830,6 +836,9 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
                     run.send("")
                 elif hit.key == "disc":
                     discs += 1
+                    if discs == skip_at:
+                        run.send("s")
+                        continue
                     label = picker.pick(box_labels(text[hit.start:hit.end]))
                     if label is None or discs == quit_at:
                         run.send("q")
@@ -870,7 +879,8 @@ def run_journey_bat(journey: Journey, archive: Archive, wine: Any,
     result = leg([f"C:\\{name}\\recovery\\scripts\\restore.bat",
                   *(arg_text(a, archive) for a in journey.args)],
                  {"LCSAS_RELOCATED": "D:\\", **journey.env},
-                 journey.typed_for("bat"), journey.quit_at_disc)
+                 journey.typed_for("bat"), journey.quit_at_disc,
+                 journey.skip_at_disc)
     launcher = wine.desktop / "Resume LCSAS restore.bat"
     if journey.then is not None and launcher.is_file():
         # The drive is empty; the launcher runs as wine can run it (its
@@ -940,6 +950,27 @@ JOURNEYS: tuple[Journey, ...] = (
                       asked=("newest data disc", "which set", "folder",
                              "password"),
                       tools_folder="kept", disc_asked=True),
+        differs={"bat": Differs(because=("menu by number",))},
+        then=Leg(typed=(Password(PHOTOS), "n"),
+                 expect=Expect(exit=ScriptExit.OK, asked=("password", "another set"),
+                               restored=PHOTOS, tools_folder="removed",
+                               disc_asked=True)),
+    ),
+    # #949: the person does not have the disc tier 1 asks for and types
+    # s.  The files on the discs in reach are restored, the rest listed,
+    # exit 4, and the end names the skipped disc; the tools folder stays,
+    # and carrying on later with the disc in restores the rest.
+    Journey(
+        name="s at the disc prompt, then carry on with the disc",
+        archive="two sets",
+        typed=(NEWEST, Pick(PHOTOS), Password(PHOTOS)),
+        skip_at_disc=1,
+        expect=Expect(exit=ScriptExit.NOT_ALL_RESTORED,
+                      asked=("newest data disc", "which set", "folder",
+                             "password"),
+                      tools_folder="kept", disc_asked=True,
+                      says=(r"Skipped discs: LCSAS_\w+",
+                            r"type s at its\s+question")),
         differs={"bat": Differs(because=("menu by number",))},
         then=Leg(typed=(Password(PHOTOS), "n"),
                  expect=Expect(exit=ScriptExit.OK, asked=("password", "another set"),

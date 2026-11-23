@@ -2642,7 +2642,8 @@ if defined RESUME_CMD (
 )
 echo  It skips the files already restored.  Run by a double-click or
 echo  from a Command Prompt window, it asks for each disc it needs by
-echo  its label.
+echo  its label.  If you do not have one of them, type s at its
+echo  question: that disc is skipped and the restore finishes.
 echo ============================================================
 pause
 exit /b 4

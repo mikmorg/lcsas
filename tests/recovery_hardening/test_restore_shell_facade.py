@@ -425,7 +425,7 @@ _TIER1_BOX = """\
 |   /media                                                 |
 |                                                          |
 | Insert the right disc and press ENTER to retry.          |
-| Type 'q' then ENTER to abort.                            |
+| Type 'q' then ENTER to stop for now.                     |
 | (A disc that mounts by itself is found without ENTER.)   |
 +----------------------------------------------------------+"""
 
@@ -515,7 +515,7 @@ box() {
     frame /media/lcsas-blind/LCSAS_D3
     echo "|                                                          |"
     echo "| Insert the right disc and press ENTER to retry.          |"
-    echo "| Type 'q' then ENTER to abort.                            |"
+    echo "| Type 'q' then ENTER to stop for now.                     |"
     echo "| (A disc that mounts by itself is found without ENTER.)   |"
     echo "+----------------------------------------------------------+"
     printf '> '

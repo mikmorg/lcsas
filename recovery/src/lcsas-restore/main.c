@@ -710,6 +710,7 @@ main(int argc, char **argv)
             fprintf(stderr,
                     "[lcsas-restore] finished with errors: every other "
                     "item was restored to %s\n", target);
+            lcsas_disc_locator_report_skips(&locator, stderr);
             rc = EXIT_NOT_ALL_RESTORED;
             goto out;
         }

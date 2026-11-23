@@ -43,7 +43,7 @@ BOX_NO_HINT = """\
 | insert the disc named above into the SAME drive.         |
 |                                                          |
 | Insert the right disc and press ENTER to retry.          |
-| Type 'q' then ENTER to abort.                            |
+| Type 'q' then ENTER to stop for now.                     |
 | (A disc that mounts by itself is found without ENTER.)   |
 +----------------------------------------------------------+
 > """

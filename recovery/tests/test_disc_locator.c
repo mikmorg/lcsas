@@ -380,6 +380,200 @@ roomy_base(void)
     return "/tmp";
 }
 
+/*
+ * #949: the answer 's' ("I do not have this disc") at the disc prompt.
+ * One locator for the whole run, as main() has: the skipped labels are
+ * remembered, a pack whose discs were all skipped is not found at once,
+ * and K discs give at most K boxes.  Returns the number of failures.
+ */
+static int
+locate_with_answers(lcsas_disc_locator *l, const char *dir,
+                    const unsigned char *missing, int *boxes)
+{
+    char found[2048];
+    int rc;
+    (void)dir;
+    alarm(20);
+    rc = lcsas_disc_locate_pack(l, missing, found, sizeof found);
+    alarm(0);
+    /* Every box drawn so far in this run's transcript. */
+    *boxes = count_lines_with(l->prompt_out, "| Pack ");
+    return rc;
+}
+
+static int
+test_skip_answer(const char *tmpdir)
+{
+    int bad = 0;
+    char cat_path[512];
+    char sql[4096];
+    unsigned char p1[32], p2[32], p3[32];
+    const char *h1 = "1111111111111111111111111111111111111111111111111111111111111111";
+    const char *h2 = "2222222222222222222222222222222222222222222222222222222222222222";
+    const char *h3 = "3333333333333333333333333333333333333333333333333333333333333333";
+    const char *search[1];
+    lcsas_disc_locator l;
+    lcsas_catalog *cat;
+    int pfd[2];
+    FILE *in;
+    FILE *out;
+    FILE *rep;
+    int boxes;
+    int rc;
+
+    memset(p1, 0x11, 32);
+    memset(p2, 0x22, 32);
+    memset(p3, 0x33, 32);
+    search[0] = tmpdir;
+    snprintf(cat_path, sizeof cat_path, "%s/skip_catalog.db", tmpdir);
+    /* p1 on A and B; p2 on B and C; p3 on A only. */
+    snprintf(sql, sizeof sql,
+             "%s"
+             "INSERT INTO packs VALUES(1, '%s', 10, 'r');"
+             "INSERT INTO packs VALUES(2, '%s', 10, 'r');"
+             "INSERT INTO packs VALUES(3, '%s', 10, 'r');"
+             "INSERT INTO volumes VALUES(1, 'DISC_A_0001', 'u1', 'BD25', 'VERIFIED');"
+             "INSERT INTO volumes VALUES(2, 'DISC_B_0002', 'u2', 'BD25', 'VERIFIED');"
+             "INSERT INTO volumes VALUES(3, 'DISC_C_0003', 'u3', 'BD25', 'VERIFIED');"
+             "INSERT INTO volume_packs VALUES(1, 1);"
+             "INSERT INTO volume_packs VALUES(2, 1);"
+             "INSERT INTO volume_packs VALUES(2, 2);"
+             "INSERT INTO volume_packs VALUES(3, 2);"
+             "INSERT INTO volume_packs VALUES(1, 3);",
+             "CREATE TABLE schema_version (version INTEGER);"
+             "INSERT INTO schema_version VALUES (10);"
+             "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+             "  size_bytes INTEGER, repo_id TEXT);"
+             "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT,"
+             "  uuid TEXT, media_type TEXT, status TEXT);"
+             "CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);",
+             h1, h2, h3);
+    if (make_catalog(cat_path, sql) != 0) {
+        fprintf(stderr, "FAIL 949: catalog\n");
+        return 1;
+    }
+
+    /* Run 1: a catalog that names the discs. */
+    cat = lcsas_catalog_open(cat_path);
+    out = tmpfile();
+    if (!cat || !out || pipe(pfd) != 0) {
+        fprintf(stderr, "FAIL 949: setup\n");
+        if (cat) lcsas_catalog_close(cat);
+        if (out) fclose(out);
+        return 1;
+    }
+    /* Answers: 's' for p1's box (A, B), 's' for p2's box (C only). */
+    if (write(pfd[1], "s\nS\n", 4) != 4) { /* input ends early: q */ }
+    close(pfd[1]);
+    in = fdopen(pfd[0], "r");
+    lcsas_disc_locator_init(&l, search, 1, cat, 1);
+    lcsas_disc_locator_set_auto_mount(&l, 0);
+    if (in) l.prompt_in = in;
+    l.prompt_out = out;
+
+    rc = locate_with_answers(&l, tmpdir, p1, &boxes);
+    if (rc != -1 || l.reader_quit || boxes != 1 || l.n_skipped != 2
+            || strcmp(l.skipped_labels[0], "DISC_B_0002") != 0
+            || strcmp(l.skipped_labels[1], "DISC_A_0001") != 0) {
+        fprintf(stderr, "FAIL 949: s for p1 (rc %d quit %d boxes %d n %lu)\n",
+                rc, l.reader_quit, boxes, (unsigned long)l.n_skipped);
+        bad++;
+    }
+    if (count_lines_with(out, "If you do not have it: type 's'") != 1
+            || count_lines_with(out, "skipping disc DISC_A_0001") != 1
+            || box_lines_are_60(out, "949 skip") <= 0) {
+        fprintf(stderr, "FAIL 949: box text for p1\n"); bad++;
+    }
+    /* p3 is only on A, skipped: not found, no box. */
+    rc = locate_with_answers(&l, tmpdir, p3, &boxes);
+    if (rc != -1 || boxes != 1 || l.misses != 1) {
+        fprintf(stderr, "FAIL 949: p3 asked again (rc %d misses %lu)\n",
+                rc, l.misses);
+        bad++;
+    }
+    /* p2 is on B (skipped) and C: the box names C only. */
+    rc = locate_with_answers(&l, tmpdir, p2, &boxes);
+    if (rc != -1 || boxes != 2 || l.n_skipped != 3
+            || count_lines_with(out, "|   DISC_C_0003") != 1
+            || count_lines_with(out, "|   DISC_B_0002") != 1) {
+        fprintf(stderr, "FAIL 949: p2 box (rc %d boxes %d n %lu)\n",
+                rc, boxes, (unsigned long)l.n_skipped);
+        bad++;
+    }
+    /* Three discs, two boxes, three items not found. */
+    if (l.misses != 2 || l.skipped_misses != 3 || l.stop_asking) {
+        fprintf(stderr, "FAIL 949: bounded prompts (misses %lu, skipped %lu)\n",
+                l.misses, l.skipped_misses);
+        bad++;
+    }
+    rep = tmpfile();
+    if (rep) {
+        lcsas_disc_locator_report_skips(&l, rep);
+        if (count_lines_with(rep,
+                "Skipped discs: DISC_B_0002, DISC_A_0001, DISC_C_0003.") != 1
+                || count_lines_with(rep, "3 item(s) need a disc") != 1
+                || count_lines_with(rep, "No disc was asked for") != 0) {
+            fprintf(stderr, "FAIL 949: report\n"); bad++;
+        }
+        fclose(rep);
+    }
+    lcsas_disc_locator_free(&l);
+    if (in) fclose(in); else close(pfd[0]);
+    fclose(out);
+    lcsas_catalog_close(cat);
+
+    /* Run 2: no catalog.  's' stops every later disc question. */
+    out = tmpfile();
+    if (!out || pipe(pfd) != 0) {
+        fprintf(stderr, "FAIL 949: setup 2\n");
+        if (out) fclose(out);
+        return bad + 1;
+    }
+    if (write(pfd[1], "s\n", 2) != 2) { /* input ends early: q */ }
+    close(pfd[1]);
+    in = fdopen(pfd[0], "r");
+    lcsas_disc_locator_init(&l, search, 1, NULL, 1);
+    lcsas_disc_locator_set_auto_mount(&l, 0);
+    if (in) l.prompt_in = in;
+    l.prompt_out = out;
+    rc = locate_with_answers(&l, tmpdir, p1, &boxes);
+    if (rc != -1 || l.reader_quit || !l.stop_asking || boxes != 1
+            || count_lines_with(out, "If you have no more discs") != 1
+            || box_lines_are_60(out, "949 stop") <= 0) {
+        fprintf(stderr, "FAIL 949: s with no catalog\n"); bad++;
+    }
+    rc = locate_with_answers(&l, tmpdir, p2, &boxes);
+    if (rc != -1 || boxes != 1 || l.skipped_misses != 2) {
+        fprintf(stderr, "FAIL 949: asked again after stop\n"); bad++;
+    }
+    rep = tmpfile();
+    if (rep) {
+        lcsas_disc_locator_report_skips(&l, rep);
+        if (count_lines_with(rep, "Skipped discs") != 0
+                || count_lines_with(rep, "No disc was asked for") != 1
+                || count_lines_with(rep, "2 item(s) need a disc") != 1) {
+            fprintf(stderr, "FAIL 949: report 2\n"); bad++;
+        }
+        fclose(rep);
+    }
+    lcsas_disc_locator_free(&l);
+    if (in) fclose(in); else close(pfd[0]);
+    fclose(out);
+
+    /* No answer 's': the report prints nothing. */
+    lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+    rep = tmpfile();
+    if (rep) {
+        lcsas_disc_locator_report_skips(&l, rep);
+        if (ftell(rep) != 0) {
+            fprintf(stderr, "FAIL 949: report with no skip\n"); bad++;
+        }
+        fclose(rep);
+    }
+    lcsas_disc_locator_free(&l);
+    return bad;
+}
+
 int
 main(void)
 {
@@ -2659,6 +2853,8 @@ main(void)
             }
         }
     }
+
+    fails += test_skip_answer(tmpdir);
 
     /* Cleanup tmpdir. */
     {
