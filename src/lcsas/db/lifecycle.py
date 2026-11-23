@@ -95,7 +95,7 @@ def _update_status(
         allowed = _TRANSITIONS.get(current, set())
         if status not in allowed:
             raise ValueError(
-                f"Invalid status transition for volume {volume_id}: "
+                f"Invalid status transition for {volume.label}: "
                 f"{current} → {status} (allowed: {sorted(allowed)})"
             )
         # Safety check: refuse DEPRECATED if packs would become unreplicated.
@@ -888,7 +888,8 @@ class VolumeLifecycle:
         refusal = self.may_delete(volume_id, never_burned=never_burned)
         if refusal is not None:
             raise ValueError(
-                f"Volume {volume_id} may not be deleted ({refusal.kind}: "
+                f"{get_volume_by_id(self._conn, volume_id).label} may not "
+                f"be deleted ({refusal.kind}: "
                 f"{refusal.status})"
             )
         _delete_volume(self._conn, volume_id)

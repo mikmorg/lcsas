@@ -11,6 +11,15 @@ from lcsas.db.models import VolumeCopy
 from lcsas.utils.timestamps import utc_now
 
 
+def _volume_name(conn: sqlite3.Connection, volume_id: int) -> str:
+    """A volume as messages name it: its label, the name the owner knows
+    and writes on the disc, not its catalog row id (#968)."""
+    row = conn.execute(
+        "SELECT label FROM volumes WHERE volume_id = ?", (volume_id,)
+    ).fetchone()
+    return str(row[0]) if row is not None else f"volume {volume_id}"
+
+
 def _row_to_copy(row: sqlite3.Row) -> VolumeCopy:
     # iso_sha256, last_verified_at, media_serial may be absent on v3 catalogs
     try:
@@ -121,7 +130,8 @@ def add_volume_copy(
     ).fetchone()
     if row is None:
         raise RuntimeError(
-            f"Failed to insert/update the disc record for volume {volume_id} at {location}"
+            f"Failed to insert/update the disc record for "
+            f"{_volume_name(conn, volume_id)} at {location}"
         )
     return _row_to_copy(row)
 
@@ -280,12 +290,14 @@ def move_volume_copy(
         )
     except sqlite3.IntegrityError:
         raise ValueError(
-            f"A disc of volume {volume_id} is already recorded at '{to_location}'. "
+            f"A disc of {_volume_name(conn, volume_id)} is already recorded "
+            f"at '{to_location}'. "
             f"The disc cannot be moved there without first removing that disc record."
         ) from None
     if result.rowcount == 0:
         raise ValueError(
-            f"No in-service disc of volume {volume_id} at '{from_location}'"
+            f"No in-service disc of {_volume_name(conn, volume_id)} at "
+            f"'{from_location}'"
         )
     # Audit trail: record the move as a LOCATION_MOVE event. The new location
     # goes in the dedicated `location` column; from/to are also serialised
@@ -416,7 +428,8 @@ def deprecate_copy(
     )
     if result.rowcount == 0:
         raise ValueError(
-            f"No in-service disc of volume {volume_id} at '{location}'"
+            f"No in-service disc of {_volume_name(conn, volume_id)} at "
+            f"'{location}'"
         )
     _record_disc_fate(
         conn, volume_id, location, "deprecated (out of service)"
@@ -454,7 +467,8 @@ def destroy_copy(
     )
     if result.rowcount == 0:
         raise ValueError(
-            f"No disc of volume {volume_id} recorded at '{location}'"
+            f"No disc of {_volume_name(conn, volume_id)} recorded at "
+            f"'{location}'"
         )
     action = "lost" if lost else "destroyed"
     _record_disc_fate(

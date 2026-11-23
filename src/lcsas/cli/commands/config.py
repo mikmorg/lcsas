@@ -31,13 +31,19 @@ def cmd_config_check(args: argparse.Namespace) -> int:
     # blocks it; the check is where a typo must not read as "valid" (#515).
     # load_config has already printed each one as a warning.
     with open(args.config, "rb") as f:
-        if unknown_toml_keys(tomllib.load(f)):
+        raw = tomllib.load(f)
+        if unknown_toml_keys(raw):
             errors.append(
                 "unknown sections or keys (listed above): fix the typo or "
                 "remove them"
             )
     if config.collections:
         errors.extend(_config_check_collections(args, config))
+    defaults = raw.get("defaults")
+    errors.extend(_config_check_default_location(
+        args, config,
+        explicit=isinstance(defaults, dict) and "location" in defaults,
+    ))
     # #960: the hint goes on every disc; meet the problem here, not at
     # the first stage.
     from lcsas.config.settings import password_hint_problem
@@ -64,6 +70,43 @@ def cmd_config_check(args: argparse.Namespace) -> int:
     for err in errors:
         logger.error(f"  {err}")
     return 1
+
+
+def _config_check_default_location(
+    args: argparse.Namespace, config: LCSASConfig, *, explicit: bool,
+) -> list[str]:
+    """``config check`` error for a ``[defaults] location`` the catalog
+    does not know (#968): after ``location rename``, plain ``stage`` still
+    stages for the old name and ``burn`` refuses it.  A default the config
+    does not set (an install that stages by collection only) gets a
+    warning instead.  Not checked when there is no catalog yet; the
+    catalog is never created here."""
+    from lcsas.db.locations import list_locations
+    from lcsas.exceptions import CatalogError
+
+    db_path = _resolve_db_path(args, config)
+    try:
+        with _open_catalog(args, mode="read", db_path=db_path) as conn:
+            known = [loc.name for loc in list_locations(conn)]
+    except CatalogError:
+        return []
+    name = config.default_location
+    if name in known:
+        return []
+    registered = ", ".join(known) if known else "none"
+    if not explicit:
+        logger.warning(
+            "The config sets no [defaults] location, so plain 'lcsas "
+            "stage' and 'lcsas burn' use %s, which is not a registered "
+            "location (registered: %s).", name, registered,
+        )
+        return []
+    return [
+        f"[defaults] location '{name}' is not a registered location "
+        f"(registered: {registered}). If it was renamed, change the "
+        f"config to the new name; otherwise register it with 'lcsas "
+        f"location add {name}'."
+    ]
 
 
 def _config_check_collections(
