@@ -1042,12 +1042,11 @@ HOW TO RESTORE (manual)
 2. Inspect catalog:
        sqlite3 /tmp/vol1/catalog.db "SELECT label FROM volumes"
 
-3. Copy pack files into a rustic-compatible cache layout:
-       for f in /tmp/vol*/data/*; do
-           sha=$(basename "$f")
-           prefix=${sha:0:2}
-           mkdir -p /tmp/cache/data/$prefix
-           cp "$f" /tmp/cache/data/$prefix/$sha
+3. Copy the pack files of every disc into one cache folder.  On a disc
+   they are in data/<first 2 characters>/<name>; keep that layout:
+       for d in /tmp/vol*/data/*/; do
+           mkdir -p "/tmp/cache/data/$(basename "$d")"
+           cp "$d"* "/tmp/cache/data/$(basename "$d")/"
        done
 
 4. Copy metadata (index, snapshots, keys, config) from any disc.
