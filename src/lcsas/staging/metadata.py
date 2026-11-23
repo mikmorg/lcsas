@@ -1111,8 +1111,11 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         description = config.archive_description or (
             "digital files backed up using LCSAS (Linux Cold Storage Archival Suite)"
         )
-        key_hints = config.key_storage_hints or (
-            "The archive's owner should have stored the password in a safe place.\n"
+        from lcsas.config.settings import usable_password_hint
+
+        # #960: a placeholder is no hint; say so instead of reassuring.
+        key_hints = usable_password_hint(config) or (
+            "The archive's owner gave no hint of where the password is kept.\n"
             "Check for a USB drive, paper printout, or password manager entry\n"
             "labeled 'LCSAS', 'backup password', or 'archive password'."
         )
@@ -1273,10 +1276,12 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
                         lines.append("  Password: an ordinary password (not split)")
                 lines.append("")
 
-        if config.key_storage_hints:
+        from lcsas.config.settings import usable_password_hint
+
+        if usable_password_hint(config):
             lines.append("WHERE TO FIND THE PASSWORD(S)")
             lines.append("-----------------------------")
-            lines.append(config.key_storage_hints)
+            lines.append(usable_password_hint(config))
             lines.append("")
 
         # #491: say that one password opens every repository ONLY when the

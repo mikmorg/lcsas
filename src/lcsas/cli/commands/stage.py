@@ -222,6 +222,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
             allow_low_redundancy=getattr(
                 args, "allow_low_redundancy", False,
             ),
+            allow_no_password_hint=getattr(
+                args, "allow_no_password_hint", False,
+            ),
         )
 
         if args.clean:
@@ -233,6 +236,18 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 return 1
             logger.info(f"Cleaned session: {session_ref}")
             return 0
+
+        # #960: no disc without a password hint, unless the owner says so.
+        from lcsas.config.settings import password_hint_problem
+        hint_problem = password_hint_problem(config)
+        if hint_problem is not None:
+            if not getattr(args, "allow_no_password_hint", False):
+                logger.error("%s", hint_problem)
+                return 1
+            logger.warning(
+                "Staging with no password hint (--allow-no-password-hint): "
+                "the discs say no hint was given."
+            )
 
         media_type = None
         if args.media:

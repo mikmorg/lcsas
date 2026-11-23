@@ -171,6 +171,14 @@ optical_device     = "/dev/sr0"
 label_prefix       = "ARCHIVE"
 metadata_reserve_mb = 100
 
+# Printed on every disc and on the estate card: where the heir finds the
+# password.  Name a person, not a findable place (docs/DISC_CONFIDENTIALITY.md).
+# `lcsas stage` refuses without a real hint (#960).
+[survivability]
+archive_owner     = "Jane Doe"
+technical_contact = "John Doe (john@example.com)"
+password_hints    = "Ask my sister Ann; the sealed envelope is with her"
+
 [repos.family]
 mirror_path   = "/mnt/mirror/family"
 password_file = "/root/keys/family.key"

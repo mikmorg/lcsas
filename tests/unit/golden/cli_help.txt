@@ -194,7 +194,8 @@ options:
 usage: lcsas stage [-h] [--media MEDIA] [--for-location FOR_LOCATION]
                    [--repo [REPO ...]] [--collection NAME] [--min-fill PCT]
                    [--partial] [--clean] [--force] [--session SESSION]
-                   [--dry-run] [--allow-split-drift] [--allow-low-redundancy]
+                   [--dry-run] [--allow-split-drift]
+                   [--allow-no-password-hint] [--allow-low-redundancy]
 
 options:
   -h, --help            show this help message and exit
@@ -223,6 +224,10 @@ options:
                         the recorded split (KEY-08). Logged as a volume event.
                         For multi-config edge cases only — discs may print
                         share instructions that do not match the real split.
+  --allow-no-password-hint
+                        Stage even though [survivability] password_hints is
+                        missing, empty or a placeholder. The discs then say no
+                        hint was given. Recorded as a volume event.
   --allow-low-redundancy
                         Stage a volume even if its RS03 error correction would
                         be below the 5% floor, or its content exceeds the
@@ -568,6 +573,7 @@ options:
 ===== lcsas consolidate --help =====
 usage: lcsas consolidate [-h] [--media-type TARGET_MEDIA] [--execute]
                          [--deprecate] [--location LOCATION]
+                         [--allow-no-password-hint]
                          VOLUME [VOLUME ...]
 
 positional arguments:
@@ -584,6 +590,10 @@ options:
   --location LOCATION   With --execute: the location the new volumes are
                         staged for (default: the configured default location).
                         A location given here must already exist.
+  --allow-no-password-hint
+                        With --execute: stage even though [survivability]
+                        password_hints is missing, empty or a placeholder.
+                        Recorded as a volume event.
 ===== lcsas verify --help =====
 usage: lcsas verify [-h] [--iso ISO] [--disc] [--device DEVICE]
                     [--mark-verified] [--mark-failed] [--detail DETAIL]
@@ -887,9 +897,12 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
 ===== lcsas estate card --help =====
-usage: lcsas estate card [-h] [--output OUTPUT]
+usage: lcsas estate card [-h] [--output OUTPUT] [--allow-no-password-hint]
 
 options:
   -h, --help            show this help message and exit
   --output OUTPUT, --out OUTPUT
                         Write the card here (default: stdout).
+  --allow-no-password-hint
+                        Print the card even though [survivability]
+                        password_hints is missing, empty or a placeholder.

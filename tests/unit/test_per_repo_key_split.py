@@ -103,6 +103,7 @@ def _write_toml(tmp_path: Path, body: str) -> Path:
 
 def test_repo_table_overrides_defaults(tmp_path: Path) -> None:
     cfg = _write_toml(tmp_path, (
+        "[survivability]\npassword_hints = 'Test hint: sealed envelope'\n"
         "[defaults]\nsplit = false\nsplit_threshold = 2\nsplit_shares = 5\n"
         '[repos.photos]\nmirror_path = "p"\n'
         "split = true\nsplit_threshold = 2\nsplit_shares = 3\n"
@@ -118,6 +119,7 @@ def test_repo_table_overrides_defaults(tmp_path: Path) -> None:
 
 def test_repo_table_can_turn_an_archive_wide_split_off(tmp_path: Path) -> None:
     cfg = _write_toml(tmp_path, (
+        "[survivability]\npassword_hints = 'Test hint: sealed envelope'\n"
         "[defaults]\nsplit = true\nsplit_threshold = 3\nsplit_shares = 5\n"
         '[repos.photos]\nmirror_path = "p"\n'
         '[repos.documents]\nmirror_path = "d"\nsplit = false\n'
@@ -406,6 +408,7 @@ def test_estate_card_cli_mixed_archive_uses_the_record(tmp_path: Path) -> None:
     (tmp_path / "p").mkdir()
     (tmp_path / "d").mkdir()
     cfg = _write_toml(tmp_path, (
+        "[survivability]\npassword_hints = 'Test hint: sealed envelope'\n"
         "[defaults]\nsplit = false\n"
         "[repos.photos]\n"
         f'mirror_path = "{tmp_path / "p"}"\n'
@@ -433,6 +436,7 @@ def test_estate_card_cli_uniform_archive_prints_recorded_kn(
     """#573: the card prints the split actually performed, not the config."""
     (tmp_path / "p").mkdir()
     cfg = _write_toml(tmp_path, (
+        "[survivability]\npassword_hints = 'Test hint: sealed envelope'\n"
         "[defaults]\nsplit = true\nsplit_threshold = 2\nsplit_shares = 5\n"
         "[repos.photos]\n"
         f'mirror_path = "{tmp_path / "p"}"\n'

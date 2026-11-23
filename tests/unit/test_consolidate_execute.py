@@ -76,7 +76,7 @@ def archive(tmp_path):
         f'staging = "{staging}"\n'
         f'catalog = "{db}"\n'
         "\n"
-        "[defaults]\n"
+        "[survivability]\npassword_hints = 'Test hint: sealed envelope'\n[defaults]\n"
         'media_type = "TEST_TINY"\n'
         'label_prefix = "NEW"\n'
         'location = "Home"\n'

@@ -125,6 +125,9 @@ class _SiteA:
             f'[paths]\nmirror_base = "{root / "mirror"}"\n'
             f'staging = "{root / "staging"}"\n'
             f'catalog = "{self.db}"\n'
+            # #960: stage refuses without a real password hint.
+            "\n[survivability]\n"
+            'password_hints = "Test hint: sealed envelope"\n'
             "\n[defaults]\n"
             'media_type = "TEST_TINY"\n'
             "ecc_redundancy_pct = 0\n"

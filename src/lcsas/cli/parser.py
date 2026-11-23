@@ -371,6 +371,12 @@ def build_parser() -> argparse.ArgumentParser:
                               "Logged as a volume event. For multi-config "
                               "edge cases only — discs may print share "
                               "instructions that do not match the real split.")
+    stage_p.add_argument("--allow-no-password-hint", action="store_true",
+                         default=False,
+                         help="Stage even though [survivability] "
+                              "password_hints is missing, empty or a "
+                              "placeholder. The discs then say no hint was "
+                              "given. Recorded as a volume event.")
     stage_p.add_argument("--allow-low-redundancy", action="store_true",
                          default=False,
                          help="Stage a volume even if its RS03 error "
@@ -729,6 +735,12 @@ def build_parser() -> argparse.ArgumentParser:
                              "are staged for (default: the configured "
                              "default location). A location given here "
                              "must already exist.")
+    cons_p.add_argument("--allow-no-password-hint", action="store_true",
+                        default=False,
+                        help="With --execute: stage even though "
+                             "[survivability] password_hints is missing, "
+                             "empty or a placeholder. Recorded as a volume "
+                             "event.")
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
@@ -1107,6 +1119,11 @@ def build_parser() -> argparse.ArgumentParser:
     estate_card.add_argument(
         "--output", "--out", dest="output", type=Path, default=None,
         help="Write the card here (default: stdout).",
+    )
+    estate_card.add_argument(
+        "--allow-no-password-hint", action="store_true", default=False,
+        help="Print the card even though [survivability] password_hints is "
+             "missing, empty or a placeholder.",
     )
 
     return parser

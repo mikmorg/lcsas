@@ -31,6 +31,14 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
     if config is None:
         logger.error("--config is required to generate an estate card.")
         return 1
+    # #960: the card prints the same hint the discs carry.
+    from lcsas.config.settings import password_hint_problem, usable_password_hint
+    hint_problem = password_hint_problem(config)
+    if (hint_problem is not None
+            and not getattr(args, "allow_no_password_hint", False)):
+        logger.error("%s", hint_problem.replace(
+            "to stage without one", "to print the card without one"))
+        return 1
 
     disc_count: int | None = None
     recorded: dict[str, tuple[int, int]] = {}
@@ -86,7 +94,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
         description=config.archive_description,
         technical_contact=config.technical_contact,
         repositories=sorted(config.repositories),
-        key_storage_hints=config.key_storage_hints,
+        key_storage_hints=usable_password_hint(config),
         key_split=uniform is not None,
         key_threshold=uniform[0] if uniform else config.key_threshold,
         key_shares=uniform[1] if uniform else config.key_shares,

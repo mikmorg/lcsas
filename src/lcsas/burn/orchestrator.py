@@ -386,6 +386,7 @@ class BurnOrchestrator:
         allow_escrow_drift: bool = False,
         prompt: OperatorPrompt | None = None,
         allow_low_redundancy: bool = False,
+        allow_no_password_hint: bool = False,
     ) -> None:
         self._config = config
         self._conn = conn
@@ -407,6 +408,9 @@ class BurnOrchestrator:
         # #674 escape hatch: stage a volume whose RS03 redundancy is below
         # MIN_EFFECTIVE_REDUNDANCY_PCT (recorded as a volume event).
         self._allow_low_redundancy = allow_low_redundancy
+        # #960: the owner staged with no password hint on purpose; each
+        # volume records it (the CLI refuses otherwise).
+        self._allow_no_password_hint = allow_no_password_hint
 
     def _stage_single_volume(
         self,
@@ -544,6 +548,18 @@ class BurnOrchestrator:
                 detail=f"KEY-08 split drift override: {drift_msg}",
                 commit=False,
             )
+        if self._allow_no_password_hint:
+            from lcsas.config.settings import usable_password_hint
+            if not usable_password_hint(self._config):
+                add_event(
+                    self._conn,
+                    volume.volume_id,
+                    "NOTE",
+                    detail=("#960 no password hint: staged with "
+                            "--allow-no-password-hint; the disc says no "
+                            "hint was given"),
+                    commit=False,
+                )
         # Same transaction as the volume row: a volume can never exist
         # outside session_volumes (the ISO hash is filled in later via
         # update_session_volume_iso once the ISO has been mastered).

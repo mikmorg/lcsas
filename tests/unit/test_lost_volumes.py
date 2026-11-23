@@ -515,7 +515,7 @@ class TestDisplays:
             f'mirror_base = "{tmp_path / "mirror_base"}"',
             f'staging = "{tmp_path / "staging"}"',
             f'catalog = "{db}"',
-            "[defaults]",
+            "[survivability]", "password_hints = 'Test hint: sealed envelope'", "[defaults]",
             'label_prefix = "SMITH"',
             "[repos.alpha]",
             f'mirror_path = "{mirror}"',

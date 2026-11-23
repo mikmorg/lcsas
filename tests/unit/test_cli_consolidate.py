@@ -71,7 +71,7 @@ def _write_consolidate_config(tmp_path, db) -> str:
         f'staging = "{staging}"\n'
         f'catalog = "{db}"\n'
         "\n"
-        "[defaults]\n"
+        "[survivability]\npassword_hints = 'Test hint: sealed envelope'\n[defaults]\n"
         'media_type = "BDXL100"\n'
         'label_prefix = "TEST"\n'
         "\n"

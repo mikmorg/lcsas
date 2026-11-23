@@ -68,6 +68,8 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
                 config, conn,
                 SubprocessXorrisoRunner(tmpdir=config.staging_path),
                 SubprocessDVDisasterRunner(tmpdir=config.staging_path),
+                allow_no_password_hint=getattr(
+                    args, "allow_no_password_hint", False),
             )
         reserve = config.metadata_reserve_bytes if config else 104_857_600
         merger = VolumeMerger(
@@ -149,6 +151,15 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
                                      "it",
                 }.get(v.status, "only VERIFIED volumes can be consolidated")
                 logger.error(f"Volume {v.label} is {v.status}: {hint}.")
+            logger.error("Nothing was staged.")
+            return 1
+
+        # #960: consolidation discs carry the hint too.
+        from lcsas.config.settings import password_hint_problem
+        hint_problem = password_hint_problem(config)
+        if (hint_problem is not None
+                and not getattr(args, "allow_no_password_hint", False)):
+            logger.error("%s", hint_problem)
             logger.error("Nothing was staged.")
             return 1
 
