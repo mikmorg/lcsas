@@ -20,9 +20,11 @@ from .cards import (
     extract_mnemonic,
     is_mistyped_share_line,
     is_mnemonic_line,
+    is_number_token,
     is_share_line,
     normalize_share_line,
     read_share_stream,
+    split_shares,
 )
 from .codec import decode_master_secret, encode_master_secret
 from .slip39 import (
@@ -47,9 +49,11 @@ __all__ = [
     "generate_mnemonics",
     "is_mistyped_share_line",
     "is_mnemonic_line",
+    "is_number_token",
     "is_share_line",
     "normalize_share_line",
     "recover_secret",
     "share_identifier",
     "split_secret",
+    "split_shares",
 ]

@@ -102,10 +102,11 @@ int lcsas_keyshare_recover_password(const char *const *mnemonics, size_t n,
 /*
  * Extract the share mnemonic embedded in `text` (a bare mnemonic file OR
  * a printed share card with header lines and prose).  A line contributes
- * to the mnemonic iff it is non-blank and every whitespace-separated
- * token is a SLIP-0039 wordlist word; such lines are joined, in order,
- * into one space-separated, lowercased mnemonic written NUL-terminated
- * into `out` (capacity `cap`).
+ * to the mnemonic iff it holds a share word and every other
+ * whitespace-separated token is a SLIP-0039 wordlist word or a number
+ * (lcsas_keyshare_is_number); such lines are joined, in order, into one
+ * space-separated, lowercased mnemonic of their words (the numbers
+ * left out) written NUL-terminated into `out` (capacity `cap`).
  *
  * Returns 0 on success.  Returns nonzero if the joined word count is not
  * a valid share length (at least 20 words) or `out` is too small; on
@@ -121,7 +122,9 @@ int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
  * actionable per-share diagnostics before the shares are combined.  Checks,
  * in order: every token resolves to a wordlist word (full word, or a
  * unique 4+-letter prefix); the word count is a valid share length; and
- * the per-share RS1024 checksum verifies.
+ * the per-share RS1024 checksum verifies.  Number tokens
+ * (lcsas_keyshare_is_number) are skipped and not counted, so "word N"
+ * is the N-th share word.
  *
  * Returns 0 if the share is individually valid.  On any failure returns
  * nonzero and writes a one-line, human-readable reason into `errbuf`
@@ -143,5 +146,15 @@ int lcsas_keyshare_check_share(const char *mnemonic,
  * (nearly all share words) from card prose (almost none).
  */
 int lcsas_keyshare_is_word(const char *tok, size_t len);
+
+/*
+ * Return 1 if the token `tok` (length `len`, not NUL-terminated) is a
+ * number as a share card prints it beside a word: one or more digits,
+ * optionally followed by one '.' or ')' ("7", "7.", "7)").  Else 0.
+ * Number tokens are skipped wherever share words are read (#955), so a
+ * card typed with its numbers combines, and "word N" counts share words
+ * only.
+ */
+int lcsas_keyshare_is_number(const char *tok, size_t len);
 
 #endif

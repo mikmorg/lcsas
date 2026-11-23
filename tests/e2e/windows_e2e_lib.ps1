@@ -1750,13 +1750,17 @@ function Invoke-HiddenPasswordLeg {
 # ---------------------------------------------------------------------
 
 # The share words of a printed card (`lcsas password split`'s -card.txt): the
-# line after "THE SHARE WORDS".
+# rows after "THE SHARE WORDS", up to the blank line, without the numbers the
+# card prints beside them (#955: four numbered words a row).
 function Get-CardWords {
     param([string]$Path)
     $lines = @([IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) -split "`r?`n")
     for ($i = 0; $i -lt $lines.Count - 1; $i++) {
         if ($lines[$i] -cmatch '^THE SHARE WORDS') {
-            $words = @($lines[$i + 1].Trim() -split '\s+' | Where-Object { $_ })
+            $words = @()
+            for ($j = $i + 1; $j -lt $lines.Count -and $lines[$j].Trim() -ne ''; $j++) {
+                $words += @($lines[$j].Trim() -split '\s+' | Where-Object { $_ -and $_ -notmatch '^[0-9]+[.)]?$' })
+            }
             if ($words.Count -lt 20) { throw "$Path`: $($words.Count) share words after THE SHARE WORDS (a card has 20 or more)" }
             return ($words -join ' ')
         }

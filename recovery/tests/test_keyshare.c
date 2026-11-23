@@ -488,6 +488,70 @@ static void run_is_word(void)
     }
 }
 
+/* #955: the numbers a card prints beside its words ("7", "7.", "7)")
+ * are skipped by extraction and by the per-share check, so a card in
+ * numbered rows, or typed with its numbers, gives the same share, and
+ * "word N" counts share words only. */
+static void run_numbers(void)
+{
+    static const struct { const char *tok; int want; } cases[] = {
+        { "7", 1 }, { "12.", 1 }, { "3)", 1 }, { "007", 1 },
+        { ".", 0 }, { ")", 0 }, { "1.2", 0 }, { "(1)", 0 }, { "1a", 0 },
+        { "#1", 0 }, { "", 0 }, { "acid", 0 }
+    };
+    static const char SHARE[] =
+        "duckling enlarge academic academic agency result length solution "
+        "fridge kidney coal piece deal husband erode duke ajar critical "
+        "decision keyboard";
+    static const char ROWS[] =
+        "THE SHARE WORDS (20 words; keep every word, in order)\n"
+        "    1 duckling   2 enlarge    3 academic   4 academic\n"
+        "    5 agency     6 result     7 length     8 solution\r\n"
+        "    9 fridge    10 kidney    11 coal      12 piece\n"
+        "   13 deal      14 husband   15 erode     16 duke\n"
+        "   17. ajar     18) critical 19 decision  20 keyboard\n"
+        "\n"
+        "  Type the words only; the numbers are there to keep your place.\n";
+    static const char TYPO[] =
+        "1 duckling 2 enlarge 3 academic 4 academic 5 agency 6 result "
+        "7 zqzq 8 solution 9 fridge 10 kidney";
+    char out[4096];
+    char err[128];
+    size_t i;
+    int rc;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int got = lcsas_keyshare_is_number(cases[i].tok,
+                                           strlen(cases[i].tok));
+        if (got != cases[i].want) {
+            fprintf(stderr, "FAIL is_number('%s') = %d, want %d\n",
+                    cases[i].tok, got, cases[i].want);
+            fails++;
+        }
+    }
+    rc = lcsas_keyshare_extract(ROWS, out, sizeof(out), err, sizeof(err));
+    if (rc != 0 || strcmp(out, SHARE) != 0) {
+        fprintf(stderr, "FAIL numbered rows: rc=%d out='%s'\n", rc, out);
+        fails++;
+    }
+    err[0] = '\0';
+    if (lcsas_keyshare_check_share(TYPO, err, sizeof(err)) == 0 ||
+        strcmp(err, "word 7 'zqzq' is not a share word") != 0) {
+        fprintf(stderr, "FAIL numbered typo: '%s'\n", err);
+        fails++;
+    }
+    /* Numbers alone are not share words: no share. */
+    rc = lcsas_keyshare_extract("1 2 3\n4. 5)\n", out, sizeof(out),
+                                err, sizeof(err));
+    if (rc == 0 || strstr(err, "found 0 ") == NULL) {
+        fprintf(stderr, "FAIL numbers only: rc=%d err='%s'\n", rc, err);
+        fails++;
+    }
+    if (fails == 0) {
+        printf("test_keyshare: numbered words OK\n");
+    }
+}
+
 int main(void)
 {
     run_vectors();
@@ -496,6 +560,7 @@ int main(void)
     run_check_share();
     run_more_than_threshold();
     run_is_word();
+    run_numbers();
     if (fails == 0) {
         printf("test_keyshare: OK\n");
     }

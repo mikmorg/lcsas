@@ -83,10 +83,9 @@ try:  # source checkout / dev: lcsas.keyshare
         decode_master_secret,
         decode_share_text,
         extract_mnemonic,
-        is_share_line,
-        normalize_share_line,
         read_share_stream,
         recover_secret,
+        split_shares,
     )
 except ImportError:  # pragma: no cover - meta disc top-level bundle path
     # On the meta disc the package is bundled as top-level ``keyshare``.
@@ -99,10 +98,9 @@ except ImportError:  # pragma: no cover - meta disc top-level bundle path
         decode_master_secret,
         decode_share_text,
         extract_mnemonic,
-        is_share_line,
-        normalize_share_line,
         read_share_stream,
         recover_secret,
+        split_shares,
     )
 
 # Exit status (the C lcsas-shares uses the same values).
@@ -138,8 +136,9 @@ def _skipped_hint(skipped: int) -> str:
     """
     return (
         f"{skipped} line(s) of input were not read as shares (blank lines "
-        "are not counted).\nType each card's share words on ONE line: a "
-        "share split over two lines\nis skipped.\n"
+        "are not counted).\nType each card's share words on ONE line, or "
+        "in rows with no blank line\nbetween them: a share broken up "
+        "otherwise is skipped.\n"
     )
 
 
@@ -151,10 +150,11 @@ def _read_mnemonics(
     For each file path, the whole file is treated as ONE share — a bare
     mnemonic file or a printed share card — and its embedded mnemonic is
     extracted (header/prose lines ignored).  When no paths are given,
-    mnemonics are read from stdin keeping one-mnemonic-per-line
-    semantics, but non-mnemonic lines (blanks, comments, card prose) are
-    skipped rather than fatal, so ``cat card1 card2 | ...`` works.  In
-    every mode a word may be typed as its first 4 letters, in any case.
+    shares are read from stdin, a share a line or a card's rows of words
+    (:func:`split_shares`); other lines (blanks, comments, card prose)
+    are skipped rather than fatal, so ``cat card1 card2 | ...`` works.
+    In every mode a word may be typed as its first 4 letters, in any
+    case, and the numbers a card prints beside its words are ignored.
     A file or line that is nearly all share words is kept as a share with
     typing mistakes, so the per-share check names the bad word.
     Returns ``(label, mnemonic)`` pairs in the order encountered; the label
@@ -170,15 +170,8 @@ def _read_mnemonics(
                 (p, extract_mnemonic(text, source=p, keep_mistyped=True))
             )
     else:
-        n_skipped = 0
-        stdin = read_share_stream(sys.stdin)
-        for lineno, line in enumerate(stdin.splitlines(), start=1):
-            if is_share_line(line):
-                mnemonics.append(
-                    (f"stdin line {lineno}", normalize_share_line(line))
-                )
-            elif line.strip():
-                n_skipped += 1
+        shares, n_skipped = split_shares(read_share_stream(sys.stdin))
+        mnemonics += [(f"stdin line {lineno}", m) for lineno, m in shares]
         if skipped is not None:
             skipped.append(n_skipped)
     return mnemonics
@@ -235,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     if not pairs:
         sys.stderr.write(
             "error: no share mnemonics supplied.  Pass share file paths as\n"
-            "arguments, or pipe mnemonics (one per line) on stdin.\n"
+            "arguments, or pipe them on stdin (one per line, or a card's rows).\n"
         )
         if skipped and skipped[0]:
             sys.stderr.write(_skipped_hint(skipped[0]))

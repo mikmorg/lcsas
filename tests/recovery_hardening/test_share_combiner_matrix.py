@@ -115,6 +115,21 @@ def both(c_bin: Path, args: list[str], stdin: bytes | None = None,
     return (run("c", c_bin, args, stdin, env), run("py", c_bin, args, stdin, env))
 
 
+def rows(words: list[str], style: str = "", per_row: int = 4) -> str:
+    """The words numbered in rows, as the new card prints them;
+    ``style`` is what follows each number: "", "." or ")"."""
+    out = []
+    for i in range(0, len(words), per_row):
+        out.append("  " + "".join(
+            f"{n:>3}{style} {w:<9}"
+            for n, w in enumerate(words[i:i + per_row], start=i + 1)).rstrip())
+    return "\n".join(out) + "\n"
+
+
+def numbered_line(words: list[str], style: str = "") -> str:
+    return " ".join(f"{n}{style} {w}" for n, w in enumerate(words, start=1))
+
+
 def old_card(words: str) -> str:
     """A card printed before #955: the words on one line."""
     return (
@@ -142,6 +157,36 @@ def assert_password(c: Run, py: Run) -> None:
     assert py.rc == 0 and py.out == PASSWORD, f"Python: {py}"
 
 
+# ── #955: the card's words with their numbers ─────────────────────────
+
+
+@pytest.mark.parametrize("style", ["", ".", ")"])
+def test_numbered_rows_combine(c_bin: Path, mnemonics: list[str], tmp_path: Path,
+                               style: str) -> None:
+    """A card file in the new layout (four numbered words a row)."""
+    a = _write(tmp_path / "a.txt", rows(mnemonics[0].split(), style))
+    b = _write(tmp_path / "b.txt", rows(mnemonics[2].split(), style))
+    assert_password(*both(c_bin, [a, b]))
+
+
+def test_numbered_prefixes_combine(c_bin: Path, mnemonics: list[str],
+                                   tmp_path: Path) -> None:
+    """The first 4 letters of each word, with the numbers."""
+    a = _write(tmp_path / "a.txt", rows([w[:4] for w in mnemonics[0].split()]))
+    b = _write(tmp_path / "b.txt", numbered_line([w[:4] for w in mnemonics[1].split()]))
+    assert_password(*both(c_bin, [a, b]))
+
+
+def test_numbered_words_on_one_line(c_bin: Path, mnemonics: list[str],
+                                    tmp_path: Path) -> None:
+    """What the share card tells the heir to type at the restore's
+    question, with the numbers: one card a line, as restore.sh and
+    restore.bat write it to a file for the combiner."""
+    a = _write(tmp_path / "a.txt", numbered_line(mnemonics[0].split()) + "\n")
+    b = _write(tmp_path / "b.txt", numbered_line(mnemonics[1].split(), ".") + "\n")
+    assert_password(*both(c_bin, [a, b]))
+
+
 def test_wrapped_lines_and_old_card(c_bin: Path, mnemonics: list[str],
                                     tmp_path: Path) -> None:
     """Old layouts still combine: words wrapped ten a line, and the old
@@ -153,10 +198,55 @@ def test_wrapped_lines_and_old_card(c_bin: Path, mnemonics: list[str],
     assert_password(*both(c_bin, [a, b]))
 
 
+def test_wrong_word_named_by_its_number_on_the_card(
+        c_bin: Path, mnemonics: list[str], tmp_path: Path) -> None:
+    """A wrong word in a numbered card is reported as the word with that
+    number on the card, by both tools; no password is written."""
+    words = mnemonics[0].split()
+    words[22] = TYPO  # word 23 on the card
+    for i, text in enumerate((rows(words), numbered_line(words) + "\n")):
+        a = _write(tmp_path / f"a{i}.txt", text)
+        b = _write(tmp_path / f"b{i}.txt", rows(mnemonics[1].split()))
+        for r in both(c_bin, [a, b]):
+            assert r.rc == 3 and r.out == b"", r
+            assert f"word 23 '{TYPO}' is not a share word" in r.err, r
+
+
+def test_wrong_word_in_the_first_row(c_bin: Path, mnemonics: list[str],
+                                     tmp_path: Path) -> None:
+    words = mnemonics[0].split()
+    words[1] = TYPO
+    a = _write(tmp_path / "a.txt", rows(words))
+    b = _write(tmp_path / "b.txt", rows(mnemonics[1].split()))
+    for r in both(c_bin, [a, b]):
+        assert r.rc == 3 and r.out == b"", r
+        assert f"word 2 '{TYPO}' is not a share word" in r.err, r
+
+
+def test_stdin_numbered_cards(c_bin: Path, mnemonics: list[str]) -> None:
+    """``cat card1 card2 | lcsas-shares`` with cards in the new layout,
+    and with one numbered card a line."""
+    piped = (rows(mnemonics[0].split()) + "\nsome prose between\n\n"
+             + rows(mnemonics[1].split()))
+    assert_password(*both(c_bin, [], stdin=piped.encode()))
+    lines = (numbered_line(mnemonics[0].split()) + "\n"
+             + numbered_line(mnemonics[2].split(), ")") + "\n")
+    assert_password(*both(c_bin, [], stdin=lines.encode()))
+
+
 def test_stdin_one_share_a_line(c_bin: Path, mnemonics: list[str]) -> None:
     """The old stdin form: one share a line, lines next to each other."""
     piped = f"{mnemonics[0]}\n{mnemonics[1]}\n"
     assert_password(*both(c_bin, [], stdin=piped.encode()))
+
+
+def test_stdin_wrong_word_named(c_bin: Path, mnemonics: list[str]) -> None:
+    words = mnemonics[0].split()
+    words[22] = TYPO
+    piped = rows(words) + "\n" + rows(mnemonics[1].split())
+    for r in both(c_bin, [], stdin=piped.encode()):
+        assert r.rc == 3 and r.out == b"", r
+        assert f"word 23 '{TYPO}' is not a share word" in r.err, r
 
 
 # ── #967 item 2: the four inputs the tools disagreed on ───────────────
@@ -215,8 +305,9 @@ def test_undecodable_file(c_bin: Path, mnemonics: list[str], tmp_path: Path) -> 
 def test_crlf_tabs_and_utf8_bom(c_bin: Path, mnemonics: list[str],
                                 tmp_path: Path) -> None:
     a = _write(tmp_path / "a.txt", b"\xef\xbb\xbf"
-               + old_card(mnemonics[0]).replace("\n", "\r\n").encode())
-    b = _write(tmp_path / "b.txt", mnemonics[1].replace(" ", "\t") + "\r\n")
+               + rows(mnemonics[0].split()).replace("\n", "\r\n").encode())
+    b = _write(tmp_path / "b.txt",
+               numbered_line(mnemonics[1].split()).replace(" ", "\t") + "\r\n")
     assert_password(*both(c_bin, [a, b]))
     bare = _write(tmp_path / "c.txt", b"\xef\xbb\xbf" + mnemonics[2].encode() + b"\n")
     assert_password(*both(c_bin, [a, bare]))

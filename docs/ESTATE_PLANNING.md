@@ -135,10 +135,18 @@ theft.
   > --share-file CARD`. It reads K, N and the split ID from the card,
   > checks them against lcsas.toml, and makes no new shares (#963).
 
-- [ ] **Tell heirs the reconstruction is a two-step pre-step**, in your
-  letter (template below):
+- [ ] **Tell heirs how the cards are used**, in your letter (template
+  below). The restore asks for them: the heir starts the restore as the
+  estate card says, and when it gets to the password of a split backup set
+  it asks for the share cards, one at each question. The heir types each
+  card's words (the first 4 letters of each word are enough; the numbers
+  printed beside the words may be typed or left out).
 
-  1. Gather any **K** share cards and run the combiner from the META disc.
+  Rebuilding the password by hand is the fallback, for a restore that does
+  not ask for the cards:
+
+  1. Gather any **K** share cards, put each card's words in a text file,
+     and run the combiner from the META disc.
      The primary combiner is the static, python-free `lcsas-shares`
      binary (one per platform under `recovery/bin/<machine>/`; Windows
      heirs run `lcsas-shares.exe`):
@@ -156,8 +164,9 @@ theft.
 
      Either one prints the password (and nothing else).
 
-  2. Run the normal restore (`restore.sh`) and enter that password at the
-     `Password:` prompt — exactly as when the password is not split.
+  2. Type that password when the restore asks for the password. If the
+     restore asks for the share cards instead, type `P` at the share-card
+     question and then the password.
 
   The share format and a from-scratch re-implementation guide are in
   `docs/SHARE_FORMAT.md`, bundled on every meta disc.

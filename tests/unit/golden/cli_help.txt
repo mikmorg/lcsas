@@ -865,7 +865,8 @@ options:
   -h, --help            show this help message and exit
   --share-file SHARE_FILES
                         A file containing one share mnemonic (repeatable). If
-                        omitted, shares are read from stdin, one per line.
+                        omitted, shares are read from stdin, one per line or
+                        as a card's rows of words.
   --out OUT             Write the reconstructed password here (default:
                         stdout).
 ===== lcsas password unsplit --help =====

@@ -441,8 +441,9 @@ and the script asks for the cards instead of the password:
 
 Take any K cards whose "Split ID" is the one shown.  For each card,
 type all its words on one line, in order, with a space between
-them, and press Enter.  The first 4 letters of each word are enough.
-The script checks each card on its own as you type it: if a word is
+them, and press Enter.  The first 4 letters of each word are enough,
+and the numbers a card prints beside its words may be typed or left
+out.  The script checks each card on its own as you type it: if a word is
 wrong, it names the word and asks for that card again.  When it has
 K cards, it rebuilds the password with the bundled
 lcsas-shares.exe and goes on.  Cards from another backup set, or
