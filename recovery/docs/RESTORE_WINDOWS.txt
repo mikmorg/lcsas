@@ -619,7 +619,8 @@ RESTORE FOLDER NOTES
             --catalog C:\lcsas-check\catalog.db ^
             --repo C:\lcsas-check --password-file NUL
 
-    Its last line reads "Total: N packs, X MB across M discs."  Make
+    Its last line reads "Total: N packs, X MB. They are on M discs."
+    (each pack counted once, even when two discs hold it).  Make
     sure the destination drive has at least X MB free, as shown in
     File Explorer under "This PC".  Delete C:\lcsas-check afterwards.
 

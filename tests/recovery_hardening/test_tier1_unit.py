@@ -512,7 +512,7 @@ def test_list_pending_packs_with_valid_catalog(tmp_path: Path) -> None:
 def test_list_pending_packs_repo_id_filter(tmp_path: Path) -> None:
     """#798: --repo-id ID counts only that repository's packs, so
     restore.sh can size one backup set of several without a sqlite3
-    command.  The "Total:" line keeps its format (restore.sh parses it).
+    command.  The scripts parse the "Total:" line (#951: its new words).
     The filter uses packs.repo_id only: a frozen column."""
     bin_path = _find_bin()
     db_path = tmp_path / "two-sets.db"
@@ -544,25 +544,93 @@ def test_list_pending_packs_repo_id_filter(tmp_path: Path) -> None:
 
     res = pending()
     assert res.returncode == 0, res.stderr
-    assert "Total: 3 packs, 21.0 MB across 2 discs." in res.stdout
+    assert "Total: 3 packs, 21.0 MB. They are on 2 discs.\n" in res.stdout
 
     res = pending("--repo-id", "small")
     assert res.returncode == 0, res.stderr
     assert "repository small only" in res.stdout
-    assert "Total: 1 pack, 1.0 MB across 1 disc." in res.stdout
+    assert "Total: 1 pack, 1.0 MB. They are on 1 disc.\n" in res.stdout
     assert "vol-b" not in res.stdout
 
     res = pending("--repo-id", "big")
-    assert "Total: 2 packs, 20.0 MB across 2 discs." in res.stdout
+    assert "Total: 2 packs, 20.0 MB. They are on 2 discs.\n" in res.stdout
 
     res = pending("--repo-id", "absent")
     assert res.returncode == 0, res.stderr
-    assert "Total: 0 packs, 0.0 MB across 0 discs." in res.stdout
+    assert "Total: 0 packs, 0.0 MB.\n" in res.stdout
 
     res = _run(bin_path, "--repo", str(repo), "--password-file", os.devnull,
                "--list-snapshots", "--repo-id", "small", timeout=5)
     assert res.returncode == 2
     assert "--repo-id goes with --list-pending-packs" in res.stderr
+
+
+def test_list_pending_packs_counts_a_pack_once(tmp_path: Path) -> None:
+    """#951: a pack on two discs (an archive kept in two places) is
+    counted once in the total; the per-disc lines still list it on
+    each."""
+    bin_path = _find_bin()
+    db_path = tmp_path / "two-places.db"
+    import sqlite3
+    db = sqlite3.connect(db_path)
+    db.executescript("""
+        CREATE TABLE schema_version (version INTEGER);
+        INSERT INTO schema_version VALUES (10);
+        CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,
+          size_bytes INTEGER, repo_id TEXT);
+        INSERT INTO packs VALUES (1, 'aa', 1048576, 's'),
+          (2, 'bb', 1048576, 's');
+        CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT,
+          status TEXT);
+        INSERT INTO volumes VALUES (1, 'HOME_0001', 'VERIFIED'),
+          (2, 'AWAY_0002', 'VERIFIED');
+        CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);
+        INSERT INTO volume_packs VALUES (1, 1), (1, 2), (2, 1), (2, 2);
+    """)
+    db.commit()
+    db.close()
+    repo = _make_minimal_repo(tmp_path)
+    res = _run(bin_path, "--repo", str(repo), "--password-file", os.devnull,
+               "--catalog", str(db_path), "--list-pending-packs",
+               "--repo-id", "s", timeout=5)
+    assert res.returncode == 0, res.stderr
+    assert "  HOME_0001: 2 packs (2.0 MB)\n" in res.stdout
+    assert "  AWAY_0002: 2 packs (2.0 MB)\n" in res.stdout
+    assert ("Total: 2 packs, 2.0 MB. They are on 2 discs; some hold the "
+            "same packs.\n") in res.stdout, res.stdout
+
+
+def test_list_pending_packs_unreadable_catalog_gives_no_total(
+        tmp_path: Path) -> None:
+    """#951: a catalog cut short gives no total and exit 1, so the
+    scripts say they could not work out the size (it printed "Total: 0
+    packs" and exit 0, and the free-space check was skipped without a
+    word)."""
+    bin_path = _find_bin()
+    db_path = tmp_path / "cut.db"
+    import sqlite3
+    db = sqlite3.connect(db_path)
+    db.executescript("""
+        CREATE TABLE schema_version (version INTEGER);
+        INSERT INTO schema_version VALUES (10);
+        CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,
+          size_bytes INTEGER, repo_id TEXT);
+        CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT,
+          status TEXT);
+        CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);
+    """)
+    db.executemany("INSERT INTO packs VALUES (?, ?, 4096, 's')",
+                   [(n, f"{n:064x}") for n in range(1, 2000)])
+    db.commit()
+    db.close()
+    os.truncate(db_path, db_path.stat().st_size // 2)
+    repo = _make_minimal_repo(tmp_path)
+    res = _run(bin_path, "--repo", str(repo), "--password-file", os.devnull,
+               "--catalog", str(db_path), "--list-pending-packs",
+               "--repo-id", "s", timeout=5)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "Total:" not in res.stdout, res.stdout
+    assert "damaged or cut short" in res.stderr, res.stderr
 
 
 def test_list_pending_packs_repo_id_in_help() -> None:

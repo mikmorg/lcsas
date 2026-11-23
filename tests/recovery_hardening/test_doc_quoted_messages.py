@@ -226,7 +226,7 @@ def test_quoted_messages_are_printed_by_the_programs() -> None:
     # A placeholder on both sides (%s; <...> or ...).
     "special file ... not created",
     # tier 1 C, a plural written as pack%s.
-    "Total: N packs, X MB across M discs.",
+    "Total: N packs, X MB. They are on M discs.",
     # restore.bat, with ^( ^) escapes.
     "The restore stopped before it finished (code N).",
 ])

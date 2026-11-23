@@ -152,12 +152,14 @@ usage(const char *argv0)
         "Use scripts/restore.sh to assemble one from LCSAS discs first.\n"
         "\n"
         "--list-pending-packs requires --catalog.  Prints a summary of\n"
-        "which discs you will need and how many packs each holds, then\n"
+        "which discs hold the packs and how many each holds, then\n"
         "exits without performing any restore:\n"
         "    Pending packs by disc:\n"
         "      LCSAS_X: 4 packs (12.3 MB)\n"
         "      LCSAS_Y: 2 packs (8.1 MB)\n"
-        "    Total: 6 packs, 20.4 MB across 2 discs.\n"
+        "    Total: 4 packs, 12.3 MB. They are on 2 discs; some hold the same packs.\n"
+        "The total counts each pack once.  A catalog that cannot be\n"
+        "read gives no total, and exit status 1.\n"
         "With --repo-id ID it counts only that repository's packs (its\n"
         "id is the folder name under metadata/ on a data disc).\n"
         "\n"
@@ -364,6 +366,15 @@ main(int argc, char **argv)
         if (!cat) {
             fprintf(stderr,
                     "ERROR: cannot open catalog %s\n", catalog_path);
+            return 1;
+        }
+        /* #951: a catalog that cannot be read through gives no total
+         * (it used to give "Total: 0 packs", and the scripts skipped
+         * the free-space check without a word). */
+        if (lcsas_catalog_check(cat) != 0) {
+            fprintf(stderr, "ERROR: the catalog %s is damaged or cut "
+                            "short; no size\n", catalog_path);
+            lcsas_catalog_close(cat);
             return 1;
         }
         lpp_rc = lcsas_catalog_print_pending_packs(cat, pending_repo_id);

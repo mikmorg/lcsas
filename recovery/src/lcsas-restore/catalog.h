@@ -23,11 +23,10 @@ typedef struct {
     char repo_id[128];
 } lcsas_catalog_pack;
 
+/* A volume, from the frozen columns only (#961). */
 typedef struct {
     long long volume_id;
     char label[64];
-    char uuid[64];
-    char media_type[16];
     char status[16];
 } lcsas_catalog_volume;
 
@@ -53,8 +52,9 @@ int lcsas_catalog_check(lcsas_catalog *c);
 void lcsas_catalog_close(lcsas_catalog *c);
 
 /*
- * Read the schema version from the schema_version table.  Returns -1
- * on error.
+ * Read the schema version: the highest row of the schema_version table
+ * (#961; a migrated catalog keeps a row per step).  Returns -1 on
+ * error or when the table has no row.
  */
 int lcsas_catalog_schema_version(lcsas_catalog *c);
 
@@ -110,9 +110,13 @@ void lcsas_catalog_describe(lcsas_catalog *c);
  * catalog, or with `repo_id` non-NULL only that repository's (#798).
  * This is the --list-pending-packs path: it gives the heir a preview of
  * which discs they will need to insert before any actual restore
- * begins, and restore.sh its size estimate (from the "Total:" line).
+ * begins, and the scripts their size estimate, from the last line:
+ *     Total: 4 packs, 0.2 MB. They are on 2 discs; some hold the same packs.
+ * The total counts each pack once (#951); "They are on ..." is left out
+ * when no disc holds one, and "; some hold ..." when no pack is on two.
  *
- * Returns 0 on success, -1 on SQL error.
+ * Returns 0 on success, -1 (and prints nothing on stdout) when the
+ * catalog cannot be read.
  */
 int lcsas_catalog_print_pending_packs(lcsas_catalog *c, const char *repo_id);
 
