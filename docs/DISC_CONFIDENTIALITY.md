@@ -143,6 +143,14 @@ estimated bits.
 files remain valid forever and reconstruct the *old* password. There is no
 "revoke" for an already-burned disc.
 
+It also does nothing for **later** backups against someone who holds an old
+disc and the old password. A password change (`rustic key add`, then `key
+remove`) re-wraps the same master key under a new password; the master key
+itself does not change. So the old key file on an old disc, opened with the
+old password, plus the index and snapshots of any newer disc, decrypts
+everything backed up after the change as well (#956). Only a new repository,
+with a new master key, starts a clean break.
+
 The only true revocation for a leaked or weak password is the **physical
 destruction of every disc** that carries the affected key files.
 Plan accordingly: the password you burn is, in practice, the password those

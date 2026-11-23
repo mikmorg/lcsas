@@ -236,7 +236,18 @@ machines, or when staging in advance for an unattended burn.
    disc never prints share instructions that contradict the real split
    (`cmd_stage`). Every repository of the plan is checked before the burn
    session is created, so a refused stage leaves no burn session and
-   nothing in the staging area (#747).
+   nothing in the staging area (#747). It does not override the
+   password-change refusal (#956): when the key file a recorded split
+   was made against is no longer in a mirror (the password was changed
+   with `rustic key add` and `key remove`), stage refuses until the new
+   password is split (`lcsas password split --repo R`) or the record is
+   cleared (`lcsas password unsplit --repo R`). Cards made after the
+   change (a split recorded by an earlier release keeps the key file of
+   `repo add`) are shown to open the repository with `lcsas password
+   split --repo R --record-existing --share-file CARD ...` and K cards,
+   which lifts the refusal. Without a recorded
+   split it only warns, once, that the password changed since the
+   repository was registered.
 7. `--allow-low-redundancy` — stage a volume even when its RS03
    redundancy would be below 5 %, or its content exceeds the medium's
    usable bytes (#674). The percentage is recorded as a `NOTE` event on

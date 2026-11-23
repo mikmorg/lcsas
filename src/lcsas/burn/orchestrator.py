@@ -112,6 +112,17 @@ class DiscMetadataTooLargeError(StagingError):
     """One disc cannot hold the disc metadata and a pack (#811)."""
 
 
+class PasswordChangedAfterSplitError(StagingError):
+    """A split password no longer opens the repository (#956).
+
+    The key file the split password opened (recorded by ``password
+    split``) is no longer in the mirror: the password was changed.  New
+    discs carry only the mirror's key files, so the share cards would
+    rebuild a password that does not open them.  Not overridable: split
+    the new password, or clear the record (owner decision on #956).
+    """
+
+
 class WaitingSessionGapError(StagingError):
     """Staging now would leave snapshots off the new discs for good (#946).
 
@@ -953,6 +964,74 @@ class BurnOrchestrator:
             return message
         raise EscrowDriftError(message)
 
+    def _password_change_preflight(self) -> dict[str, str]:
+        """#956: notice a repository password changed since it was recorded.
+
+        ``repositories.encryption_key_id`` names the key file the
+        password opened when it was recorded: the one a split password
+        opens (``password split``), else the first key file at ``repo
+        add``.  Every repository whose ``keys/`` go on the discs is
+        checked (every disc carries every repository's metadata, so a
+        password change needs no new packs to matter).  When that key
+        file is no longer in the mirror:
+
+        - a split is recorded: raise :class:`PasswordChangedAfterSplitError`
+          (the cards rebuild a password that does not open new discs);
+        - no split: warn, and return ``{repo_id: current key file}`` for
+          :meth:`stage` to record once the stage passes its checks.
+
+        A mirror with no readable or no non-empty ``keys/`` (not mounted,
+        a retired repository), or no recorded key file, is skipped: that
+        is not a password change.
+        """
+        from lcsas.db.repos import get_repo
+        from lcsas.utils.fs import read_repo_key_ids
+
+        names = self._config_names()
+        refusals: list[str] = []
+        updates: dict[str, str] = {}
+        for repo_id, mirror in sorted(self._get_mirror_paths().items()):
+            try:
+                repo = get_repo(self._conn, repo_id)
+            except ValueError:  # the "default" fallback: no catalog row
+                continue
+            recorded = repo.encryption_key_id
+            if not recorded:
+                continue
+            try:
+                keys = read_repo_key_ids(mirror)
+            except OSError:
+                continue
+            if not keys or recorded in keys:
+                continue
+            name = names.get(repo_id, repo.name)
+            record = get_split_for_repo(self._conn, repo_id)
+            if record is not None:
+                refusals.append(
+                    f"The password of '{name}' was changed after it was "
+                    f"split on {record.split_at[:10]}: the share cards "
+                    f"rebuild a password that no longer opens new discs. "
+                    f"Split the new password (lcsas password split --repo "
+                    f"{name}) and hand out new cards, or clear the record "
+                    f"(lcsas password unsplit --repo {name}). If the cards "
+                    f"were made after the change, show that with K of them "
+                    f"(lcsas password split --repo {name} --record-existing "
+                    f"--share-file CARD ...)."
+                )
+                continue
+            _logger.warning(
+                "The password of '%s' changed since it was registered: "
+                "password cards and hints written before today name the old "
+                "one. Write new ones (lcsas password card --repo %s).",
+                name, name,
+            )
+            updates[repo_id] = keys[0]
+        if refusals:
+            raise PasswordChangedAfterSplitError(
+                " ".join(refusals) + " Nothing was staged."
+            )
+        return updates
+
     def _effective_kn(self, repo_ids: list[str]) -> tuple[int, int] | None:
         """K/N to render on this volume's disc text, from the record when present.
 
@@ -1108,6 +1187,10 @@ class BurnOrchestrator:
         # each volume; a dry run warns here.
         if dry_run or not self._allow_escrow_drift:
             self._escrow_preflight(sorted(participating_repos))
+        # #956: a split password that no longer opens the repository is
+        # refused whatever --allow-split-drift says; with no split, a
+        # changed password is only reported.
+        key_updates = self._password_change_preflight()
 
         # --- Dry-run: report the plan without side effects ---
         if dry_run:
@@ -1195,6 +1278,15 @@ class BurnOrchestrator:
         # #947: after the space check, which tests drive with packs that
         # are not in the mirror; still before any side effect.
         self._lost_pack_preflight(volume_plans)
+
+        # #956: every check passed, so the changed password reported above
+        # is recorded now (once: the next stage does not report it again).
+        if key_updates:
+            from lcsas.db.repos import set_encryption_key_id
+            for repo_id, key_id in key_updates.items():
+                set_encryption_key_id(self._conn, repo_id, key_id,
+                                      commit=False)
+            self._conn.commit()
 
         # 4. Create the burn session.  FUP-02: commit the burn_sessions row
         # BEFORE the directory exists on disk.  Invariant: any session-named dir on disk

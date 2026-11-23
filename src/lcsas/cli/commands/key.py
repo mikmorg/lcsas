@@ -151,14 +151,17 @@ def cmd_key_card(args: argparse.Namespace) -> int:
 
 
 def _verify_password_unlocks_repo(
-    keys_dir: Path, password: bytes, repo: str,
+    keys_dir: Path, password: bytes, repo: str, *, for_split: bool = True,
 ) -> str | None:
     """Authenticate *password* against a repo's ``keys/`` directory.
 
     Returns ``None`` on success; otherwise a human-readable error string
-    naming the repo, the keys dir, and how to override.  Fails closed: a
-    missing or empty ``keys/`` is an error (a split is exactly where
-    "probably fine" is wrong).
+    naming the repo and the keys dir.  Fails closed: a missing or empty
+    ``keys/`` is an error (a split is exactly where "probably fine" is
+    wrong).  For ``password split`` (*for_split*) the error names the
+    ``--no-verify-repo`` override; ``password verify`` has none, and says
+    instead that a password which does not open the repository is most
+    often the one from before a password change (#956).
     """
     from lcsas.restore.restic_fallback import (
         IntegrityError,
@@ -166,18 +169,21 @@ def _verify_password_unlocks_repo(
         try_keys,
     )
 
+    def skip(dangerous: str) -> str:
+        return f" Pass --no-verify-repo to skip ({dangerous})." if for_split else ""
+
     if not keys_dir.is_dir():
         return (
             f"keys directory not found for repository '{repo}': {keys_dir}. "
             "Cannot verify that the password unlocks the repo. Make the "
-            "mirror's keys/ reachable, or pass --no-verify-repo to skip "
-            "(splitting an unchecked password is dangerous)."
+            "mirror's keys/ reachable."
+            + skip("splitting an unchecked password is dangerous")
         )
     if not any(p.is_file() for p in keys_dir.iterdir()):
         return (
             f"no key files under {keys_dir} for repository '{repo}'. "
-            "Cannot verify that the password unlocks the repo. "
-            "Pass --no-verify-repo to skip (dangerous)."
+            "Cannot verify that the password unlocks the repo."
+            + skip("dangerous")
         )
     try:
         try_keys(keys_dir, password)
@@ -190,8 +196,8 @@ def _verify_password_unlocks_repo(
             return (
                 f"cannot check the password for repository '{repo}': "
                 f"every key file under {keys_dir} is unreadable or corrupt "
-                f"({damaged}). Repair the mirror's keys/ before splitting, "
-                "or pass --no-verify-repo to skip (dangerous)."
+                f"({damaged}). Repair the mirror's keys/."
+                + skip("dangerous")
             )
         msg = (
             f"the password in this file does NOT unlock repository "
@@ -203,12 +209,51 @@ def _verify_password_unlocks_repo(
                 f"{len(e.corrupt)} more could not be read, so were not "
                 f"checked: {damaged}. "
             )
+        if for_split:
+            return msg + (
+                "You were about to split a wrong password. If you really "
+                "intend this, pass --no-verify-repo."
+            )
         return msg + (
-            "You were about to split a wrong password. If you really "
-            "intend this, pass --no-verify-repo."
+            f"If the password of '{repo}' was changed (rustic key add and "
+            f"key remove), this is the old one, and share cards made before "
+            f"the change rebuild it too: split the new password (lcsas "
+            f"password split --repo {repo}) and hand out new cards."
         )
     except IntegrityError as e:
         return f"cannot check the password for repository '{repo}': {e}"
+    return None
+
+
+def _unlocking_key_file(keys_dir: Path, password: bytes) -> str | None:
+    """The name of the first key file in *keys_dir* that *password* opens.
+
+    Tried in the order :func:`try_keys` tries them; None when none opens
+    (or *keys_dir* cannot be read).  ``password split`` records it (#956).
+    Each key file is tried alone through the reader's public ``try_keys``,
+    from a private folder holding a copy of it: the restore path stays as
+    it is.
+    """
+    import shutil
+    import tempfile
+
+    from lcsas.restore.restic_fallback import IntegrityError, try_keys
+
+    try:
+        key_files = sorted(p for p in keys_dir.iterdir() if p.is_file())
+    except OSError:
+        return None
+    with tempfile.TemporaryDirectory(prefix="lcsas-key-") as tmp:
+        one = Path(tmp)
+        for kf in key_files:
+            for old in one.iterdir():
+                old.unlink()
+            try:
+                shutil.copyfile(kf, one / kf.name)
+                try_keys(one, password)
+            except (IntegrityError, OSError):
+                continue
+            return kf.name
     return None
 
 
@@ -362,30 +407,36 @@ def _record_split_by_name(
     shares: int,
     split_id: int,
     mirror_path: Path | None = None,
+    key_file: str | None = None,
     *,
     split_at: str | None = None,
-) -> None:
+) -> str:
     """Record a split under the catalog repo_id of the repository *name*.
 
     *name* is resolved like every other ``--repo`` (#687), with
     *mirror_path* (its configured mirror) first.  Also drops a record that
     an earlier build left under the name (#571), so one row stands for one
-    repository.
+    repository.  *key_file*, the key file the split password opens, goes
+    into ``repositories.encryption_key_id``: ``stage`` refuses once it is
+    gone from the mirror (#956).  Returns the repository's repo_id.
     """
     from lcsas.db.key_escrow import clear_split, record_split
-    from lcsas.db.repos import resolve_repo
+    from lcsas.db.repos import resolve_repo, set_encryption_key_id
 
     repo = resolve_repo(conn, name, mirror_path)
     if repo is None:
         raise ValueError(f"repository '{name}' is not registered in the catalog")
     record_split(conn, repo.repo_id, threshold, shares, split_id,
                  split_at=split_at, commit=False)
+    if key_file is not None:
+        set_encryption_key_id(conn, repo.repo_id, key_file, commit=False)
     name_is_an_id = conn.execute(
         "SELECT 1 FROM repositories WHERE repo_id = ?", (name,)
     ).fetchone()
     if name_is_an_id is None:
         clear_split(conn, name, commit=False)
     conn.commit()
+    return repo.repo_id
 
 
 def _existing_share_files(out_dir: Path, repo: str) -> list[Path]:
@@ -529,6 +580,7 @@ def _record_existing_split(args: argparse.Namespace) -> int:
         return 1
 
     # ── With K cards, the password they rebuild must unlock the repo ──
+    key_file: str | None = None
     if len(mnemonics) >= k and not args.no_verify_repo:
         try:
             password = decode_master_secret(recover_secret(mnemonics))
@@ -545,6 +597,10 @@ def _record_existing_split(args: argparse.Namespace) -> int:
             logger.error("%s Nothing was recorded.", err)
             return 1
         logger.info("The %d cards rebuild the password of '%s'.", len(mnemonics), name)
+        # #956: the key file the cards' password opens, for stage's check.
+        key_file = _unlocking_key_file(
+            config.repositories[name].mirror_path / "keys", password,
+        )
     elif len(mnemonics) < k:
         logger.info(
             "%d card(s) cannot rebuild the password (it takes %d); to check "
@@ -569,6 +625,19 @@ def _record_existing_split(args: argparse.Namespace) -> int:
         record = get_split_for_repo(conn, repo.repo_id)
         if record is not None:
             if (record.threshold, record.shares, record.slip39_id) == (k, n, split_id):
+                if key_file is not None and key_file != repo.encryption_key_id:
+                    # #956: these cards open the mirror's current key file;
+                    # record it, so stage does not take the split for one
+                    # made before a password change.
+                    from lcsas.db.repos import set_encryption_key_id
+                    set_encryption_key_id(conn, repo.repo_id, key_file)
+                    logger.info(
+                        "The catalog already records this %d-of-%d split "
+                        "(split ID %05d) of repository '%s'; recorded that "
+                        "its cards open key file %s.",
+                        k, n, split_id, name, key_file,
+                    )
+                    return 0
                 logger.info(
                     "The catalog already records this %d-of-%d split (split "
                     "ID %05d) of repository '%s'. Nothing to do.",
@@ -589,7 +658,7 @@ def _record_existing_split(args: argparse.Namespace) -> int:
         when = next(iter(split_on)) if split_on else None
         _record_split_by_name(
             conn, name, k, n, split_id, _config_mirror(config, name),
-            split_at=f"{when}T00:00:00.000+00:00" if when else None,
+            key_file, split_at=f"{when}T00:00:00.000+00:00" if when else None,
         )
 
     from lcsas.utils.timestamps import utc_now
@@ -727,6 +796,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         logger.error("Could not split password: %s", e)
         return 1
 
+    key_file: str | None = None
     # ── Repo-unlock verification (default on) ─────────────────────────
     # Authenticate the password against the real key files BEFORE writing
     # anything, so a failed split leaves no wrong-password card on disk.
@@ -756,6 +826,9 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         if err is not None:
             logger.error("%s", err)
             return 1
+        # #956: the key file this password opens; stage refuses once a
+        # password change has removed it from the mirror.
+        key_file = _unlocking_key_file(repo_cfg.mirror_path / "keys", password)
 
     # ── In-memory recombine round-trip (always on) ────────────────────
     err = _recombine_roundtrip_error(mnemonics, password)
@@ -817,9 +890,9 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     if config is not None:
         try:
             with _open_catalog(args, config) as conn:
-                _record_split_by_name(
+                repo_id = _record_split_by_name(
                     conn, args.repo, threshold, shares, split_id,
-                    _config_mirror(config, args.repo),
+                    _config_mirror(config, args.repo), key_file,
                 )
         except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
             logger.warning(
@@ -827,6 +900,17 @@ def cmd_key_split(args: argparse.Namespace) -> int:
                 "Once the catalog is reachable, re-run 'lcsas --config ... "
                 "password split --repo %s' so burn drift-checking works.",
                 e, args.repo,
+            )
+        else:
+            from lcsas.utils.timestamps import utc_now
+            logger.warning(
+                "AUDIT %s password split: recorded a %d-of-%d split of "
+                "repository '%s' (id %s, split ID %05d), %s.",
+                utc_now(), threshold,
+                shares, args.repo, repo_id, split_id,
+                f"made against key file {key_file}" if key_file is not None
+                else "key file not checked (--no-verify-repo): a later "
+                "password change cannot be told from this split",
             )
     else:
         logger.warning(
@@ -1119,7 +1203,9 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
         n_shares = len(mnemonics)
 
     keys_dir = repo_cfg.mirror_path / "keys"
-    err = _verify_password_unlocks_repo(keys_dir, password, args.repo)
+    err = _verify_password_unlocks_repo(
+        keys_dir, password, args.repo, for_split=False,
+    )
     if err is not None:
         logger.error("%s", err)
         return 1

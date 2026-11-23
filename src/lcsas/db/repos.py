@@ -212,6 +212,25 @@ def set_repo_status(
     return get_repo(conn, repo_id)
 
 
+def set_encryption_key_id(
+    conn: sqlite3.Connection, repo_id: str, key_id: str, *, commit: bool = True,
+) -> None:
+    """Record *key_id* as the repository's key file (#956).
+
+    ``repo add`` records the first key file of the mirror;
+    ``password split`` records the one the split password opens, and
+    ``stage`` the current one after the password of a repository with no
+    recorded split changed.  ``stage`` compares it with the mirror's
+    ``keys/``.
+    """
+    conn.execute(
+        "UPDATE repositories SET encryption_key_id = ? WHERE repo_id = ?",
+        (key_id, repo_id),
+    )
+    if commit:
+        conn.commit()
+
+
 def delete_repo(conn: sqlite3.Connection, repo_id: str) -> None:
     """Delete a repository from the catalog.
 
