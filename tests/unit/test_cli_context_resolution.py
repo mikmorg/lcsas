@@ -270,7 +270,7 @@ class TestCatalogIsSingular:
 
         assert main(["--config", cfg, "init"]) == 0
         assert main(
-            ["--config", cfg, "repo", "add", "family", str(tmp_path / "mirror")]
+            ["--config", cfg, "repo", "add", "--force", "family", str(tmp_path / "mirror")]
         ) == 0
         capsys.readouterr()
 
@@ -326,7 +326,7 @@ class TestCatalogIsSingular:
         monkeypatch.chdir(elsewhere)
 
         main(["--config", cfg, "init"])
-        main(["--config", cfg, "repo", "add", "family", str(tmp_path / "mirror")])
+        main(["--config", cfg, "repo", "add", "--force", "family", str(tmp_path / "mirror")])
 
         from lcsas.db.connection import get_connection
         from lcsas.db.repos import list_repos

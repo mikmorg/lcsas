@@ -72,7 +72,7 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
 ===== lcsas repo add --help =====
-usage: lcsas repo add [-h] name mirror_path
+usage: lcsas repo add [-h] [--force] name mirror_path
 
 positional arguments:
   name         Repository name (e.g., 'family').
@@ -80,6 +80,8 @@ positional arguments:
 
 options:
   -h, --help   show this help message and exit
+  --force      Register mirror_path even though it holds no rustic repository
+               (no 'config' file) yet, e.g. a mirror that is not mounted now.
 ===== lcsas repo list --help =====
 usage: lcsas repo list [-h]
 

@@ -28,7 +28,7 @@ def _init_with_repo(tmp_path: Path, name: str = "family") -> tuple[Path, str]:
     mirror = tmp_path / name
     mirror.mkdir(exist_ok=True)
     assert main(["init", "--catalog-path", str(db)]) == 0
-    assert main(["--catalog", str(db), "repo", "add", name, str(mirror)]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "--force", name, str(mirror)]) == 0
     conn = get_connection(db)
     try:
         repo_id = next(r.repo_id for r in list_repos(conn) if r.name == name)

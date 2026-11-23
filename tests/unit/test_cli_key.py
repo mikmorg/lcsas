@@ -555,7 +555,7 @@ class TestSplitRecordedUnderRepoId:
         assert main(["--config", str(cfg), "init"]) == 0
         assert main([
             "--config", str(cfg),
-            "repo", "add", "alpha", str(tmp_path / "mirror"),
+            "repo", "add", "--force", "alpha", str(tmp_path / "mirror"),
         ]) == 0
         assert main([
             "--config", str(cfg),

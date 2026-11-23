@@ -13,7 +13,7 @@ class TestCmdStatus:
         """Status with repos shows counts."""
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        main(["--catalog", str(db), "repo", "add", "fam", "/mnt/fam"])
+        main(["--catalog", str(db), "repo", "add", "--force", "fam", "/mnt/fam"])
         capsys.readouterr()
 
         result = main(["--catalog", str(db), "status"])

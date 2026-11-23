@@ -289,9 +289,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
     logger.info(f"\nTotal scanned: {total_scanned} packs across "
                f"{repos_scanned} repo(s){skipped}")
     if snapshot_failures:
-        # Pack registration, the scan's job, succeeded, so this stays a
-        # warning; but say so at the end, where it is read.
-        logger.warning(
+        # Pack registration succeeded, but the catalog's snapshots of
+        # these repositories are stale: said at the end, where it is
+        # read, and the exit code says so too (#968).
+        logger.error(
             f"Snapshot listing failed for: {', '.join(snapshot_failures)} "
             "(packs were still registered; see the warnings above)."
         )
@@ -306,6 +307,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
             "The mirror of %s is damaged (see above); its lost packs were "
             "NOT recorded as pruned.", ", ".join(repos_damaged),
         )
+        return 1
+    if snapshot_failures:
         return 1
     return 0
 

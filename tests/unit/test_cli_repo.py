@@ -13,7 +13,8 @@ class TestCmdRepoAdd:
         # First init
         assert main(["init", "--catalog-path", str(db)]) == 0
 
-        result = main(["--catalog", str(db), "repo", "add", "family", str(tmp_path / "mirror")])
+        result = main(["--catalog", str(db), "repo", "add", "--force", "family",
+                       str(tmp_path / "mirror")])
         assert result == 0
         out = capsys.readouterr().out
         assert "Registered repository 'family'" in out
@@ -21,7 +22,7 @@ class TestCmdRepoAdd:
     def test_repo_add_without_init(self, tmp_path, capsys):
         """repo add auto-initializes DB."""
         db = tmp_path / "new.db"
-        result = main(["--catalog", str(db), "repo", "add", "work", str(tmp_path)])
+        result = main(["--catalog", str(db), "repo", "add", "--force", "work", str(tmp_path)])
         assert result == 0
         out = capsys.readouterr().out
         assert "Registered repository 'work'" in out
@@ -33,8 +34,8 @@ class TestCmdRepoAddEdges:
         would make every later ``--repo dup`` ambiguous."""
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        r1 = main(["--catalog", str(db), "repo", "add", "dup", "/p1"])
-        r2 = main(["--catalog", str(db), "repo", "add", "dup", "/p2"])
+        r1 = main(["--catalog", str(db), "repo", "add", "--force", "dup", "/p1"])
+        r2 = main(["--catalog", str(db), "repo", "add", "--force", "dup", "/p2"])
         assert r1 == 0
         assert r2 == 1
 
@@ -53,8 +54,8 @@ class TestCmdRepoList:
         """Lists registered repos with IDs."""
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        main(["--catalog", str(db), "repo", "add", "family", "/mnt/mirror/family"])
-        main(["--catalog", str(db), "repo", "add", "work", "/mnt/mirror/work"])
+        main(["--catalog", str(db), "repo", "add", "--force", "family", "/mnt/mirror/family"])
+        main(["--catalog", str(db), "repo", "add", "--force", "work", "/mnt/mirror/work"])
         capsys.readouterr()  # clear
 
         result = main(["--catalog", str(db), "repo", "list"])
@@ -69,7 +70,7 @@ class TestCmdRepoListEdges:
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
         for i in range(10):
-            main(["--catalog", str(db), "repo", "add", f"repo{i}", f"/mnt/{i}"])
+            main(["--catalog", str(db), "repo", "add", "--force", f"repo{i}", f"/mnt/{i}"])
         capsys.readouterr()
 
         result = main(["--catalog", str(db), "repo", "list"])
@@ -99,7 +100,7 @@ class TestCmdRepoRemove:
         """repo remove deletes the row and logs a success message."""
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        main(["--catalog", str(db), "repo", "add", "family", str(tmp_path / "mirror")])
+        main(["--catalog", str(db), "repo", "add", "--force", "family", str(tmp_path / "mirror")])
         repo_id = _get_repo_id_by_name(str(db), "family")
         capsys.readouterr()  # clear
 
@@ -143,7 +144,7 @@ class TestCmdRepoRemove:
 
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        main(["--catalog", str(db), "repo", "add", "family", str(tmp_path / "mirror")])
+        main(["--catalog", str(db), "repo", "add", "--force", "family", str(tmp_path / "mirror")])
         repo_id = _get_repo_id_by_name(str(db), "family")
 
         # Add an active pack on a non-deprecated volume.
@@ -197,7 +198,7 @@ class TestCmdRepoRemove:
 
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        main(["--catalog", str(db), "repo", "add", "family", str(tmp_path / "mirror")])
+        main(["--catalog", str(db), "repo", "add", "--force", "family", str(tmp_path / "mirror")])
         repo_id = _get_repo_id_by_name(str(db), "family")
 
         conn = get_connection(str(db))
@@ -263,7 +264,7 @@ class TestCmdRepoRemove:
 
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        main(["--catalog", str(db), "repo", "add", "family", str(tmp_path / "m")])
+        main(["--catalog", str(db), "repo", "add", "--force", "family", str(tmp_path / "m")])
         repo_id = _get_repo_id_by_name(str(db), "family")
         conn = get_connection(str(db))
         try:
@@ -308,7 +309,7 @@ class TestCmdRepoRemoveEdges:
         """Removing repo with active packs without --force fails."""
         db = tmp_path / "test.db"
         main(["init", "--catalog-path", str(db)])
-        main(["--catalog", str(db), "repo", "add", "packed", "/mnt/packed"])
+        main(["--catalog", str(db), "repo", "add", "--force", "packed", "/mnt/packed"])
 
         conn = get_connection(db)
         from lcsas.db.repos import list_repos

@@ -63,6 +63,7 @@ def test_add_repo_gives_a_uuid_and_keeps_the_name(tmp_path: Path) -> None:
     for i, name in enumerate(names):
         mirror = tmp_path / f"m{i}"
         mirror.mkdir()
+        (mirror / "config").write_text("")  # a repository (#968)
         got[name] = fixture_lib.add_repo(db, name, mirror)
     assert all(_is_uuid(i) for i in got.values())
     assert len(set(got.values())) == len(names)
@@ -73,6 +74,7 @@ def test_add_repo_gives_a_uuid_and_keeps_the_name(tmp_path: Path) -> None:
 
 def test_add_repo_keeps_stdout_clean(tmp_path: Path, capsys) -> None:
     (tmp_path / "m").mkdir()
+    (tmp_path / "m" / "config").write_text("")  # a repository (#968)
     fixture_lib.add_repo(tmp_path / "catalog.db", "alpha", tmp_path / "m")
     out, err = capsys.readouterr()
     assert out == ""
@@ -103,6 +105,7 @@ def test_blind_fixture_registers_uuid_ids_named_after_the_tenants(
     mirror = tmp_path / "mirror"
     for name in ("alpha", "bravo", "charlie"):
         (mirror / name / "data").mkdir(parents=True)
+        (mirror / name / "config").write_text("")  # a repository (#968)
     monkeypatch.setattr(_setup, "MIRROR", mirror)
     monkeypatch.setattr(_setup, "DB_PATH", tmp_path / "catalog.db")
 

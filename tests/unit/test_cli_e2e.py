@@ -49,7 +49,7 @@ class TestInitRepoScanPipeline:
         assert db.exists()
 
         # 2. repo add registers the repository
-        assert main(["--catalog", str(db), "repo", "add", "test_repo", str(mirror)]) == 0
+        assert main(["--catalog", str(db), "repo", "add", "--force", "test_repo", str(mirror)]) == 0
 
         # 3. repo list shows the new repo
         capsys.readouterr()
@@ -85,7 +85,7 @@ class TestInitRepoScanPipeline:
         mirror.mkdir()
 
         assert main(["init", "--catalog-path", str(db)]) == 0
-        assert main(["--catalog", str(db), "repo", "add", "test_repo", str(mirror)]) == 0
+        assert main(["--catalog", str(db), "repo", "add", "--force", "test_repo", str(mirror)]) == 0
 
         data_dir = mirror / "data" / "cc"
         data_dir.mkdir(parents=True)
@@ -128,7 +128,7 @@ class TestRepoRemovePipeline:
         mirror.mkdir()
 
         assert main(["init", "--catalog-path", str(db)]) == 0
-        assert main(["--catalog", str(db), "repo", "add", "temp_repo", str(mirror)]) == 0
+        assert main(["--catalog", str(db), "repo", "add", "--force", "temp_repo", str(mirror)]) == 0
 
         # Extract repo_id directly from the catalog
         conn = get_connection(db)

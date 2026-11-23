@@ -365,8 +365,12 @@ class TestPackUnprune:
         main(["init", "--catalog-path", str(db_path)])
         conn = get_connection(db_path)
         create_all(conn)
-        register_repo(conn, "family", "family", "/mirror/family", "")
+        # #968: unprune checks the pack file is in the mirror.
+        mirror = tmp_path / "mirror-family"
+        register_repo(conn, "family", "family", str(mirror), "")
         for sha in shas:
+            (mirror / "data" / sha[:2]).mkdir(parents=True, exist_ok=True)
+            (mirror / "data" / sha[:2] / sha).write_bytes(b"pack")
             p = register_pack(conn, sha256=sha, size_bytes=1024, repo_id="family")
             mark_pruned(conn, p.pack_id)
         conn.close()
@@ -1087,7 +1091,8 @@ class TestForgottenSnapshots:
 
     def test_rows_untouched_when_listing_fails(self, tmp_path):
         env = self._env(tmp_path)
-        assert self._scan(env, RuntimeError("mirror unreadable")) == 0
+        # #968: a failed listing makes the scan exit non-zero.
+        assert self._scan(env, RuntimeError("mirror unreadable")) == 1
         assert set(self._rows(env)) == {"old11111", "kept2222"}
 
     def test_rows_untouched_on_empty_listing(self, tmp_path, capsys):
