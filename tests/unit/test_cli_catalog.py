@@ -48,21 +48,27 @@ def _build_fake_disc(
     try:
         create_all(conn)
         register_repo(conn, repo_name, repo_name, f"/mnt/mirror/{repo_name}", "")
-        if catalog_hashes:
-            packs = [register_pack(conn, sha, 1024, repo_name) for sha in catalog_hashes]
-            vol = create_volume(
-                conn,
-                volume_label,
-                generate_uuid(),
-                "TEST_TINY",
-                1_000_000,
-                "Home_Shelf",
-                "VERIFIED",
-            )
-            bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
+        uuid_ = generate_uuid()
+        packs = [register_pack(conn, sha, 1024, repo_name) for sha in catalog_hashes]
+        vol = create_volume(
+            conn,
+            volume_label,
+            uuid_,
+            "TEST_TINY",
+            1_000_000,
+            "Home_Shelf",
+            "VERIFIED",
+        )
+        bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
         conn.commit()
     finally:
         conn.close()
+    # #963: validate finds the disc's volume by the uuid here, and checks
+    # the manifest too (staging writes the volume's packs into it).
+    (disc_path / "volume_info.json").write_text(json.dumps({
+        "label": volume_label, "uuid": uuid_,
+        "sha256_manifest": sorted(catalog_hashes),
+    }))
 
     data_dir = disc_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)

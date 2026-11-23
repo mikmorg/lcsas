@@ -269,8 +269,14 @@ def detect_escrow_drift(
                     f"split=true {threshold}-of-{shares} but "
                     f"the catalog records no split for this repository. Discs would "
                     f"print instructions to gather share cards that were never "
-                    f"made. Re-run 'lcsas --config ... password split --repo "
-                    f"{name}' or set split=false under {where}."
+                    f"made. If the cards of a split were handed out (a "
+                    f"catalog rebuilt from discs has no record of a split "
+                    f"made after its newest disc), record that split again "
+                    f"from one card, which makes no new shares: 'lcsas "
+                    f"--config ... password split --repo {name} "
+                    f"--record-existing --share-file <card>'. If no cards "
+                    f"were made, run 'lcsas --config ... password split "
+                    f"--repo {name}' or set split=false under {where}."
                 )
             if (record.threshold, record.shares) != (threshold, shares):
                 return (

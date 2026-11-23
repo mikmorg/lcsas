@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from lcsas.db.schema import create_all
 from lcsas.db.verify import (
     CatalogValidationResult,
     _collect_disc_packs,
@@ -101,27 +102,50 @@ class TestCollectDiscPacks:
         assert result == set()
 
 
+def _write_volume_info(
+    disc: Path, info: dict, catalog: list[str] | None = None,
+) -> None:
+    """Write *info* as the disc's volume_info.json (with a uuid) and place
+    *catalog* (default: the manifest) on its volume in the disc catalog."""
+    info = {"uuid": f"uuid-{info['label']}", **info}
+    (disc / "volume_info.json").write_text(json.dumps(info))
+    packs = info.get("sha256_manifest", []) if catalog is None else catalog
+    conn = sqlite3.connect(str(disc / "catalog.db"))
+    conn.execute(
+        "INSERT INTO repositories (repo_id, name, mirror_path) "
+        "VALUES ('r', 'r', '/m')"
+    )
+    volume_id = conn.execute(
+        "INSERT INTO volumes (label, uuid, media_type, capacity_bytes) "
+        "VALUES (?, ?, 'TEST_TINY', 1)", (info["label"], info["uuid"]),
+    ).lastrowid
+    for sha in packs:
+        pack_id = conn.execute(
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES (?, 1, 'r')",
+            (sha,),
+        ).lastrowid
+        conn.execute("INSERT INTO volume_packs VALUES (?, ?)",
+                     (volume_id, pack_id))
+    conn.commit()
+    conn.close()
+
+
 class TestValidateDisc:
     @pytest.fixture
     def disc_path(self, tmp_path):
-        """Create a mock disc with catalog.db and data/ directory."""
+        """A disc with data/ and an LCSAS catalog (schema of this build).
+
+        Tests write ``volume_info.json`` with :func:`_write_volume_info`,
+        which also places the manifest's packs on the disc's volume in the
+        catalog, as staging does (#963: validate reads the catalog).
+        """
         disc = tmp_path / "disc"
         disc.mkdir()
         (disc / "data").mkdir()
-
-        # Create a minimal valid catalog.db
         conn = sqlite3.connect(str(disc / "catalog.db"))
-        conn.execute(
-            "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE)"
-        )
-        conn.execute(
-            "CREATE TABLE volumes "
-            "(volume_id INTEGER PRIMARY KEY, label TEXT, status TEXT)"
-        )
-        conn.execute("CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER)")
+        create_all(conn)
         conn.commit()
         conn.close()
-
         yield disc
 
     def test_single_disc_all_packs_present(self, disc_path):
@@ -133,8 +157,7 @@ class TestValidateDisc:
             "pack_count": 2,
             "sha256_manifest": ["a" * 64, "b" * 64],
         }
-        with open(disc_path / "volume_info.json", "w") as f:
-            json.dump(volume_info, f)
+        _write_volume_info(disc_path, volume_info)
 
         # Create matching pack files on disc
         (disc_path / "data" / "aa").mkdir(parents=True)
@@ -157,8 +180,7 @@ class TestValidateDisc:
             "label": "PARTIAL_VOL",
             "sha256_manifest": ["a" * 64, "b" * 64],
         }
-        with open(disc_path / "volume_info.json", "w") as f:
-            json.dump(volume_info, f)
+        _write_volume_info(disc_path, volume_info)
 
         # Only create one pack file
         (disc_path / "data" / "aa").mkdir(parents=True)
@@ -177,8 +199,7 @@ class TestValidateDisc:
             "label": "TEST_VOL",
             "sha256_manifest": ["a" * 64],
         }
-        with open(disc_path / "volume_info.json", "w") as f:
-            json.dump(volume_info, f)
+        _write_volume_info(disc_path, volume_info)
 
         # Create two packs on disc, but only one in manifest
         (disc_path / "data" / "aa").mkdir(parents=True)
@@ -213,14 +234,45 @@ class TestValidateDisc:
     def test_empty_disc_with_volume_info(self, disc_path):
         """Empty disc with empty manifest is valid."""
         volume_info = {"label": "EMPTY_VOL", "sha256_manifest": []}
-        with open(disc_path / "volume_info.json", "w") as f:
-            json.dump(volume_info, f)
+        _write_volume_info(disc_path, volume_info)
 
         result = validate_disc(disc_path)
 
         assert result.catalog_pack_count == 0
         assert result.disc_pack_count == 0
         assert result.ok
+
+    def test_catalog_that_disagrees_with_manifest_and_data_fails(self, disc_path):
+        """#963: the manifest and data/ agree, the catalog lacks a pack."""
+        _write_volume_info(
+            disc_path, {"label": "V", "sha256_manifest": ["a" * 64, "b" * 64]},
+            catalog=["a" * 64],
+        )
+        for sha in ("a" * 64, "b" * 64):
+            (disc_path / "data" / sha).write_bytes(b"x")
+        result = validate_disc(disc_path)
+        assert result.not_in_catalog == ["b" * 64]
+        assert not result.ok
+
+    def test_volume_missing_from_catalog_fails(self, disc_path):
+        (disc_path / "volume_info.json").write_text(
+            json.dumps({"label": "V", "uuid": "nowhere", "sha256_manifest": []})
+        )
+        result = validate_disc(disc_path)
+        assert result.problems and "nowhere" in result.problems[0]
+        assert not result.ok
+
+    def test_zero_length_catalog_is_refused(self, disc_path):
+        from lcsas.db.disc_catalog import DiscCatalogError
+
+        _write_volume_info(disc_path, {"label": "V", "sha256_manifest": []})
+        (disc_path / "catalog.db").write_bytes(b"")
+        with pytest.raises(DiscCatalogError, match="not an LCSAS catalog"):
+            validate_disc(disc_path)
+
+    def test_missing_volume_info_is_refused(self, disc_path):
+        with pytest.raises(ValueError, match="volume_info.json"):
+            validate_disc(disc_path)
 
     def test_catalog_validation_result_ok_property(self):
         """ok property returns True only when no missing or orphaned packs."""
@@ -255,8 +307,7 @@ class TestValidateDisc:
             "label": "ROT_VOL",
             "sha256_manifest": [good_sha, bad_sha],
         }
-        with open(disc_path / "volume_info.json", "w") as f:
-            json.dump(volume_info, f)
+        _write_volume_info(disc_path, volume_info)
 
         for sha, content in ((good_sha, good_content), (bad_sha, bad_content)):
             subdir = disc_path / "data" / sha[:2]

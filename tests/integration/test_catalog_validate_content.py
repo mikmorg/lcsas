@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from lcsas.cli.main import main
+from lcsas.db.schema import create_all
 from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
 requires_xorriso = pytest.mark.skipif(
@@ -37,16 +38,23 @@ def _sha(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def _write_minimal_catalog(path: Path) -> None:
+def _write_minimal_catalog(path: Path, uuid_: str, packs: list[str]) -> None:
+    """An LCSAS catalog placing *packs* on the volume *uuid_* (#963:
+    validate reads the catalog and finds the volume by its uuid)."""
     conn = sqlite3.connect(str(path))
-    conn.execute(
-        "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE)"
-    )
-    conn.execute(
-        "CREATE TABLE volumes "
-        "(volume_id INTEGER PRIMARY KEY, label TEXT, status TEXT)"
-    )
-    conn.execute("CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER)")
+    create_all(conn)
+    conn.execute("INSERT INTO repositories (repo_id, name, mirror_path) "
+                 "VALUES ('r', 'r', '/m')")
+    volume_id = conn.execute(
+        "INSERT INTO volumes (label, uuid, media_type, capacity_bytes) "
+        "VALUES ('BURN02_TEST', ?, 'TEST_TINY', 1)", (uuid_,),
+    ).lastrowid
+    for sha in packs:
+        pack_id = conn.execute(
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES (?, 1, 'r')",
+            (sha,),
+        ).lastrowid
+        conn.execute("INSERT INTO volume_packs VALUES (?, ?)", (volume_id, pack_id))
     conn.commit()
     conn.close()
 
@@ -64,10 +72,12 @@ def test_catalog_validate_content_flags_corrupt_pack_on_real_iso(tmp_path, capsy
         subdir = tree / "data" / sha[:2]
         subdir.mkdir(parents=True, exist_ok=True)
         (subdir / sha).write_bytes(content)
-    _write_minimal_catalog(tree / "catalog.db")
+    _write_minimal_catalog(tree / "catalog.db", "burn02-uuid",
+                           [good_sha, bad_sha])
     (tree / "volume_info.json").write_text(
         json.dumps({
             "label": "BURN02_TEST",
+            "uuid": "burn02-uuid",
             "sha256_manifest": [good_sha, bad_sha],
         })
     )

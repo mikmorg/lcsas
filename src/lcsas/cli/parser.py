@@ -1008,6 +1008,20 @@ def build_parser() -> argparse.ArgumentParser:
              "key files. Splitting an unchecked password is dangerous; use "
              "only when the mirror's keys/ is unavailable at split time.",
     )
+    key_split.add_argument(
+        "--record-existing", action="store_true",
+        help="Make no new shares: record in the catalog a split already made, "
+             "read from its share cards (--share-file), e.g. after a catalog "
+             "rebuild that found no record of it. The cards handed out stay "
+             "valid.",
+    )
+    key_split.add_argument(
+        "--share-file", action="append", default=None, dest="share_files",
+        type=Path,
+        help="With --record-existing: a share card of that split "
+             "(repeatable). With K cards the password is also checked "
+             "against the repository.",
+    )
 
     key_verify = key_sub.add_parser(
         "verify",
