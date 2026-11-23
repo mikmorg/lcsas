@@ -34,6 +34,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
 
     disc_count: int | None = None
     recorded: dict[str, tuple[int, int]] = {}
+    retired: tuple[str, ...] = ()
     db_path = _resolve_db_path(args, config)
     if db_path.exists():
         from lcsas.constants import (
@@ -70,6 +71,10 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
             disc_count = int(row[0]) or None
             # KEY-08 / #573: print the split actually performed, not the
             # config's K/N.
+            # #959: each retired backup set and the disc it starts from.
+            from lcsas.db.repos import retired_backup_sets
+            retired = tuple(rs.sentence()
+                            for rs in retired_backup_sets(conn))
             from lcsas.db.key_escrow import recorded_splits_by_name
             recorded = recorded_splits_by_name(conn, {
                 name: repo.mirror_path
@@ -95,6 +100,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
         card_date=date.today().isoformat(),
         split_repos=view.by_repo if mixed and view is not None else None,
         unsplit_repos=view.unsplit if mixed and view is not None else (),
+        retired_sets=retired,
     )
 
     if args.output is not None:

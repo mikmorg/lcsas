@@ -38,7 +38,8 @@ This document provides a checklist and templates to make that possible.
     volume with a disc still in service, counted once), whether the
     password is split, and the literal first command an heir runs per
     operating system. No password is printed. Store this sheet WITH the disc
-    binder.
+    binder. A retired backup set is listed with the disc it is restored
+    from (#959): print the card again after `lcsas repo retire`.
   - Or print a list of all disc labels and what they contain by hand.
   - Update it each time you burn new discs.
 
