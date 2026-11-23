@@ -1,0 +1,15 @@
+{
+  "disc": {
+    "label": "LCSAS_TEST_TINY_2026_0002",
+    "uuid": "6e10cb3c-3042-43d2-ad2c-9feba0ace1a5"
+  },
+  "labels": [
+    "LCSAS_TEST_TINY_2026_0001",
+    "LCSAS_TEST_TINY_2026_0002"
+  ],
+  "repo_id": "391696d0-15f9-4819-9e8e-6143adb18d5c",
+  "snapshots": [
+    "0507dcc99c0239b2ce2cd0777a1f4fb457c281de4f3dd4c27f264891f0ec4a1f",
+    "09301cd2364feacfedb06ac74a630301eff3d076f279c9848e500be84fe8402c"
+  ]
+}

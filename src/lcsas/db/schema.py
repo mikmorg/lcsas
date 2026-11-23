@@ -31,35 +31,72 @@ class WedgedMigrationError(RuntimeError):
     """Catalog holds ``*_old`` leftovers from an interrupted migration."""
 
 # ---------------------------------------------------------------------------
-# TIER-1 FROZEN SURFACE  (FMT-05)
+# TIER-1 FROZEN SURFACE  (FMT-05, #961)
 # ---------------------------------------------------------------------------
-# The tier-1 C reader (recovery/src/lcsas-restore/catalog.c) is burned onto
-# every meta disc and can NEVER be patched once written.  It hard-codes SQL
-# against the columns below.  An older meta disc's binary will routinely be
-# paired with newer data discs, so these (table, column) pairs are FROZEN:
+# The heir-path readers are burned onto every META disc and can NEVER be
+# patched once written: the tier-1 C reader
+# (recovery/src/lcsas-restore/catalog.c) and the Python reader (tier 3,
+# python_reader.py, whose catalog queries are in restore/_disc_search.py).
+# An older META disc's readers will routinely meet newer data discs, so what
+# they read of a disc catalog is FROZEN:
 #
-#   schema_version : version
+#   schema_version : version          (the HIGHEST row is the catalog's
+#                                      version; migrate() appends a row)
 #   packs          : pack_id, sha256, size_bytes, repo_id
 #   volume_packs   : volume_id, pack_id
 #   volumes        : volume_id, label, status   (+ the status != 'DESTROYED'
 #                    filter, so 'DESTROYED' must remain a valid status value)
+#   snapshots      : the table only (tier 1 counts its rows)
+#   PRAGMA user_version : the label mark (TIER1_LABEL_MARK_PRAGMA, below)
 #
 # POLICY: future schema bumps must be ADDITIVE only over this surface — never
-# rename, drop, or re-type these columns, and never remove 'DESTROYED' from the
-# volumes.status CHECK.  catalog.c whose version > LCSAS_TIER1_SCHEMA_MAX (5)
-# now warns and reports query errors distinctly from misses, but already-burned
-# binaries can only be protected by writer-side discipline here.  The pins are
-# enforced by tests/unit/test_schema_v5_columns_frozen.py (always-on CI).
+# rename, drop, or re-type these tables and columns, never remove 'DESTROYED'
+# from the volumes.status CHECK, never use user_version for anything but the
+# label mark, and never write DDL the vendored SQLite of tier 1 (3.46.0)
+# cannot parse: one entry in sqlite_master it cannot parse makes every table
+# unreadable to tier 1.  catalog.c whose version > LCSAS_TIER1_SCHEMA_MAX (5)
+# warns and reports query errors distinctly from misses, but already-burned
+# binaries can only be protected by writer-side discipline here.
+#
+# The pin is taken from the readers (#961): tests/unit/
+# test_schema_v5_columns_frozen.py prepares every SQL statement in catalog.c
+# and in python_reader.py and fails on any table, column or pragma they read
+# that is not listed here.  tests/recovery_hardening/
+# test_catalogs_across_releases.py runs both readers and `catalog rebuild`
+# over the committed disc catalog of each release (tests/fixtures/catalogs/)
+# and over synthetic next-version ones.
+#
+# How a v11 is made and rolled out: CURRENT_SCHEMA_VERSION becomes 11, the new
+# DDL goes into create_all() and a `current < 11` step into migrate() that
+# changes the catalog and appends the row 11 (older rows are kept); the frozen
+# surface stays as it is, and that release's disc catalog joins
+# tests/fixtures/catalogs/.  Old META discs keep reading the new data discs,
+# because nothing they read has changed.
 TIER1_FROZEN_SURFACE: dict[str, tuple[str, ...]] = {
     "schema_version": ("version",),
     "packs": ("pack_id", "sha256", "size_bytes", "repo_id"),
     "volume_packs": ("volume_id", "pack_id"),
     "volumes": ("volume_id", "label", "status"),
+    "snapshots": (),
 }
 
 # Status value the tier-1 DESTROYED filter depends on; must stay in the
 # volumes.status CHECK constraint forever.
 TIER1_REQUIRED_VOLUME_STATUS = "DESTROYED"
+
+# The label mark (#676): the highest disc label number ever issued, kept in
+# the SQLite header field ``PRAGMA user_version`` (db/label_mark.py).  Tier 1
+# ranks the catalogs it finds by it (#950), so it means this and nothing else,
+# forever.  It is not the schema version (that is schema_version, above).
+TIER1_LABEL_MARK_PRAGMA = "user_version"
+
+# Every pragma an heir-path reader runs on a catalog: the label mark, and
+# SQLite's own check of the file (which reads no catalog content).
+TIER1_FROZEN_PRAGMAS: tuple[str, ...] = (TIER1_LABEL_MARK_PRAGMA, "quick_check")
+
+# ``PRAGMA application_id``: LCSAS leaves it 0 and reads it nowhere.  It is
+# unused, so that a later release can claim it deliberately.
+CATALOG_APPLICATION_ID = 0
 
 # ---------------------------------------------------------------------------
 # DDL Statements

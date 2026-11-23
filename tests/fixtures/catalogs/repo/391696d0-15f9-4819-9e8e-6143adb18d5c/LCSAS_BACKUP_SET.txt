@@ -1,0 +1,7 @@
+# LCSAS backup set marker. Restore works without this file.
+format=1
+id=391696d0-15f9-4819-9e8e-6143adb18d5c
+name=alpha
+name_cmd=alpha
+split=none
+split_id=

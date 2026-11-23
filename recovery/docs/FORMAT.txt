@@ -105,23 +105,53 @@ LCSAS CATALOG
   A restore does not need it.  Tier 1 and tier 3 use it to say which
   disc holds a pack; without it they ask for discs by pack instead.
 
-  - Schema version: the "version" column of the one row in table
-    schema_version (10 for discs from LCSAS 1.0).  Do NOT use
-    PRAGMA user_version: LCSAS keeps the highest disc label number
-    issued there, not the schema version.
+  - Schema version: the highest "version" in table schema_version,
+    SELECT MAX(version) FROM schema_version (10 for discs from LCSAS
+    1.0).  The table has one row for each version the catalog went
+    through: a catalog made new has one row, and each migration
+    appends one, older rows kept.  So a catalog first made by an
+    older LCSAS has several rows, oldest first; the highest is its
+    version, never the first.
+  - PRAGMA user_version is the label mark: the highest disc label
+    number LCSAS has issued (the number at the end of a label).  It
+    is NOT the schema version.  Tier 1 ranks the catalogs it finds
+    by it.  It will never be used for anything else.
+  - PRAGMA application_id is 0: unused.  A later LCSAS may claim it.
   - Twelve tables: schema_version, repositories, packs, volumes,
     volume_packs, snapshots, locations, volume_copies, burn_sessions,
     session_volumes, volume_events, key_escrow.  The full schema is
     in the LCSAS source, db/schema.py: on the meta disc under
     lcsas/src/lcsas/, on a production data disc under lcsas_src/.
-  - What a reader needs, and what later versions only add to:
-      packs        (pack_id, sha256, size_bytes, repo_id)
+  - The frozen surface.  This is all the readers on a meta disc
+    (tier 1 and tier 3) read, and later versions only add to it:
+    they never rename, drop or retype what is listed here.
+      schema_version (version)
+      packs (pack_id, sha256, size_bytes, repo_id)
       volume_packs (volume_id, pack_id)
-      volumes      (volume_id, label, status)
+      volumes (volume_id, label, status)
+      snapshots (the table only)
+      PRAGMA user_version
+      PRAGMA quick_check
     A pack's sha256 is its file name under data/.  Join packs to
     volume_packs to volumes to find the disc LABEL that holds it;
-    skip volumes whose status is DESTROYED.  repo_id is the
-    <repo_id> folder name under metadata/.
+    skip volumes whose status is DESTROYED (a value every later
+    version keeps).  repo_id is the <repo_id> folder name under
+    metadata/.  Tier 1 counts the rows of snapshots, and reads none
+    of its columns.  PRAGMA quick_check is SQLite's own check of the
+    file.  A later version may add tables, indexes, nullable columns
+    and new values in other columns (a status, a media type); a
+    reader must not fail on any of them.
+  - The schema is written in SQL that SQLite 3.46.0 can parse: that
+    is the SQLite built into tier 1 (recovery/vendored/sqlite/).  One
+    entry in sqlite_master it cannot parse would make every table
+    unreadable to tier 1, so no LCSAS writes newer syntax.
+  - Timestamps are text, in two formats.  A value left to SQLite's
+    CURRENT_TIMESTAMP default (schema_version.applied_at always)
+    reads "YYYY-MM-DD HH:MM:SS", in UTC.  The others are ISO 8601
+    with a UTC offset, written by LCSAS:
+    "2026-11-23T18:25:53.793+00:00";
+    snapshots.timestamp is the snapshot's own time, with up to nine
+    fraction digits.  SQLite's julianday() reads both.
   - The disc's own row in volumes has status STAGING: the copy is
     taken before the disc is burned.  Discs staged in the same
     session may be missing from it.  The newest disc's catalog
@@ -140,6 +170,10 @@ LCSAS CATALOG
     Where its discs are kept is in volume_copies (one row for each
     disc: location, status).  A reader that wants to know where a
     disc is reads volume_copies, never volumes.location.
+    volumes.location is written when the volume is staged.  Only
+    renaming that location changes it (to the new name): burning a
+    disc for another location, moving a disc or losing one changes
+    volume_copies only.
   - The file uses a rollback journal (journal_mode DELETE), not WAL,
     so it opens on a read-only disc.  Open it read-only (tier 1 uses
     the SQLite URI parameter immutable=1).
