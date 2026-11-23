@@ -637,11 +637,14 @@ LCSAS_SKIP_SPACE_CHECK
   Read by:  restore.sh and restore.bat (since rc8, #660)
   What:     1 → skip the free-space preflight restore.sh runs before
             any password or disc prompt.  The check derives the size
-            of the chosen backup set from the freshest reachable
-            catalog.db (via a sqlite3 CLI when present, else the
-            tier-1 binary's --list-pending-packs --repo-id total, #798;
-            when tier 1 knows no pack of that id, the total of every
-            set in the archive) and gives the exact required-vs-
+            of the chosen backup set from the catalog.db it picked,
+            always through the tier-1 binary's --list-pending-packs
+            --repo-id total (#798, #951: each pack counted once, however
+            many discs hold it, so an archive kept in two places is
+            not counted twice; no sqlite3 command is used, so every
+            computer gets the same answer; when tier 1 knows no pack of
+            that id, the total of every set in the archive) and gives
+            the exact required-vs-
             available numbers when either the target directory or the
             pack-cache filesystem is too small.  Each needs about the
             set's size, so when the two share a filesystem (the
@@ -650,11 +653,15 @@ LCSAS_SKIP_SPACE_CHECK
             target that holds the restore marker.  The size is an
             estimate: on a terminal (LCSAS_INTERACTIVE) a short disk
             asks "Carry on anyway? [y/N]" and y goes on; any other
-            answer, or no terminal, stops with exit 1.  When the size
-            cannot be derived the check silently skips.
+            answer, or no terminal, stops with exit 1.  A catalog tier
+            1 cannot read gives no size: the script says it "could not
+            work out the size of this restore" and goes on without the
+            check.  With no catalog or no tier 1 the check silently
+            skips.
   Windows:  restore.bat makes the same check (since rc8, #660), after
             the catalog copy and before the password, with the same
-            tier-1 size (it has no sqlite3), the free space from
+            tier-1 size and the same words when there is none, the
+            free space from
             `dir`; "the same filesystem" means the same drive letter.
             A short drive always asks "Carry on anyway? [y/N]" (cmd
             cannot tell a terminal from a pipe); the end of the input

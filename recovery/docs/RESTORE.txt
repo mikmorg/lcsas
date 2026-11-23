@@ -976,7 +976,16 @@ mounted disc it prints (to stderr):
 
 The catalog lines name the label of the DATA disc you need (e.g.
 "LCSAS_BD25_2026_0003").  The catalog comes from your newest data
-disc.  If you skipped that disc, the first box says
+disc: of the catalogs on the discs in reach, the restore uses the one
+that has issued the highest disc number, whatever the files' dates.  It
+never uses the catalog of a disc of another archive (a disc that knows
+none of this backup set), and does not copy such a disc; it says so in
+one line.  When the box says
+    (catalog has the pack, but lists no disc for it)
+    It is on a disc newer than:
+the pack is on a disc burned after the one named: insert your newest
+data disc, whose catalog names it.  If you skipped that disc, the
+first box says
     (no disc catalog yet: insert your newest data disc)
 Do that: every data disc carries a catalog, and from then on the box
 names the disc it needs.  The three "Single-drive restore" lines show

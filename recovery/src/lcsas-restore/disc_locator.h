@@ -30,8 +30,9 @@ typedef struct lcsas_disc_locator {
 
     /* Optional: catalog for volume-label hints in prompts.  May be
      * NULL.  This is the CALLER's catalog handle and is borrowed --
-     * the locator may swap in a fresher one (see `owned_catalog`
-     * below) and use that for hints instead. */
+     * the locator uses any catalog it takes itself (see
+     * `owned_catalog` below) instead.  main() passes NULL and hands
+     * its --catalog to lcsas_disc_locator_consider_catalog. */
     lcsas_catalog *catalog;
 
     /* Interactive behaviour.
@@ -67,12 +68,29 @@ typedef struct lcsas_disc_locator {
     size_t       n_discovered;
     size_t       cap_discovered;
 
-    /* Freshest catalog opened by the locator from a discovered mount
-     * (NULL when none beats the caller-provided one).  Locator owns
-     * this handle and closes it on free / refresh. */
+    /* #950: the best catalog the locator has found (NULL: none yet),
+     * and what it ranks by.  Tier 1 is the one owner of the choice: a
+     * catalog is usable when it opens, passes lcsas_catalog_check and
+     * knows the backup set being restored (`repo_id`); among usable
+     * ones the highest label mark wins, then the one listing more
+     * volumes, then the newer file.  The --catalog argument is one
+     * candidate among the others.  `owned_catalog_path` (the file it
+     * came from) points into `owned_path_buf`.  Locator-owned; closed
+     * on free. */
     lcsas_catalog *owned_catalog;
     char          *owned_catalog_path;
-    long long      owned_catalog_mtime;
+    char           owned_path_buf[4096];
+    long long      owned_mark;
+    long long      owned_volumes;
+    long long      owned_mtime;
+
+    /* #950: the backup set being restored: the --repo folder's name
+     * (metadata/<id>).  A catalog with no pack of it is another
+     * archive's: never used, and its disc never copied into the pack
+     * cache.  Without lcsas_disc_locator_set_repo (`has_repo_id` 0,
+     * unit tests only) every catalog counts as knowing the set. */
+    char repo_id[256];
+    int  has_repo_id;
 
     /* Optional opt-in opportunistic pack cache.  When set (e.g. via
      * the LCSAS_PACK_CACHE_DIR env var, plumbed from main.c), every
@@ -105,14 +123,18 @@ typedef struct lcsas_disc_locator {
     int pack_mismatch_warned;
 
     /* Discs the drain gave up on for this run (#786): one that did not
-     * fit in the cache or whose copy stopped partway.  Their packs are
-     * read from the disc.  Catalogs found damaged (#788), so they are
-     * not copied and warned about again on each rescan.  Locator-owned;
-     * freed in lcsas_disc_locator_free(). */
+     * fit in the cache, whose copy stopped partway, or (#950) another
+     * archive's.  Their packs are read from the disc, if ever.  Every
+     * catalog considered (#788, #950), with what was found (taken,
+     * ranked below, damaged or empty, another archive's), so the same
+     * file is not copied, checked or warned about again on each
+     * rescan; `catalog_evaluations` counts the ones looked into, for
+     * tests.  Locator-owned; freed in lcsas_disc_locator_free(). */
     struct lcsas_disc_memo *drain_skips;
     size_t n_drain_skips;
-    struct lcsas_disc_memo *bad_catalogs;
-    size_t n_bad_catalogs;
+    struct lcsas_disc_memo *seen_catalogs;
+    size_t n_seen_catalogs;
+    unsigned long catalog_evaluations;
 
     /* Auto-detect (#455).  While the interactive prompt waits, re-scan
      * the search paths and mount parents every `poll_ms` milliseconds,
@@ -215,22 +237,31 @@ void lcsas_disc_locator_set_mount_parents(lcsas_disc_locator *l,
 void lcsas_disc_locator_free(lcsas_disc_locator *l);
 
 /*
- * Record the mtime of the caller-provided catalog so the locator
- * never swaps in an OLDER catalog discovered on a mounted disc.  The
- * caller passes the SQLite path it opened (typically the value of
- * `--catalog`); the locator stat()s it and uses st_mtime as the
- * floor.  Safe to call with a NULL/missing path -- the floor stays
- * at 0 and any opened catalog wins.
+ * #950: the backup set being restored, from the --repo folder (its
+ * last path component, as on a data disc: metadata/<id>).  Catalogs
+ * that do not know it are not used, nor their discs copied.
  */
-void lcsas_disc_locator_set_catalog_floor(lcsas_disc_locator *l,
-                                          const char *catalog_path);
+void lcsas_disc_locator_set_repo(lcsas_disc_locator *l,
+                                 const char *repo_path);
+
+/*
+ * #950: consider the catalog at `catalog_path` (the --catalog
+ * argument) as one candidate among the catalogs on the discs: it is
+ * taken when usable and better ranked than the one in use (see
+ * `owned_catalog`), and sets no floor when it is not.  Call it after
+ * lcsas_disc_locator_set_repo and lcsas_disc_locator_set_cache_dir.
+ */
+void lcsas_disc_locator_consider_catalog(lcsas_disc_locator *l,
+                                         const char *catalog_path);
 
 /*
  * Enable the opt-in opportunistic pack cache.  Set `cache_dir` to a
  * writable directory; the locator will mkdir-p it and, on every
  * successful pack hit found on a non-cache path, copy the rest of
  * that disc's data/ subtree into the cache so subsequent packs from
- * the same disc resolve from local storage.  Without this, restoring
+ * the same disc resolve from local storage.  A disc whose catalog does
+ * not know the backup set (another archive's, #950) is not copied.
+ * Without this, restoring
  * a tree whose blob references interleave packs from N discs causes
  * O(blobs) disc swaps in the worst case; with this, O(N) swaps.
  *

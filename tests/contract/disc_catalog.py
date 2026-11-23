@@ -25,6 +25,14 @@ HEADING = "| It is on any disc labelled:                              |"
 NONE_LISTED = "none listed"
 NO_RECORD = "no record"
 NO_PROMPT = "no prompt"
+NEWER_THAN = "| It is on a disc newer than:                              |"
+
+
+def newer_than(label: str) -> str:
+    """What a prompt says when the catalog has the pack on no disc it
+    offers and names *label*, the newest disc it lists, as the one the
+    pack is newer than (#957)."""
+    return f"{NONE_LISTED}; newer than {label}"
 
 
 @dataclass(frozen=True)
@@ -47,11 +55,14 @@ class Vol:
 
 
 def write_catalog(path: Path, packs: Sequence[str], vols: Sequence[Vol],
-                  *, knows_pack: bool = True) -> None:
+                  *, knows_pack: bool = True, repo_id: str = "repo-1",
+                  mark: int = 0) -> None:
     """A schema-v10 catalog with *vols* (volume_id 1, 2, ... in order)
     each holding every pack in *packs* (but a ``holds=False`` one).  With ``knows_pack=False`` the
     catalog has the volumes but no record of those packs (they hold an
-    unrelated one instead)."""
+    unrelated one instead).  The packs belong to backup set *repo_id*
+    (a reader takes it from its ``--repo`` folder's name, #950), and
+    *mark* is the label mark (``PRAGMA user_version``)."""
     from lcsas.db import schema
     from lcsas.db.queries import AUTO_DEPRECATED_NOTE_PREFIX, get_lost_volume_ids
 
@@ -59,15 +70,16 @@ def write_catalog(path: Path, packs: Sequence[str], vols: Sequence[Vol],
     try:
         schema.create_all(conn)
         conn.execute("INSERT INTO repositories (repo_id, name, mirror_path) "
-                     "VALUES ('repo-1', 'one', '/srv/one')")
+                     "VALUES (?, 'one', '/srv/one')", (repo_id,))
         conn.execute("INSERT OR IGNORE INTO locations (name) "
                      "VALUES ('Home_Shelf')")
         held = list(packs) if knows_pack else ["0f" * 32]
         pack_ids = [
             conn.execute("INSERT INTO packs (sha256, size_bytes, repo_id) "
-                         "VALUES (?, 4096, 'repo-1')", (sha,)).lastrowid
+                         "VALUES (?, 4096, ?)", (sha, repo_id)).lastrowid
             for sha in held
         ]
+        conn.execute(f"PRAGMA user_version = {int(mark)}")
         for n, vol in enumerate(vols, start=1):
             status = "DEPRECATED" if vol.lost else vol.status
             disc = "DESTROYED" if vol.lost else vol.disc
@@ -102,7 +114,8 @@ def write_catalog(path: Path, packs: Sequence[str], vols: Sequence[Vol],
 def named_discs(output: str) -> tuple[str, ...] | str:
     """What the first disc prompt in *output* names: the labels under
     its "It is on any disc labelled:" heading, in order, or
-    ``NONE_LISTED`` / ``NO_RECORD`` / ``NO_PROMPT``."""
+    ``NONE_LISTED`` (``newer_than(label)`` when the prompt names the
+    disc the pack is newer than) / ``NO_RECORD`` / ``NO_PROMPT``."""
     lines = output.splitlines()
     for i, line in enumerate(lines):
         if line == HEADING:
@@ -115,6 +128,9 @@ def named_discs(output: str) -> tuple[str, ...] | str:
                 labels.append(label)
             return tuple(labels)
         if "lists no disc for it" in line:
+            rest = lines[i + 1:i + 3]
+            if len(rest) == 2 and rest[0] == NEWER_THAN:
+                return newer_than(rest[1][4:-1].strip())
             return NONE_LISTED
         if "catalog has no record of this pack" in line:
             return NO_RECORD

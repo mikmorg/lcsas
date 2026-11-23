@@ -390,6 +390,9 @@ _CLI_BLOCK = textwrap.dedent("""\
             pack_cache_dir=pack_cache,
             resume=not args.no_resume,
             meta_disc=Path(args.meta_disc) if args.meta_disc else None,
+            # #950: the backup set is the --repo folder's name, as tier
+            # 1 takes it: a catalog of another archive is not used.
+            repo_id=repo_path.name,
         )
 
         if args.info:

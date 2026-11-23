@@ -347,8 +347,12 @@ def _catalog(path: Path, disc_a: list[_Set], disc_b: list[_Set] | None,
 
     on_a = (lambda n: True) if only is None else (lambda n: n in only)
     on_b = (lambda n: True) if only is None else (lambda n: n not in only)
+    # #950: each pack in its own set, so the catalog knows every set.
+    owner = {p.name: s.repo_id for s in [*disc_a, *(disc_b or [])]
+             for p in _packs(s)}
     test_multidisc._build_catalog(path, sizes(disc_a, on_a),
-                                  sizes(disc_b or [], on_b), LABEL_A, LABEL_B)
+                                  sizes(disc_b or [], on_b), LABEL_A, LABEL_B,
+                                  pack_sets=owner)
     return path
 
 

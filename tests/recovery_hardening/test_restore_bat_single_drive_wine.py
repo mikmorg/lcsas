@@ -192,9 +192,10 @@ def _build(tmp_path: Path) -> _Fixture:
                 for p in (disc / "data").rglob("*") if p.is_file()]
 
     catalog = tmp_path / "catalog.db"
+    # #950: the catalog knows the set (its id is the set's folder name).
     test_multidisc._build_catalog(
         catalog, packs_on(discs["disc_a"]), packs_on(discs["disc_b"]),
-        LABELS["disc_a"], LABELS["disc_b"],
+        LABELS["disc_a"], LABELS["disc_b"], set_id=SET_ID,
     )
     for name, disc in discs.items():
         (disc / "volume_info.json").write_text(

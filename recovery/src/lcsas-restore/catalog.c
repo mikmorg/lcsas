@@ -33,86 +33,72 @@ struct lcsas_catalog {
     int skew_warned;      /* emit the newer-schema warning at most once */
 };
 
+/* The longest catalog path opened: the locator's own paths are 4 KiB. */
+#define CATALOG_PATH_MAX 4096
+
 /*
- * A "file:" URI for `path` with ?immutable=1.  '%', '?' and '#' would
- * escape or end the path inside a URI, so they are percent-encoded.  An
- * absolute path gets an empty authority ("file://" + "/abs"), so a
- * leading "//" can't be read as a host.  NULL when out of memory.
+ * Write into `u` (CATALOG_URI_MAX bytes) a "file:" URI for `path` with
+ * ?immutable=1.  '%', '?' and '#' would escape or end the path inside a
+ * URI, so they are percent-encoded.  An absolute path gets an empty
+ * authority ("file://" + "/abs"), so a leading "//" can't be read as a
+ * host.  -1 when the path is longer than CATALOG_PATH_MAX.
  */
-static char *
-immutable_uri(const char *path)
+#define CATALOG_URI_MAX (7 + 3 * CATALOG_PATH_MAX + sizeof "?immutable=1")
+static int
+immutable_uri(const char *path, char *u)
 {
     static const char hexd[] = "0123456789ABCDEF";
     static const char query[] = "?immutable=1";
     size_t n = strlen(path);
     size_t i;
     size_t j;
-    char *u = (char *)malloc(7 + 3 * n + sizeof query);
 
-    if (u) {
-        strcpy(u, path[0] == '/' ? "file://" : "file:");
-        j = strlen(u);
-        for (i = 0; i < n; i++) {
-            unsigned char ch = (unsigned char)path[i];
-            if (ch == '%' || ch == '?' || ch == '#') {
-                u[j++] = '%';
-                u[j++] = hexd[ch >> 4];
-                u[j++] = hexd[ch & 15];
-            } else {
-                u[j++] = (char)ch;
-            }
+    if (n > CATALOG_PATH_MAX) return -1;
+    strcpy(u, path[0] == '/' ? "file://" : "file:");
+    j = strlen(u);
+    for (i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)path[i];
+        if (ch == '%' || ch == '?' || ch == '#') {
+            u[j++] = '%';
+            u[j++] = hexd[ch >> 4];
+            u[j++] = hexd[ch & 15];
+        } else {
+            u[j++] = (char)ch;
         }
-        memcpy(u + j, query, sizeof query);
     }
-    return u;
+    memcpy(u + j, query, sizeof query);
+    return 0;
 }
 
 /*
- * #543: a WAL-mode catalog on read-only media opens, but every query
- * then fails ("unable to open database file"): SQLite has to create
- * the -shm and -wal files beside it, and can't.  A disc never changes,
- * so read it as immutable (no locks, no -shm, no -wal), as the Python
- * readers do.  Only after a plain open's first query has failed that
- * way (see lcsas_catalog_open): immutable would also ignore a live
- * -wal next to a catalog copied off a running system.  Keeps the plain
- * handle, and its error, when this doesn't help.
+ * A catalog is always opened as immutable: no locks, no -shm, no -wal.
+ * A disc never changes, and tier 1 reads only a disc's catalog or a
+ * copy of one.  #543: a WAL-mode catalog on read-only media opened
+ * plainly, but every query then failed ("unable to open database
+ * file"): SQLite has to create the -shm and -wal files beside it, and
+ * can't.  #967: on a disc copied to a folder, where it can, the plain
+ * open left an empty -shm and -wal beside the copy.  A -wal beside a
+ * copy is not read: a disc's catalog is whole in its main file.  The
+ * Python readers open it the same way.
  */
-static void
-reopen_immutable(lcsas_catalog *c, const char *path)
-{
-    char *uri = immutable_uri(path);
-    sqlite3 *plain = c->db;
-    sqlite3 *db = NULL;
-    int version = -1;
-
-    if (uri && sqlite3_open_v2(uri, &db,
-                               SQLITE_OPEN_READONLY | SQLITE_OPEN_URI,
-                               NULL) == SQLITE_OK) {
-        c->db = db;
-        version = lcsas_catalog_schema_version(c);
-    }
-    if (version >= 0) {
-        sqlite3_close(plain);
-        c->schema_version = version;
-    } else {
-        sqlite3_close(db);
-        c->db = plain;
-    }
-    free(uri);
-}
-
 lcsas_catalog *
 lcsas_catalog_open(const char *path)
 {
     lcsas_catalog *c;
+    char uri[CATALOG_URI_MAX];
     int rc;
 
+    if (immutable_uri(path, uri) != 0) {
+        fprintf(stderr, "catalog open failed: the path is too long\n");
+        return NULL;
+    }
     c = (lcsas_catalog *)malloc(sizeof(*c));
     if (!c) return NULL;
     c->db = NULL;
     c->schema_version = -1;
     c->skew_warned = 0;
-    rc = sqlite3_open_v2(path, &c->db, SQLITE_OPEN_READONLY, NULL);
+    rc = sqlite3_open_v2(uri, &c->db,
+                         SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "catalog open failed: %s\n",
                 c->db ? sqlite3_errmsg(c->db) : "unknown");
@@ -121,14 +107,6 @@ lcsas_catalog_open(const char *path)
         return NULL;
     }
     c->schema_version = lcsas_catalog_schema_version(c);
-    /* The -shm SQLite can't create shows up as SQLITE_CANTOPEN on a
-     * read-only mount and SQLITE_READONLY in an unwritable directory.
-     * Nothing else (not a database, no such table) is helped by
-     * reopening, so don't spend a second open on it. */
-    rc = sqlite3_errcode(c->db);
-    if (c->schema_version < 0
-            && (rc == SQLITE_CANTOPEN || rc == SQLITE_READONLY))
-        reopen_immutable(c, path);
     return c;
 }
 
@@ -206,14 +184,58 @@ lcsas_catalog_schema_version(lcsas_catalog *c)
     int rc;
     int version = -1;
 
+    /* #961: the highest row is the catalog's version.  A master
+     * migrated step by step keeps a row for each version it went
+     * through, oldest first.  No row at all reads as NULL: no version. */
     rc = sqlite3_prepare_v2(c->db,
-            "SELECT version FROM schema_version", -1, &st, NULL);
+            "SELECT MAX(version) FROM schema_version", -1, &st, NULL);
     if (rc != SQLITE_OK) return -1;
-    if (sqlite3_step(st) == SQLITE_ROW) {
+    if (sqlite3_step(st) == SQLITE_ROW
+            && sqlite3_column_type(st, 0) != SQLITE_NULL) {
         version = sqlite3_column_int(st, 0);
     }
     sqlite3_finalize(st);
     return version;
+}
+
+/*
+ * The first column of the first row `sql` gives (with ?1 bound to
+ * `text`), or `none` when it gives no row; -1 when it cannot be asked.
+ */
+static long long
+query_int(lcsas_catalog *c, const char *sql, const char *text, long long none)
+{
+    sqlite3_stmt *st = NULL;
+    long long v = -1;
+    int rc;
+
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    if (text) sqlite3_bind_text(st, 1, text, -1, SQLITE_STATIC);
+    rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) v = sqlite3_column_int64(st, 0);
+    if (rc == SQLITE_DONE) v = none;
+    sqlite3_finalize(st);
+    return v;
+}
+
+int
+lcsas_catalog_knows_repo(lcsas_catalog *c, const char *repo_id)
+{
+    return (int)query_int(c, "SELECT 1 FROM packs WHERE repo_id = ?1 LIMIT 1",
+                          repo_id, 0);
+}
+
+long long
+lcsas_catalog_label_mark(lcsas_catalog *c)
+{
+    return query_int(c, "PRAGMA user_version", NULL, -1);
+}
+
+long long
+lcsas_catalog_volume_count(lcsas_catalog *c)
+{
+    return query_int(c, "SELECT COUNT(*) FROM volumes", NULL, -1);
 }
 
 static void
@@ -268,7 +290,7 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
     size_t count = 0;
 
     rc = sqlite3_prepare_v2(c->db,
-            "SELECT v.volume_id, v.label, v.uuid, v.media_type, v.status "
+            "SELECT v.volume_id, v.label, v.status "
             "FROM volumes v "
             "JOIN volume_packs vp ON vp.volume_id = v.volume_id "
             "WHERE vp.pack_id = ? AND v.status != 'DESTROYED' "
@@ -283,10 +305,7 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
     while (count < max_vols && (rc = sqlite3_step(st)) == SQLITE_ROW) {
         out[count].volume_id = sqlite3_column_int64(st, 0);
         copy_text_col(st, 1, out[count].label, sizeof(out[count].label));
-        copy_text_col(st, 2, out[count].uuid, sizeof(out[count].uuid));
-        copy_text_col(st, 3, out[count].media_type,
-                      sizeof(out[count].media_type));
-        copy_text_col(st, 4, out[count].status,
+        copy_text_col(st, 2, out[count].status,
                       sizeof(out[count].status));
         count++;
     }
@@ -295,6 +314,26 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
      * volume".  rc is SQLITE_ROW when the cap stopped the loop. */
     if (rc != SQLITE_ROW && rc != SQLITE_DONE) return -1;
     return (int)count;
+}
+
+int
+lcsas_catalog_newest_label(lcsas_catalog *c, char *out, size_t cap)
+{
+    sqlite3_stmt *st = NULL;
+    int found = 0;
+
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT label FROM volumes "
+            "WHERE status != 'DESTROYED' AND label IS NOT NULL "
+            "ORDER BY volume_id DESC LIMIT 1",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        copy_text_col(st, 0, out, cap);
+        found = 1;
+    }
+    sqlite3_finalize(st);
+    return found;
 }
 
 /* Prints the disc plan of the whole archive, or of one repository with
@@ -315,21 +354,43 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
  * binary" thesis to save disc fetches on a multi-hundred-disc restore.
  * Deliberately declined: correctness is unaffected (the over-broad list
  * still restores the right data) and the per-snapshot optimisation stays a
- * tier-2 (rustic) capability.  See issue #350 for the full analysis. */
+ * tier-2 (rustic) capability.  See issue #350 for the full analysis.
+ *
+ * #951: the total counts each pack once, however many volumes hold it
+ * (an archive kept in two places, a lost volume burned again).  The
+ * per-disc lines count a pack on every disc that holds it, so the last
+ * line does not promise that every disc listed is needed.  The total is
+ * worked out first: a catalog it cannot be read from gets nothing on
+ * stdout, and -1. */
 int
 lcsas_catalog_print_pending_packs(lcsas_catalog *c, const char *repo_id)
 {
     sqlite3_stmt *st = NULL;
-    int rc;
-    long long total_packs = 0;
-    long long total_bytes = 0;
+    long long total_packs;
+    long long total_bytes;
+    long long listed = 0;
     long long total_discs = 0;
-    double mb;
+    const char *packs_s;
+    const char *discs_s;
 
-    /* Group all packs by volume label, ordered by pack count desc.
-     * Column names taken from lcsas_catalog_find_pack /
-     * lcsas_catalog_volumes_for_pack.  Mirror the DESTROYED filter. */
-    rc = sqlite3_prepare_v2(c->db,
+    /* Every pack of the set that is on a volume not DESTROYED (the
+     * filter of lcsas_catalog_volumes_for_pack), once. */
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT COUNT(*), COALESCE(SUM(p.size_bytes), 0) FROM packs p "
+            "WHERE (?1 IS NULL OR p.repo_id = ?1) "
+            "AND EXISTS (SELECT 1 FROM volume_packs vp "
+            "JOIN volumes v ON v.volume_id = vp.volume_id "
+            "WHERE vp.pack_id = p.pack_id AND v.status != 'DESTROYED')",
+            -1, &st, NULL) != SQLITE_OK)
+        goto fail;
+    sqlite3_bind_text(st, 1, repo_id, -1, SQLITE_STATIC);
+    if (sqlite3_step(st) != SQLITE_ROW) goto fail;
+    total_packs = sqlite3_column_int64(st, 0);
+    total_bytes = sqlite3_column_int64(st, 1);
+    sqlite3_finalize(st);
+
+    /* Each disc, with the packs of the set it holds, most first. */
+    if (sqlite3_prepare_v2(c->db,
             "SELECT v.label, COUNT(p.pack_id), SUM(p.size_bytes) "
             "FROM packs p "
             "JOIN volume_packs vp ON p.pack_id = vp.pack_id "
@@ -338,13 +399,10 @@ lcsas_catalog_print_pending_packs(lcsas_catalog *c, const char *repo_id)
             "AND (?1 IS NULL OR p.repo_id = ?1) "
             "GROUP BY v.label "
             "ORDER BY COUNT(p.pack_id) DESC",
-            -1, &st, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf(stderr, "catalog query failed: %s\n", sqlite3_errmsg(c->db));
-        return -1;
-    }
+            -1, &st, NULL) != SQLITE_OK)
+        goto fail;
+    sqlite3_bind_text(st, 1, repo_id, -1, SQLITE_STATIC);
     if (repo_id) {
-        sqlite3_bind_text(st, 1, repo_id, -1, SQLITE_STATIC);
         printf("Pending packs by disc, repository %s only:\n", repo_id);
     } else {
         printf("Pending packs by disc:\n");
@@ -352,25 +410,34 @@ lcsas_catalog_print_pending_packs(lcsas_catalog *c, const char *repo_id)
     while (sqlite3_step(st) == SQLITE_ROW) {
         const unsigned char *label = sqlite3_column_text(st, 0);
         long long n_packs = sqlite3_column_int64(st, 1);
-        long long n_bytes = sqlite3_column_int64(st, 2);
-        mb = (double)n_bytes / (1024.0 * 1024.0);
         printf("  %s: %lld pack%s (%.1f MB)\n",
                label ? (const char *)label : "(unknown)",
-               n_packs,
-               n_packs == 1 ? "" : "s",
-               mb);
-        total_packs += n_packs;
-        total_bytes += n_bytes;
+               n_packs, n_packs == 1 ? "" : "s",
+               (double)sqlite3_column_int64(st, 2) / (1024.0 * 1024.0));
+        listed += n_packs;
         total_discs++;
     }
     sqlite3_finalize(st);
 
-    mb = (double)total_bytes / (1024.0 * 1024.0);
-    printf("Total: %lld pack%s, %.1f MB across %lld disc%s.\n",
-           total_packs, total_packs == 1 ? "" : "s",
-           mb,
-           total_discs, total_discs == 1 ? "" : "s");
+    /* The words are worked out first, so the line's two halves are
+     * adjacent in this file (the docs quote it whole). */
+    packs_s = total_packs == 1 ? "" : "s";
+    discs_s = total_discs == 1 ? "" : "s";
+    printf("Total: %lld pack%s, %.1f MB.", total_packs, packs_s,
+           (double)total_bytes / (1024.0 * 1024.0));
+    /* A pack listed on two discs: there are two discs or more. */
+    if (listed > total_packs)
+        printf(" They are on %lld discs; some hold the same packs.",
+               total_discs);
+    else if (total_discs > 0)
+        printf(" They are on %lld disc%s.", total_discs, discs_s);
+    printf("\n");
     return 0;
+
+fail:
+    fprintf(stderr, "catalog query failed: %s\n", sqlite3_errmsg(c->db));
+    sqlite3_finalize(st);
+    return -1;
 }
 
 void

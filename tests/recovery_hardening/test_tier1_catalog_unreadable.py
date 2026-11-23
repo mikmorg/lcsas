@@ -20,8 +20,9 @@ disc-swap prompt and stops:
   1. A real (schema v10) WAL catalog in a directory the binary can't
      write to, standing in for a read-only disc, names the missing
      pack's volume.
-  2. A catalog that isn't a database says it couldn't be read, and why,
-     with no word about a newer LCSAS.
+  2. A catalog that isn't a database is not used (#950: tier 1 judges
+     --catalog as it judges the discs' catalogs), with one warning that
+     it is damaged and no word about a newer LCSAS.
 
 The C side (recovery/tests/test_catalog.c, test_disc_locator.c) pins
 the same branches function by function, plus a damaged page.
@@ -67,8 +68,10 @@ def _first_prompt(
     return out
 
 
-def _build_wal_catalog(path: Path, packs: list[tuple[str, int]]) -> None:
-    """A schema-v10 catalog putting ``packs`` on _LABEL_B, in WAL mode."""
+def _build_wal_catalog(path: Path, packs: list[tuple[str, int]],
+                       set_id: str) -> None:
+    """A schema-v10 catalog putting ``packs`` (of backup set ``set_id``:
+    the --repo folder's name, #950) on _LABEL_B, in WAL mode."""
     from lcsas.db import schema as db_schema
     from lcsas.db.packs import register_pack
     from lcsas.db.volume_packs import bulk_link_packs
@@ -80,9 +83,9 @@ def _build_wal_catalog(path: Path, packs: list[tuple[str, int]]) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO repositories (repo_id, name, mirror_path) "
         "VALUES (?, ?, ?)",
-        ("repo-wal", "wal", "/srv/wal"),
+        (set_id, "wal", "/srv/wal"),
     )
-    rows = [register_pack(conn, sha, size, "repo-wal") for sha, size in packs]
+    rows = [register_pack(conn, sha, size, set_id) for sha, size in packs]
     vol = create_volume(
         conn, label=_LABEL_B, uuid="uuid-wal-b", media_type="BD25",
         capacity_bytes=26843545600, status="VERIFIED", commit=False,
@@ -104,6 +107,7 @@ def test_wal_catalog_on_unwritable_media_names_the_volume(tmp_path: Path) -> Non
     _build_wal_catalog(
         catalog,
         [(f.name, f.stat().st_size) for f in sorted((disc_b / "data").iterdir())],
+        repo.name,
     )
     assert [p.name for p in disc.iterdir()] == ["catalog.db"], (
         "the -wal and -shm files should be gone after close"
@@ -126,6 +130,9 @@ def test_unreadable_catalog_is_not_blamed_on_a_newer_lcsas(tmp_path: Path) -> No
     catalog = tmp_path / "catalog.db"
     catalog.write_bytes(b"not an SQLite database\n" * 40)
     out = _first_prompt(tmp_path, repo, pwfile, disc_a, catalog)
-    assert "catalog could not be read" in out, out
-    assert "Reason: file is not a database" in out, out
+    # #950: a catalog that cannot be read is not used (it is one
+    # candidate, judged as the discs' are): one warning naming it, and
+    # the prompt asks for the newest data disc.
+    assert f"the catalog {catalog} is damaged or cut short" in out, out
+    assert "no disc catalog yet: insert your newest data disc" in out, out
     assert "newer LCSAS" not in out, f"an unreadable catalog was reported as skew:\n{out}"

@@ -441,8 +441,14 @@ def _build_catalog(catalog_path: Path,
                    disc_a_packs: list[tuple[str, int]],
                    disc_b_packs: list[tuple[str, int]],
                    disc_a_label: str,
-                   disc_b_label: str) -> None:
-    """Build a schema-v5 catalog.db using production Python APIs."""
+                   disc_b_label: str,
+                   set_id: str = "repo-test",
+                   pack_sets: dict[str, str] | None = None) -> None:
+    """Build a schema-v5 catalog.db using production Python APIs.  Its
+    packs are of backup set ``set_id`` (``pack_sets``: pack id -> set
+    id, for the packs of other sets): tier 1 uses a catalog only when it
+    knows the set of --repo, its folder's name (#950)."""
+    sets = pack_sets or {}
     import sqlite3
     sys.path.insert(0, str(RECOVERY.parent / "src"))
     from lcsas.db import schema as db_schema
@@ -459,13 +465,19 @@ def _build_catalog(catalog_path: Path,
     conn.execute(
         "INSERT OR IGNORE INTO repositories "
         "(repo_id, name, mirror_path) VALUES (?, ?, ?)",
-        ("repo-test", "test", "/srv/test"),
+        (set_id, "test", "/srv/test"),
     )
+    for other in sorted(set(sets.values()) - {set_id}):
+        conn.execute(
+            "INSERT OR IGNORE INTO repositories "
+            "(repo_id, name, mirror_path) VALUES (?, ?, ?)",
+            (other, other, f"/srv/{other}"),
+        )
     conn.commit()
 
-    a_packs = [register_pack(conn, sha, size, "repo-test")
+    a_packs = [register_pack(conn, sha, size, sets.get(sha, set_id))
                for sha, size in disc_a_packs]
-    b_packs = [register_pack(conn, sha, size, "repo-test")
+    b_packs = [register_pack(conn, sha, size, sets.get(sha, set_id))
                for sha, size in disc_b_packs]
 
     vol_a = create_volume(
@@ -579,7 +591,8 @@ def case_catalog_prompt_label() -> int:
 
         catalog_path = tmp / "catalog.db"
         _build_catalog(catalog_path, a_packs, b_packs,
-                       "vol-A-2026-photos", "vol-B-2026-videos")
+                       "vol-A-2026-photos", "vol-B-2026-videos",
+                       set_id=repo.name)
 
         staging = tmp / "staging"
         staging.mkdir()

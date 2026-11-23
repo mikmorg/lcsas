@@ -112,7 +112,7 @@ def _install_stub_binary(recovery: Path, target: str, name: str) -> Path:
         for a in "$@"; do
             if [ "$a" = "--list-pending-packs" ]; then
                 printf 'Pending packs by disc:\\n'
-                printf 'Total: 3 packs, 50.0 MB across 1 disc.\\n'
+                printf 'Total: 3 packs, 50.0 MB. They are on 1 disc.\\n'
                 exit 0
             fi
         done
@@ -462,7 +462,7 @@ def _install_strict_stub(recovery: Path) -> Path:
             exit 2
         fi
         if [ "$lpp" = 1 ]; then
-            printf 'Total: 9 packs, 99999999.0 MB across 3 discs.\\n'
+            printf 'Total: 9 packs, 99999999.0 MB. They are on 3 discs.\\n'
             exit 0
         fi
         exit 0

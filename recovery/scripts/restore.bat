@@ -1226,16 +1226,19 @@ REM Stop now, before the password and the first disc, when a drive has
 REM too little free space for the restore: not part-way through, after
 REM discs have been swapped.  The size comes from the catalog copy,
 REM through lcsas-restore.exe --list-pending-packs --repo-id: the size of
-REM the chosen set's packs (#798; its folder name under metadata\ is its
-REM id in the catalog).  When that counts no pack (an older disc names
+REM the chosen set's packs, each counted once however many discs hold it
+REM (#951; #798: its folder name under metadata\ is its id in the
+REM catalog).  When that counts no pack (an older disc names
 REM its folders by set name) it is the size of every set on the discs.
 REM Either way it is an estimate.  The pack cache needs
 REM about that size too, so when the folder and the pack cache are on
 REM the same drive (the usual: both on C:) that drive needs both.  What
 REM an earlier run already wrote counts: the packs in the cache, and the
-REM files in a folder an earlier restore wrote to.  With no catalog, no
-REM program or a size that cannot be read, there is no check: a missing
-REM size never stops a restore.  LCSAS_SKIP_SPACE_CHECK=1 skips it.
+REM files in a folder an earlier restore wrote to.  A catalog that
+REM lcsas-restore.exe cannot read gives no size, and the script says so.
+REM With no catalog, no program or a size that cannot be read, there is
+REM no check: a missing size never stops a restore.
+REM LCSAS_SKIP_SPACE_CHECK=1 skips it.
 REM As the size is an estimate, a short drive asks, and y carries on;
 REM anything else (or the end of the input) stops.  restore.sh asks too.
 if "%LCSAS_SKIP_SPACE_CHECK%"=="1" goto :space_done
@@ -1961,6 +1964,7 @@ REM The chosen set's size; else, SP_WHOLE, the size of every set.
 for %%I in ("%REPO%") do set "SP_ID=%%~nxI"
 call :sp_pending --repo-id "%SP_ID%"
 if defined SP_MIB goto :sp_sized
+if not defined SP_N goto :sp_unknown
 call :sp_pending
 if not defined SP_MIB goto :eof
 set "SP_WHOLE=1"
@@ -2026,13 +2030,21 @@ echo this large.
 set "SPACE_SHORT=1"
 set "SP_HUGE=1"
 goto :eof
+:sp_unknown
+REM #951: lcsas-restore.exe printed no total: it could not read the
+REM catalog.  Say so; the restore goes on without the check.
+echo restore.bat: could not work out the size of this restore: the
+echo catalog cannot be read.  The free space is not checked.
+goto :eof
 
 :sp_pending
 REM sp_pending [--repo-id ID]: SP_MIB = the size in MB of the packs
 REM lcsas-restore.exe --list-pending-packs counts; unset when it counts
-REM no pack or prints no total.  "Total: 6 packs, 20.4 MB across 2
-REM discs." -- MB of 1048576 bytes.  --repo and --password-file must be
-REM given, but are not read.
+REM no pack or prints no total.  SP_N = the number of packs; unset when
+REM it prints no total (#951: it could not read the catalog).  "Total: 4
+REM packs, 0.2 MB. They are on 2 discs; some hold the same packs." -- MB
+REM of 1048576 bytes, each pack counted once.  --repo and
+REM --password-file must be given, but are not read.
 set "SP_MIB="
 set "SP_N="
 set "SP_OUT=%TOOLS%\pending-packs.txt"

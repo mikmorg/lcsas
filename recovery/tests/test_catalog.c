@@ -28,6 +28,464 @@ exec_sql(sqlite3 *db, const char *sql)
     return 0;
 }
 
+/* Create (or replace) the database at `path` from `sql`. */
+static int
+make_db(const char *path, const char *sql)
+{
+    sqlite3 *db = NULL;
+    int rc;
+    unlink(path);
+    if (sqlite3_open(path, &db) != SQLITE_OK) {
+        sqlite3_close(db);
+        return -1;
+    }
+    rc = exec_sql(db, sql);
+    sqlite3_close(db);
+    return rc;
+}
+
+/*
+ * Run lcsas_catalog_print_pending_packs with stdout sent to a temp
+ * file; its output goes to `buf`.  Returns the call's return value.
+ */
+static int
+pending_output(lcsas_catalog *c, const char *repo_id, char *buf, size_t cap)
+{
+    FILE *f = tmpfile();
+    int saved;
+    int rc;
+    size_t n = 0;
+
+    buf[0] = '\0';
+    if (!f) return -2;
+    fflush(stdout);
+    saved = dup(1);
+    dup2(fileno(f), 1);
+    rc = lcsas_catalog_print_pending_packs(c, repo_id);
+    fflush(stdout);
+    dup2(saved, 1);
+    close(saved);
+    rewind(f);
+    n = fread(buf, 1, cap - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    return rc;
+}
+
+/* The schema-v10 shape of the tables tier 1 reads (frozen columns, and
+ * the others a burn writes, so a query naming one is not caught out by
+ * the fixture). */
+#define V10_TABLES \
+    "CREATE TABLE schema_version (version INTEGER, applied_at DATETIME);" \
+    "INSERT INTO schema_version VALUES (10, datetime('now'));" \
+    "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY AUTOINCREMENT," \
+    "  sha256 TEXT UNIQUE NOT NULL, size_bytes INTEGER, repo_id TEXT," \
+    "  is_pruned INTEGER DEFAULT 0);" \
+    "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY AUTOINCREMENT," \
+    "  label TEXT UNIQUE, uuid TEXT, media_type TEXT, status TEXT);" \
+    "CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER," \
+    "  PRIMARY KEY (volume_id, pack_id));"
+
+/*
+ * #951: the size of a backup set counts each pack once, however many
+ * volumes hold it: an archive kept in two places, a lost volume burned
+ * again.  A pack on DESTROYED volumes only is not counted.  The last
+ * line does not promise that every disc listed is needed.
+ */
+static void
+test_pending_counts_each_pack_once(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_twice.db";
+    char out[2048];
+    lcsas_catalog *c;
+    int rc;
+
+    if (make_db(p, V10_TABLES
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES"
+            "  ('p1', 100000, 'sec'), ('p2', 50000, 'sec'),"
+            "  ('p3', 50000, 'sec'), ('p4', 32100, 'sec'),"
+            "  ('p5', 999999, 'sec'), ('o1', 4096, 'other');"
+            "INSERT INTO volumes (label, status) VALUES"
+            "  ('HOME_0001', 'VERIFIED'), ('AWAY_0002', 'VERIFIED'),"
+            "  ('GONE_0003', 'DESTROYED');"
+            /* p1..p4 at home and away; p5 only on the DESTROYED one. */
+            "INSERT INTO volume_packs VALUES (1, 1), (1, 2), (1, 3), (1, 4),"
+            "  (2, 1), (2, 2), (2, 3), (2, 4), (3, 5), (1, 6);") != 0) {
+        fprintf(stderr, "FAIL #951: fixture\n");
+        fails++;
+        return;
+    }
+    c = lcsas_catalog_open(p);
+    if (!c) { fprintf(stderr, "FAIL #951: open\n"); fails++; return; }
+    rc = pending_output(c, "sec", out, sizeof out);
+    if (rc != 0 || !strstr(out,
+            "Total: 4 packs, 0.2 MB. They are on 2 discs; some hold the "
+            "same packs.\n")) {
+        fprintf(stderr, "FAIL #951: a pack on two volumes is counted "
+                "twice (rc %d):\n%s", rc, out);
+        fails++;
+    }
+    if (!strstr(out, "  HOME_0001: 4 packs (0.2 MB)\n")
+            || !strstr(out, "  AWAY_0002: 4 packs (0.2 MB)\n")
+            || strstr(out, "GONE_0003")) {
+        fprintf(stderr, "FAIL #951: the per-disc list:\n%s", out);
+        fails++;
+    }
+    /* The whole archive: one more pack, on one disc already listed. */
+    rc = pending_output(c, NULL, out, sizeof out);
+    if (rc != 0 || !strstr(out, "Total: 5 packs, 0.2 MB. They are on 2 "
+                                "discs; some hold the same packs.\n")) {
+        fprintf(stderr, "FAIL #951: whole archive (rc %d):\n%s", rc, out);
+        fails++;
+    }
+    /* A set on no volume: a total of nothing, still exit 0 (the
+     * scripts then size the whole archive). */
+    rc = pending_output(c, "nobody", out, sizeof out);
+    if (rc != 0 || !strstr(out, "Total: 0 packs, 0.0 MB.\n")) {
+        fprintf(stderr, "FAIL #951: a set with no pack (rc %d):\n%s",
+                rc, out);
+        fails++;
+    }
+    lcsas_catalog_close(c);
+
+    /* One disc, no pack on two: no word about shared packs. */
+    if (make_db(p, V10_TABLES
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES"
+            "  ('p1', 1048576, 'one');"
+            "INSERT INTO volumes (label, status) VALUES ('ONLY_0001', 'VERIFIED');"
+            "INSERT INTO volume_packs VALUES (1, 1);") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #951: one-disc fixture\n");
+        fails++;
+        return;
+    }
+    rc = pending_output(c, "one", out, sizeof out);
+    if (rc != 0 || !strstr(out, "Total: 1 pack, 1.0 MB. They are on 1 disc.\n")) {
+        fprintf(stderr, "FAIL #951: one pack on one disc (rc %d):\n%s",
+                rc, out);
+        fails++;
+    }
+    lcsas_catalog_close(c);
+
+    /* A lost volume burned again: the pack is on the DEPRECATED volume
+     * and on its replacement; the total is unchanged. */
+    if (make_db(p, V10_TABLES
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES"
+            "  ('p1', 1048576, 'one'), ('p2', 1048576, 'one');"
+            "INSERT INTO volumes (label, status) VALUES"
+            "  ('LOST_0001', 'DEPRECATED'), ('KEPT_0002', 'VERIFIED'),"
+            "  ('AGAIN_0003', 'VERIFIED');"
+            "INSERT INTO volume_packs VALUES (1, 1), (2, 2), (3, 1);") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #951: re-burn fixture\n");
+        fails++;
+        return;
+    }
+    rc = pending_output(c, "one", out, sizeof out);
+    if (rc != 0 || !strstr(out, "Total: 2 packs, 2.0 MB. They are on 3 "
+                                "discs; some hold the same packs.\n")) {
+        fprintf(stderr, "FAIL #951: a lost volume burned again (rc %d):\n%s",
+                rc, out);
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    unlink(p);
+}
+
+/*
+ * #951: a catalog the size queries cannot read gives no total and an
+ * error, so the scripts say they could not work out the size (a "Total:
+ * 0 packs" line used to skip the free-space check without a word).
+ * A catalog lacking volume_packs fails the first query; one whose
+ * volumes lack a label fails the per-disc query.
+ */
+static void
+test_pending_unreadable(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_pending_bad.db";
+    char out[2048];
+    lcsas_catalog *c;
+    int rc;
+    int pass;
+    static const char *const sql[2] = {
+        "CREATE TABLE schema_version (version INTEGER);"
+        "INSERT INTO schema_version VALUES (10);"
+        "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+        "  size_bytes INTEGER, repo_id TEXT);"
+        "INSERT INTO packs VALUES (1, 'p1', 10, 'r');",
+        "CREATE TABLE schema_version (version INTEGER);"
+        "INSERT INTO schema_version VALUES (10);"
+        "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+        "  size_bytes INTEGER, repo_id TEXT);"
+        "INSERT INTO packs VALUES (1, 'p1', 10, 'r');"
+        "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, status TEXT);"
+        "INSERT INTO volumes VALUES (1, 'VERIFIED');"
+        "CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);"
+        "INSERT INTO volume_packs VALUES (1, 1);"
+    };
+    for (pass = 0; pass < 2; pass++) {
+        if (make_db(p, sql[pass]) != 0 || !(c = lcsas_catalog_open(p))) {
+            fprintf(stderr, "FAIL #951 unreadable (%d): fixture\n", pass);
+            fails++;
+            continue;
+        }
+        rc = pending_output(c, "r", out, sizeof out);
+        if (rc != -1 || strstr(out, "Total:")) {
+            fprintf(stderr, "FAIL #951 unreadable (%d): want -1 and no "
+                    "total; got %d:\n%s", pass, rc, out);
+            fails++;
+        }
+        lcsas_catalog_close(c);
+    }
+    unlink(p);
+}
+
+/*
+ * #950: what tier 1 ranks a catalog by: whether it knows a backup set,
+ * its label mark (PRAGMA user_version) and how many volumes it lists;
+ * -1 from each when the catalog cannot be asked (no packs or volumes
+ * table).
+ */
+static void
+test_rank_inputs(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_rank.db";
+    lcsas_catalog *c;
+
+    if (make_db(p, "PRAGMA user_version = 42;" V10_TABLES
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES"
+            "  ('p1', 10, 'ours');"
+            "INSERT INTO volumes (label, status) VALUES ('A_0001', 'VERIFIED'),"
+            "  ('B_0002', 'DESTROYED'), ('C_0003', 'STAGING');") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #950: rank fixture\n");
+        fails++;
+        return;
+    }
+    if (lcsas_catalog_knows_repo(c, "ours") != 1
+            || lcsas_catalog_knows_repo(c, "theirs") != 0
+            || lcsas_catalog_label_mark(c) != 42
+            || lcsas_catalog_volume_count(c) != 3) {
+        fprintf(stderr, "FAIL #950: knows %d/%d, mark %lld, volumes %lld "
+                "(want 1/0, 42, 3)\n",
+                lcsas_catalog_knows_repo(c, "ours"),
+                lcsas_catalog_knows_repo(c, "theirs"),
+                lcsas_catalog_label_mark(c),
+                lcsas_catalog_volume_count(c));
+        fails++;
+    }
+    lcsas_catalog_close(c);
+
+    if (make_db(p, "CREATE TABLE schema_version (version INTEGER);"
+                   "INSERT INTO schema_version VALUES (99);") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #950: rank skew fixture\n");
+        fails++;
+        return;
+    }
+    if (lcsas_catalog_knows_repo(c, "ours") != -1
+            || lcsas_catalog_volume_count(c) != -1
+            || lcsas_catalog_label_mark(c) != 0) {
+        fprintf(stderr, "FAIL #950: a catalog with no packs or volumes "
+                "table: want -1, -1 and mark 0\n");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    unlink(p);
+}
+
+/*
+ * #957: the newest volume that is not DESTROYED; none when every one
+ * is; -1 when there is no volumes table to ask.
+ */
+static void
+test_newest_label(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_newest.db";
+    lcsas_catalog *c;
+    char label[64];
+    int rc;
+
+    if (make_db(p, V10_TABLES
+            "INSERT INTO volumes (label, status) VALUES ('A_0001', 'VERIFIED'),"
+            "  ('B_0002', 'DEPRECATED'), ('C_0003', 'DESTROYED');") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #957: fixture\n");
+        fails++;
+        return;
+    }
+    rc = lcsas_catalog_newest_label(c, label, sizeof label);
+    if (rc != 1 || strcmp(label, "B_0002") != 0) {
+        fprintf(stderr, "FAIL #957: newest label %d '%s' (want B_0002)\n",
+                rc, rc == 1 ? label : "");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    if (make_db(p, V10_TABLES
+            "INSERT INTO volumes (label, status) VALUES ('C_0003', 'DESTROYED');")
+                != 0
+            || !(c = lcsas_catalog_open(p))
+            || lcsas_catalog_newest_label(c, label, sizeof label) != 0) {
+        fprintf(stderr, "FAIL #957: every volume DESTROYED: want none\n");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    if (make_db(p, "CREATE TABLE schema_version (version INTEGER);"
+                   "INSERT INTO schema_version VALUES (10);") != 0
+            || !(c = lcsas_catalog_open(p))
+            || lcsas_catalog_newest_label(c, label, sizeof label) != -1) {
+        fprintf(stderr, "FAIL #957: no volumes table: want -1\n");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    unlink(p);
+}
+
+/*
+ * #961: the catalog's version is its highest schema_version row.  A
+ * master migrated from v5 to v10 keeps a row for each step (5..10); the
+ * first row is 5.  An empty table is no version at all.
+ */
+static void
+test_schema_version_is_the_highest_row(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_migrated.db";
+    lcsas_catalog *c;
+    int v;
+
+    if (make_db(p,
+            "CREATE TABLE schema_version (version INTEGER, applied_at TEXT);"
+            "INSERT INTO schema_version VALUES (5, '2026-01-01'),"
+            "  (6, '2026-02-01'), (7, '2026-03-01'), (8, '2026-04-01'),"
+            "  (9, '2026-05-01'), (10, '2026-06-01');") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #961: fixture\n");
+        fails++;
+        return;
+    }
+    v = lcsas_catalog_schema_version(c);
+    if (v != 10) {
+        fprintf(stderr, "FAIL #961: a migrated catalog reads as v%d "
+                "(want v10)\n", v);
+        fails++;
+    }
+    lcsas_catalog_close(c);
+
+    if (make_db(p, "CREATE TABLE schema_version (version INTEGER);") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #961: empty-table fixture\n");
+        fails++;
+        return;
+    }
+    v = lcsas_catalog_schema_version(c);
+    if (v != -1 || lcsas_catalog_check(c) != -1) {
+        fprintf(stderr, "FAIL #961: an empty schema_version reads as v%d "
+                "(want -1, and the check fails)\n", v);
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    unlink(p);
+}
+
+/*
+ * #961 / #951: the volume lookup reads only the frozen columns
+ * (volume_id, label, status), so a catalog whose volumes table has no
+ * uuid or media_type column still names the discs.
+ */
+static void
+test_volumes_read_frozen_columns_only(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_frozen.db";
+    lcsas_catalog *c;
+    lcsas_catalog_volume vols[8];
+    int n;
+
+    if (make_db(p,
+            "CREATE TABLE schema_version (version INTEGER);"
+            "INSERT INTO schema_version VALUES (11);"
+            "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+            "  size_bytes INTEGER, repo_id TEXT);"
+            "INSERT INTO packs VALUES (1, 'p1', 10, 'r');"
+            "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT,"
+            "  status TEXT);"
+            "INSERT INTO volumes VALUES (1, 'ONLY_0001', 'VERIFIED');"
+            "CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);"
+            "INSERT INTO volume_packs VALUES (1, 1);") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #961 frozen: fixture\n");
+        fails++;
+        return;
+    }
+    n = lcsas_catalog_volumes_for_pack(c, 1, vols, 8);
+    if (n != 1 || strcmp(vols[0].label, "ONLY_0001") != 0
+            || strcmp(vols[0].status, "VERIFIED") != 0) {
+        fprintf(stderr, "FAIL #961 frozen: volumes without uuid and "
+                "media_type: %d volume(s) (want 1): %s\n", n,
+                n < 0 ? lcsas_catalog_errmsg(c) : "");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    unlink(p);
+}
+
+/*
+ * #967: a catalog in WAL format, in a folder that can be written (a
+ * disc copied to a folder): reading it leaves no -shm or -wal file
+ * beside it.
+ */
+static void
+test_wal_catalog_leaves_nothing_behind(void)
+{
+    char dir[256];
+    char path[300];
+    char side[320];
+    sqlite3 *w = NULL;
+    lcsas_catalog *c;
+    lcsas_catalog_pack pk;
+    struct stat st;
+    int left = 0;
+
+    snprintf(dir, sizeof dir, "/tmp/lcsas_catalog_test_wal_%ld",
+             (long)getpid());
+    snprintf(path, sizeof path, "%s/catalog.db", dir);
+    mkdir(dir, 0755);
+    if (sqlite3_open(path, &w) != SQLITE_OK
+            || exec_sql(w,
+                "PRAGMA journal_mode=WAL;"
+                "CREATE TABLE schema_version (version INTEGER);"
+                "INSERT INTO schema_version VALUES (10);"
+                "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY,"
+                "  sha256 TEXT, size_bytes INTEGER, repo_id TEXT);"
+                "INSERT INTO packs VALUES (1, 'aa11', 1024, 'r');") < 0) {
+        fprintf(stderr, "FAIL #967: WAL fixture\n");
+        fails++;
+    }
+    sqlite3_close(w);   /* the last close checkpoints and removes both */
+    c = lcsas_catalog_open(path);
+    if (!c || lcsas_catalog_find_pack(c, "aa11", &pk) != 0) {
+        fprintf(stderr, "FAIL #967: WAL catalog not read\n");
+        fails++;
+    }
+    snprintf(side, sizeof side, "%s-shm", path);
+    if (stat(side, &st) == 0) left++;
+    snprintf(side, sizeof side, "%s-wal", path);
+    if (stat(side, &st) == 0) left++;
+    lcsas_catalog_close(c);
+    snprintf(side, sizeof side, "%s-shm", path);
+    if (stat(side, &st) == 0) left++;
+    unlink(side);
+    snprintf(side, sizeof side, "%s-wal", path);
+    if (stat(side, &st) == 0) left++;
+    unlink(side);
+    if (left) {
+        fprintf(stderr, "FAIL #967: reading a WAL catalog left %d -shm/-wal "
+                "file(s) beside it\n", left);
+        fails++;
+    }
+    unlink(path);
+    rmdir(dir);
+}
+
 int main(void)
 {
     const char *db_path = "/tmp/lcsas_catalog_test.db";
@@ -301,11 +759,11 @@ int main(void)
      * URI.  (As root the directory stays writable and the plain open
      * works; the outcome is the same.)
      *
-     * A second WAL database there has no schema_version table, so the
-     * immutable reopen doesn't help either: the catalog keeps the plain
-     * handle, and lookups fail with its read error, which is not skew.
-     * Not as root: there the plain handle reads, and the missing tables
-     * rightly count as skew.
+     * A second WAL database there has no schema_version table.  Since
+     * #967 every catalog is opened immutable, so it reads (it was kept
+     * on a plain handle that could not read, and its lookups failed
+     * with that read error); its missing tables then rightly count as
+     * skew, as they did as root.
      */
     {
         char ro_dir[256];
@@ -350,13 +808,13 @@ int main(void)
             fails++;
         }
         lcsas_catalog_close(cw);
-        cw = geteuid() != 0 ? lcsas_catalog_open(nv_path) : NULL;
-        if (geteuid() != 0
-                && (!cw || lcsas_catalog_find_pack(cw, "aa11", &pk) != -1
-                    || lcsas_catalog_error_is_skew(cw))) {
+        cw = lcsas_catalog_open(nv_path);
+        if (!cw || lcsas_catalog_schema_version(cw) != -1
+                || lcsas_catalog_find_pack(cw, "aa11", &pk) != -1
+                || !lcsas_catalog_error_is_skew(cw)) {
             fprintf(stderr,
                     "FAIL #543: no-version WAL catalog: want an open handle"
-                    " whose lookups fail, not as skew (got: %s)\n",
+                    " whose lookups fail as skew (got: %s)\n",
                     cw ? lcsas_catalog_errmsg(cw) : "NULL");
             fails++;
         }
@@ -475,9 +933,41 @@ int main(void)
                         " skew\n", fr, fskew, nv, vskew);
                 fails++;
             }
+            /* #951: no total from a damaged catalog. */
+            {
+                char out[1024];
+                int prc = pending_output(cd, "repo-abc", out, sizeof out);
+                if (prc != -1 || strstr(out, "Total:")) {
+                    fprintf(stderr, "FAIL #951: damaged page: want -1 and "
+                            "no total; got %d:\n%s", prc, out);
+                    fails++;
+                }
+            }
             lcsas_catalog_close(cd);
         }
         unlink(cor_path);
+    }
+
+    test_pending_counts_each_pack_once();
+    test_pending_unreadable();
+    test_schema_version_is_the_highest_row();
+    test_rank_inputs();
+    test_newest_label();
+    test_volumes_read_frozen_columns_only();
+    test_wal_catalog_leaves_nothing_behind();
+
+    /* A path longer than tier 1 ever builds (4 KiB) is refused. */
+    {
+        static char longp[4200];
+        memset(longp, 'a', sizeof longp - 1);
+        longp[0] = '/';
+        longp[sizeof longp - 1] = '\0';
+        c = lcsas_catalog_open(longp);
+        if (c) {
+            fprintf(stderr, "FAIL #967: a 4 KiB+ path opened\n");
+            lcsas_catalog_close(c);
+            fails++;
+        }
     }
 
     if (fails == 0) printf("test_catalog: OK\n");

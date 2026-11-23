@@ -71,7 +71,8 @@ def _win(path: Path) -> str:
 
 
 def _catalog(path: Path, discs: list[tuple[str, list[Path]]]) -> None:
-    """A minimal disc catalog naming each pack's disc."""
+    """A minimal disc catalog naming each pack's disc.  Its packs belong
+    to the set restored (folder `repo`), so tier 1 uses it (#950)."""
     db = sqlite3.connect(str(path))
     db.executescript(
         "CREATE TABLE schema_version(version INTEGER);"
@@ -87,7 +88,7 @@ def _catalog(path: Path, discs: list[tuple[str, list[Path]]]) -> None:
                    (vid, label, f"uuid-{vid}"))
         for p in packs:
             cur = db.execute("INSERT INTO packs(sha256, size_bytes, repo_id) "
-                             "VALUES(?, ?, 'r')", (p.name, p.stat().st_size))
+                             "VALUES(?, ?, 'repo')", (p.name, p.stat().st_size))
             db.execute("INSERT INTO volume_packs VALUES(?, ?)",
                        (vid, cur.lastrowid))
     db.commit()

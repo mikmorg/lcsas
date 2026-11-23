@@ -2612,14 +2612,16 @@ fi
 # The burn side checks staging-area space before writing a byte; mirror
 # that on the restore side BEFORE the password / disc prompts so a
 # too-small target fails in one obvious line, not via ENOSPC after a
-# long disc-swapping session.  Required bytes come from the catalog: the
-# chosen set's pack sum, from a sqlite3 command when there is one, else
-# from tier 1's --list-pending-packs --repo-id (#798: the set's
-# metadata/<id> folder name is its packs.repo_id; a slight over-estimate
-# when packs live on several discs).  When tier 1 knows no pack of that
-# id (an older disc names its folders by set name), it sizes the whole
-# archive, every set on the discs.  When neither tool can run, the check
-# is SKIPPED -- never block a restore on a missing convenience tool.
+# long disc-swapping session.  Required bytes come from the catalog,
+# through tier 1's --list-pending-packs --repo-id on every computer
+# (#951: one answer, whether or not it has a sqlite3 command): the
+# chosen set's packs, each counted once however many discs hold it
+# (#798: the set's metadata/<id> folder name is its packs.repo_id).
+# When tier 1 knows no pack of that id (an older disc names its folders
+# by set name), it sizes the whole archive, every set on the discs.
+# When tier 1 cannot read the catalog, the script says it could not work
+# out the size; with no catalog or no tier 1 the check is SKIPPED --
+# never block a restore on a missing convenience tool.
 # Any size is an estimate, so a short disk asks the reader, when there
 # is one, whether to carry on; with nobody to ask, or any answer but y,
 # the run stops (exit 1), as restore.bat does.  The pack cache needs
@@ -2662,8 +2664,10 @@ used_kb_in() {
 }
 
 # pending_kb [--repo-id ID]: KB of the packs tier 1's --list-pending-packs
-# counts (of set ID, or of the whole archive); nothing when it counts no
-# pack or prints no total.  Its output is captured: it must not reach the
+# counts (of set ID, or of the whole archive): "none" when it counts no
+# pack, nothing when it prints no total (it could not read the catalog).
+# The total line: "Total: 4 packs, 0.2 MB. They are on 2 discs; ..." (MB
+# of 1048576 bytes).  Its output is captured: it must not reach the
 # reader's terminal.  Tier 1 wants --repo and --password-file even here,
 # where it reads neither (#535); the password is not asked for yet, so
 # /dev/null.
@@ -2671,9 +2675,10 @@ pending_kb() {
     "$_RESTORE_BIN_PROBE" --repo "$REPO" --password-file /dev/null \
             --catalog "${catalog_local:-$catalog_pick}" \
             --list-pending-packs "$@" 2>/dev/null </dev/null \
-        | awk '/^Total:/ && $2 + 0 > 0 {
+        | awk '/^Total:/ {
+              if ($2 + 0 <= 0) { print "none"; exit }
               for (i = 3; i < NF; i++)
-                  if ($(i+1) == "MB") { printf "%.0f\n", $i * 1024; exit }
+                  if ($(i+1) ~ /^MB/) { printf "%.0f\n", $i * 1024; exit }
           }' || true
 }
 
@@ -2701,23 +2706,18 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
     # 1 when the size counts every backup set on the discs.
     _sp_whole=""
     _tenant="$(basename "$REPO")"
-    if [ -n "$catalog_pick" ] && command -v sqlite3 >/dev/null 2>&1; then
-        _req_bytes="$(sqlite3 "${catalog_local:-$catalog_pick}" \
-            "SELECT COALESCE(SUM(p.size_bytes), 0) FROM packs p \
-             JOIN repositories r ON r.repo_id = p.repo_id \
-             WHERE (r.name = '$_tenant' OR r.repo_id = '$_tenant') \
-               AND p.is_pruned = 0;" 2>/dev/null || true)"
-        case "$_req_bytes" in
-            ''|*[!0-9]*) ;;
-            *) required_kb=$(( (_req_bytes + 1023) / 1024 )) ;;
-        esac
-    fi
-    if [ "$required_kb" -eq 0 ] && [ -n "$catalog_pick" ] \
-       && [ -x "$_RESTORE_BIN_PROBE" ]; then
+    if [ -n "$catalog_pick" ] && [ -x "$_RESTORE_BIN_PROBE" ]; then
         _sp_kb="$(pending_kb --repo-id "$_tenant")"
-        if [ -z "$_sp_kb" ]; then
+        if [ "$_sp_kb" = "none" ]; then
             _sp_kb="$(pending_kb)"
-            [ -z "$_sp_kb" ] || _sp_whole=1
+            case "$_sp_kb" in
+                none) _sp_kb=0 ;;
+                ?*) _sp_whole=1 ;;
+            esac
+        fi
+        if [ -z "$_sp_kb" ]; then
+            printf 'restore.sh: could not work out the size of this restore: the\n' >&2
+            printf 'catalog cannot be read.  The free space is not checked.\n' >&2
         fi
         required_kb="${_sp_kb:-0}"
     fi

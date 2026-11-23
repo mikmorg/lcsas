@@ -23,18 +23,16 @@ typedef struct {
     char repo_id[128];
 } lcsas_catalog_pack;
 
+/* A volume, from the frozen columns only (#961). */
 typedef struct {
     long long volume_id;
     char label[64];
-    char uuid[64];
-    char media_type[16];
     char status[16];
 } lcsas_catalog_volume;
 
 /*
- * Open a catalog file (read-only).  Returns NULL on error.  When the
- * first query on a plain read-only open fails (a WAL-mode catalog on
- * read-only media), it is reopened as immutable (#543).
+ * Open a catalog file read-only and immutable (#543, #967: no -shm or
+ * -wal is made or read beside it).  Returns NULL on error.
  */
 lcsas_catalog *lcsas_catalog_open(const char *path);
 
@@ -53,10 +51,31 @@ int lcsas_catalog_check(lcsas_catalog *c);
 void lcsas_catalog_close(lcsas_catalog *c);
 
 /*
- * Read the schema version from the schema_version table.  Returns -1
- * on error.
+ * Read the schema version: the highest row of the schema_version table
+ * (#961; a migrated catalog keeps a row per step).  Returns -1 on
+ * error or when the table has no row.
  */
 int lcsas_catalog_schema_version(lcsas_catalog *c);
+
+/*
+ * #950: what tier 1 ranks a catalog by, from the frozen surface plus
+ * the label mark.
+ *
+ * lcsas_catalog_knows_repo: 1 when the catalog has a pack of backup set
+ * `repo_id` (packs.repo_id), 0 when it has none (a catalog of another
+ * archive), -1 when it cannot be asked.
+ *
+ * lcsas_catalog_label_mark: PRAGMA user_version, the highest label
+ * number the catalog has issued (#676).  It only goes up: stage raises
+ * it, session abort does not lower it, catalog rebuild keeps the
+ * highest it reads.  -1 when it cannot be read.
+ *
+ * lcsas_catalog_volume_count: how many volumes it lists (every row,
+ * DESTROYED ones too); -1 when it cannot be read.
+ */
+int lcsas_catalog_knows_repo(lcsas_catalog *c, const char *repo_id);
+long long lcsas_catalog_label_mark(lcsas_catalog *c);
+long long lcsas_catalog_volume_count(lcsas_catalog *c);
 
 /*
  * Look up a pack by its SHA-256 hex string.  Tri-state return:
@@ -85,6 +104,14 @@ int lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
                                    size_t max_vols);
 
 /*
+ * #957: the label of the newest volume the catalog lists that is not
+ * DESTROYED (highest volume_id), into `out`: the disc a pack the
+ * catalog knows but puts on no volume is newer than.  Returns 1 when
+ * there is one, 0 when there is none, -1 on query error.
+ */
+int lcsas_catalog_newest_label(lcsas_catalog *c, char *out, size_t cap);
+
+/*
  * After a -1 from a lookup, before any other catalog call: SQLite's
  * message for the failure ...
  */
@@ -110,9 +137,13 @@ void lcsas_catalog_describe(lcsas_catalog *c);
  * catalog, or with `repo_id` non-NULL only that repository's (#798).
  * This is the --list-pending-packs path: it gives the heir a preview of
  * which discs they will need to insert before any actual restore
- * begins, and restore.sh its size estimate (from the "Total:" line).
+ * begins, and the scripts their size estimate, from the last line:
+ *     Total: 4 packs, 0.2 MB. They are on 2 discs; some hold the same packs.
+ * The total counts each pack once (#951); "They are on ..." is left out
+ * when no disc holds one, and "; some hold ..." when no pack is on two.
  *
- * Returns 0 on success, -1 on SQL error.
+ * Returns 0 on success, -1 (and prints nothing on stdout) when the
+ * catalog cannot be read.
  */
 int lcsas_catalog_print_pending_packs(lcsas_catalog *c, const char *repo_id);
 

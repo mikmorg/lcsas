@@ -369,8 +369,9 @@ src/lcsas/burn/orchestrator.py:
 src/lcsas/meta/builder.py:
   Bundle no `catalog.db`: the meta disc holds no catalog, since a
   copy there would always be stale (pre-dating later data discs).
-  The recovery cascade uses whichever disc catalog is FRESHEST
-  among currently-mounted discs.
+  The recovery cascade uses the best disc catalog among the
+  mounted discs: tier 1 ranks them by content (#950; see TIERS.txt,
+  WHICH DISCS THE PROMPT NAMES).
 
 src/lcsas-restore/main.c:
   At startup, if --catalog is given, load it.  Also scan
@@ -744,7 +745,9 @@ the NEWEST data disc when no data disc is in yet:
     folder (#610).  restore.bat copies the newest data disc's;
     restore.sh copies the freshest catalog.db by file time among the
     mounted discs and its own earlier copy (the two differ only for
-    a re-burn that keeps an old label).
+    a re-burn that keeps an old label).  That pick is only one
+    candidate: tier 1 judges it as it judges every disc's catalog
+    (#950), so a damaged, re-timed or foreign pick costs nothing.
 
 Where the two scripts differ:
   * restore.sh asks only on a terminal (LCSAS_INTERACTIVE) and only

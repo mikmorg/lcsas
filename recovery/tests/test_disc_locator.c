@@ -574,6 +574,385 @@ test_skip_answer(const char *tmpdir)
     return bad;
 }
 
+/*
+ * #950: a disc catalog for the ranking tests, at <parent>/<disc>/
+ * catalog.db: label mark `mark` (PRAGMA user_version), `nvol` volumes
+ * numbered from `first_id`, one pack of set `repo`, file time `mtime`.
+ */
+static int
+rank_catalog(const char *parent, const char *disc, long mark, int nvol,
+             int first_id, const char *repo, long mtime)
+{
+    char dir[1024];
+    char path[1100];
+    char sql[2048];
+    struct utimbuf ut;
+
+    snprintf(dir, sizeof dir, "%s/%s", parent, disc);
+    snprintf(path, sizeof path, "%s/catalog.db", dir);
+    if (mkdir_recursive(dir) != 0) return -1;
+    snprintf(sql, sizeof sql,
+             "PRAGMA user_version = %ld;"
+             "CREATE TABLE schema_version (version INTEGER);"
+             "INSERT INTO schema_version VALUES (10);"
+             "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+             "  size_bytes INTEGER, repo_id TEXT);"
+             "INSERT INTO packs VALUES (1, '%s', 10, '%s');"
+             "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY,"
+             "  label TEXT, status TEXT);"
+             "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1"
+             "  FROM n WHERE i + 1 < %d)"
+             "  INSERT INTO volumes SELECT %d + i, '%s_' || (%d + i),"
+             "  'VERIFIED' FROM n;"
+             "CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);"
+             "INSERT INTO volume_packs VALUES (%d, 1);",
+             mark,
+             "5555555555555555555555555555555555555555555555555555555555555555",
+             repo, nvol, first_id, disc, first_id, first_id);
+    if (make_catalog(path, sql) != 0) return -1;
+    ut.actime = ut.modtime = (time_t)mtime;
+    return utime(path, &ut);
+}
+
+/*
+ * #950: the catalog a locator takes from the discs under `parent`
+ * after one miss, as "<disc>" (the folder name), or "none".  Its
+ * stderr goes to `err` when given.
+ */
+static const char *
+picked_disc(const char *parent, char *out, size_t cap)
+{
+    lcsas_disc_locator l;
+    const char *parents[1];
+    unsigned char miss[32];
+    char found[2048];
+    const char *p;
+
+    memset(miss, 0xE7, 32);
+    parents[0] = parent;
+    lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+    lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+    (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+    snprintf(out, cap, "none");
+    if (l.owned_catalog_path) {
+        p = l.owned_catalog_path + strlen(parent) + 1;
+        snprintf(out, cap, "%.*s", (int)(strcspn(p, "/")), p);
+    }
+    lcsas_disc_locator_free(&l);
+    return out;
+}
+
+/*
+ * #950: catalogs are ranked by what is in them, not by file time.  The
+ * highest label mark wins; then the one that lists more volumes; then
+ * the newer file.  Each case: discA should win, and discB's file is
+ * newer.  Returns the number of failures.
+ */
+static int
+test_catalog_ranking(const char *tmpdir)
+{
+    struct {
+        const char *what;
+        long mark_a; int nvol_a; int first_a;
+        long mark_b; int nvol_b; int first_b;
+    } cases[3];
+    char parent[1024];
+    char got[64];
+    char rm[1100];
+    int bad = 0;
+    int i;
+    FILE *err;
+    int saved;
+
+    /* A waiting session aborted after B was made: A lists no more
+     * volumes than B, and its mark is higher. */
+    cases[0].what = "an older disc that lists as many volumes";
+    cases[0].mark_a = 3; cases[0].nvol_a = 2; cases[0].first_a = 1;
+    cases[0].mark_b = 2; cases[0].nvol_b = 2; cases[0].first_b = 1;
+    /* Two discs of one session carry the same mark; the later one
+     * lists more volumes. */
+    cases[1].what = "two discs of one session";
+    cases[1].mark_a = 3; cases[1].nvol_a = 3; cases[1].first_a = 1;
+    cases[1].mark_b = 3; cases[1].nvol_b = 2; cases[1].first_b = 1;
+    /* A rebuilt master numbers its rows afresh: B has more volumes,
+     * with higher numbers, but A's mark is higher. */
+    cases[2].what = "a catalog from a rebuilt master";
+    cases[2].mark_a = 5; cases[2].nvol_a = 2; cases[2].first_a = 1;
+    cases[2].mark_b = 4; cases[2].nvol_b = 4; cases[2].first_b = 100;
+
+    for (i = 0; i < 3; i++) {
+        snprintf(parent, sizeof parent, "%s_rank%d", tmpdir, i);
+        if (rank_catalog(parent, "discA", cases[i].mark_a, cases[i].nvol_a,
+                         cases[i].first_a, "r", 1000000000L) != 0
+                || rank_catalog(parent, "discB", cases[i].mark_b,
+                                cases[i].nvol_b, cases[i].first_b, "r",
+                                1000000100L) != 0) {
+            fprintf(stderr, "FAIL 950: ranking fixture %d\n", i);
+            bad++;
+            continue;
+        }
+        if (strcmp(picked_disc(parent, got, sizeof got), "discA") != 0) {
+            fprintf(stderr, "FAIL 950: %s: took %s's catalog (want "
+                    "discA's)\n", cases[i].what, got);
+            bad++;
+        }
+        snprintf(rm, sizeof rm, "rm -rf %s", parent);
+        (void)system(rm);
+    }
+
+    /* Everything else equal: the newer file wins. */
+    snprintf(parent, sizeof parent, "%s_rank_time", tmpdir);
+    if (rank_catalog(parent, "discA", 3, 2, 1, "r", 1000000100L) != 0
+            || rank_catalog(parent, "discB", 3, 2, 1, "r", 1000000000L) != 0
+            || strcmp(picked_disc(parent, got, sizeof got), "discA") != 0) {
+        fprintf(stderr, "FAIL 950: equal catalogs: took %s's (want the "
+                "newer file, discA's)\n", got);
+        bad++;
+    }
+    snprintf(rm, sizeof rm, "rm -rf %s", parent);
+    (void)system(rm);
+
+    /* An empty catalog.db (a copy that never got its bytes) is called
+     * empty, and is not taken. */
+    snprintf(parent, sizeof parent, "%s_rank_empty", tmpdir);
+    if (rank_catalog(parent, "discA", 3, 2, 1, "r", 1000000000L) != 0) {
+        fprintf(stderr, "FAIL 950: empty-catalog fixture\n");
+        bad++;
+    } else {
+        char p[1100];
+        struct utimbuf ut;
+        snprintf(p, sizeof p, "%s/discB", parent);
+        mkdir_recursive(p);
+        snprintf(p, sizeof p, "%s/discB/catalog.db", parent);
+        write_pack(p, "");
+        ut.actime = ut.modtime = (time_t)1000000100L;
+        (void)utime(p, &ut);
+        err = capture_stderr_begin(&saved);
+        (void)picked_disc(parent, got, sizeof got);
+        capture_stderr_end(saved);
+        if (strcmp(got, "discA") != 0) {
+            fprintf(stderr, "FAIL 950: an empty catalog: took %s's\n", got);
+            bad++;
+        }
+        if (err) {
+            if (count_lines_with(err, "is empty") != 1
+                    || count_lines_with(err, "newer LCSAS") != 0) {
+                fprintf(stderr, "FAIL 950: an empty catalog is not called "
+                        "empty\n");
+                bad++;
+            }
+            fclose(err);
+        }
+    }
+    snprintf(rm, sizeof rm, "rm -rf %s", parent);
+    (void)system(rm);
+    return bad;
+}
+
+/*
+ * #950: catalogs that do not know the backup set being restored.  With
+ * the set given (lcsas_disc_locator_set_repo, from the --repo folder):
+ * another archive's catalog is never taken, however it ranks, and is
+ * named once however many rescans; its disc is not copied into the
+ * pack cache.  Each catalog is looked into once per run (the memo):
+ * rescans copy and check nothing they have seen.  --catalog is one
+ * candidate (lcsas_disc_locator_consider_catalog): when it is unusable
+ * it sets no floor.  Returns the number of failures.
+ */
+static int
+test_catalog_of_another_archive(const char *tmpdir)
+{
+    lcsas_disc_locator l;
+    const char *parents[1];
+    unsigned char miss[32];
+    char found[2048];
+    char parent[1024];
+    char cache[1024];
+    char p[1200];
+    char rm[2200];
+    char hex[65];
+    FILE *err;
+    int saved;
+    int bad = 0;
+    int i;
+    struct stat st;
+
+    memset(miss, 0xE7, 32);
+    snprintf(parent, sizeof parent, "%s_foreign", tmpdir);
+    snprintf(cache, sizeof cache, "%s/lcsas_dl_foreign_%ld", roomy_base(),
+             (long)getpid());
+    /* Ours (mark 2, older file) and another archive's (mark 9, newer,
+     * more volumes), whose disc holds a pack and says its label. */
+    if (rank_catalog(parent, "ours", 2, 2, 1, "set-ours", 1000000000L) != 0
+            || rank_catalog(parent, "theirs", 9, 5, 1, "set-theirs",
+                            1000000100L) != 0) {
+        fprintf(stderr, "FAIL 950 foreign: fixture\n");
+        return 1;
+    }
+    snprintf(p, sizeof p, "%s/theirs", parent);
+    if (write_real_pack(p, "another archive's pack\n", hex) != 0) {
+        fprintf(stderr, "FAIL 950 foreign: pack\n");
+        bad++;
+    }
+    snprintf(p, sizeof p, "%s/theirs/volume_info.json", parent);
+    write_pack(p, "{\"label\": \"THEIRS_0005\"}");
+    mkdir_recursive(cache);
+    parents[0] = parent;
+
+    err = capture_stderr_begin(&saved);
+    lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+    lcsas_disc_locator_set_repo(&l, "/mnt/disc/metadata/set-ours/");
+    lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+    lcsas_disc_locator_set_cache_dir(&l, cache);
+    for (i = 0; i < 4; i++)
+        (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+    capture_stderr_end(saved);
+
+    if (strcmp(l.repo_id, "set-ours") != 0) {
+        fprintf(stderr, "FAIL 950 foreign: the set is '%s' (want "
+                "set-ours)\n", l.repo_id);
+        bad++;
+    }
+    if (!l.owned_catalog_path || !strstr(l.owned_catalog_path, "/ours/")) {
+        fprintf(stderr, "FAIL 950 foreign: took %s\n",
+                l.owned_catalog_path ? l.owned_catalog_path : "none");
+        bad++;
+    }
+    /* Two catalogs, four rescans: each looked into once. */
+    if (l.catalog_evaluations != 2) {
+        fprintf(stderr, "FAIL 950 memo: %lu catalog evaluations in four "
+                "rescans of two discs (want 2)\n", l.catalog_evaluations);
+        bad++;
+    }
+    snprintf(p, sizeof p, "%s/data/%c%c/%s", cache, hex[0], hex[1], hex);
+    if (stat(p, &st) == 0) {
+        fprintf(stderr, "FAIL 950 foreign: another archive's pack is in "
+                "the cache\n");
+        bad++;
+    }
+    if (err) {
+        if (count_lines_with(err, "another archive's catalog") != 1
+                || count_lines_with(err, "disc THEIRS_0005 belongs to "
+                                         "another archive") != 1) {
+            fprintf(stderr, "FAIL 950 foreign: want one line for the "
+                    "catalog and one for the disc\n");
+            bad++;
+        }
+        fclose(err);
+    }
+    lcsas_disc_locator_free(&l);
+
+    /* --catalog: another archive's, then a cut-short one.  Neither is
+     * taken, and neither stops ours (older) being taken on a rescan. */
+    for (i = 0; i < 2; i++) {
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_repo(&l, "set-ours");
+        lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+        snprintf(p, sizeof p, "%s/theirs/catalog.db", parent);
+        if (i == 1) {
+            snprintf(p, sizeof p, "%s_cut.db", parent);
+            rank_catalog(parent, "cut", 7, 3, 1, "set-ours", 1000000200L);
+            snprintf(rm, sizeof rm, "%s/cut/catalog.db", parent);
+            if (truncate(rm, 600) != 0) bad++;
+            snprintf(p, sizeof p, "%s", rm);
+        }
+        err = capture_stderr_begin(&saved);
+        lcsas_disc_locator_consider_catalog(&l, p);
+        if (l.owned_catalog) {
+            capture_stderr_end(saved);
+            fprintf(stderr, "FAIL 950 --catalog (%d): an unusable one "
+                    "was taken\n", i);
+            bad++;
+        } else {
+            (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            capture_stderr_end(saved);
+            if (!l.owned_catalog_path
+                    || !strstr(l.owned_catalog_path, "/ours/")) {
+                fprintf(stderr, "FAIL 950 --catalog (%d): an unusable "
+                        "--catalog set a floor (took %s)\n", i,
+                        l.owned_catalog_path ? l.owned_catalog_path
+                                             : "none");
+                bad++;
+            }
+        }
+        if (err) fclose(err);
+        lcsas_disc_locator_free(&l);
+    }
+
+    /* A catalog this program cannot query for the set (no packs
+     * table): not used, with a warning. */
+    snprintf(p, sizeof p, "%s_nopacks.db", parent);
+    make_catalog(p, "CREATE TABLE schema_version (version INTEGER);"
+                    "INSERT INTO schema_version VALUES (99);");
+    lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+    lcsas_disc_locator_set_repo(&l, "set-ours");
+    err = capture_stderr_begin(&saved);
+    lcsas_disc_locator_consider_catalog(&l, p);
+    capture_stderr_end(saved);
+    if (l.owned_catalog
+            || !err || count_lines_with(err, "cannot read it") != 1) {
+        fprintf(stderr, "FAIL 950: a catalog with no packs table\n");
+        bad++;
+    }
+    if (err) fclose(err);
+    lcsas_disc_locator_free(&l);
+    unlink(p);
+
+    snprintf(rm, sizeof rm, "rm -rf %s %s %s_cut.db", parent, cache, parent);
+    (void)system(rm);
+    return bad;
+}
+
+/*
+ * #957: the catalog has the pack but lists no disc for it (the pack is
+ * on a disc burned after this catalog's): name the newest disc this
+ * catalog does list, and say to insert the newest data disc -- the
+ * Python reader's words.  A DESTROYED volume is not named.
+ */
+static int
+test_newer_than_hint(const char *tmpdir)
+{
+    char cat_path[1024];
+    char sql[2048];
+    unsigned char missing[32];
+    char label_row[80];
+    int bad = 0;
+
+    memset(missing, 0xAB, 32);
+    snprintf(label_row, sizeof label_row, "|   %-54s |",
+             "LCSAS_BD25_2026_0002");
+    snprintf(cat_path, sizeof cat_path, "%s_newer_catalog.db", tmpdir);
+    snprintf(sql, sizeof sql,
+             "CREATE TABLE schema_version(version INTEGER);"
+             "INSERT INTO schema_version VALUES(10);"
+             "CREATE TABLE packs(pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+             " size_bytes INTEGER, repo_id TEXT);"
+             "INSERT INTO packs VALUES(1, '%s', 10, 'r');"
+             "CREATE TABLE volumes(volume_id INTEGER PRIMARY KEY, label TEXT,"
+             " status TEXT);"
+             "INSERT INTO volumes VALUES(1, 'LCSAS_BD25_2026_0001', 'VERIFIED');"
+             "INSERT INTO volumes VALUES(2, 'LCSAS_BD25_2026_0002', 'VERIFIED');"
+             "INSERT INTO volumes VALUES(3, 'LCSAS_BD25_2026_0003', 'DESTROYED');"
+             "CREATE TABLE volume_packs(volume_id INTEGER, pack_id INTEGER);",
+             "abababababababababababababababababababababababababababababababab");
+    if (make_catalog(cat_path, sql) != 0) {
+        fprintf(stderr, "FAIL 957: fixture\n");
+        return 1;
+    }
+    if (!prompt_mentions(tmpdir, cat_path, missing,
+                         "| It is on a disc newer than:                              |")
+            || !prompt_mentions(tmpdir, cat_path, missing, label_row)
+            || !prompt_mentions(tmpdir, cat_path, missing,
+                                "| Insert your newest data disc: its catalog names it.      |")
+            || prompt_mentions(tmpdir, cat_path, missing, "_0003")) {
+        fprintf(stderr, "FAIL 957: the prompt does not name the disc the "
+                "pack is newer than\n");
+        bad++;
+    }
+    unlink(cat_path);
+    return bad;
+}
+
 int
 main(void)
 {
@@ -2855,6 +3234,9 @@ main(void)
     }
 
     fails += test_skip_answer(tmpdir);
+    fails += test_catalog_ranking(tmpdir);
+    fails += test_catalog_of_another_archive(tmpdir);
+    fails += test_newer_than_hint(tmpdir);
 
     /* Cleanup tmpdir. */
     {

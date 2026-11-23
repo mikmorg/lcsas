@@ -34,19 +34,23 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
-TIER1 = REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore"
+#: LCSAS_RESTORE_BIN: another build of tier 1 (as the differential tests
+#: take it); else the committed one.
+TIER1 = Path(os.environ.get("LCSAS_RESTORE_BIN")
+             or REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore")
 HOST_TARGET = "x86_64-unknown-linux-musl"
 
 pytestmark = pytest.mark.skipif(
     platform.system() != "Linux" or platform.machine() not in ("x86_64", "amd64")
     or not TIER1.is_file(),
-    reason="needs Linux x86_64 and the committed tier-1 binary",
+    reason="needs Linux x86_64 and a tier-1 binary",
 )
 
 SIZING = "Need about"
 ASK = "Carry on anyway? [y/N]"
 STOPPED = "Not enough free space for this restore"
 WHOLE = "counts every backup set on these discs"
+UNKNOWN = "could not work out the size of this restore"
 
 
 def _catalog(path: Path, sizes: dict[str, int]) -> None:
@@ -200,3 +204,73 @@ def test_an_id_tier1_does_not_know_sizes_the_whole_archive(
     assert SIZING in res.stderr, res.stderr
     assert WHOLE in res.stderr, res.stderr
     assert STOPPED in res.stderr, res.stderr
+
+
+def _two_place_catalog(path: Path, set_id: str, total: int) -> None:
+    """#951: an archive kept in two places: each of the set's four packs
+    (``total`` bytes in all) is on a volume at home and on one away."""
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        create_all(conn)
+        register_repo(conn, set_id, set_id, f"/srv/{set_id}")
+        packs = [register_pack(conn, f"{n:02x}" * 32, total // 4, set_id)
+                 for n in range(1, 5)]
+        for n, place in enumerate(("HOME", "AWAY"), start=1):
+            vol = create_volume(
+                conn, label=f"LCSAS_{place}_2026_{n:04d}", uuid=f"uuid-{n}",
+                media_type="BD25", capacity_bytes=26_843_545_600,
+                status="VERIFIED",
+            )
+            bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("no_sqlite3", [True, False],
+                         ids=["no-sqlite3", "sqlite3"])
+def test_an_archive_in_two_places_is_sized_once(
+        tmp_path: Path, no_sqlite3: bool) -> None:
+    """#951: every pack of alpha is on two discs (home and away).  Its
+    packs and the pack cache (on the same disk) need about 70 % of the
+    free space; counted once per disc, 140 %.  The size is the same
+    with or without a sqlite3 command: no question, on to the
+    password."""
+    recovery = _fixture(tmp_path, folders=("alpha",), ids=("x", "y"))
+    (recovery / "catalog.db").unlink()
+    free = shutil.disk_usage(tmp_path).free
+    _two_place_catalog(recovery / "catalog.db", "alpha", int(free * 0.35))
+    res = _run(tmp_path, recovery, "alpha", no_sqlite3=no_sqlite3)
+
+    assert SIZING not in res.stderr, res.stderr
+    assert STOPPED not in res.stderr, res.stderr
+    assert UNKNOWN not in res.stderr, res.stderr
+    assert "Password:" in res.stderr, (
+        f"rc={res.returncode}\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}")
+
+
+@pytest.mark.parametrize("no_sqlite3", [True, False],
+                         ids=["no-sqlite3", "sqlite3"])
+def test_an_unreadable_catalog_says_the_size_is_unknown(
+        tmp_path: Path, no_sqlite3: bool) -> None:
+    """#951: a catalog cut short cannot be sized.  The script says it
+    could not work out the size and goes on, with or without sqlite3
+    (tier 1 used to print "Total: 0 packs" and the check was skipped
+    without a word)."""
+    recovery = _fixture(tmp_path)
+    cat = recovery / "catalog.db"
+    os.truncate(cat, 5000)
+    res = _run(tmp_path, recovery, "alpha", no_sqlite3=no_sqlite3)
+
+    assert UNKNOWN in res.stderr, res.stderr
+    assert SIZING not in res.stderr, res.stderr
+    assert "Password:" in res.stderr, (
+        f"rc={res.returncode}\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}")
