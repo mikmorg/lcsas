@@ -1458,6 +1458,9 @@ class PurePythonRestorer:
         ]
         if len(matches) == 1:
             return matches[0]
+        if len(matches) > 1 and not snapshot_id:
+            # #967: an empty id names no snapshot.  Tier 1's words.
+            raise ValueError("snapshot not found: ''")
         if len(matches) > 1:
             raise ValueError(
                 f"Ambiguous snapshot prefix '{snapshot_id}' — "
