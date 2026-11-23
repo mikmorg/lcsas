@@ -114,8 +114,8 @@ def test_no_catalog_says_to_insert_a_data_disc(tmp_path: Path, capsys) -> None:
     drive = Drive(tmp_path)
     drive.insert(None)          # only the META disc: no catalog anywhere
     box = _prompt(_restorer(tmp_path, drive), PACKS[2], capsys)
-    assert "no catalog available" in box
-    assert "Insert any data disc, your newest if you know which:" in box
+    # #967: tier 1's words.
+    assert "(no disc catalog yet: insert your newest data disc)" in box
 
 
 def test_older_disc_catalog_points_past_its_newest_disc(

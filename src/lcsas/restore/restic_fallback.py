@@ -1066,8 +1066,9 @@ class PurePythonRestorer:
                 ``recovery/src/lcsas-restore/disc_locator.c::print_prompt``).
                 Heirs (and the blind-restore test agent's pattern matcher)
                 rely on that exact phrasing.  A missing, corrupt, or locked
-                catalog falls back to the legacy "(no catalog available)"
-                line; lookups never raise.
+                catalog gives tier 1's "(no disc catalog yet: insert your
+                newest data disc)" line (#967), and one that cannot be
+                read is named once; lookups never raise.
 
                 When ``None`` (the default), the restorer auto-discovers a
                 ``catalog.db`` lazily from ``pack_search_paths``: each

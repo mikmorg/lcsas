@@ -187,7 +187,7 @@ def test_auto_discover_catalog_at_mount_root(tmp_path: Path, capsys) -> None:
         f"expected volume label {_VOLUME_LABEL!r} in framed prompt after "
         f"auto-discovery; stderr was:\n{stderr}"
     )
-    assert "no catalog available" not in stderr, (
+    assert "no disc catalog yet" not in stderr, (
         "legacy fallback line leaked when auto-discovery should have "
         f"succeeded; stderr was:\n{stderr}"
     )
@@ -241,7 +241,7 @@ def test_auto_discover_picks_up_catalog_appearing_mid_restore(
 
     # Prompt 1: no catalog yet.  Legacy fallback line expected.
     first = _show_prompt(search, capsys)
-    assert "(tier-3 Python reader: no catalog available)" in first, (
+    assert "(no disc catalog yet: insert your newest data disc)" in first, (
         "expected legacy fallback line on FIRST prompt (catalog not yet "
         f"reachable); stderr was:\n{first}"
     )
@@ -326,7 +326,7 @@ def test_auto_discover_returns_none_when_no_catalog_anywhere(
     search = _make_search(tmp_path, pack_search_paths=[mount_root])
     stderr = _show_prompt(search, capsys)
     assert _discovered(stderr) == []
-    assert "(tier-3 Python reader: no catalog available)" in stderr
+    assert "(no disc catalog yet: insert your newest data disc)" in stderr
 
 
 def test_discover_catalog_probes_recovery_subpath(

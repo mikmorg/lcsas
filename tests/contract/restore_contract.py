@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Literal
 
 from tests.contract.disc_catalog import (
+    NO_CATALOG,
     NO_RECORD,
     NONE_LISTED,
     Vol,
@@ -215,8 +216,9 @@ class Outcome:
     ``summary``: a regex searched in the last lines the reader printed.
     ``wrote_outside``: something outside the target changed.
     ``discs``: what the first disc prompt names (``named_discs``): the
-    labels in order, or ``NONE_LISTED`` / ``NO_RECORD`` / ``NO_PROMPT``;
-    ``None`` = not compared.
+    labels in order, or ``NONE_LISTED`` / ``NO_RECORD`` / ``NO_CATALOG``
+    / ``NO_PROMPT``; ``None`` = not compared.
+    ``says``: regexes searched in everything the reader printed.
     """
 
     exit: int
@@ -225,6 +227,7 @@ class Outcome:
     summary: str = ""
     wrote_outside: bool = False
     discs: tuple[str, ...] | str | None = None
+    says: tuple[str, ...] = ()
     #: Only on an outcome a driver returns: the reader's output.
     output: str = field(default="", compare=False, repr=False)
 
@@ -564,10 +567,14 @@ CASES: list[Case] = [
         faults=Faults(missing=(b"b",), answers=b"q\n"),
         # #909: neither reader leaves the file it was writing (tier 1 left
         # it empty, mode 0600, before).  Both restore it on the next run.
+        # #967: with no catalog the prompt says to put in the newest
+        # data disc, in tier 1's words (tier 3 said "no catalog
+        # available").
         expect=Outcome(
             exit=ReaderExit.READER_QUIT,
             restored={b"a": File(b"alpha\n")},
             summary=r"(?i)run the same command again|stopped",
+            discs=NO_CATALOG,
         ),
         replaces="new (#658; test_restore_sh_driver.py::"
                  "test_tier1_done_and_quit_code_are_real, the 75)",
@@ -790,6 +797,24 @@ CASES: list[Case] = [
          DiscCat(_T2, (Vol(_T1, holds=False), Vol(_T2, holds=False)),
                  mark=2, age=100)),
         _OTHER, newer_than(_T2)),
+    # #967: the only catalog in reach cannot be read.  It is named as
+    # not used, and the prompt has no catalog (tier 3 said "no catalog
+    # available", and not why).
+    Case(
+        name="catalog choice: the only catalog is cut short",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(missing=(b"b",), answers=b"q\n",
+                      discs=(DiscCat(_T2, (Vol(_T1), Vol(_T2)), mark=2,
+                                     cut_to=5000),),
+                      catalog_from=_T2),
+        expect=Outcome(
+            exit=ReaderExit.READER_QUIT, restored=ANY, discs=NO_CATALOG,
+            says=(rf"WARNING: the catalog \S*{_T2}/catalog\.db is damaged "
+                  r"or cut short, or this program cannot read it; not "
+                  r"using it\.",)),
+        replaces="new (#967)",
+    ),
     Case(
         name="usage error",
         tree={b"f": File(b"f\n")},
@@ -1355,6 +1380,9 @@ def mismatches(case: Case, reader: str, got: Outcome, built: Built) -> list[str]
         out.append(f"wrote outside the target: {got.wrote_outside}")
     if want.discs is not None and got.discs != want.discs:
         out.append(f"the disc prompt names {got.discs!r}, want {want.discs!r}")
+    for rx in want.says:
+        if not re.search(rx, got.output):
+            out.append(f"does not say /{rx}/")
     return out
 
 
