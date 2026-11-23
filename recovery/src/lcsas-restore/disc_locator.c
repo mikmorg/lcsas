@@ -1540,7 +1540,17 @@ print_prompt(lcsas_disc_locator *l, const char *hex, int names_discs)
                     }
                 }
             } else if (n == 0) {
+                char newest[64];
                 fputs("| (catalog has the pack, but lists no disc for it)         |\n", o);
+                /* #957: a catalog lists only the discs burned before
+                 * it, so the pack is on a newer one.  The Python
+                 * reader's words (_print_swap_prompt). */
+                if (lcsas_catalog_newest_label(cat, newest,
+                                               sizeof newest) == 1) {
+                    fputs("| It is on a disc newer than:                              |\n", o);
+                    print_search_path(o, newest);
+                    fputs("| Insert your newest data disc: its catalog names it.      |\n", o);
+                }
             } else {
                 fr = -1;
             }

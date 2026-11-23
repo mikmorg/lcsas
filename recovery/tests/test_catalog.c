@@ -295,6 +295,53 @@ test_rank_inputs(void)
 }
 
 /*
+ * #957: the newest volume that is not DESTROYED; none when every one
+ * is; -1 when there is no volumes table to ask.
+ */
+static void
+test_newest_label(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_newest.db";
+    lcsas_catalog *c;
+    char label[64];
+    int rc;
+
+    if (make_db(p, V10_TABLES
+            "INSERT INTO volumes (label, status) VALUES ('A_0001', 'VERIFIED'),"
+            "  ('B_0002', 'DEPRECATED'), ('C_0003', 'DESTROYED');") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #957: fixture\n");
+        fails++;
+        return;
+    }
+    rc = lcsas_catalog_newest_label(c, label, sizeof label);
+    if (rc != 1 || strcmp(label, "B_0002") != 0) {
+        fprintf(stderr, "FAIL #957: newest label %d '%s' (want B_0002)\n",
+                rc, rc == 1 ? label : "");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    if (make_db(p, V10_TABLES
+            "INSERT INTO volumes (label, status) VALUES ('C_0003', 'DESTROYED');")
+                != 0
+            || !(c = lcsas_catalog_open(p))
+            || lcsas_catalog_newest_label(c, label, sizeof label) != 0) {
+        fprintf(stderr, "FAIL #957: every volume DESTROYED: want none\n");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    if (make_db(p, "CREATE TABLE schema_version (version INTEGER);"
+                   "INSERT INTO schema_version VALUES (10);") != 0
+            || !(c = lcsas_catalog_open(p))
+            || lcsas_catalog_newest_label(c, label, sizeof label) != -1) {
+        fprintf(stderr, "FAIL #957: no volumes table: want -1\n");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    unlink(p);
+}
+
+/*
  * #961: the catalog's version is its highest schema_version row.  A
  * master migrated from v5 to v10 keeps a row for each step (5..10); the
  * first row is 5.  An empty table is no version at all.
@@ -905,6 +952,7 @@ int main(void)
     test_pending_unreadable();
     test_schema_version_is_the_highest_row();
     test_rank_inputs();
+    test_newest_label();
     test_volumes_read_frozen_columns_only();
     test_wal_catalog_leaves_nothing_behind();
 

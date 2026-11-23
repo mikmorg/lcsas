@@ -104,6 +104,14 @@ int lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
                                    size_t max_vols);
 
 /*
+ * #957: the label of the newest volume the catalog lists that is not
+ * DESTROYED (highest volume_id), into `out`: the disc a pack the
+ * catalog knows but puts on no volume is newer than.  Returns 1 when
+ * there is one, 0 when there is none, -1 on query error.
+ */
+int lcsas_catalog_newest_label(lcsas_catalog *c, char *out, size_t cap);
+
+/*
  * After a -1 from a lookup, before any other catalog call: SQLite's
  * message for the failure ...
  */

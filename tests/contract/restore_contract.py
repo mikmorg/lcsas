@@ -50,6 +50,7 @@ from tests.contract.disc_catalog import (
     NONE_LISTED,
     Vol,
     named_discs,
+    newer_than,
     write_catalog,
 )
 from tests.contract.exit_codes import ReaderExit
@@ -724,6 +725,12 @@ CASES: list[Case] = [
                  (_V1,)),
     _disc_prompt("its only volume DESTROYED",
                  (Vol(_V1, "DESTROYED", "DESTROYED"),), NONE_LISTED),
+    # #957: the pack is on a disc burned after this catalog's.
+    _disc_prompt("on a disc newer than the catalog",
+                 (Vol(_V1, holds=False), Vol(_V2, holds=False),
+                  Vol("LCSAS_BD50_2026_0003", "DESTROYED", "DESTROYED",
+                      holds=False)),
+                 newer_than(_V2)),
     _disc_prompt("pack unknown to the catalog", (Vol(_V1), Vol(_V2)),
                  NO_RECORD, knows=False),
     # #950: which catalog a reader takes, when several are in reach.
@@ -748,6 +755,16 @@ CASES: list[Case] = [
                  knows_pack=False),
          DiscCat(_T2, (Vol(_T1), Vol(_T2)), mark=2, age=100)),
         _OTHER, (_T2, _T1)),
+    # #950: the disc the pack is newer than is named from this archive's
+    # catalog, not from another archive's that lists more discs.
+    _catalog_choice(
+        "another archive's catalog lists more discs",
+        (DiscCat(_OTHER, tuple(Vol(f"LCSAS_OTHER_2026_000{n}")
+                               for n in range(1, 6)),
+                 mark=9, foreign=True, knows_pack=False),
+         DiscCat(_T2, (Vol(_T1, holds=False), Vol(_T2, holds=False)),
+                 mark=2, age=100)),
+        _OTHER, newer_than(_T2)),
     Case(
         name="usage error",
         tree={b"f": File(b"f\n")},

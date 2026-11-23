@@ -31,6 +31,7 @@ from tests.contract.disc_catalog import (
     NONE_LISTED,
     Vol,
     named_discs,
+    newer_than,
     write_catalog,
 )
 
@@ -360,13 +361,13 @@ class TestPromptNamesTier1Discs:
 
 class TestNewerThanHint:
     """The pack is in the catalog on no disc it lists: tier 3 names the
-    newest disc and says the pack is on a newer one (#635; tier 3 only).
-    That disc is never a DESTROYED one (#896)."""
+    newest disc and says the pack is on a newer one (#635; tier 1 too
+    since #957).  That disc is never a DESTROYED one (#896)."""
 
     def test_names_the_newest_disc(self, tmp_path: Path) -> None:
         box = _prompt(tmp_path, [Vol(_OLD, holds=False),
                                  Vol(_NEW, holds=False)])
-        assert named_discs(box) == NONE_LISTED
+        assert named_discs(box) == newer_than(_NEW)
         assert _newer_than(box) == _NEW
 
     def test_never_a_destroyed_disc(self, tmp_path: Path) -> None:
@@ -374,7 +375,7 @@ class TestNewerThanHint:
             Vol(_OLD, holds=False),
             Vol(_NEW, "DESTROYED", "DESTROYED", holds=False),
         ])
-        assert named_discs(box) == NONE_LISTED
+        assert named_discs(box) == newer_than(_OLD)
         assert _newer_than(box) == _OLD
 
     def test_never_a_disc_a_newer_catalog_copy_says_is_destroyed(

@@ -316,6 +316,26 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
     return (int)count;
 }
 
+int
+lcsas_catalog_newest_label(lcsas_catalog *c, char *out, size_t cap)
+{
+    sqlite3_stmt *st = NULL;
+    int found = 0;
+
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT label FROM volumes "
+            "WHERE status != 'DESTROYED' AND label IS NOT NULL "
+            "ORDER BY volume_id DESC LIMIT 1",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        copy_text_col(st, 0, out, cap);
+        found = 1;
+    }
+    sqlite3_finalize(st);
+    return found;
+}
+
 /* Prints the disc plan of the whole archive, or of one repository with
  * `repo_id` (#798: packs.repo_id, a frozen column, so a size for one
  * backup set needs no sqlite3 command).  Pruned packs are counted too

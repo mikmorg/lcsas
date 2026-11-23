@@ -428,9 +428,10 @@ owner decision 2026-11-19):
     the newest disc.  At most 8 discs: the 8 newest.
   * The pack is in the catalog but every volume holding it is
     DESTROYED (or none holds it): "(catalog has the pack, but lists no
-    disc for it)".  Tier 3 then also names the newest disc in the
-    catalog that is not DESTROYED and says the pack is on a newer one;
-    it never names a DESTROYED disc there.
+    disc for it)".  Both tiers then also name the newest disc in the
+    catalog that is not DESTROYED, under "It is on a disc newer than:",
+    and say "Insert your newest data disc: its catalog names it." (tier
+    1 since rc12, #957); never a DESTROYED disc there.
   * The pack is not in the catalog at all: "(catalog has no record of
     this pack ID)", and how to pick an older snapshot.
 

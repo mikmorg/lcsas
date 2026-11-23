@@ -25,6 +25,14 @@ HEADING = "| It is on any disc labelled:                              |"
 NONE_LISTED = "none listed"
 NO_RECORD = "no record"
 NO_PROMPT = "no prompt"
+NEWER_THAN = "| It is on a disc newer than:                              |"
+
+
+def newer_than(label: str) -> str:
+    """What a prompt says when the catalog has the pack on no disc it
+    offers and names *label*, the newest disc it lists, as the one the
+    pack is newer than (#957)."""
+    return f"{NONE_LISTED}; newer than {label}"
 
 
 @dataclass(frozen=True)
@@ -106,7 +114,8 @@ def write_catalog(path: Path, packs: Sequence[str], vols: Sequence[Vol],
 def named_discs(output: str) -> tuple[str, ...] | str:
     """What the first disc prompt in *output* names: the labels under
     its "It is on any disc labelled:" heading, in order, or
-    ``NONE_LISTED`` / ``NO_RECORD`` / ``NO_PROMPT``."""
+    ``NONE_LISTED`` (``newer_than(label)`` when the prompt names the
+    disc the pack is newer than) / ``NO_RECORD`` / ``NO_PROMPT``."""
     lines = output.splitlines()
     for i, line in enumerate(lines):
         if line == HEADING:
@@ -119,6 +128,9 @@ def named_discs(output: str) -> tuple[str, ...] | str:
                 labels.append(label)
             return tuple(labels)
         if "lists no disc for it" in line:
+            rest = lines[i + 1:i + 3]
+            if len(rest) == 2 and rest[0] == NEWER_THAN:
+                return newer_than(rest[1][4:-1].strip())
             return NONE_LISTED
         if "catalog has no record of this pack" in line:
             return NO_RECORD

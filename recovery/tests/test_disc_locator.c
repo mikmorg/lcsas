@@ -903,6 +903,56 @@ test_catalog_of_another_archive(const char *tmpdir)
     return bad;
 }
 
+/*
+ * #957: the catalog has the pack but lists no disc for it (the pack is
+ * on a disc burned after this catalog's): name the newest disc this
+ * catalog does list, and say to insert the newest data disc -- the
+ * Python reader's words.  A DESTROYED volume is not named.
+ */
+static int
+test_newer_than_hint(const char *tmpdir)
+{
+    char cat_path[1024];
+    char sql[2048];
+    unsigned char missing[32];
+    char label_row[80];
+    int bad = 0;
+
+    memset(missing, 0xAB, 32);
+    snprintf(label_row, sizeof label_row, "|   %-54s |",
+             "LCSAS_BD25_2026_0002");
+    snprintf(cat_path, sizeof cat_path, "%s_newer_catalog.db", tmpdir);
+    snprintf(sql, sizeof sql,
+             "CREATE TABLE schema_version(version INTEGER);"
+             "INSERT INTO schema_version VALUES(10);"
+             "CREATE TABLE packs(pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+             " size_bytes INTEGER, repo_id TEXT);"
+             "INSERT INTO packs VALUES(1, '%s', 10, 'r');"
+             "CREATE TABLE volumes(volume_id INTEGER PRIMARY KEY, label TEXT,"
+             " status TEXT);"
+             "INSERT INTO volumes VALUES(1, 'LCSAS_BD25_2026_0001', 'VERIFIED');"
+             "INSERT INTO volumes VALUES(2, 'LCSAS_BD25_2026_0002', 'VERIFIED');"
+             "INSERT INTO volumes VALUES(3, 'LCSAS_BD25_2026_0003', 'DESTROYED');"
+             "CREATE TABLE volume_packs(volume_id INTEGER, pack_id INTEGER);",
+             "abababababababababababababababababababababababababababababababab");
+    if (make_catalog(cat_path, sql) != 0) {
+        fprintf(stderr, "FAIL 957: fixture\n");
+        return 1;
+    }
+    if (!prompt_mentions(tmpdir, cat_path, missing,
+                         "| It is on a disc newer than:                              |")
+            || !prompt_mentions(tmpdir, cat_path, missing, label_row)
+            || !prompt_mentions(tmpdir, cat_path, missing,
+                                "| Insert your newest data disc: its catalog names it.      |")
+            || prompt_mentions(tmpdir, cat_path, missing, "_0003")) {
+        fprintf(stderr, "FAIL 957: the prompt does not name the disc the "
+                "pack is newer than\n");
+        bad++;
+    }
+    unlink(cat_path);
+    return bad;
+}
+
 int
 main(void)
 {
@@ -3186,6 +3236,7 @@ main(void)
     fails += test_skip_answer(tmpdir);
     fails += test_catalog_ranking(tmpdir);
     fails += test_catalog_of_another_archive(tmpdir);
+    fails += test_newer_than_hint(tmpdir);
 
     /* Cleanup tmpdir. */
     {
