@@ -60,7 +60,7 @@ def test_retired_set_is_named_with_its_last_disc(
     for name in ("VOLUME_INFO.txt", "START_HERE.txt"):
         flat = " ".join((tree / name).read_text().split())
         assert sentence.search(flat), (name, flat)
-        assert f'use that disc as the "newest data disc"' in flat, name
+        assert 'use that disc as the "newest data disc"' in flat, name
     info = json.loads((tree / "volume_info.json").read_text())
     assert info["retired_backup_sets"] == [
         {"name": "alpha", "last_label": last}], info
