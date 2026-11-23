@@ -2392,6 +2392,18 @@ class BurnOrchestrator:
             session_id, force=True, never_burned=never_burned,
         )
 
+        if not strandable:
+            # #968: no volume of it was left unburned, so the abort
+            # deleted nothing from the catalog; it only cleaned the session.
+            logger.info(
+                "Cleaned session %s: it has no volume that was never burned, "
+                "so nothing was deleted from the catalog and no pack "
+                "returned to the unarchived pool. Its ISOs and staging "
+                "folder were removed ('lcsas stage --clean' does the same).",
+                session_id,
+            )
+            return summary
+
         logger.info(
             "Aborted session %s: deleted %d volume(s)%s, reclaimed %d "
             "pack(s), %s bytes returned to the unarchived pool.",

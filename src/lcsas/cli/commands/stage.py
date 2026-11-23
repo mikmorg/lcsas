@@ -230,13 +230,17 @@ def cmd_stage(args: argparse.Namespace) -> int:
         )
 
         if args.clean:
+            from lcsas.db.sessions import resolve_session_id
+
             session_ref = args.session or "latest"
             try:
-                orch.clean_session(session_ref, force=args.force)
+                # #968: name the session cleaned, not "latest".
+                session_id = resolve_session_id(conn, session_ref)
+                orch.clean_session(session_id, force=args.force)
             except ValueError as e:
                 logger.error("%s", e)
                 return 1
-            logger.info(f"Cleaned session: {session_ref}")
+            logger.info(f"Cleaned session: {session_id}")
             return 0
 
         # #960: no disc without a password hint, unless the owner says so.
