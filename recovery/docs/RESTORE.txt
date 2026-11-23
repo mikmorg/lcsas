@@ -179,10 +179,18 @@ in this order.  Each one says how to answer.
      cards instead (see "SHARE CARDS (SPLIT PASSWORDS)").
 
   4. The discs, one by one, while the restore runs (see "MULTI-DISC
-     RESTORE").
+     RESTORE").  Before it starts, the restore says which backup it
+     is, by its date (the backup computer's own clock):
+         Restoring the backup of 2026-11-21 14:02, the newest on these discs.
+     An older backup, chosen with --snapshot, is named with the
+     newest beside it.  Check the date: a newer backup than you
+     expected may be on a newer data disc ("A WRONG OR MIXED-UP
+     DISC").
 
-  5. After a restore that succeeds, the end says where the files are
-     and how many:
+  5. After a restore that succeeds, the end says which backup it was,
+     where the files are and how many:
+         The backup of 2026-11-21 14:02 is restored.
+         ...
          Restore complete.  4 files restored to:
              /home/alice/restored
      Then, when the discs hold a set not restored yet:

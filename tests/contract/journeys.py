@@ -1178,13 +1178,21 @@ DOC = "documents"
 #: matched case-blind is #627 item 8).
 UNKNOWN_SET = "Garden photos"
 
+#: #952 b: what the readers say of the backup restored, by its date.
+_DATE = r"\d{4}-\d\d-\d\d \d\d:\d\d"
+
 JOURNEYS: tuple[Journey, ...] = (
+    # #952 b, #966 item 2: before the restore and at its end, the
+    # backup is named by its date.
     Journey(
         name="one set, password typed, one disc",
         archive="one set",
         typed=(NEWEST, Password(PHOTOS)),
         expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "folder", "password"),
-                      restored=PHOTOS, tools_folder="removed", disc_asked=False),
+                      restored=PHOTOS, tools_folder="removed", disc_asked=False,
+                      says=(rf"Restoring the backup of {_DATE}, the newest on "
+                            r"these discs\.",
+                            rf"The backup of {_DATE} is restored\.")),
     ),
     Journey(
         name="two sets, pick by name, newest data disc asked first",

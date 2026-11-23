@@ -1738,6 +1738,42 @@ main(void)
             }
         }
 
+        /* #952: a backup's date as the heir reads it: the date and the
+         * minute of the backup computer's own clock, no conversion; any
+         * other text as it is; nothing recorded said so.  The Python
+         * reader's _backup_date gives the same. */
+        {
+            static const struct { const char *time, *want; } c[] = {
+                { "2026-11-21T14:02:33.123456789+01:00", "2026-11-21 14:02" },
+                { "2026-01-02T03:04:05Z", "2026-01-02 03:04" },
+                { "2026-01-02 03:04:05-05:00", "2026-01-02 03:04" },
+                { "2026-01-02T03:04", "2026-01-02 03:04" },
+                { "2026-01-02", "2026-01-02" },
+                { "2026-01-02T3:04:05Z", "2026-01-02T3:04:05Z" },
+                { "yesterday", "yesterday" },
+                { "", "(no date recorded)" }
+            };
+            char out[64];
+            char small[8];
+            size_t k;
+            for (k = 0; k < sizeof c / sizeof c[0]; k++) {
+                lcsas_snapshot_date_text(c[k].time, out, sizeof out);
+                if (strcmp(out, c[k].want) != 0) {
+                    fprintf(stderr, "FAIL: 952 date of '%s' is '%s', want "
+                                    "'%s'\n", c[k].time, out, c[k].want);
+                    fails++;
+                }
+            }
+            /* Cut to the buffer, never past it. */
+            lcsas_snapshot_date_text("2026-11-21T14:02:33Z", small,
+                                     sizeof small);
+            if (strcmp(small, "2026-11") != 0) {
+                fprintf(stderr, "FAIL: 952 date not cut to the buffer: "
+                                "'%s'\n", small);
+                fails++;
+            }
+        }
+
         /* (b) decrypts OK but invalid JSON → fatal (-1). */
         {
             char tmp[] = "/tmp/lcsas_401_snapjson_XXXXXX";

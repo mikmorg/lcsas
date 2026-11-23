@@ -769,6 +769,50 @@ def test_fixture_verbose_full_restore(tmp_path: Path) -> None:
     assert "indexed" in err and "blobs" in err, err
 
 
+def test_fixture_backup_date_lines(tmp_path: Path) -> None:
+    """#952: the restore names the backup by its date, before it starts
+    and at the end; an older backup with the newest beside it.  (Here,
+    in the coverage-c run's list, for main.c's date lines; the readers'
+    agreement is test_readers_backup_date.py, with real rustic.)"""
+    import re
+
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    listing = _run(bin_path, "--repo", str(repo), "--password-file",
+                   str(pwfile), "--list-snapshots", timeout=10)
+    assert listing.returncode == 0, listing.stderr
+    rows = [line.split()[:2] for line in listing.stdout.splitlines()[1:]
+            if line.strip()]
+    assert len(rows) >= 2, listing.stdout
+
+    def date(time: str) -> str:
+        m = re.match(r"(\d{4}-\d\d-\d\d)T(\d\d:\d\d)", time)
+        assert m, time
+        return f"{m.group(1)} {m.group(2)}"
+
+    (old_id, old_time), (_new_id, new_time) = rows[-2], rows[-1]
+    res = _run(bin_path, "--repo", str(repo), "--password-file", str(pwfile),
+               "--restore-folder", str(tmp_path / "latest"), timeout=10)
+    assert res.returncode == 0, res.stderr
+    assert (f"Restoring the backup of {date(new_time)}, the newest on these "
+            "discs.") in res.stderr, res.stderr
+    assert f"The backup of {date(new_time)} is restored." in res.stderr
+
+    # The older snapshot names a blob the fixture leaves out, so its
+    # restore ends in an error, after the date line, and without the
+    # "is restored" line.
+    res = _run(bin_path, "--repo", str(repo), "--password-file", str(pwfile),
+               "--restore-folder", str(tmp_path / "older"),
+               "--snapshot", old_id, timeout=10)
+    assert (f"Restoring the backup of {date(old_time)}; the newest on these "
+            f"discs is of {date(new_time)}.") in res.stderr, res.stderr
+    if res.returncode != 0:
+        assert "is restored." not in res.stderr, res.stderr
+
+
 def test_fixture_refused_names_exit_nonzero(tmp_path: Path) -> None:
     """Issue #781: a snapshot whose tree holds refused names ("../escape",
     "foo/bar", "evil<NUL>x") still restores every other node, names each

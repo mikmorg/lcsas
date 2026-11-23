@@ -61,8 +61,11 @@ QUICK START (90 SECONDS)
         - for the password: type it and press Enter.  If the
           password of that set is split into share cards, it asks
           for the cards instead (see "SHARE CARDS" below).
-  7. Wait.  When the script says "Restore complete", the files are
-     in the folder you chose.  If the archive has more than one
+  7. Wait.  Before it starts, the restore names the backup by its
+     date and time, for example 2026-11-21 14:02 ("Restoring the
+     backup of ..., the newest on these discs."), and at the end it
+     says "The backup of ... is restored.".  When the script says
+     "Restore complete", the files are in the folder you chose.  If the archive has more than one
      backup set, it then asks whether to restore another one.
 
 If you have multiple discs, the script will tell you when to swap.
