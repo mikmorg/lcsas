@@ -351,7 +351,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Stage the [collections.NAME] of the config: "
                               "its repos, for its location (as "
                               "--for-location), on its media_type, with "
-                              "its min_fill_pct. Not with --repo, "
+                              "its min_fill_pct and max_volumes. Not "
+                              "with --repo, "
                               "--for-location or --media.")
     stage_p.add_argument("--min-fill", type=float, default=None,
                          metavar="PCT",
@@ -359,6 +360,14 @@ def build_parser() -> argparse.ArgumentParser:
                               "less than PCT%% of its pack space (0-100); "
                               "the full volumes before it are staged. "
                               "Overrides a collection's min_fill_pct.")
+    stage_p.add_argument("--max-volumes", type=int, default=None,
+                         metavar="N",
+                         help="Stage only the first N volumes of the plan; "
+                              "the other packs stay unarchived for the "
+                              "next stage. Burn these, then stage again: "
+                              "staging space for a few discs suffices for "
+                              "a backup of any size. Overrides a "
+                              "collection's max_volumes.")
     stage_p.add_argument("--partial", action="store_true", default=False,
                          help="Stage the last volume even if it is below "
                               "the minimum fill.")

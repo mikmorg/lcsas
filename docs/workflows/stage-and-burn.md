@@ -67,10 +67,14 @@ The end-to-end flow inside a single session:
    pack counts with its own ISO overhead (`pack_disc_bytes`).  Oversize
    packs (larger than `usable_bytes` less the reserve) raise `ValueError`
    because they can never fit on the chosen media.
-3. **Disk-space pre-flight** — `stage()` computes
-   `total_data_bytes × (1.05 × (1 + ecc%/100) + 1)` and refuses if
-   `staging_path` does not have that much free space
-   (`BurnOrchestrator.stage`).
+3. **Disk-space pre-flight** — `stage()` refuses when `staging_path`
+   has less free space than the session needs: per volume its metadata
+   reserve and its image (on ECC media padded to a full medium), plus
+   one more padded image for `augment_iso`'s working copy, plus the
+   packs themselves when the staging area is not on the file system of
+   every mirror (then they are copied, not hardlinked; #965)
+   (`BurnOrchestrator._staging_space_needed`). See
+   [Staging space and `--max-volumes`](#staging-space-and---max-volumes).
 4. **Create session** — `create_session` writes a `burn_sessions` row with
    status `STAGED` and a per-session staging directory under `staging_path`
    (`BurnOrchestrator.stage`).
@@ -200,9 +204,10 @@ machines, or when staging in advance for an unattended burn.
   checks their versions and stops with an error naming the tool when
   one is missing or too old (#731). dvdisaster is checked only when
   the media gets ECC. `--dry-run` runs neither tool and checks neither.
-- `staging_path` filesystem with enough free space; pre-flight requires
-  `total_data_bytes × (1.05 × (1 + ecc%/100) + 1)`
-  (`BurnOrchestrator.stage`).
+- `staging_path` filesystem with enough free space for the volumes
+  staged in one run: about two disc images per volume on ECC media (see
+  [Staging space and `--max-volumes`](#staging-space-and---max-volumes)).
+  `--dry-run` prints the number and the free space.
 
 **Steps:**
 
@@ -225,9 +230,15 @@ machines, or when staging in advance for an unattended burn.
    staged. `--partial` stages it anyway. If it is the only volume,
    nothing is staged and the exit code is 0
    (`BurnOrchestrator._trim_underfilled`).
-5. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
-   without touching the staging area, the catalog, or the disc
-   (`BurnOrchestrator.stage`). It checks for password split drift like a
+   `--max-volumes N` stages only the first N volumes of the plan (made
+   after `--min-fill`); the packs of the others stay unarchived for the
+   next stage (#965). A collection may set it as `max_volumes`; the flag
+   overrides it. See
+   [Staging space and `--max-volumes`](#staging-space-and---max-volumes).
+5. `--dry-run` / `-n` — compute the bin-pack plan and report it, with
+   the free space the real run needs in the staging area and the space
+   free now, then exit without touching the staging area, the catalog,
+   or the disc (`BurnOrchestrator.stage`). It checks for password split drift like a
    real run: on drift it refuses with exit code 1, unless
    `--allow-split-drift`.
 6. `--allow-split-drift` — proceed even when `lcsas.toml`'s `split`/K/N
@@ -304,6 +315,61 @@ labels (`<prefix>_<media_label>_<seq>`) generated via
 
 See also [`docs/architecture.md`](../architecture.md) for the storage-stage
 and disc-catalog model.
+
+---
+
+### Staging space and `--max-volumes`
+
+`lcsas stage` builds every disc image of its session before any is
+burned, and the images stay in the staging area until they are burned.
+For each volume staged in one run it needs free space for the volume's
+image (on BD and M-DISC media padded by the error correction to a whole
+disc), its copy of the disc metadata, and one more image while the error
+correction is added. When the staging area is on the same file system as
+the mirrors, the packs are hardlinked and take no new space; on another
+file system they are copied and count in full.
+
+Roughly, with full discs:
+
+| Volumes staged in one run | BD25, same file system | BD25, other file system | MDISC100, same file system | MDISC100, other file system |
+|---|---|---|---|---|
+| 1 | 49 GB | 70 GB | 194 GB | 279 GB |
+| 2 | 73 GB | 115 GB | 291 GB | 461 GB |
+| 5 | 146 GB | 252 GB | 582 GB | 1,007 GB |
+
+A first backup of 500 GB is about 24 BD25 discs, and staging all of
+them at once needs about 0.6 TB free (1.1 TB on another file system).
+With `--max-volumes N` it does not have to:
+
+```bash
+lcsas --config lcsas.toml stage --dry-run --max-volumes 2   # what it needs, what is free
+lcsas --config lcsas.toml stage --max-volumes 2
+lcsas --config lcsas.toml burn --session latest --location Home_Shelf
+lcsas --config lcsas.toml stage --max-volumes 2              # the next two
+```
+
+The plan is made for all the packs; only its first N volumes are
+staged, and the stage says how many more the plan had. Their packs stay
+unarchived, and the next `stage` plans them again. A snapshot whose
+packs are not all staged yet is left off a batch's discs and carried by
+a later batch, as with `--min-fill`. A first backup that is one snapshot
+over many discs is therefore on none of them until the last batch:
+until that batch is burned, the discs cannot restore that backup.
+
+Burn each batch before staging the next. A batch staged while an
+earlier one waits is allowed as long as it completes no snapshot; the
+batch that would complete one is refused until the earlier batches are
+burned, because its discs would lack that snapshot for good (see "A
+waiting session" below). A collection can set the batch size as
+`max_volumes` ([collections.md](collections.md)).
+
+Expect about 0.4 h of ISO mastering and error correction per BD25 disc
+(one measurement: 3.9 GB of packs to a 4.7 GB image in 242 s), burning
+not included.
+
+**Source refs:** `BurnOrchestrator.stage`, `_staging_space_needed`,
+`_packs_copied` (`src/lcsas/burn/orchestrator.py`); `_stage_max_volumes`
+(`src/lcsas/cli/commands/stage.py`).
 
 ---
 
@@ -492,8 +558,9 @@ committing to a full stage.
    `cmd_stage` returns immediately after `orch.stage(dry_run=True)`,
    skipping the result-logging block.
 
-**Expected outcome:** Per-volume plan printed, no session created, no
-staging directories, no catalog mutation. A dry run refuses (exit 1) where
+**Expected outcome:** Per-volume plan printed, then the free space the
+real run needs in the staging area and what is free now (#965), no
+session created, no staging directories, no catalog mutation. A dry run refuses (exit 1) where
 the real run would refuse for password split drift or an unregistered
 `--for-location`. When nothing needs staging it prints the same "No packs
 need staging." as the real run and exits 1 like it.

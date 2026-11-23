@@ -178,5 +178,7 @@ def test_dry_run_without_drift_plans(tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger="lcsas"):
         rc = main(["--config", str(cfg), "stage", "--dry-run"])
     assert rc == 0, caplog.text
-    assert "drift" not in caplog.text
+    # The dry run names the staging folder (#965), whose tmp_path holds
+    # this test's name: look for the drift message, not the word.
+    assert "split drift" not in caplog.text
     assert "[DRY RUN] 1 volume(s) planned" in caplog.text

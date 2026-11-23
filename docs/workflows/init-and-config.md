@@ -75,7 +75,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
    - a known key has the wrong TOML type: strings must be quoted, numbers and `true`/`false` must not be (`split = "false"`, `split_threshold = "3"`, `metadata_reserve_mb = "100"`, `media_type = 25`, `label_prefix = 7` are all errors);
    - `split_threshold`/`split_shares` (in `[defaults]`, or the pair a `[repos.<name>]` table makes by overriding either) is not `2 <= K <= N <= 16`, or `K = N = 1` for no split;
    - two `[repos.<name>]` tables have the same `mirror_path`;
-   - a `[repos.<name>]` `sources` is not a list of strings, or a `[collections.<name>]` table has no `location`, an empty or missing `repos`, a repository with no `[repos.<name>]` table, an unknown `media_type`, or a `min_fill_pct` outside 0-100 (#701, [collections.md](collections.md)).
+   - a `[repos.<name>]` `sources` is not a list of strings, or a `[collections.<name>]` table has no `location`, an empty or missing `repos`, a repository with no `[repos.<name>]` table, an unknown `media_type`, a `min_fill_pct` outside 0-100, or a `max_volumes` below 1 (#701, #965, [collections.md](collections.md)).
 3. `validate_config()` checks (`src/lcsas/config/settings.py`):
    - `mirror_base_path` exists and is a directory.
    - `staging_path` exists, is a directory, and is writable.

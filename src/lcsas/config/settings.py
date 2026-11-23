@@ -137,6 +137,8 @@ class CollectionConfig:
     media_type: MediaType | None = None
     # Percent of a volume's pack space (0 = no minimum).
     min_fill_pct: float = 0.0
+    # Volumes staged per run (None = all of the plan, #965).
+    max_volumes: int | None = None
 
 
 def _xdg_db_path() -> str:
@@ -278,7 +280,7 @@ _REPO_TYPES = {
 }
 _COLLECTION_TYPES = {
     "location": "str", "media_type": "str", "min_fill_pct": "number",
-    "repos": "strlist",
+    "max_volumes": "int", "repos": "strlist",
 }
 _TYPE_WORDS = {
     "str": "a quoted string",
@@ -606,12 +608,18 @@ def _load_collections(
                 f"{where} min_fill_pct must be between 0 and 100, "
                 f"not {min_fill!r}"
             )
+        max_volumes = cfg.get("max_volumes")
+        if max_volumes is not None and max_volumes < 1:
+            errors.append(
+                f"{where} max_volumes must be 1 or more, not {max_volumes!r}"
+            )
         collections[name] = CollectionConfig(
             name=name,
             location=location,
             repos=tuple(names),
             media_type=media,
             min_fill_pct=float(min_fill),
+            max_volumes=max_volumes,
         )
     if errors:
         raise ValueError("; ".join(errors))
