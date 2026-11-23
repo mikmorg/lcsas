@@ -139,7 +139,7 @@ def test_tier3_exports_pythonpath_to_bundled_zstandard(tmp_path: Path) -> None:
 
     # And the diagnostic must surface on stderr so the operator/agent
     # can see which path the script picked.
-    assert "PYTHONPATH includes bundled zstandard" in res.stderr, (
+    assert "[tier 3] using the bundled zstandard at" in res.stderr, (
         f"missing diagnostic line on stderr:\n{res.stderr}"
     )
 
