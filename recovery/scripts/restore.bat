@@ -1429,6 +1429,8 @@ REM `if not defined`, not `if "%PW_TYPED%"==""`: a '"' in the password
 REM broke that comparison's syntax (#482).
 if not defined PW_TYPED goto :pw_empty
 if /i "!PW_TYPED!"=="q" goto :pw_gave_up
+REM C: back to the share cards, after P at them (#966).
+if defined SPLIT_K if defined PW_OWN if exist "%KS_EXE%" if /i "!PW_TYPED!"=="c" goto :pw_cards
 set "PW_EMPTY=0"
 set "PW_VALUE=!PW_TYPED!"
 set "PW_TYPED="
@@ -1572,12 +1574,15 @@ set /p "SHARE=Words of card %SI%: "
 if not defined SHARE goto :share_empty
 if /i "!SHARE!"=="q" goto :shares_gave_up
 if /i "!SHARE!"=="p" goto :shares_own
+REM R starts again with card 1 (#966).
+if /i "!SHARE!"=="r" goto :shares_again
 set "PW_EMPTY=0"
 REM One word cannot be a card (a card has 20 words or more), and
 REM `echo on` would act on echo itself.  The line is handed on as typed:
 REM lcsas-shares skips the numbers a card prints beside its words (#955).
 if "!SHARE!"=="!SHARE: =!" goto :share_one_word
 > "%SH_DIR%\card%SI%.txt" echo !SHARE!
+set "SH_TYPED=!SHARE!"
 set "SHARE="
 pushd "%SH_DIR%"
 "%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt" <nul
@@ -1594,8 +1599,70 @@ if "%KRC%"=="1" goto :share_good
 rmdir /s /q "%SH_DIR%" 2>nul
 goto :keyshare_broken
 :share_good
+REM #966: the same card twice counts once, so the cards could not be
+REM combined: said now.  Typed with or without the card's numbers, in
+REM any case, in full or in four letters, it is the same card
+REM (:share_key).  And every card of one split begins with the same
+REM two words (the split's id and settings): a card of another split
+REM is named as it is typed, not at the end.
+call :share_key
+set "SH_DUP="
+set /a SH_PREV=SI-1
+for /l %%J in (1,1,%SH_PREV%) do if /i "!SKEY%%J!"=="!SK!" set "SH_DUP=1"
+if defined SH_DUP (
+    del "%SH_DIR%\card%SI%.txt" 2>nul
+    echo That is a card you already typed.  Type a different card.
+    goto :share_next
+)
+if %SI% gtr 1 if /i not "!SK2!"=="!SK2_FIRST!" goto :share_other_split
+set "SKEY%SI%=!SK!"
+if %SI% equ 1 set "SK2_FIRST=!SK2!"
+if %SI% equ 1 set "SKW_FIRST=!SKW!"
 set /a SI+=1
 goto :share_next
+
+:share_other_split
+del "%SH_DIR%\card%SI%.txt" 2>nul
+echo Card %SI% is not from the same split as card 1: the cards of one
+echo split all begin with the same two words.
+echo Card 1 begins '!SKW_FIRST!'; this card begins '!SKW!'.
+echo Type card %SI% again from a card of the same split, or R then ENTER
+echo to start again with card 1.
+goto :share_next
+
+:shares_again
+rmdir /s /q "%SH_DIR%" 2>nul
+goto :shares_ask
+
+:share_key
+REM From SH_TYPED, the card as typed: SK, its words each cut to four
+REM letters, the numbers a card prints beside them left out (lcsas-shares
+REM reads a word by its first four letters, and skips the numbers);
+REM SK2, the first two of those; SKW, the first two words as typed.
+REM The line was accepted by lcsas-shares, so it holds only letters,
+REM digits, dots, brackets and blanks: with the dots and brackets made
+REM blanks, the plain for list takes its words, and a word that is only
+REM digits is a number.
+set "SK="
+set "SK2="
+set "SKW="
+set "SK_N=0"
+set "SK_ALL=!SH_TYPED:.= !"
+set "SK_ALL=!SK_ALL:)= !"
+for %%W in (%SK_ALL%) do call :share_key_word %%W
+exit /b 0
+:share_key_word
+set "SK_W=%~1"
+REM (# first: the variable is never empty while digits are taken out.)
+set "SK_D=#%~1"
+for %%D in (0 1 2 3 4 5 6 7 8 9) do set "SK_D=!SK_D:%%D=!"
+if "!SK_D!"=="#" exit /b 0
+set /a SK_N+=1
+set "SK=!SK! !SK_W:~0,4!"
+if !SK_N! equ 2 set "SK2=!SK!"
+if !SK_N! equ 1 set "SKW=!SK_W!"
+if !SK_N! equ 2 set "SKW=!SKW! !SK_W!"
+exit /b 0
 
 :share_one_word
 echo That is not a whole card: type all of its words on one line.
@@ -1681,7 +1748,16 @@ set "PW_WRONG=1"
 echo.
 if "%PW_FROM%"=="shares" goto :pw_wrong_shares
 echo That password is wrong: it does not open the backup set !SET_NAME!.
+if defined SPLIT_K if defined PW_OWN if exist "%KS_EXE%" goto :pw_wrong_split
 echo Check it and type it again, or type Q then ENTER to quit.
+goto :pw_next
+:pw_wrong_split
+echo Check it and type it again, C then ENTER to type the share cards
+echo instead, or Q then ENTER to quit.
+goto :pw_next
+:pw_cards
+set "PW_OWN="
+set "PW_TYPED="
 goto :pw_next
 :pw_wrong_shares
 echo The password rebuilt from those share cards does not open the backup

@@ -189,10 +189,17 @@ Type `q` at any disc prompt to stop the restore cleanly (exit code
 The binary prints periodic progress on stderr:
 
 ```
-[lcsas-restore] progress: 12/30 blobs, 0 MB
-[lcsas-restore] progress: 24/30 blobs, 1 MB
+[lcsas-restore] Restoring the backup of 2026-11-21 14:02, the newest on these discs.
+[lcsas-restore] restoring snapshot 3f2a9c1d8e4b -> /home/you/restored
+[lcsas-restore] progress: 0 blobs, 0 MB
+[lcsas-restore] progress: 16 blobs, 1 MB
+[lcsas-restore] The backup of 2026-11-21 14:02 is restored.
 [lcsas-restore] restore complete
 ```
+
+The first line names the backup by its date (the backup computer's
+own clock).  The progress lines count what is done so far; there is
+no total.
 
 When you see `[lcsas-restore] restore complete`, your files are at the
 folder you gave as `--restore-folder` (e.g. `~/restored/`).  Check with

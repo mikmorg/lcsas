@@ -953,6 +953,145 @@ test_newer_than_hint(const char *tmpdir)
     return bad;
 }
 
+/*
+ * #966: the disc box's texts.
+ *   - A mount folder that is itself a disc (it has data/) is one disc:
+ *     "Currently searching" lists it, not its own folders (data,
+ *     metadata, ...).  A mount folder that is not a disc still lists
+ *     the discs mounted under it.
+ *   - The box of a pack the catalog has no record of names the option
+ *     that lists the snapshots, --list-snapshots (it said --list, which
+ *     no program takes).
+ */
+static int
+test_box_texts_966(const char *tmpdir)
+{
+    int f = 0;
+    char disc[1024], sub[1024], parent[1024], cat_path[1024], sql[2048];
+    const char *search[1];
+    const char *parents[1];
+    unsigned char missing[32];
+    FILE *out;
+    int prc, quit;
+
+    memset(missing, 0xAB, 32);
+    /* A disc mounted straight at the mount folder. */
+    snprintf(disc, sizeof disc, "%s_966disc", tmpdir);
+    snprintf(sub, sizeof sub, "%s/data/00", disc);
+    mkdir_recursive(sub);
+    snprintf(sub, sizeof sub, "%s/metadata/someset", disc);
+    mkdir_recursive(sub);
+    snprintf(sub, sizeof sub, "%s/extras", disc);
+    mkdir_recursive(sub);
+    search[0] = tmpdir;
+    parents[0] = disc;
+    out = prompt_run(search, 1, parents, 1, NULL, NULL, missing, "q\n",
+                     &prc, &quit);
+    if (!out) {
+        fprintf(stderr, "FAIL #966 box: no transcript\n"); f++;
+    } else {
+        if (count_lines_with(out, "_966disc ") != 1) {
+            fprintf(stderr, "FAIL #966 box: the disc is not listed once\n");
+            f++;
+        }
+        if (count_lines_with(out, "_966disc/") != 0) {
+            fprintf(stderr, "FAIL #966 box: a folder of the disc is "
+                            "listed as searched\n"); f++;
+        }
+        fclose(out);
+    }
+
+    /* A mount folder that is not a disc: the disc under it is listed. */
+    snprintf(parent, sizeof parent, "%s_966parent", tmpdir);
+    snprintf(sub, sizeof sub, "%s/LCSAS_X_0001/data", parent);
+    mkdir_recursive(sub);
+    parents[0] = parent;
+    out = prompt_run(search, 1, parents, 1, NULL, NULL, missing, "q\n",
+                     &prc, &quit);
+    if (!out) {
+        fprintf(stderr, "FAIL #966 box: no transcript (2)\n"); f++;
+    } else {
+        if (count_lines_with(out, "_966parent/LCSAS_X_0001 ") != 1) {
+            fprintf(stderr, "FAIL #966 box: a disc under the mount folder "
+                            "is not listed\n"); f++;
+        }
+        fclose(out);
+    }
+
+    /* A mount folder with a plain folder named data in it (a USB disk
+     * labelled data, /mnt/data) and a disc beside it: the disc is still
+     * searched, and the pack on it found with no question. */
+    snprintf(sub, sizeof sub, "%s_966mixed/data", tmpdir);
+    mkdir_recursive(sub);
+    snprintf(sub, sizeof sub, "%s_966mixed/LCSAS_Y_0001/data/ab", tmpdir);
+    mkdir_recursive(sub);
+    snprintf(sub, sizeof sub, "%s_966mixed/LCSAS_Y_0001/data/ab/%s", tmpdir,
+             "abababababababababababababababababababababababababababababababab");
+    write_pack(sub, "pack-contents");
+    snprintf(parent, sizeof parent, "%s_966mixed", tmpdir);
+    parents[0] = parent;
+    out = prompt_run(search, 1, parents, 1, NULL, NULL, missing, "q\n",
+                     &prc, &quit);
+    if (!out) {
+        fprintf(stderr, "FAIL #966 box: no transcript (mixed)\n"); f++;
+    } else {
+        if (prc != 0 || quit != 0 || count_lines_with(out, "| Pack ") != 0) {
+            fprintf(stderr, "FAIL #966: a disc beside a folder named data "
+                            "is not searched (rc=%d quit=%d)\n", prc, quit);
+            f++;
+        }
+        fclose(out);
+    }
+    {
+        char rm[2200];
+        snprintf(rm, sizeof rm, "rm -rf %s", parent);
+        (void)system(rm);
+    }
+
+    /* The catalog has no record of the pack. */
+    snprintf(cat_path, sizeof cat_path, "%s_966catalog.db", tmpdir);
+    snprintf(sql, sizeof sql,
+             "CREATE TABLE schema_version(version INTEGER);"
+             "INSERT INTO schema_version VALUES(10);"
+             "CREATE TABLE packs(pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+             " size_bytes INTEGER, repo_id TEXT);"
+             "CREATE TABLE volumes(volume_id INTEGER PRIMARY KEY, label TEXT,"
+             " uuid TEXT, media_type TEXT, status TEXT);"
+             "CREATE TABLE volume_packs(volume_id INTEGER, pack_id INTEGER);"
+             "INSERT INTO packs VALUES(1, '%s', 10, 'r');",
+             "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+    if (make_catalog(cat_path, sql) != 0) {
+        fprintf(stderr, "FAIL #966 box: catalog fixture\n"); f++;
+    } else {
+        out = prompt_run(search, 1, NULL, 0, NULL, cat_path, missing,
+                         "q\n", &prc, &quit);
+        if (!out) {
+            fprintf(stderr, "FAIL #966 box: no transcript (3)\n"); f++;
+        } else {
+            if (box_lines_are_60(out, "966 no record") < 10) {
+                fprintf(stderr, "FAIL #966 box: lines not 60 wide\n"); f++;
+            }
+            if (count_lines_with(out, "| Type 'q', then list the snapshots "
+                                      "(--list-snapshots)     |") != 1
+                    || count_lines_with(out, "| and restore an older one "
+                                             "with --snapshot <id>.           |")
+                       != 1
+                    || count_lines_with(out, "(--list)") != 0) {
+                fprintf(stderr, "FAIL #966 box: the option that lists the "
+                                "snapshots is not --list-snapshots\n"); f++;
+            }
+            fclose(out);
+        }
+    }
+    unlink(cat_path);
+    {
+        char rm[2200];
+        snprintf(rm, sizeof rm, "rm -rf %s %s_966parent", disc, tmpdir);
+        (void)system(rm);
+    }
+    return f;
+}
+
 int
 main(void)
 {
@@ -3237,6 +3376,7 @@ main(void)
     fails += test_catalog_ranking(tmpdir);
     fails += test_catalog_of_another_archive(tmpdir);
     fails += test_newer_than_hint(tmpdir);
+    fails += test_box_texts_966(tmpdir);
 
     /* Cleanup tmpdir. */
     {

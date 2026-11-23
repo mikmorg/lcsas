@@ -13,14 +13,17 @@ operator-facing recovery README:
 
 2. The test rig and the agent prompt treat tmux as the expected
    driver, which makes operators with a single terminal think they
-   need to install tmux before they can swap discs.  In reality
-   ``Ctrl+Z`` + ``fg`` (or a second SSH session) work fine.
+   need to install tmux before they can swap discs.  A second
+   terminal window works fine.  (#966: the ``Ctrl+Z`` + ``fg`` advice
+   is gone: after ``fg`` at the hidden password question the terminal
+   showed the password as it was typed.)
 
 This file fails the build if either regression returns:
 
 * The obsolete ``cp -r /mnt`` recipe creeps back into the README, OR
 * The ``LCSAS_NO_RELOCATE`` override stops being documented, OR
-* The single-terminal ``Ctrl+Z`` advice is removed, OR
+* The ``Ctrl+Z`` advice comes back, or the second-terminal advice
+  goes, OR
 * The Single-Drive quick-start grows back beyond two shell commands.
 
 Catches the failure mode where operators copy a longer recipe than
@@ -68,14 +71,21 @@ def test_readme_mentions_relocate_override() -> None:
     )
 
 
-def test_readme_mentions_ctrl_z_alternative() -> None:
-    """Single-terminal operators need to know Ctrl+Z + fg is an option."""
+def test_readme_swaps_discs_from_a_second_terminal() -> None:
+    """#966 item 8: Ctrl+Z, a disc swap, then ``fg`` at the hidden
+    password question left the terminal showing the password as it was
+    typed.  The README says to swap from a second terminal window, and
+    no longer suggests Ctrl+Z (nor tmux)."""
     readme = _read_readme_source()
-    # Accept "Ctrl+Z", "Ctrl-Z", "ctrl z", and the like.
-    assert re.search(r"ctrl[\s+\-]?z", readme, re.IGNORECASE), (
-        "README_RESTORE no longer documents Ctrl+Z (suspend + fg) as a "
-        "single-terminal alternative to tmux for handling disc swaps — "
-        "operators on a single terminal will think they need tmux."
+    # "Ctrl+Z", "Ctrl-Z", "ctrl z", and the like.
+    assert not re.search(r"ctrl[\s+\-]?z", readme, re.IGNORECASE), (
+        "README_RESTORE suggests Ctrl+Z again: after fg at the password "
+        "question the terminal echoes the password."
+    )
+    flat = " ".join(readme.split())
+    assert "second terminal window" in flat, (
+        "README_RESTORE does not say how to swap discs with one "
+        "terminal open: from a second terminal window."
     )
 
 

@@ -1509,6 +1509,34 @@ offered_discs(lcsas_disc_locator *l, const char *hex,
     return kept;
 }
 
+/*
+ * #966: 1 when `path` is a folder straight under a mount folder that
+ * is itself a disc (it has data/): a folder of that disc (data,
+ * metadata, ...), not a disc.  It is still searched, as every folder
+ * under a mount folder is (a "data" folder there may be another
+ * disc's neighbour, not a disc's own), but the box does not list it.
+ */
+static int
+folder_of_a_disc(const lcsas_disc_locator *l, const char *path)
+{
+    size_t i;
+    for (i = 0; i < l->n_mount_parents; i++) {
+        const char *p = l->mount_parents[i];
+        size_t n = p ? strlen(p) : 0;
+        char data[4096];
+        struct stat st;
+        int rc;
+        if (n == 0 || strncmp(path, p, n) != 0 || path[n] != '/'
+                || strchr(path + n + 1, '/') != NULL)
+            continue;
+        rc = snprintf(data, sizeof data, "%s/data", p);
+        if (rc > 0 && (size_t)rc < sizeof data && stat(data, &st) == 0
+                && S_ISDIR(st.st_mode))
+            return 1;
+    }
+    return 0;
+}
+
 static void
 print_prompt(lcsas_disc_locator *l, const char *hex, int names_discs)
 {
@@ -1563,8 +1591,10 @@ print_prompt(lcsas_disc_locator *l, const char *hex, int names_discs)
             fputs("| (catalog has no record of this pack ID)                  |\n", o);
             fputs("| If the NEWEST data disc has already been read, this pack |\n", o);
             fputs("| was never burned: the snapshot is newer than the discs.  |\n", o);
-            fputs("| Type 'q', then list the snapshots (--list) and restore   |\n", o);
-            fputs("| an older one with --snapshot <id>.                       |\n", o);
+            /* #966: the option is --list-snapshots (both scripts take
+             * it too); the Python reader's words. */
+            fputs("| Type 'q', then list the snapshots (--list-snapshots)     |\n", o);
+            fputs("| and restore an older one with --snapshot <id>.           |\n", o);
         }
         /* A query error.  Do NOT claim "no record": we never asked. */
         if (fr < 0) print_catalog_error(o, cat);
@@ -1578,6 +1608,9 @@ print_prompt(lcsas_disc_locator *l, const char *hex, int names_discs)
         print_search_path(o, l->search_paths[i]);
     }
     for (i = 0; i < l->n_discovered; i++) {
+        /* #966: not a disc's own folders (the Python reader lists
+         * none either). */
+        if (folder_of_a_disc(l, l->discovered_paths[i])) continue;
         print_search_path(o, l->discovered_paths[i]);
     }
 

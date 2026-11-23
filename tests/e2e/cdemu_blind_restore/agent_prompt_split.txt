@@ -256,10 +256,9 @@ restore-shell session merges stdout and stderr, so you will see
 them interleaved with normal output.
 
   Progress lines (periodic):
-      [lcsas-restore] progress: N/M blobs, X MB
-      The denominator M is the full index size, so it is an
-      upper bound; the real snapshot subset may be smaller.
-      The first progress line is emitted at 0/M before any
+      [lcsas-restore] progress: N blobs, X MB
+      N counts the blobs restored so far; there is no total.
+      The first progress line is emitted at 0 before any
       disc is read.  Do NOT treat silence for up to 60 seconds
       as a hang — slow optical drives can take that long between
       progress lines.

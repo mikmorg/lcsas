@@ -464,7 +464,11 @@ code 77).
 Each card you type is kept in a file of its own in %TEMP% only until
 the password is rebuilt, and then deleted.  If you have already
 rebuilt the password, type P instead of a card, and then the
-password.
+password; if that password is wrong, C then ENTER goes back to the
+cards.  A card typed twice (in full or in 4-letter words) is named,
+and so is a card of another split, as you type it: every card of one
+split begins with the same two words.  Type another card, or R then
+ENTER to start again with card 1.
 
 TO TYPE NO CARDS: put each card in a text file of its own, all in
 one folder (a retyped card, or the card file as it was printed: its

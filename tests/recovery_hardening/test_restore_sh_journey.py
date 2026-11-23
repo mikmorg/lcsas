@@ -954,6 +954,9 @@ def test_typed_share_cards_rebuild_the_password(tmp_path: Path) -> None:
 
 @needs_keyshare
 def test_cards_from_two_splits_or_another_set_start_again(tmp_path: Path) -> None:
+    """Another set's cards (one split of their own) combine, and the
+    password is refused: start again.  A card of another split is named
+    as it is typed (#966 item 7), and the person types another."""
     good, split_id = _shares(GOOD_PW.encode(), 2, 3)
     other, _ = _shares(GOOD_PW.encode(), 2, 3)
     wrong, _ = _shares(b"the-password-of-another-set", 2, 3)
@@ -961,14 +964,97 @@ def test_cards_from_two_splits_or_another_set_start_again(tmp_path: Path) -> Non
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS_ID,
                     LCSAS_ANOTHER_SET="0"),
-               stdin=(f"{good[0]}\n{other[1]}\n"      # two splits
-                      f"{wrong[0]}\n{wrong[1]}\n"     # another set's password
-                      f"{good[1]}\n{good[2]}\n"))
+               stdin=(f"{wrong[0]}\n{wrong[1]}\n"     # another set's password
+                      f"{good[0]}\n{other[1]}\n"      # two splits
+                      f"{good[2]}\n"))
     assert res.returncode == 0, res.stderr
-    assert "These cards could not be combined" in res.stderr
     assert (f"The password rebuilt from these cards was not accepted for {PHOTOS}."
             in res.stderr)
-    assert res.stderr.count("Start again with card 1") == 2
+    assert res.stderr.count("Start again with card 1") == 1
+    assert "Card 2 is not from the same split as card 1" in res.stderr
+    assert "These cards could not be combined" not in res.stderr
+    assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
+
+
+def _four_letters(mnemonic: str) -> str:
+    """The card as lcsas-shares also reads it: each word cut to its
+    first four letters, in capitals."""
+    return " ".join(w[:4].upper() for w in mnemonic.split())
+
+
+@needs_keyshare
+def test_a_card_typed_again_in_other_spelling_is_caught(tmp_path: Path) -> None:
+    """#966 item 7: the same card typed twice, the second time in its
+    words' first four letters (which lcsas-shares reads), passed the
+    "already typed" check, and the two copies could not be combined."""
+    good, split_id = _shares(GOOD_PW.encode(), 2, 3)
+    recovery = _split_sets(tmp_path, split_id)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS_ID,
+                    LCSAS_ANOTHER_SET="0"),
+               stdin=f"{good[0]}\n{_four_letters(good[0])}\n{good[1]}\n")
+    assert res.returncode == 0, res.stderr
+    assert "That is a card you already typed." in res.stderr
+    assert res.stderr.count("Share card 2 of 2") == 2
+    assert "Start again with card 1" not in res.stderr
+    assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
+
+
+@needs_keyshare
+def test_a_card_of_another_split_is_named_and_r_starts_again(tmp_path: Path) -> None:
+    """#966 item 7: card 1 of another split, then the right cards.  Each
+    right card is named as not from card 1's split, showing how each
+    card begins; R starts again with card 1."""
+    good, split_id = _shares(GOOD_PW.encode(), 2, 3)
+    other, _ = _shares(b"another archive", 2, 3)
+    recovery = _split_sets(tmp_path, split_id)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS_ID,
+                    LCSAS_ANOTHER_SET="0"),
+               stdin=f"{other[0]}\n{good[1]}\nR\n{good[0]}\n{good[1]}\n")
+    assert res.returncode == 0, res.stderr
+    begins = " ".join(other[0].split()[:2])
+    assert (f"Card 2 is not from the same split as card 1: the cards of one "
+            f"split all begin with the same two words.\nCard 1 begins "
+            f"'{begins}'") in res.stderr, res.stderr
+    assert "R then ENTER to start again with card 1" in res.stderr
+    assert res.stderr.count("Share card 1 of 2") == 2
+    assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
+
+
+@needs_keyshare
+def test_cards_that_cannot_be_combined_are_named_as_cards(tmp_path: Path) -> None:
+    """#966 item 7: lcsas-shares' lines named the temporary files
+    ("share 1 (/tmp/.../share.LV0V9R): OK").  Here two cards of a
+    3-of-3 split, typed where the set says 2: they cannot be combined,
+    and the lines say "card 1" and "card 2"."""
+    three, split_id = _shares(GOOD_PW.encode(), 3, 3)
+    recovery = _split_sets(tmp_path, split_id)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS_ID,
+                    LCSAS_ANOTHER_SET="0"),
+               stdin=f"{three[0]}\n{three[1]}\nQ\n")
+    assert res.returncode == 77, res.stderr
+    assert "These cards could not be combined" in res.stderr
+    assert "share 1 (card 1): OK" in res.stderr, res.stderr
+    assert "share 2 (card 2): OK" in res.stderr, res.stderr
+    assert "share." not in res.stderr, "a temporary file was named"
+
+
+@needs_keyshare
+def test_after_p_and_a_wrong_password_c_goes_back_to_the_cards(
+        tmp_path: Path) -> None:
+    """#966 item 7: after P and a wrong password there was no way back to
+    the share cards.  C goes back to them."""
+    good, split_id = _shares(GOOD_PW.encode(), 2, 3)
+    recovery = _split_sets(tmp_path, split_id)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_BACKUP_SET=PHOTOS_ID,
+                    LCSAS_ANOTHER_SET="0"),
+               stdin=f"P\nnot-it\nC\n{good[0]}\n{good[2]}\n")
+    assert res.returncode == 0, res.stderr
+    assert "C then ENTER to type the share cards instead" in res.stderr
+    assert res.stderr.count("Share card 1 of 2") == 2
     assert _runs(tmp_path)[-1].endswith(f"pw={GOOD_PW}")
 
 

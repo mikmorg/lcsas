@@ -709,14 +709,10 @@ main(int argc, char **argv)
     {
         lcsas_progress progress;
         int tree_rc;
-        /* total_blob_hint is the loaded index size -- an upper bound
-         * on what this snapshot can reference.  We surface that
-         * explicitly so the heir isn't misled by the denominator. */
-        lcsas_progress_init(&progress, (unsigned long long)ix.count);
-        fprintf(stderr,
-                "[lcsas-restore] progress: 0/%llu blobs, 0 MB"
-                " (denominator is index size, not snapshot subset)\n",
-                progress.total_blob_hint);
+        /* #966: no denominator.  The index size it showed is not the
+         * snapshot's, so a finished restore ended below 100 %. */
+        lcsas_progress_init(&progress);
+        fputs("[lcsas-restore] progress: 0 blobs, 0 MB\n", stderr);
 
         tree_rc = lcsas_tree_restore(repo_path, &mk, &ix,
                                      snaps.items[sidx].tree_id_hex,

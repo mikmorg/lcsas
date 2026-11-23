@@ -557,7 +557,8 @@ LCSAS_PROGRESS
             Set LCSAS_PROGRESS=0 to silence it.  Any other value
             (including unset) enables it.  Tier 1 does not read this
             variable: lcsas-restore always prints its
-            "[lcsas-restore] progress: N/M blobs, X MB" lines.
+            "[lcsas-restore] progress: N blobs, X MB" lines (no
+            total: #966).
   Why:      Opt-OUT.  On a slow disc (~1 MB/s) a silent restore is
             indistinguishable from a frozen process.  Forgetting this
             knob means you cannot tell if the restore is

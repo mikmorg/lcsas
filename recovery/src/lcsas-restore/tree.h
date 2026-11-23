@@ -27,19 +27,18 @@ extern int lcsas_tree_max_depth;
  * A progress line is emitted to stderr each time *either* threshold
  * (blobs_per_tick or bytes_per_tick) is crossed since the last tick.
  *
- * total_blob_hint is purely informational -- the denominator shown in
- * "N/M" lines.  We use the loaded index size (lcsas_blob_index.count)
- * as the hint; it overstates by including blobs the snapshot does not
- * reference, but a pre-walk would double tree-blob I/O for no real
- * UX gain (this exists to reassure the heir that work is happening,
- * not to be a precise ETA).
+ * A line counts the blobs done, with no total (#966): the size of the
+ * index, shown before, is not the snapshot's, so a finished restore
+ * ended below 100 %; and counting the snapshot's blobs first would
+ * read every tree blob twice, some of them on discs not in a drive.
+ * This exists to reassure the heir that work is happening, not to be
+ * an ETA.
  *
  * Zero-init via {0} disables progress reporting.  Field `enabled` must
  * be set to 1 explicitly to turn output on.
  */
 typedef struct {
     int enabled;
-    unsigned long long total_blob_hint;
     unsigned long long blobs_done;
     unsigned long long bytes_done;
     unsigned long long last_tick_blobs;
@@ -48,11 +47,11 @@ typedef struct {
     unsigned long long bytes_per_tick;  /* default 1<<20 */
 } lcsas_progress;
 
-void lcsas_progress_init(lcsas_progress *p, unsigned long long total_hint);
+void lcsas_progress_init(lcsas_progress *p);
 
 /*
  * Record one decrypted/decompressed blob (`blob_len` bytes) towards
- * progress and emit a `[lcsas-restore] progress: N/M blobs, X MB`
+ * progress and emit a `[lcsas-restore] progress: N blobs, X MB`
  * stderr line if a tick threshold has been crossed.  Safe to call with
  * p == NULL (no-op) or p->enabled == 0.
  */

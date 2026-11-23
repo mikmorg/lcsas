@@ -8,15 +8,18 @@ restore had no way to tell whether the binary was making progress or
 had wedged on a stalled read.
 
 The fix: ``lcsas-restore`` now emits ``[lcsas-restore] progress:
-N/M blobs, X MB`` to stderr at restore start, every ~16 blobs OR
+N blobs, X MB`` to stderr at restore start, every ~16 blobs OR
 ~1 MB of decoded data (whichever fires first), and at restore end.
+(#966: no denominator.  It was the size of the whole index, not of
+the snapshot, so a finished restore ended below 100 %.)
 
 This test pins three properties of that contract:
 
   * ``progress:`` lines appear in stderr for a restore that processes
     more than the per-tick threshold (>= 32 blobs).
   * At least one progress line matches the canonical pattern
-    ``\\[lcsas-restore\\] progress: \\d+/\\d+ blobs, \\d+ MB``.
+    ``\\[lcsas-restore\\] progress: \\d+ blobs, \\d+ MB``, and none
+    has a denominator (#966).
   * Progress is interleaved with the restore (a progress line shows
     up *before* "restore complete"), not just dumped at the end —
     otherwise the anti-freeze UX value is zero.
@@ -62,7 +65,7 @@ sys.path.insert(0, str(RECOVERY / "tests"))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 PROGRESS_RE = re.compile(
-    r"\[lcsas-restore\] progress: (\d+)/(\d+) blobs, (\d+) MB"
+    r"\[lcsas-restore\] progress: (\d+) blobs, (\d+) MB"
 )
 
 
@@ -126,12 +129,9 @@ def test_progress_lines_emitted() -> None:
             f"no anti-freeze signal during long restores.\nstderr:\n"
             f"{res.stderr}"
         )
-        # Sanity: progress denominator is non-zero (so N/M is informative).
-        for done, total, _mb in matches:
-            assert int(total) > 0, (
-                f"progress denominator is 0 -- the format string lost the "
-                f"index size: {done}/{total}"
-            )
+        # #966: no denominator.  The index size it showed is not the
+        # snapshot's, so a finished restore ended below 100 %.
+        assert not re.search(r"progress: \d+/\d+", res.stderr), res.stderr
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

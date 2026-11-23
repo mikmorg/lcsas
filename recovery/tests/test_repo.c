@@ -878,7 +878,7 @@ main(void)
         {
             lcsas_progress prog;
             char target2[] = "/tmp/lcsas_test_repo_target2_XXXXXX";
-            lcsas_progress_init(&prog, ix.count);
+            lcsas_progress_init(&prog);
             prog.enabled = 1;
             if (mkdtemp(target2)) {
                 lcsas_tree_restore(repo, &mk, &ix, FIXTURE_TREE_BLOB_HEX,
