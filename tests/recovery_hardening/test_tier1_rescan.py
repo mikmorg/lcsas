@@ -258,6 +258,8 @@ def test_tier1_refreshes_catalog_on_retry() -> None:
         b_packs = [(f.name, f.stat().st_size)
                    for f in sorted((disc_b / "data").iterdir())]
 
+        # #950: the catalogs' backup set is the --repo folder's name,
+        # as on a disc (metadata/<id>): tier 1 uses no other catalog.
         def _populate_catalog(path: Path, with_b: bool) -> None:
             conn = sqlite3.connect(str(path))
             conn.row_factory = sqlite3.Row
@@ -265,9 +267,9 @@ def test_tier1_refreshes_catalog_on_retry() -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO repositories "
                 "(repo_id, name, mirror_path) VALUES (?, ?, ?)",
-                ("repo-rescan", "rescan", "/srv/rescan"),
+                (repo.name, "rescan", "/srv/rescan"),
             )
-            a_rows = [register_pack(conn, sha, size, "repo-rescan")
+            a_rows = [register_pack(conn, sha, size, repo.name)
                       for sha, size in a_packs]
             vol_a = create_volume(
                 conn, label="vol-RESCAN-A", uuid="uuid-rescan-a",
@@ -279,7 +281,7 @@ def test_tier1_refreshes_catalog_on_retry() -> None:
                 commit=False,
             )
             if with_b:
-                b_rows = [register_pack(conn, sha, size, "repo-rescan")
+                b_rows = [register_pack(conn, sha, size, repo.name)
                           for sha, size in b_packs]
                 vol_b = create_volume(
                     conn, label="vol-FRESH-B", uuid="uuid-fresh-b",
@@ -421,6 +423,9 @@ def test_tier1_does_not_replace_caller_catalog_with_older_disc_catalog() -> None
         b_packs = [(f.name, f.stat().st_size)
                    for f in sorted((disc_b / "data").iterdir())]
 
+        # #950: the backup set is the --repo folder's name.  Both
+        # catalogs have the same label mark (0) and list two volumes,
+        # so the newer file wins.
         def _populate(path: Path, label_b: str) -> None:
             conn = sqlite3.connect(str(path))
             conn.row_factory = sqlite3.Row
@@ -428,11 +433,11 @@ def test_tier1_does_not_replace_caller_catalog_with_older_disc_catalog() -> None
             conn.execute(
                 "INSERT OR IGNORE INTO repositories "
                 "(repo_id, name, mirror_path) VALUES (?, ?, ?)",
-                ("repo-floor", "floor", "/srv/floor"),
+                (repo.name, "floor", "/srv/floor"),
             )
-            a_rows = [register_pack(conn, sha, size, "repo-floor")
+            a_rows = [register_pack(conn, sha, size, repo.name)
                       for sha, size in a_packs]
-            b_rows = [register_pack(conn, sha, size, "repo-floor")
+            b_rows = [register_pack(conn, sha, size, repo.name)
                       for sha, size in b_packs]
             vol_a = create_volume(
                 conn, label="vol-FLOOR-A", uuid="uuid-floor-a",

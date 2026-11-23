@@ -995,6 +995,7 @@ class PurePythonRestorer:
         meta_disc: Path | None = None,
         prompt_in: Callable[[], str] | None = None,
         prompt_out: Callable[[str], None] | None = None,
+        repo_id: str | None = None,
     ) -> None:
         """Initialize the restorer.
 
@@ -1075,6 +1076,11 @@ class PurePythonRestorer:
                 ("" at the end of input).  ``None`` (the default): stdin.
             prompt_out: Writes the disc prompt and the lines around it.
                 ``None`` (the default): stderr.
+            repo_id: The backup set being restored (#950: the reader
+                passes its ``--repo`` folder's name, as in
+                ``metadata/<id>``).  A disc catalog with no pack of it
+                is another archive's and is not used for the prompt.
+                ``None`` (the default): every catalog is used.
         """
         self.repo_path = repo_path
         self._strict = strict
@@ -1122,6 +1128,7 @@ class PurePythonRestorer:
             log=lambda msg: _log(msg),
             prompt_in=prompt_in,
             prompt_out=prompt_out,
+            repo_id=repo_id,
         )
         # The search is told this repository's pack ids before its
         # first read (see _read_blob).

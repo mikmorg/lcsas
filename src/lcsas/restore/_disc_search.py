@@ -403,6 +403,7 @@ class DiscSearch:
         prompt_in: Callable[[], str] | None = None,
         prompt_out: Callable[[str], None] | None = None,
         fs: _DiscFs | None = None,
+        repo_id: str | None = None,
     ) -> None:
         """Set up the search.
 
@@ -430,6 +431,10 @@ class DiscSearch:
                 Default: stderr, flushed.
             fs: Every filesystem touch of the search goes through it
                 (#885).  Default: the real filesystem.
+            repo_id: The backup set being restored (#950).  A catalog
+                with no pack of it (``packs.repo_id``) is another
+                archive's: it is not used for the prompt, as tier 1
+                does not use it.  ``None``: every catalog is used.
         """
         self._fs = fs if fs is not None else _DiscFs()
         self.interactive = interactive
@@ -450,6 +455,11 @@ class DiscSearch:
         self._catalog_copies: dict[str, Path] = {}
         self._catalog_copy_dir: Path | None = None
         self._newest_known_label: str | None = None
+        # #950: the backup set; where each copy came from, and the
+        # catalogs already named as another archive's (once each).
+        self._repo_id = repo_id
+        self._copy_origin: dict[Path, Path] = {}
+        self._foreign_named: set[str] = set()
 
         # Discs found one level below a root (refreshed on a miss), and
         # the meta disc, which is skipped while it is mounted.
@@ -909,12 +919,15 @@ class DiscSearch:
         dst = self._catalog_copy_dir / f"{digest[:16]}.db"
         if self._fs.write_file(dst, data):
             self._catalog_copies[digest] = dst
+            self._copy_origin[dst] = path
 
     def _query_catalog(
         self, path: Path, pack_id: str,
     ) -> _CatalogAnswer | None:
         """(volumes holding the pack, pack known, every volume of the
-        catalog), or None when the catalog cannot be opened or read.
+        catalog), or None when the catalog cannot be opened or read, or
+        does not know the backup set being restored (#950: another
+        archive's catalog, named once).
         Each volume is ``(volume_id, label, status)``, newest first,
         DESTROYED ones included: ``_offered_labels`` and
         ``_newest_disc`` apply the rules.
@@ -925,6 +938,18 @@ class DiscSearch:
         if conn is None:
             return None
         try:
+            if self._repo_id is not None and conn.execute(
+                "SELECT 1 FROM packs WHERE repo_id = ? LIMIT 1",
+                (self._repo_id,),
+            ).fetchone() is None:
+                shown = str(self._copy_origin.get(path, path))
+                if shown not in self._foreign_named:
+                    self._foreign_named.add(shown)
+                    self._log(
+                        f"The catalog {shown} does not know backup set "
+                        f"{self._repo_id}: it is another archive's catalog, "
+                        "so it is not used.")
+                return None
             # Three-table join: volume_packs.pack_id is the INT FK, not
             # the sha256 hex we have in hand -- so we go through
             # packs.sha256.  Newest volume first, as tier 1's

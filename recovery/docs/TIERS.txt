@@ -435,10 +435,20 @@ owner decision 2026-11-19):
     this pack ID)", and how to pick an older snapshot.
 
 Tier 1 reads one catalog (lcsas_catalog_volumes_for_pack in
-recovery/src/lcsas-restore/catalog.c).  Tier 3 reads every catalog it
-has seen in the run (#635) and names the volumes any of them lists by
-the same rule; a volume that any of them records as DESTROYED is not
-named, since a destroyed volume never comes back.
+recovery/src/lcsas-restore/catalog.c): the best of those in reach, the
+one the scripts pass (--catalog) and each disc's, judged by what is in
+them, not by file time (#950).  A catalog is used only when it can be
+read through and knows the backup set being restored (it has a pack
+whose repo_id is the --repo folder's name, metadata/<id>); a catalog of
+another archive is never used, and with the pack cache on its disc is
+not copied either (one line says it belongs to another archive).  Of
+the usable ones, the one with the highest label mark (the highest
+label number it has issued, PRAGMA user_version) wins, then the one
+listing more volumes, then the newer file.  An empty file is called
+empty.  Tier 3 reads every catalog it has seen in the run (#635) that
+knows the backup set, and names the volumes any of them lists by the
+same rule; a volume that any of them records as DESTROYED is not named,
+since a destroyed volume never comes back.
 
 NOTE for ALREADY-BURNED discs: before rc11, tier 1 listed the discs
 oldest volume first; tier 3 also named DESTROYED volumes and listed the

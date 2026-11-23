@@ -944,7 +944,7 @@ def test_fixture_meta_disc_excludes_path(tmp_path: Path) -> None:
 def test_fixture_verbose_catalog_open_warn(tmp_path: Path) -> None:
     """--catalog with a path that lcsas_catalog_open can't open (without
     --list-pending-packs which exits early) must print the WARN message
-    in main.c line 265 — non-fatal, restore continues."""
+    in main.c — non-fatal, restore continues."""
     repo = _fixture_repo()
     if repo is None:
         pytest.skip("fixture repo not generated; run gen_fixture.py")
@@ -961,7 +961,53 @@ def test_fixture_verbose_catalog_open_warn(tmp_path: Path) -> None:
     )
     assert res.returncode == 0, res.stderr
     err = res.stderr
-    assert "WARN" in err and "cannot open catalog" in err, err
+    assert "WARN: not using the catalog" in err, err
+
+
+def test_fixture_verbose_describes_the_catalog_taken(tmp_path: Path) -> None:
+    """#950: --catalog is taken when it knows the backup set (the
+    --repo folder's name); --verbose then describes it.  One of another
+    archive is not taken, and says why."""
+    import sqlite3
+
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    for set_id, taken in ((repo.name, True), ("another-set", False)):
+        db_path = tmp_path / f"{set_id}.db"
+        db = sqlite3.connect(db_path)
+        db.executescript(f"""
+            PRAGMA user_version = 3;
+            CREATE TABLE schema_version (version INTEGER);
+            INSERT INTO schema_version VALUES (10);
+            CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT,
+              size_bytes INTEGER, repo_id TEXT);
+            INSERT INTO packs VALUES (1, 'aa', 10, '{set_id}');
+            CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY,
+              label TEXT, status TEXT);
+            CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER);
+            CREATE TABLE snapshots (snapshot_id TEXT);
+        """)
+        db.commit()
+        db.close()
+        res = _run(
+            bin_path,
+            "--repo", str(repo),
+            "--password-file", str(pwfile),
+            "--restore-folder", str(tmp_path / f"restored-{set_id}"),
+            "--catalog", str(db_path),
+            "--verbose",
+            timeout=10,
+        )
+        assert res.returncode == 0, res.stderr
+        if taken:
+            assert "[catalog] schema v10" in res.stderr, res.stderr
+            assert "WARN: not using" not in res.stderr, res.stderr
+        else:
+            assert "another archive's catalog" in res.stderr, res.stderr
+            assert "WARN: not using the catalog" in res.stderr, res.stderr
 
 
 def test_fixture_verbose_pack_cache_logs(tmp_path: Path) -> None:

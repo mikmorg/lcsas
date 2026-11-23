@@ -132,6 +132,27 @@ ANY = "any"
 
 
 @dataclass(frozen=True)
+class DiscCat:
+    """A data disc in the mount folder that holds only its
+    ``catalog.db`` (#950): which catalog a reader takes is the case."""
+
+    #: Its folder in the mount folder.
+    name: str
+    #: The catalog's volumes, as for ``Faults.catalog``.
+    vols: tuple[Vol, ...]
+    #: Its label mark (``PRAGMA user_version``).
+    mark: int
+    #: How many seconds older than the newest the file's time is.
+    age: int = 0
+    #: False: the catalog has no record of the missing packs.
+    knows_pack: bool = True
+    #: Another archive's disc: its packs belong to another backup set.
+    foreign: bool = False
+    #: Cut the file to this many bytes.
+    cut_to: int | None = None
+
+
+@dataclass(frozen=True)
 class Faults:
     """What goes wrong (or differs from a plain restore) in a case."""
 
@@ -170,6 +191,12 @@ class Faults:
     catalog: tuple[Vol, ...] | None = None
     #: False: the catalog has those volumes but no record of the packs.
     catalog_knows_pack: bool = True
+    #: Discs in a mount folder the readers search, each holding only a
+    #: catalog (#950).
+    discs: tuple[DiscCat, ...] = ()
+    #: The disc whose catalog is passed with ``--catalog``, as the
+    #: scripts pass the one with the newest file time.
+    catalog_from: str | None = None
 
 
 @dataclass(frozen=True)
@@ -276,6 +303,28 @@ def _disc_prompt(name: str, vols: tuple[Vol, ...],
         expect=Outcome(exit=ReaderExit.READER_QUIT, restored=ANY,
                        discs=named),
         replaces="new (#896)",
+    )
+
+
+_T1 = "LCSAS_TEST_TINY_2026_0001"
+_T2 = "LCSAS_TEST_TINY_2026_0002"
+_T3 = "LCSAS_TEST_TINY_2026_0003"
+_OTHER = "LCSAS_TEST_TINY_2026_0009"
+
+
+def _catalog_choice(name: str, discs: tuple[DiscCat, ...], passed: str,
+                    named: tuple[str, ...] | str) -> Case:
+    """#950: the pack of ``b`` is on no disc in reach; *discs* hold
+    catalogs, and the one on *passed* is given with ``--catalog``."""
+    return Case(
+        name=f"catalog choice: {name}",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(missing=(b"b",), answers=b"q\n", discs=discs,
+                      catalog_from=passed),
+        expect=Outcome(exit=ReaderExit.READER_QUIT, restored=ANY,
+                       discs=named),
+        replaces="new (#950)",
     )
 
 
@@ -677,6 +726,28 @@ CASES: list[Case] = [
                  (Vol(_V1, "DESTROYED", "DESTROYED"),), NONE_LISTED),
     _disc_prompt("pack unknown to the catalog", (Vol(_V1), Vol(_V2)),
                  NO_RECORD, knows=False),
+    # #950: which catalog a reader takes, when several are in reach.
+    # The scripts pass the one with the newest file time; tier 1 used
+    # it, and never one older.  The pack is on a disc not in a drive.
+    _catalog_choice(
+        "the newest catalog is cut short, an older good one in reach",
+        (DiscCat(_T2, (Vol(_T1), Vol(_T2, holds=False)), mark=2, age=100),
+         DiscCat(_T3, (Vol(_T1), Vol(_T2, holds=False),
+                       Vol(_T3, holds=False)), mark=3, cut_to=5000)),
+        _T3, (_T1,)),
+    _catalog_choice(
+        "an older disc's catalog has the newest file time",
+        (DiscCat(_T1, (Vol(_T1, holds=False),), mark=1,
+                 knows_pack=False),
+         DiscCat(_T3, (Vol(_T1, holds=False), Vol(_T2),
+                       Vol(_T3, holds=False)), mark=3, age=100)),
+        _T1, (_T2,)),
+    _catalog_choice(
+        "a disc of another archive has the newest catalog",
+        (DiscCat(_OTHER, (Vol(_OTHER),), mark=9, foreign=True,
+                 knows_pack=False),
+         DiscCat(_T2, (Vol(_T1), Vol(_T2)), mark=2, age=100)),
+        _OTHER, (_T2, _T1)),
     Case(
         name="usage error",
         tree={b"f": File(b"f\n")},
@@ -951,10 +1022,11 @@ def _small_tmpfs(mnt: Path):  # type: ignore[no-untyped-def]
 def _command(reader: str, repo: Path, target: Path, pwfile: Path,
              snapshot: str | None, faults: Faults, empty: Path,
              work: Path) -> list[str]:
+    mounts = work / "mnt" if faults.discs else empty
     if reader == "tier1":
         cmd = [str(tier1_binary()), "--repo", str(repo),
                "--password-file", str(pwfile),
-               "--mount-parent", str(empty)]
+               "--mount-parent", str(mounts)]
         if faults.answers is not None:
             cmd += ["--interactive", "on", "--auto-mount", "off"]
         else:
@@ -963,13 +1035,36 @@ def _command(reader: str, repo: Path, target: Path, pwfile: Path,
         cmd = [sys.executable, "-I", str(tier3_script(work.parent)),
                "--repo", str(repo), "--password-file", str(pwfile),
                "--interactive", "on" if faults.answers is not None else "off"]
+        if faults.discs:
+            cmd += ["--mount-point", str(repo / "data"),
+                    "--mount-point", str(mounts)]
     if faults.catalog is not None:
         cmd += ["--catalog", str(work / "catalog.db")]
+    if faults.catalog_from is not None:
+        cmd += ["--catalog", str(mounts / faults.catalog_from / "catalog.db")]
     if snapshot:
         cmd += ["--snapshot", snapshot]
     if not faults.usage_error:
         cmd += ["--restore-folder", str(target)]
     return cmd
+
+
+def _write_disc_catalogs(discs: tuple[DiscCat, ...], packs: list[str],
+                         mounts: Path, repo_id: str) -> None:
+    """Each disc of *discs* as a folder in *mounts* holding its catalog,
+    whose file times are ``age`` seconds apart (#950)."""
+    newest = 1_700_000_000
+    for disc in discs:
+        folder = mounts / disc.name
+        folder.mkdir(parents=True)
+        path = folder / "catalog.db"
+        write_catalog(path, packs, disc.vols, knows_pack=disc.knows_pack,
+                      repo_id="another-archive" if disc.foreign else repo_id,
+                      mark=disc.mark)
+        if disc.cut_to is not None:
+            assert path.stat().st_size > disc.cut_to, "the cut is a cut"
+            os.truncate(path, disc.cut_to)
+        os.utime(path, (newest - disc.age, newest - disc.age))
 
 
 def _run(cmd: list[str], stdin: bytes) -> subprocess.CompletedProcess[bytes]:
@@ -1008,7 +1103,10 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
     if case.faults.catalog is not None:
         write_catalog(work / "catalog.db", built.missing_packs,
                       case.faults.catalog,
-                      knows_pack=case.faults.catalog_knows_pack)
+                      knows_pack=case.faults.catalog_knows_pack,
+                      repo_id=repo.name)
+    _write_disc_catalogs(case.faults.discs, built.missing_packs,
+                         work / "mnt", repo.name)
     _reset_outside(built.outside)
     outside_before = walk(built.outside)
 
@@ -1234,7 +1332,8 @@ def disagreements(case: Case, outcomes: Mapping[str, Outcome]) -> list[str]:
     if o1.wrote_outside != o2.wrote_outside:
         out.append(f"wrote outside: {r1} {o1.wrote_outside}, "
                    f"{r2} {o2.wrote_outside}")
-    if case.faults.catalog is not None and o1.discs != o2.discs:
+    if ((case.faults.catalog is not None or case.faults.discs)
+            and o1.discs != o2.discs):
         out.append(f"discs named: {r1} {o1.discs!r}, {r2} {o2.discs!r}")
     return out
 

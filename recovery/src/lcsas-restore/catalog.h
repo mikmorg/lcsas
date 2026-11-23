@@ -58,6 +58,26 @@ void lcsas_catalog_close(lcsas_catalog *c);
 int lcsas_catalog_schema_version(lcsas_catalog *c);
 
 /*
+ * #950: what tier 1 ranks a catalog by, from the frozen surface plus
+ * the label mark.
+ *
+ * lcsas_catalog_knows_repo: 1 when the catalog has a pack of backup set
+ * `repo_id` (packs.repo_id), 0 when it has none (a catalog of another
+ * archive), -1 when it cannot be asked.
+ *
+ * lcsas_catalog_label_mark: PRAGMA user_version, the highest label
+ * number the catalog has issued (#676).  It only goes up: stage raises
+ * it, session abort does not lower it, catalog rebuild keeps the
+ * highest it reads.  -1 when it cannot be read.
+ *
+ * lcsas_catalog_volume_count: how many volumes it lists (every row,
+ * DESTROYED ones too); -1 when it cannot be read.
+ */
+int lcsas_catalog_knows_repo(lcsas_catalog *c, const char *repo_id);
+long long lcsas_catalog_label_mark(lcsas_catalog *c);
+long long lcsas_catalog_volume_count(lcsas_catalog *c);
+
+/*
  * Look up a pack by its SHA-256 hex string.  Tri-state return:
  *    0  = found (out is populated)
  *    1  = not found (a genuine miss against a readable v5 surface)

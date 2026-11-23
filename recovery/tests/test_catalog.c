@@ -241,6 +241,60 @@ test_pending_unreadable(void)
 }
 
 /*
+ * #950: what tier 1 ranks a catalog by: whether it knows a backup set,
+ * its label mark (PRAGMA user_version) and how many volumes it lists;
+ * -1 from each when the catalog cannot be asked (no packs or volumes
+ * table).
+ */
+static void
+test_rank_inputs(void)
+{
+    const char *p = "/tmp/lcsas_catalog_test_rank.db";
+    lcsas_catalog *c;
+
+    if (make_db(p, "PRAGMA user_version = 42;" V10_TABLES
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES"
+            "  ('p1', 10, 'ours');"
+            "INSERT INTO volumes (label, status) VALUES ('A_0001', 'VERIFIED'),"
+            "  ('B_0002', 'DESTROYED'), ('C_0003', 'STAGING');") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #950: rank fixture\n");
+        fails++;
+        return;
+    }
+    if (lcsas_catalog_knows_repo(c, "ours") != 1
+            || lcsas_catalog_knows_repo(c, "theirs") != 0
+            || lcsas_catalog_label_mark(c) != 42
+            || lcsas_catalog_volume_count(c) != 3) {
+        fprintf(stderr, "FAIL #950: knows %d/%d, mark %lld, volumes %lld "
+                "(want 1/0, 42, 3)\n",
+                lcsas_catalog_knows_repo(c, "ours"),
+                lcsas_catalog_knows_repo(c, "theirs"),
+                lcsas_catalog_label_mark(c),
+                lcsas_catalog_volume_count(c));
+        fails++;
+    }
+    lcsas_catalog_close(c);
+
+    if (make_db(p, "CREATE TABLE schema_version (version INTEGER);"
+                   "INSERT INTO schema_version VALUES (99);") != 0
+            || !(c = lcsas_catalog_open(p))) {
+        fprintf(stderr, "FAIL #950: rank skew fixture\n");
+        fails++;
+        return;
+    }
+    if (lcsas_catalog_knows_repo(c, "ours") != -1
+            || lcsas_catalog_volume_count(c) != -1
+            || lcsas_catalog_label_mark(c) != 0) {
+        fprintf(stderr, "FAIL #950: a catalog with no packs or volumes "
+                "table: want -1, -1 and mark 0\n");
+        fails++;
+    }
+    lcsas_catalog_close(c);
+    unlink(p);
+}
+
+/*
  * #961: the catalog's version is its highest schema_version row.  A
  * master migrated from v5 to v10 keeps a row for each step (5..10); the
  * first row is 5.  An empty table is no version at all.
@@ -850,6 +904,7 @@ int main(void)
     test_pending_counts_each_pack_once();
     test_pending_unreadable();
     test_schema_version_is_the_highest_row();
+    test_rank_inputs();
     test_volumes_read_frozen_columns_only();
     test_wal_catalog_leaves_nothing_behind();
 

@@ -40,6 +40,7 @@
 /* Forward declarations for helpers defined further below. */
 static int copy_file(const char *src, const char *dst, const char *want_hex);
 static void drain_disc(lcsas_disc_locator *l, const char *root);
+static void disc_name(const char *root, char *out, size_t cap);
 
 /*
  * A disc root whose volume_info.json has been announced (#456).  The
@@ -59,10 +60,11 @@ struct lcsas_seen_volume {
 };
 
 /*
- * A disc, or a disc's catalog, the locator has given up on for this run
- * (#786, #788).  `path` is the disc root or the catalog file; the
- * numbers identify the disc that was there, so another disc mounted at
- * the same path is not given up on with it.
+ * A disc the drain has given up on for this run (#786), or a disc's
+ * catalog the locator has looked into (#788, #950).  `path` is the disc
+ * root or the catalog file; the numbers identify the disc that was
+ * there, so another disc mounted at the same path is looked at afresh.
+ * `verdict` is what was found in a catalog (CAT_*).
  */
 struct lcsas_disc_memo {
     char              *path;
@@ -72,7 +74,15 @@ struct lcsas_disc_memo {
     long long          size;
     long long          info_mtime;   /* volume_info.json, or -1 */
     long long          info_size;
+    int                verdict;
 };
+
+/* What consider_catalog() found in a catalog (#950). */
+#define CAT_UNSEEN   (-1)  /* not there, or not looked into this time */
+#define CAT_TAKEN    0     /* usable, and taken for the hints */
+#define CAT_PASSED   1     /* usable, but ranked below the one in use */
+#define CAT_BAD      2     /* empty, damaged, cut short or unqueryable */
+#define CAT_FOREIGN  3     /* it does not know the backup set */
 
 /*
  * volume_info.json is a few hundred bytes plus ~70 per pack in its
@@ -103,7 +113,12 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->cap_discovered      = 0;
     l->owned_catalog       = NULL;
     l->owned_catalog_path  = NULL;
-    l->owned_catalog_mtime = 0;
+    l->owned_path_buf[0]   = '\0';
+    l->owned_mark          = 0;
+    l->owned_volumes       = 0;
+    l->owned_mtime         = 0;
+    l->repo_id[0]          = '\0';
+    l->has_repo_id         = 0;
     l->cache_dir           = NULL;
     /* #791: no longer read from LCSAS_DRAIN_CHUNK_PACKS, a test hook
      * that shipped in every binary; a test sets the field directly. */
@@ -112,8 +127,9 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->pack_mismatch_warned = 0;
     l->drain_skips         = NULL;
     l->n_drain_skips       = 0;
-    l->bad_catalogs        = NULL;
-    l->n_bad_catalogs      = 0;
+    l->seen_catalogs       = NULL;
+    l->n_seen_catalogs     = 0;
+    l->catalog_evaluations = 0;
     l->seen_volumes        = NULL;
     l->n_seen_volumes      = 0;
     l->cap_seen_volumes    = 0;
@@ -175,13 +191,18 @@ lcsas_disc_locator_set_mount_parents(lcsas_disc_locator *l,
 }
 
 void
-lcsas_disc_locator_set_catalog_floor(lcsas_disc_locator *l,
-                                     const char *catalog_path)
+lcsas_disc_locator_set_repo(lcsas_disc_locator *l, const char *repo_path)
 {
-    struct stat st;
-    if (!catalog_path || !*catalog_path) return;
-    if (stat(catalog_path, &st) != 0) return;
-    l->owned_catalog_mtime = (long long)st.st_mtime;
+    size_t end = strlen(repo_path);
+    size_t start;
+
+    while (end > 1 && LCSAS_IS_SEP(repo_path[end - 1])) end--;
+    start = end;
+    while (start > 0 && !LCSAS_IS_SEP(repo_path[start - 1])) start--;
+    if (end - start >= sizeof l->repo_id) end = start + sizeof l->repo_id - 1;
+    memcpy(l->repo_id, repo_path + start, end - start);
+    l->repo_id[end - start] = '\0';
+    l->has_repo_id = 1;
 }
 
 /*
@@ -217,19 +238,17 @@ lcsas_disc_locator_free(lcsas_disc_locator *l)
         lcsas_catalog_close(l->owned_catalog);
         l->owned_catalog = NULL;
     }
-    free(l->owned_catalog_path);
-    l->owned_catalog_path  = NULL;
-    l->owned_catalog_mtime = 0;
+    l->owned_catalog_path = NULL;
     free(l->cache_dir);
     l->cache_dir = NULL;
     for (i = 0; i < l->n_drain_skips; i++) free(l->drain_skips[i].path);
     free(l->drain_skips);
     l->drain_skips   = NULL;
     l->n_drain_skips = 0;
-    for (i = 0; i < l->n_bad_catalogs; i++) free(l->bad_catalogs[i].path);
-    free(l->bad_catalogs);
-    l->bad_catalogs   = NULL;
-    l->n_bad_catalogs = 0;
+    for (i = 0; i < l->n_seen_catalogs; i++) free(l->seen_catalogs[i].path);
+    free(l->seen_catalogs);
+    l->seen_catalogs   = NULL;
+    l->n_seen_catalogs = 0;
 }
 
 /*
@@ -264,10 +283,10 @@ memo_identity(const char *path, const char *info_root,
     return 0;
 }
 
-/* Is `m` (path and identity) in the list? */
-static int
-memo_has(const struct lcsas_disc_memo *list, size_t n,
-         const char *path, const struct lcsas_disc_memo *m)
+/* The entry of the list for `m` (path and identity), or NULL. */
+static const struct lcsas_disc_memo *
+memo_find(const struct lcsas_disc_memo *list, size_t n,
+          const char *path, const struct lcsas_disc_memo *m)
 {
     size_t i;
     for (i = 0; i < n; i++) {
@@ -276,9 +295,9 @@ memo_has(const struct lcsas_disc_memo *list, size_t n,
                 && list[i].mtime == m->mtime && list[i].size == m->size
                 && list[i].info_mtime == m->info_mtime
                 && list[i].info_size == m->info_size)
-            return 1;
+            return &list[i];
     }
-    return 0;
+    return NULL;
 }
 
 /* Add `m` for `path` to the list (grown by one).  Out of memory: not
@@ -404,112 +423,142 @@ push_discovered(lcsas_disc_locator *l, const char *path)
 }
 
 /*
- * Open the catalog at `open_path` and check it can be read through
- * (#788).  Returns the handle, or NULL after one warning naming
- * `shown` (the catalog on the disc) when it cannot.
- */
-static lcsas_catalog *
-open_checked_catalog(const char *open_path, const char *shown)
-{
-    lcsas_catalog *cat = lcsas_catalog_open(open_path);
-    if (cat && lcsas_catalog_check(cat) == 0) return cat;
-    if (cat) lcsas_catalog_close(cat);
-    fprintf(stderr,
-            "[lcsas-restore] WARNING: the catalog %s is damaged or cut "
-            "short; keeping the catalog already in use.\n", shown);
-    return NULL;
-}
-
-/*
- * Consider `path` as a potentially-fresher catalog.db.  If its mtime
- * beats whatever the locator has previously opened, and it can be read
- * through, swap it in.
+ * #950: look into the catalog at `path` (`mtime`: its file time) and
+ * take it when it is usable and ranks above the one in use.  Returns
+ * what was found (CAT_*).
  *
  * To avoid pinning the underlying mount via SQLite's persistent file
  * handle (which would block `umount /mnt` between disc swaps), we
  * **copy the catalog into the cache dir** and open the copy.  The
  * original is touched only during the copy.  Fallback when no cache
- * dir is configured: open the original in-place (legacy behaviour;
- * the heir gets the mount-busy friction).
+ * dir is configured, or the copy fails: open the original in place
+ * (the heir gets the mount-busy friction).  On Windows a catalog is
+ * never opened in place: it would hold the drive, and Windows would
+ * not eject the disc.
  *
  * Issue #788: the candidate is checked (lcsas_catalog_check) BEFORE
  * the catalog in use is touched.  The new copy is made beside the one
- * in use (".new"), checked, and takes its place only then; a damaged
- * or cut-short catalog leaves the one in use open, and is remembered
- * (path and identity), so it is neither copied nor warned about again
- * on every rescan.  It does not raise the mtime floor: a good catalog
- * of in-between age can still be taken.  Windows can neither delete
- * nor rename over an open file, so the checked copy is closed, and the
- * one in use closed, just before the rename.
+ * in use (".new"), checked, and takes its place only when it is taken.
+ * A catalog that is not taken leaves the one in use open.  Windows can
+ * neither delete nor rename over an open file, so the checked copy is
+ * closed, and the one in use closed, just before the rename.
  */
-static void
-consider_catalog(lcsas_disc_locator *l, const char *path)
+static int
+evaluate_catalog(lcsas_disc_locator *l, const char *path, long long mtime)
 {
-    struct stat st;
-    struct lcsas_disc_memo id;
     lcsas_catalog *cat;
-    char *path_dup;
     char open_path[4096];
     char new_path[4096];
-
-    if (!path || !*path) return;
-    if (stat(path, &st) != 0) return;
-    if ((long long)st.st_mtime <= l->owned_catalog_mtime) return;
-    if (memo_identity(path, NULL, &id) != 0) return;
-    if (memo_has(l->bad_catalogs, l->n_bad_catalogs, path, &id)) return;
+    const char *cand = path;     /* the file opened: a copy, or the disc's */
+    long long mark;
+    long long vols;
+    int knows;
+    int rc;
 
     if (l->cache_dir) {
-        int rc = snprintf(new_path, sizeof new_path,
-                          "%s/.locator-catalog.db.new", l->cache_dir);
-        if (rc <= 0 || (size_t)rc >= sizeof new_path) return;
+        rc = snprintf(new_path, sizeof new_path,
+                      "%s/.locator-catalog.db.new", l->cache_dir);
+        if (rc <= 0 || (size_t)rc >= sizeof new_path) return CAT_UNSEEN;
         sprintf(open_path, "%s/.locator-catalog.db", l->cache_dir);
-        if (copy_file(path, new_path, NULL) != 0) {
+        if (copy_file(path, new_path, NULL) == 0) cand = new_path;
 #ifdef _WIN32
-            /* Opened in place, the disc's catalog would hold the
-             * drive, and Windows would not eject the disc.  Keep
-             * the catalog in use. */
-            return;
-#else
-            /* Best-effort fallback: open the original.  Will pin the
-             * mount, but better than no catalog. */
-            cat = open_checked_catalog(path, path);
+        else return CAT_UNSEEN;
 #endif
-        } else {
-            cat = open_checked_catalog(new_path, path);
-            if (cat) {
-                lcsas_catalog_close(cat);
-                if (l->owned_catalog) lcsas_catalog_close(l->owned_catalog);
-                l->owned_catalog = NULL;
-#ifdef _WIN32
-                (void)remove(open_path);
-#endif
-                cat = lcsas_catalog_open(rename(new_path, open_path) == 0
-                                         ? open_path : new_path);
-            } else {
-                (void)remove(new_path);
-            }
-        }
-    } else {
-        cat = open_checked_catalog(path, path);
     }
-    if (!cat) {
-        memo_add(&l->bad_catalogs, &l->n_bad_catalogs, path, &id);
-        return;
+    cat = lcsas_catalog_open(cand);
+    knows = -2;
+    if (cat && lcsas_catalog_check(cat) == 0)
+        knows = l->has_repo_id ? lcsas_catalog_knows_repo(cat, l->repo_id)
+                               : 1;
+    if (knows == 0) {
+        fprintf(stderr,
+                "[lcsas-restore] the catalog %s does not know backup set "
+                "%s: it is another archive's catalog, so it is not used.\n",
+                path, l->repo_id);
+        rc = CAT_FOREIGN;
+        goto reject;
+    }
+    if (knows != 1) {
+        fprintf(stderr,
+                "[lcsas-restore] WARNING: the catalog %s is damaged or cut "
+                "short, or this program cannot read it; not using it.\n",
+                path);
+        rc = CAT_BAD;
+        goto reject;
+    }
+    mark = lcsas_catalog_label_mark(cat);
+    vols = lcsas_catalog_volume_count(cat);
+    if (l->owned_catalog
+            && !(mark > l->owned_mark
+                 || (mark == l->owned_mark
+                     && (vols > l->owned_volumes
+                         || (vols == l->owned_volumes
+                             && mtime > l->owned_mtime))))) {
+        rc = CAT_PASSED;
+        goto reject;
     }
 
-    /* Successfully opened a newer catalog -- swap. */
+    /* Taken. */
     if (l->owned_catalog) lcsas_catalog_close(l->owned_catalog);
-    path_dup = (char *)malloc(strlen(path) + 1);
-    if (!path_dup) {
+    l->owned_catalog = cat;
+    if (cand == new_path) {
         lcsas_catalog_close(cat);
-        l->owned_catalog = NULL;
-        return;
+#ifdef _WIN32
+        (void)remove(open_path);
+#endif
+        l->owned_catalog = lcsas_catalog_open(
+            rename(new_path, open_path) == 0 ? open_path : new_path);
     }
-    memcpy(path_dup, path, strlen(path) + 1);
-    free(l->owned_catalog_path);
-    l->owned_catalog       = cat;
-    l->owned_catalog_path  = path_dup;
-    l->owned_catalog_mtime = (long long)st.st_mtime;
+    sprintf(l->owned_path_buf, "%.*s", (int)sizeof l->owned_path_buf - 1,
+            path);
+    l->owned_catalog_path = l->owned_path_buf;
+    l->owned_mark    = mark;
+    l->owned_volumes = vols;
+    l->owned_mtime   = mtime;
+    return CAT_TAKEN;
+
+reject:
+    if (cat) lcsas_catalog_close(cat);
+    if (cand == new_path) (void)remove(new_path);
+    return rc;
+}
+
+/*
+ * #950: consider the catalog at `path` (on the disc at `root`, NULL
+ * for a catalog not on a disc).  Each one (path and identity, the
+ * disc's volume_info.json included) is looked into once per run: its
+ * verdict is remembered, so a rescan every poll tick copies and checks
+ * nothing it has seen.  An empty file is called empty.  Returns the
+ * verdict (CAT_*), CAT_UNSEEN when there is no file.
+ */
+static int
+consider_catalog(lcsas_disc_locator *l, const char *root, const char *path)
+{
+    struct lcsas_disc_memo id;
+    const struct lcsas_disc_memo *seen;
+
+    if (memo_identity(path, root, &id) != 0) return CAT_UNSEEN;
+    seen = memo_find(l->seen_catalogs, l->n_seen_catalogs, path, &id);
+    if (seen) return seen->verdict;
+    l->catalog_evaluations++;
+    if (id.size == 0) {
+        fprintf(stderr,
+                "[lcsas-restore] WARNING: the catalog %s is empty; not "
+                "using it.\n", path);
+        id.verdict = CAT_BAD;
+    } else {
+        id.verdict = evaluate_catalog(l, path, id.mtime);
+    }
+    if (id.verdict != CAT_UNSEEN)
+        memo_add(&l->seen_catalogs, &l->n_seen_catalogs, path, &id);
+    return id.verdict;
+}
+
+void
+lcsas_disc_locator_consider_catalog(lcsas_disc_locator *l,
+                                    const char *catalog_path)
+{
+    (void)consider_catalog(l, NULL, catalog_path);
 }
 
 /*
@@ -760,7 +809,7 @@ refresh_drive_roots(lcsas_disc_locator *l, int meta_live)
         if (meta_live && path_under(root, l->meta_disc)) continue;
         if (l->cache_dir) {
             sprintf(cat, "%scatalog.db", root);
-            consider_catalog(l, cat);
+            (void)consider_catalog(l, root, cat);
         }
         announced += visit_root(l, root);
     }
@@ -814,7 +863,7 @@ refresh_discovered(lcsas_disc_locator *l)
          * directly under it. */
         rc = snprintf(child, sizeof child, "%s/catalog.db", parent);
         if (rc > 0 && (size_t)rc < sizeof child) {
-            consider_catalog(l, child);
+            (void)consider_catalog(l, parent, child);
         }
         announced += visit_root(l, parent);
 
@@ -836,15 +885,15 @@ refresh_discovered(lcsas_disc_locator *l)
             if (!S_ISDIR(st.st_mode)) continue;
             if (meta_live && path_under(child, l->meta_disc))
                 continue;
-            announced += visit_root(l, child);
 
             /* Look for a catalog.db (an LCSAS disc catalog) at the disc
-             * root -- pick the freshest one we can open. */
-            rc = snprintf(child, sizeof child, "%s/%s/catalog.db",
-                          parent, name);
-            if (rc > 0 && (size_t)rc < sizeof child) {
-                consider_catalog(l, child);
+             * root, before the disc is drained (#950): rank it. */
+            {
+                char cat[4096 + sizeof "/catalog.db"];
+                sprintf(cat, "%s/catalog.db", child);
+                (void)consider_catalog(l, child, cat);
             }
+            announced += visit_root(l, child);
         }
         closedir(d);
     }
@@ -1241,7 +1290,24 @@ drain_disc(lcsas_disc_locator *l, const char *root)
     rc = snprintf(data_dir, sizeof data_dir, "%s/data", root);
     if (rc <= 0 || (size_t)rc >= sizeof data_dir) return;
     if (memo_identity(data_dir, root, &id) != 0) return;
-    if (memo_has(l->drain_skips, l->n_drain_skips, root, &id)) return;
+    if (memo_find(l->drain_skips, l->n_drain_skips, root, &id)) return;
+
+    /* #950: a disc whose catalog does not know the backup set is
+     * another archive's: none of its packs belong in the cache.  A disc
+     * with no catalog, or one that cannot be read, is copied as ever. */
+    {
+        char cat[4096 + sizeof "/catalog.db"];
+        sprintf(cat, "%s/catalog.db", root);
+        if (consider_catalog(l, root, cat) == CAT_FOREIGN) {
+            disc_name(root, name, sizeof name);
+            fprintf(stderr,
+                    "[lcsas-restore] disc %s belongs to another archive "
+                    "(its catalog does not know backup set %s); not "
+                    "copying it to the cache.\n", name, l->repo_id);
+            memo_add(&l->drain_skips, &l->n_drain_skips, root, &id);
+            return;
+        }
+    }
 
     /* Soft warning at 1 GB total cache size.  Single-shot. */
     {

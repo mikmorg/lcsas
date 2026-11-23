@@ -199,7 +199,10 @@ If you skipped that disc (S), the first box may not name a disc yet.
 Then put in your newest data disc: the latest year, then the
 highest number.  Every data disc carries a catalog, so from then on
 the box names the disc it needs.  A wrong disc does no harm: the box
-just asks again.
+just asks again.  Of the catalogs in reach, the one that has issued the
+highest disc number is used, whatever the files' dates.  A disc of
+another archive (one whose catalog knows none of this backup set) is
+not used and not copied; one line says so.
 
 The first time the restore reads from a data disc, it copies all of
 that disc's packs to this computer, so you put each disc in about
@@ -874,7 +877,9 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
     --interactive on|off|auto
                            ask at a disc box (auto: only in a console)
     --catalog FILE         optional path to LCSAS catalog.db; pass a
-                           copy, not the file on a disc
+                           copy, not the file on a disc.  One candidate:
+                           the catalog used is the best that knows the
+                           backup set (the --repo folder's name)
     --list-pending-packs   with --catalog: which discs hold how much
     --repo-id ID           with --list-pending-packs: count only the
                            backup set whose id is ID (its folder name

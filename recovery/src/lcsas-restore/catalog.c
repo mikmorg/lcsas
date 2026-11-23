@@ -198,6 +198,46 @@ lcsas_catalog_schema_version(lcsas_catalog *c)
     return version;
 }
 
+/*
+ * The first column of the first row `sql` gives (with ?1 bound to
+ * `text`), or `none` when it gives no row; -1 when it cannot be asked.
+ */
+static long long
+query_int(lcsas_catalog *c, const char *sql, const char *text, long long none)
+{
+    sqlite3_stmt *st = NULL;
+    long long v = -1;
+    int rc;
+
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    if (text) sqlite3_bind_text(st, 1, text, -1, SQLITE_STATIC);
+    rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) v = sqlite3_column_int64(st, 0);
+    if (rc == SQLITE_DONE) v = none;
+    sqlite3_finalize(st);
+    return v;
+}
+
+int
+lcsas_catalog_knows_repo(lcsas_catalog *c, const char *repo_id)
+{
+    return (int)query_int(c, "SELECT 1 FROM packs WHERE repo_id = ?1 LIMIT 1",
+                          repo_id, 0);
+}
+
+long long
+lcsas_catalog_label_mark(lcsas_catalog *c)
+{
+    return query_int(c, "PRAGMA user_version", NULL, -1);
+}
+
+long long
+lcsas_catalog_volume_count(lcsas_catalog *c)
+{
+    return query_int(c, "SELECT COUNT(*) FROM volumes", NULL, -1);
+}
+
 static void
 copy_text_col(sqlite3_stmt *st, int col, char *dst, size_t cap)
 {

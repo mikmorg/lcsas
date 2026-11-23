@@ -29,9 +29,12 @@
  *   on              always prompt and retry
  *   off             always fail fast
  *
- * --catalog opens a disc catalog (catalog.db, SQLite); used both
- * for informational logging at startup and for disc-label hints
- * in interactive disc-swap prompts.
+ * --catalog names a disc catalog (catalog.db, SQLite) for disc-label
+ * hints in interactive disc-swap prompts: one candidate among the
+ * catalogs on the discs found later.  Tier 1 takes the best usable one
+ * (#950): one that knows the backup set of --repo (its folder name),
+ * with the highest label mark, then the most volumes, then the newest
+ * file.
  *
  * --meta-disc identifies the meta disc's mount point.  The
  * locator excludes that path from pack searches and refuses to keep
@@ -187,11 +190,15 @@ usage(const char *argv0)
         "for ENTER only.  Linux/macOS; on Windows the prompt always waits\n"
         "for ENTER.\n"
         "\n"
-        "--catalog opens a disc catalog (catalog.db, SQLite) for\n"
-        "informational logging at startup and for disc-label hints\n"
-        "in interactive disc-swap prompts.  On each retry the locator\n"
-        "also probes any newly-mounted disc for a catalog.db and uses\n"
-        "the freshest one it can open to name the disc for each pack.\n"
+        "--catalog names a disc catalog (catalog.db, SQLite) for\n"
+        "disc-label hints in interactive disc-swap prompts.  On each\n"
+        "retry the locator also looks at the catalog.db of any newly-\n"
+        "mounted disc.  It uses the best one: of those that can be read\n"
+        "and know the backup set (the --repo folder's name, as in\n"
+        "metadata/<id>), the one with the highest label number issued,\n"
+        "then the one listing the most discs, then the newest file.  A\n"
+        "catalog of another archive is never used, and its disc is not\n"
+        "copied into the pack cache.\n"
         "\n"
         "--meta-disc names the mount point of the meta disc.\n"
         "The locator excludes that path from pack searches and drops\n"
@@ -259,7 +266,6 @@ main(int argc, char **argv)
     lcsas_master_key mk;
     lcsas_blob_index ix;
     lcsas_snapshot_list snaps;
-    lcsas_catalog *catalog = NULL;
     lcsas_disc_locator locator;
     int interactive = 0;
     long sidx;
@@ -391,23 +397,10 @@ main(int argc, char **argv)
         interactive = isatty(STDIN_FILENO) ? 1 : 0;
     }
 
-    if (catalog_path) {
-        catalog = lcsas_catalog_open(catalog_path);
-        if (!catalog) {
-            fprintf(stderr, "WARN: cannot open catalog %s; continuing\n",
-                    catalog_path);
-        } else if (verbose) {
-            lcsas_catalog_describe(catalog);
-        }
-    }
-
     lcsas_disc_locator_init(&locator, pack_search, n_pack_search,
-                            catalog, interactive);
-    /* Pin the caller's catalog mtime as the floor so the locator
-     * never swaps to an OLDER catalog discovered on a mounted disc. */
-    if (catalog && catalog_path) {
-        lcsas_disc_locator_set_catalog_floor(&locator, catalog_path);
-    }
+                            NULL, interactive);
+    /* #950: the backup set, by which every catalog is judged. */
+    lcsas_disc_locator_set_repo(&locator, repo_path);
     if (!meta_disc) {
         /* Allow the env var as a fallback when scripts can't pass it
          * through (e.g. minimal initramfs sh that drops args). */
@@ -433,6 +426,18 @@ main(int argc, char **argv)
                         cache_env);
             }
         }
+    }
+
+    /* #950: --catalog is one candidate, judged as the catalogs found
+     * on the discs later are (after the cache dir is set: a catalog
+     * taken is copied there). */
+    if (catalog_path) {
+        lcsas_disc_locator_consider_catalog(&locator, catalog_path);
+        if (!locator.owned_catalog)
+            fprintf(stderr, "WARN: not using the catalog %s; continuing\n",
+                    catalog_path);
+        else if (verbose)
+            lcsas_catalog_describe(locator.owned_catalog);
     }
 
     /* Determine the mount-parent list scanned on each retry to pick up
@@ -743,7 +748,6 @@ out:
     lcsas_blob_index_free(&ix);
     lcsas_snapshot_list_free(&snaps);
     lcsas_disc_locator_free(&locator);
-    if (catalog) lcsas_catalog_close(catalog);
     free(mount_parents_buf);
     free(pw);
     return rc;
