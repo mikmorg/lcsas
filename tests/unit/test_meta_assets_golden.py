@@ -29,8 +29,8 @@ from lcsas.meta.builder import (
 
 _ASSETS = Path(__file__).resolve().parents[2] / "src" / "lcsas" / "meta" / "assets"
 
-_README_MD = "b739639c79240384c2c44c27d2b327d5590c46d86ea4bc2e7c26606fcf41146b"
-_README_TXT = "6c4e7380e67e7010d4929234a66a74bf61004fce82c5b563c62ebdfcb805c23a"
+_README_MD = "fbd65bdcb8f09afabb3ead308926592ac592e264f761623b8c8d9d90e5485c53"
+_README_TXT = "ba1363032403db4e42df0a8956594d9c003c7e34d92c4265e9d1381bd1677847"
 
 # The asset files themselves: README_RESTORE.md is the only one left.
 _GOLDEN_ASSETS = {"README_RESTORE.md": _README_MD}

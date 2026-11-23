@@ -1,5 +1,6 @@
-"""Both readers say which backup they restore, by its date (#952 b,
-#966 item 2).
+"""Both readers name the backup they restore by its date (#952 b).
+
+#966 item 2 wanted the date at the end of a restore too.
 
 - Before the restore: "Restoring the backup of 2026-11-21 14:02, the
   newest on these discs."  An older backup, chosen with ``--snapshot``,
