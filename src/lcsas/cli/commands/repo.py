@@ -41,13 +41,13 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
         # encryption_key_id holds the first key file name `repo add` saw in
         # the mirror's keys/, so a mirror holding that key is that
         # repository, wherever it now lives and whatever it is called (its
-        # recorded mirror path stands in when no key was recorded).
+        # recorded mirror path stands in when either side has no key).
         from lcsas.db.repos import REPO_STATUS_RETIRED, list_repos, same_mirror_path
         existing_repos = list_repos(conn)
         for existing in existing_repos:
             if existing.status != REPO_STATUS_RETIRED:
                 continue
-            if existing.encryption_key_id:
+            if existing.encryption_key_id and key_ids:
                 same_repo = existing.encryption_key_id in key_ids
             else:
                 same_repo = same_mirror_path(existing.mirror_path, mirror)

@@ -42,7 +42,7 @@ key ID from the mirror's `keys/` directory.
 
 1. `lcsas repo add <name> <mirror_path>` — scan `keys/` for the first
    key filename; refuse a mirror that is a **retired** repository (its
-   recorded key is in the mirror's `keys/`, or, with no key recorded, its
+   recorded key is in the mirror's `keys/`, or, when either side has no key, its
    mirror path is the same): the error names that repository and offers
    `lcsas repo activate <name>`, because its packs are on discs under its
    catalog ID and a new ID would burn every pack again (#962). Then refuse

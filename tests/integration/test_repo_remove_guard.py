@@ -161,3 +161,14 @@ def test_remove_of_a_never_burned_repository_leaves_no_orphans(
             vol["volume_id"])
         assert vol["used_bytes"] == row[0]
     assert inst.query("SELECT 1 FROM packs WHERE repo_id = ?", alpha)
+
+    # The warning's advice works: abort, stage again, and the new disc
+    # carries alpha only.
+    (session,) = inst.sessions()
+    assert inst.lcsas("session", "abort", session) == 0
+    assert label not in inst.labels()
+    assert inst.lcsas("stage") == 0
+    (new_label,) = inst.labels()
+    tree = inst.disc_trees()[new_label]
+    assert {p.name for p in (tree / "metadata").iterdir()
+            if p.is_dir()} == {alpha}
