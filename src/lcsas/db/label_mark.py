@@ -8,10 +8,14 @@ one label.
 
 The catalog therefore remembers the highest number ever issued, in the
 SQLite header field ``PRAGMA user_version``.  That is not a schema change:
-no table or column changes, the schema version stays as it is, and no
-reader of the catalog looks at the field.  It survives every row delete,
-travels in each disc catalog (a copy of the file), and a catalog rebuilt
-from discs takes the highest mark and label it finds (``db/rebuild.py``).
+no table or column changes, and the schema version stays as it is.  It
+survives every row delete, travels in each disc catalog (a copy of the
+file), and a catalog rebuilt from discs takes the highest mark and label
+it finds (``db/rebuild.py``).
+
+Tier 1 ranks the catalogs it finds by the mark (#950), so the field is
+part of the frozen catalog contract (``TIER1_LABEL_MARK_PRAGMA`` in
+``db/schema.py``, #961): it holds the label mark and nothing else.
 """
 
 from __future__ import annotations
