@@ -4484,8 +4484,9 @@ if [ -x "$RUSTIC_BIN" ] && ! bin_preflight_ok "$RUSTIC_BIN"; then
     printf '[tier 2] %s is present but failed pre-flight ' "$RUSTIC_BIN" >&2
     printf '(zero-byte / wrong arch / corrupted binary); skipping\n' >&2
 elif [ -x "$RUSTIC_BIN" ] && [ ! -d "$REPO/data" ]; then
-    printf '[tier 2] skipped: rustic-static cannot drive multi-disc ' >&2
-    printf 'restores (no %s/data/); falling through to tier 3\n' "$REPO" >&2
+    # #967: the heir's words, not "falling through to tier 3".
+    printf '[tier 2] skipped: rustic-static cannot read a backup set ' >&2
+    printf 'spread over several discs; trying the next tool\n' >&2
 elif [ -x "$RUSTIC_BIN" ]; then
     printf '[tier 2] using vendored rustic-static (%s)\n' "$TARGET" >&2
     try_tier 2 rustic 3 "$RUSTIC_BIN" restore "$SNAP" "$RESTORE_FOLDER"
@@ -4624,8 +4625,17 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
                     PYTHONPATH="$_zstd_libdir"
                 fi
                 export PYTHONPATH
-                printf '[tier 3] PYTHONPATH includes bundled zstandard at %s\n' \
-                       "$_zstd_libdir" >&2
+                # #967: say it is used only when it loads.  One built
+                # for another Python is skipped by the reader, which
+                # then uses its slow built-in zstd decoder.
+                if ${TIER3_PYLOADER:+"$TIER3_PYLOADER"} "$PYBIN" \
+                        -c 'import zstandard' >/dev/null 2>&1 </dev/null; then
+                    printf '[tier 3] using the bundled zstandard at %s\n' \
+                           "$_zstd_libdir" >&2
+                else
+                    printf '[tier 3] the bundled zstandard at %s does not load in this Python: the slower built-in zstd decoder is used\n' \
+                           "$_zstd_libdir" >&2
+                fi
                 break
             fi
         done

@@ -191,7 +191,7 @@ def test_tier1_missing_multidisc_falls_to_tier3_byte_identical(
         f"tier 1 unexpectedly ran; stderr:\n{res.stderr}"
     )
     # Tier 2 was SKIPPED for the multi-disc layout (issue #227 logic).
-    assert "[tier 2] skipped" in res.stderr and "multi-disc" in res.stderr, (
+    assert "[tier 2] skipped" in res.stderr and "several discs" in res.stderr, (
         f"expected the tier-2 multi-disc skip diagnostic; stderr:\n{res.stderr}"
     )
     # The tier-2 noop stub must NOT have been invoked for a restore.

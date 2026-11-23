@@ -159,6 +159,9 @@ class Faults:
 
     #: The password file's bytes.
     password_file: bytes = PASSWORD + b"\n"
+    #: ``--snapshot`` for the judged run (#967: "latest" and an empty
+    #: id); ``None``: left off, so the newest snapshot is restored.
+    snapshot: str | None = None
     #: A first run into the same target before the one judged:
     #: "before" restores the snapshot of ``Case.before``; "latest" the
     #: same snapshot (the judged run is then a resume).  It must exit 0.
@@ -520,6 +523,28 @@ CASES: list[Case] = [
         faults=Faults(password_file=PASSWORD + b"\r\n"),
         expect=Outcome(exit=ReaderExit.OK, summary=_DONE),
         replaces="new (#641; tier 1 alone: test_tier1_password_file_rule.py)",
+    ),
+    # #967 item 1: the documented default, typed out, restores the newest
+    # of two snapshots in both readers.
+    Case(
+        name="--snapshot latest",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(snapshot="latest"),
+        expect=Outcome(exit=ReaderExit.OK, summary=_DONE),
+        replaces="new (#967)",
+    ),
+    # #967 item 1: an empty id is the start of every id.  With one
+    # snapshot both readers restore it; with two it names none, and both
+    # say so in tier 1's words.
+    Case(
+        name="--snapshot with an empty id, two snapshots",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(snapshot=""),
+        expect=Outcome(exit=ReaderExit.FAILED, restored={},
+                       summary=r"(?m)snapshot not found: ('')?$"),
+        replaces="new (#967)",
     ),
     Case(
         name="target full",
@@ -1164,8 +1189,12 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
                     child.unlink()
             else:
                 hit.unlink()
-        res = _run(_command(reader, repo, target, pwfile, None, case.faults,
-                            empty, work), case.faults.answers or b"")
+        cmd = _command(reader, repo, target, pwfile, None, case.faults,
+                       empty, work)
+        if case.faults.snapshot is not None:
+            # Here, not in _command: an empty id is an argument too.
+            cmd += ["--snapshot", case.faults.snapshot]
+        res = _run(cmd, case.faults.answers or b"")
         output = (res.stdout + res.stderr).decode("utf-8", "replace")
         root = target
         if built.src is not None:

@@ -54,6 +54,7 @@ import os
 import re
 import stat
 import sys
+import time
 from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -94,6 +95,40 @@ from lcsas.restore._disc_search import (
 # to silence progress output entirely.
 _PROGRESS_FILES_INTERVAL = 50
 _PROGRESS_BYTES_INTERVAL = 64 * 1024 * 1024  # 64 MiB
+# #967: and by time, checked after every blob, so a slow restore is
+# never silent (the reviewer saw 9 MB in 75 s with no line): the first
+# line once _PROGRESS_FIRST_SECONDS have passed, then one every
+# _PROGRESS_SECONDS, each with the time left at the rate so far.
+_PROGRESS_FIRST_SECONDS = 5.0
+_PROGRESS_SECONDS = 30.0
+#: The pure-Python AES's speed, for the estimate said before the
+#: restore starts (#967).  The progress lines measure the real rate.
+_PURE_AES_BYTES_PER_SECOND = 0.15 * 1024 * 1024
+
+
+def _node_size(node: dict[str, Any]) -> int:
+    """A file node's size in bytes (0 when it has none or a bad one)."""
+    size = node.get("size")
+    return size if isinstance(size, int) and size > 0 else 0
+
+
+def _duration_words(seconds: float) -> str:
+    """*seconds* in words, rounded: "8 seconds", "12 minutes",
+    "3 hours 10 minutes", "2 days 9 hours" (#967)."""
+    def n(count: int, unit: str) -> str:
+        return f"{count} {unit}" + ("" if count == 1 else "s")
+
+    secs = max(1, int(seconds + 0.5))
+    if secs < 90:
+        return n(secs, "second")
+    mins = int(secs / 60 + 0.5)
+    if mins < 90:
+        return n(mins, "minute")
+    hours, mins = divmod(mins, 60)
+    if hours < 48:
+        return n(hours, "hour") + (f" {n(mins, 'minute')}" if mins else "")
+    days, hours = divmod(hours, 24)
+    return n(days, "day") + (f" {n(hours, 'hour')}" if hours else "")
 
 # The file-count pass reads every tree blob; the restore pass then needs
 # the same trees again.  On a multi-disc archive a second read can mean
@@ -1146,6 +1181,12 @@ class PurePythonRestorer:
         self._progress_done_bytes: int = 0
         self._progress_last_emit_files: int = 0
         self._progress_last_emit_bytes: int = 0
+        # #967: the bytes of the files to restore (from the count pass),
+        # when the restore pass started, and when a line was last said.
+        self._progress_total_bytes: int = 0
+        self._progress_started: float = 0.0
+        self._progress_last_emit_time: float = 0.0
+        self._progress_emitted: bool = False
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -1198,10 +1239,15 @@ class PurePythonRestorer:
         self._progress_last_emit_files = 0
         self._progress_last_emit_bytes = 0
         self._progress_total_files = 0
+        self._progress_total_bytes = 0
+        self._progress_emitted = False
         self._resumed = 0
         if self._progress_enabled:
             self._progress_total_files = self._count_files(snap.tree)
             _log(f"Counted {self._progress_total_files} file(s) to restore.")
+            self._say_slow_aes_estimate()
+        self._progress_started = time.monotonic()
+        self._progress_last_emit_time = self._progress_started
 
         target.mkdir(parents=True, exist_ok=True)
         try:
@@ -1465,6 +1511,9 @@ class PurePythonRestorer:
         ]
         if len(matches) == 1:
             return matches[0]
+        if len(matches) > 1 and not snapshot_id:
+            # #967: an empty id names no snapshot.  Tier 1's words.
+            raise ValueError("snapshot not found: ''")
         if len(matches) > 1:
             raise ValueError(
                 f"Ambiguous snapshot prefix '{snapshot_id}' — "
@@ -1809,6 +1858,8 @@ class PurePythonRestorer:
 
         if self._resume and _already_restored(node, path):
             self._resumed += 1
+            self._progress_total_bytes = max(
+                0, self._progress_total_bytes - _node_size(node))
             # A partial file left by a later, stopped run is not needed.
             if _entry_kind(tmp_path) in ("file", "link"):
                 with contextlib.suppress(OSError):
@@ -1843,15 +1894,21 @@ class PurePythonRestorer:
                         raise _NodeFailed from exc
                     f.write(chunk)
                     bytes_written += len(chunk)
+                    # #967: counted per blob, so a large file shows
+                    # progress while it is written.
+                    self._progress_done_bytes += len(chunk)
+                    self._emit_progress()
             self._apply_metadata(node, tmp_path)
             os.replace(tmp_path, path)
         except (_NodeFailed, RestoreAbortedError):
             tmp_path.unlink(missing_ok=True)
+            self._progress_done_bytes -= bytes_written
             raise
         except (IntegrityError, KeyError, OSError) as exc:
             # Failure outside the per-blob guard above (e.g. _apply_metadata
             # or os.replace) — still record + clean up under tolerant mode.
             tmp_path.unlink(missing_ok=True)
+            self._progress_done_bytes -= bytes_written
             if isinstance(exc, OSError) and exc.errno in _DISK_FULL_ERRNOS:
                 # #658: stop the whole restore (removing the partial file
                 # above gave its space back).
@@ -1862,9 +1919,9 @@ class PurePythonRestorer:
             raise _NodeFailed from exc
 
         # Update progress counters and emit a status line if either
-        # the file-count or byte-count threshold has been reached.
+        # the file-count or byte-count threshold has been reached (the
+        # bytes were counted blob by blob above).
         self._progress_done_files += 1
-        self._progress_done_bytes += bytes_written
         self._emit_progress()
 
     def _node_fs_name(self, stored: object, target_dir: Path) -> str | None:
@@ -1962,6 +2019,7 @@ class PurePythonRestorer:
                 ntype = node.get("type")
                 if ntype == "file":
                     total += 1
+                    self._progress_total_bytes += _node_size(node)
                 elif ntype == "dir" and "subtree" in node:
                     stack.append(node["subtree"])
         return total
@@ -2058,7 +2116,12 @@ class PurePythonRestorer:
         done_bytes = self._progress_done_bytes
         delta_files = done_files - self._progress_last_emit_files
         delta_bytes = done_bytes - self._progress_last_emit_bytes
-        if not force and (
+        now = time.monotonic()
+        wait = (_PROGRESS_SECONDS if self._progress_emitted
+                else _PROGRESS_FIRST_SECONDS)
+        timed = (delta_files > 0 or delta_bytes > 0) and (
+            now - self._progress_last_emit_time >= wait)
+        if not force and not timed and (
             delta_files < _PROGRESS_FILES_INTERVAL
             and delta_bytes < _PROGRESS_BYTES_INTERVAL
         ):
@@ -2072,13 +2135,40 @@ class PurePythonRestorer:
 
         total = self._progress_total_files
         mb = done_bytes / (1024 * 1024)
+        # #967: of how much, and (not on the last line) the time left at
+        # the rate so far.
+        of = ""
+        if self._progress_total_bytes > 0:
+            of = f" of {self._progress_total_bytes / (1024 * 1024):.1f} MB"
+            left = self._progress_total_bytes - done_bytes
+            elapsed = now - self._progress_started
+            if not force and left > 0 and done_bytes > 0 and elapsed >= 1.0:
+                of += (f"; about {_duration_words(left * elapsed / done_bytes)}"
+                       " left")
         if total > 0:
-            _log(f"Progress: {done_files}/{total} files restored, {mb:.1f} MB.")
+            _log(f"Progress: {done_files}/{total} files restored, {mb:.1f} MB{of}.")
         else:
-            _log(f"Progress: {done_files} files restored, {mb:.1f} MB.")
+            _log(f"Progress: {done_files} files restored, {mb:.1f} MB{of}.")
 
         self._progress_last_emit_files = done_files
         self._progress_last_emit_bytes = done_bytes
+        self._progress_last_emit_time = now
+        self._progress_emitted = True
+
+    def _say_slow_aes_estimate(self) -> None:
+        """#967: with the slow pure-Python AES, say before the restore
+        starts how long the snapshot takes at that speed (25 GB: about
+        two days), so a heir knows what to expect, or to find a
+        computer with OpenSSL.  Quiet with a native AES."""
+        total = self._progress_total_bytes
+        if total <= 0 or _aes_ctr_fast().backend.name != "pure":
+            return
+        _log(
+            f"This snapshot holds {total / (1024 * 1024):.1f} MB in "
+            f"{self._progress_total_files} file(s). At about 0.15 MB/s "
+            "(the slow built-in AES) that takes about "
+            f"{_duration_words(total / _PURE_AES_BYTES_PER_SECOND)}."
+        )
 
     def _apply_metadata(
         self, node: dict[str, Any], path: Path, *, is_link: bool = False

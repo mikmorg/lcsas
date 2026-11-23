@@ -261,7 +261,10 @@ _CLI_BLOCK = textwrap.dedent("""\
         )
         parser.add_argument(
             "--snapshot", default=None,
-            help="Snapshot ID to restore (default: latest)",
+            help=(
+                "Snapshot ID (or the start of one) to restore, or "
+                "'latest' (the default): the newest snapshot"
+            ),
         )
         parser.add_argument(
             "--list-snapshots", action="store_true",
@@ -421,8 +424,10 @@ _CLI_BLOCK = textwrap.dedent("""\
         # manifest under the target.  Setup-level errors (bad password,
         # missing/corrupt repository) still fail fast with exit 1 and no
         # traceback.
+        # #967: "latest" is the default by name, as tier 1 takes it.
+        snapshot_id = None if args.snapshot == "latest" else args.snapshot
         try:
-            restorer.restore(target=target, snapshot_id=args.snapshot)
+            restorer.restore(target=target, snapshot_id=snapshot_id)
         except KeyboardInterrupt:
             print("\\n[lcsas-restore] aborted by user.", file=sys.stderr)
             sys.exit(130)

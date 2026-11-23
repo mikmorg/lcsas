@@ -132,6 +132,71 @@ def test_progress_final_line_at_completion(tmp_path, capsys, monkeypatch):
     )
 
 
+def _clock(monkeypatch, step: float) -> None:
+    """The restorer's clock: every reading *step* seconds after the last."""
+    import types
+
+    now = [0.0]
+
+    def monotonic() -> float:
+        now[0] += step
+        return now[0]
+
+    monkeypatch.setattr(restic_fallback, "time",
+                        types.SimpleNamespace(monotonic=monotonic))
+
+
+def test_a_slow_restore_says_progress_by_time_with_the_time_left(
+        tmp_path, capsys, monkeypatch):
+    """#967: below every file and byte threshold (the defaults, on a
+    2-file repository), a slow restore still prints a line once the
+    first-line delay has passed, saying of how much and how long is
+    left at the rate so far.  The reviewer saw 9 MB in 75 s with no
+    line at all.  The clock here moves 10 s per reading."""
+    monkeypatch.setenv("LCSAS_PROGRESS", "1")
+    _clock(monkeypatch, 10.0)
+
+    repo = _build_test_repo(tmp_path)
+    restorer = PurePythonRestorer(repo, password=PASSWORD)
+    restorer.restore(target=tmp_path / "restored")
+
+    err = capsys.readouterr().err
+    timed = re.search(
+        r"Progress: 0/2 files restored, [\d.]+ MB of [\d.]+ MB; "
+        r"about \d+ seconds? left\.", err)
+    assert timed, err
+    assert timed.start() < err.index("Restore complete."), err
+
+
+def test_a_fast_restore_is_not_chattier(tmp_path, capsys, monkeypatch):
+    """#967: under the first-line delay (the clock barely moves) only
+    the final 100% line is printed, as before."""
+    monkeypatch.setenv("LCSAS_PROGRESS", "1")
+    _clock(monkeypatch, 0.001)
+
+    repo = _build_test_repo(tmp_path)
+    restorer = PurePythonRestorer(repo, password=PASSWORD)
+    restorer.restore(target=tmp_path / "restored")
+
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if "Progress:" in ln]
+    assert len(lines) == 1 and "2/2 files restored" in lines[0], err
+    assert "left" not in lines[0], err
+
+
+def test_duration_words():
+    """#967: the times the estimate and the progress lines print."""
+    words = restic_fallback._duration_words
+    assert words(0.2) == "1 second"
+    assert words(8) == "8 seconds"
+    assert words(600) == "10 minutes"
+    assert words(3 * 3600 + 10 * 60) == "3 hours 10 minutes"
+    assert words(2 * 86400 + 9 * 3600) == "2 days 9 hours"
+    # The reviewer's 25 GB at the pure AES's 0.15 MB/s.
+    assert words(25 * 1024**3 / restic_fallback._PURE_AES_BYTES_PER_SECOND) == (
+        "47 hours 24 minutes")
+
+
 def test_standalone_bundle_includes_progress_code():
     """The generated python_reader.py inherits the progress logic.
 

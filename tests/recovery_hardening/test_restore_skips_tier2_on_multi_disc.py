@@ -131,8 +131,8 @@ def test_tier2_skipped_when_repo_has_no_local_data(tmp_path: Path) -> None:
         f"tier 3 did not run; stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
     # Diagnostic banner explains the skip.
-    assert "skipped" in res.stderr and "multi-disc" in res.stderr, (
-        f"expected '[tier 2] skipped: ... multi-disc' diagnostic; "
+    assert "[tier 2] skipped" in res.stderr and "several discs" in res.stderr, (
+        f"expected '[tier 2] skipped: ... several discs' diagnostic; "
         f"stderr:\n{res.stderr}"
     )
 
@@ -167,7 +167,7 @@ def test_tier2_runs_when_repo_has_local_data(tmp_path: Path) -> None:
         f"tier 2 should have run on single-disc; stdout:\n{res.stdout}"
     )
     # No skip banner in this path.
-    assert "skipped" not in res.stderr or "multi-disc" not in res.stderr, (
+    assert "spread over several discs" not in res.stderr, (
         f"unexpected tier-2 skip on single-disc fixture; "
         f"stderr:\n{res.stderr}"
     )

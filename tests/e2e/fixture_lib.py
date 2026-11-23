@@ -460,6 +460,12 @@ WINDOWS_E2E_SPLIT_SETS: dict[str, tuple[int, int]] = {"Work documents": (2, 3)}
 # and tests/integration/test_e2e_fixture_sets.py build this same shape.
 WINDOWS_E2E_FILE_COUNT = 8
 WINDOWS_E2E_FILE_BYTES = 512 * 1024
+# #967 item 4: a second password of the restored set (another rustic key,
+# added before the burn) holding what cmd treats specially: ! (delayed
+# expansion, and !TEMP! a variable in it), % (%PATH% a variable) and ^
+# (the escape, once and twice).  windows-e2e's typed-password leg types
+# it at restore.bat's password prompt on real cmd.  ASCII, no space.
+WINDOWS_E2E_TYPED_PASSWORD = "typed!TEMP!pw%PATH%x^y^^z!"
 
 
 @dataclass(frozen=True)
@@ -504,6 +510,9 @@ class WindowsFixture:
     restore_set: FixtureSet
     other_sets: tuple[FixtureSet, ...]
     sets_path: Path
+    #: ``repo-typed.pw``: the restored set's second password, when the
+    #: fixture was built with *typed_password* (#967).
+    typed_password_file: Path | None = None
 
 
 def build_windows_fixture(
@@ -515,6 +524,7 @@ def build_windows_fixture(
     set_name: str = WINDOWS_SET_NAME,
     other_set_names: tuple[str, ...] = (),
     split_sets: Mapping[str, tuple[int, int]] | None = None,
+    typed_password: str | None = None,
 ) -> WindowsFixture:
     """Build a complete TEST_TINY fixture for the Windows restore-journey
     gate, with NO root/cdemu/privileged steps.
@@ -538,6 +548,7 @@ def build_windows_fixture(
                                            for each other set
       * ``cards/``                       — the printed share cards of each
                                            set in *split_sets*
+      * ``repo-typed.pw``                — *typed_password*, when given
 
     Every set is registered with ``lcsas repo add`` (:func:`add_repo`), so
     its id is a UUID and its ``metadata/<id>/`` folder on the discs is not
@@ -564,6 +575,11 @@ def build_windows_fixture(
     into, as an owner splits it (:func:`split_password`): the set's config
     says so, and the split is recorded in the catalog before the burn, so
     every disc's marker for the set says ``split=K-of-N`` (#607).
+
+    *typed_password* is added to the restored set as a second rustic key
+    before anything is staged, so every disc's copy of its keys has it,
+    and is written to ``repo-typed.pw`` (#967: a password with the
+    characters cmd treats specially, typed at restore.bat's prompt).
     """
     _ensure_src_on_path()
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -612,6 +628,16 @@ def build_windows_fixture(
             mirror=mirror_base / slug, password_file=pw,
             source_tree=sources / slug,
         )
+        if typed_password is not None and slug == "win":
+            typed_pw = workdir / "repo-typed.pw"
+            typed_pw.write_bytes(typed_password.encode("ascii"))
+            typed_pw.chmod(0o600)
+            subprocess.run(
+                ["rustic", "key", "add", "--new-password-file", str(typed_pw)],
+                check=True, env={**os.environ,
+                                  "RUSTIC_REPOSITORY": str(mirror_base / slug),
+                                  "RUSTIC_PASSWORD_FILE": str(pw)},
+            )
 
     # 3. catalog: each set registered as an owner does (repo add), then
     #    its packs
@@ -755,6 +781,8 @@ def build_windows_fixture(
         restore_set=sets[0],
         other_sets=tuple(sets[1:]),
         sets_path=sets_path,
+        typed_password_file=(workdir / "repo-typed.pw"
+                             if typed_password is not None else None),
     )
 
 
