@@ -121,6 +121,18 @@ jobs:
       - name: Rebuild-and-diff committed binaries
         run: make -C recovery bin-parity
 
+      # A C change needs its committed binaries regenerated.  The clean
+      # rebuilds of this run are the ones the gate compares against, so on
+      # a mismatch they are uploaded, at bin/'s layout, to be committed
+      # (download the artifact into recovery/bin/, check `git diff --stat`).
+      - name: Upload the rebuilt binaries
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-recovery-bin
+          path: recovery/build/parity-out/
+          if-no-files-found: ignore
+
   # The required status check (#412): reports on EVERY pull request.  Passes
   # instantly when no gate-relevant path changed; otherwise mirrors the real
   # job's result.  Branch protection requires THIS context, not `bin-parity`.
