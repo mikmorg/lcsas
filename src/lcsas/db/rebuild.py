@@ -132,6 +132,11 @@ class RebuildResult:
     # PREFIX), so session abort, stage --clean and reconcile --fix refuse
     # to delete them unless the owner confirms they were never burned.
     burn_unknown: list[str] = field(default_factory=list)
+    # #957: the highest label number any disc read here knows (the label
+    # mark), and the label of a volume with that number if one was read.
+    # ``stage`` numbers new volumes after it.
+    label_mark: int = 0
+    label_mark_label: str = ""
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -855,8 +860,12 @@ def rebuild_catalog(
     _mark_burn_unknown(conn, known_uuids, result)
 
     # #676: never reissue a label number that any disc carries.
-    from lcsas.db.label_mark import merge_label_high_water
-    merge_label_high_water(conn, [db for _p, db, _f in ordered if db is not None])
+    from lcsas.db.label_mark import label_seq, merge_label_high_water
+    result.label_mark = merge_label_high_water(
+        conn, [db for _p, db, _f in ordered if db is not None])
+    for (label,) in conn.execute("SELECT label FROM volumes"):
+        if label_seq(str(label)) == result.label_mark:
+            result.label_mark_label = str(label)
 
     conn.close()
     return result

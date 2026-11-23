@@ -847,6 +847,18 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     logger.info("Snapshots        : %d new", result.snapshots_merged)
     logger.info("Password splits  : %d recorded", result.splits_merged)
 
+    # #957: a disc knows the last label number of its own burn session,
+    # not of sessions staged after it.  Say where numbering continues, so
+    # an owner holding a newer disc reads it before staging.
+    if result.label_mark:
+        seen = (f" ({result.label_mark_label})"
+                if result.label_mark_label else "")
+        logger.info(
+            "Labels continue after number %04d%s, the highest number any "
+            "disc read here knows. If you hold a disc with a higher number, "
+            "read it too before staging.", result.label_mark, seen,
+        )
+
     # FMA-06: mixed-age disc boxes carry conflicting catalog views; the
     # merge keeps the freshest one and explains what it overrode here.
     if result.warnings:

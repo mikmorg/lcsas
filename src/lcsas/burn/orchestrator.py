@@ -410,6 +410,7 @@ class BurnOrchestrator:
         session_id: str,
         burn_session_position: tuple[int, int],
         location: str | None = None,
+        reserve_through: int = 0,
     ) -> BurnManifest:
         """Build staging dir, register volume, inject metadata, create the ISO.
 
@@ -436,6 +437,8 @@ class BurnOrchestrator:
             burn_session_position: ``(N, M)``: this is volume N of the M
                 volumes ``stage`` builds in one burn session; printed in
                 the disc's VOLUME_INFO.txt.
+            reserve_through: The last label number of the burn session
+                (#957); the label mark is raised to it with this volume.
 
         Returns:
             BurnManifest describing the staged volume.
@@ -512,9 +515,11 @@ class BurnOrchestrator:
         )
         # #676: remember the label number in the same transaction, so it
         # is never issued again even if this volume is later deleted.
+        # #957: with the session's last number, before this volume's disc
+        # catalog is copied.
         issued = label_seq(vol_label)
         if issued is not None:
-            raise_label_high_water(self._conn, issued)
+            raise_label_high_water(self._conn, max(issued, reserve_through))
 
         pack_ids = [p.pack_id for p in selected_packs]
         bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
@@ -1237,6 +1242,12 @@ class BurnOrchestrator:
         # #676: above every label number ever issued, not only those of
         # the volumes still in the catalog.
         seq = next_label_seq(self._conn, self._config.label_prefix)
+        # #957: the session's numbers are reserved with its first volume,
+        # so every disc of the session carries the session's last number
+        # and a catalog rebuilt from any one of them continues after it.
+        # Numbers of an interrupted session are not reused (as for an
+        # aborted one, #676): a gap never means a missing disc.
+        reserve_through = seq + len(volume_plans) - 1
 
         # #657: _stage_single_volume reads this for the whole session.
         session_packs = {p.sha256 for packs, _b in volume_plans for p in packs}
@@ -1267,6 +1278,7 @@ class BurnOrchestrator:
                 session_id=session_id,
                 burn_session_position=(i + 1, len(volume_plans)),
                 location=for_location,
+                reserve_through=reserve_through,
             )
 
             # The ISO hash + byte length are already on the session
