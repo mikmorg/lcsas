@@ -5,7 +5,12 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from lcsas.cli.common import _load_config_opt, _open_catalog, _validate_config_or_exit
+from lcsas.cli.common import (
+    _load_config_opt,
+    _log_no_config,
+    _open_catalog,
+    _validate_config_or_exit,
+)
 from lcsas.log import get_logger
 
 logger = get_logger()
@@ -22,7 +27,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for scan.")
+        _log_no_config("scan")
         return 1
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1

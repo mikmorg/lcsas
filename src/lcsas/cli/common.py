@@ -53,12 +53,70 @@ def _validate_config_or_exit(config: object, skip_staging: bool = False) -> bool
 # different catalog or drive than the rest of the CLI.
 # ---------------------------------------------------------------------------
 
-def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
-    """Load ``--config`` when given, else ``None``.
+def _default_config_path() -> Path:
+    """``$XDG_CONFIG_HOME/lcsas/lcsas.toml``, else
+    ``~/.config/lcsas/lcsas.toml`` (#964).  Read at call time."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg and os.path.isabs(xdg):
+        base = Path(xdg)
+    else:
+        try:
+            base = Path.home() / ".config"
+        except (RuntimeError, KeyError):
+            # No HOME and no passwd entry (a container run as a bare
+            # uid): there is no default path, only the name of one.
+            base = Path("~/.config")
+    return base / "lcsas" / "lcsas.toml"
 
-    Every handler that accepts an optional config funnels through here so
-    config failures — a path that is not there, a file that will not
-    parse, a value the loader rejects — surface as an actionable
+
+def _look_up_config(args: argparse.Namespace) -> None:
+    """Fill ``args.config`` when ``--config`` was not given (#964).
+
+    The order is ``--config``, then ``$LCSAS_CONFIG``, then
+    :func:`_default_config_path` when a file is there.  ``main`` calls
+    this once, before the handler runs, so every handler (and every one
+    that reads ``args.config`` itself) sees the same config.
+    ``args.config_source`` records where it came from, for the messages:
+    ``--config``, ``LCSAS_CONFIG``, ``default`` or None (no config).
+    """
+    if getattr(args, "config", None):
+        args.config_source = "--config"
+        return
+    env = os.environ.get("LCSAS_CONFIG")
+    if env:
+        args.config = Path(env)
+        args.config_source = "LCSAS_CONFIG"
+        return
+    default = _default_config_path()
+    if default.exists():
+        args.config = default
+        args.config_source = "default"
+        return
+    args.config = None
+    args.config_source = None
+
+
+def _no_config_hint() -> str:
+    """The three ways to say where the config is (#964)."""
+    return (
+        "Name the config with --config PATH or the LCSAS_CONFIG "
+        f"variable, or put it at {_default_config_path()}."
+    )
+
+
+def _log_no_config(what: str) -> None:
+    """The refusal of a command that needs a config and found none."""
+    logger.error(f"A config is required for {what}, and none was found.")
+    logger.error(f"Hint: {_no_config_hint()}")
+
+
+def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
+    """Load the config ``args.config`` names, else ``None``.
+
+    ``args.config`` is ``--config``, or what :func:`_look_up_config`
+    found.  Every handler that accepts an optional config funnels through
+    here so config failures — a path that is not there, a file that will
+    not parse, a value the loader rejects — surface as an actionable
     ConfigError instead of a bare traceback or a silent fallback to a
     different catalog.
     """
@@ -77,11 +135,14 @@ def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
     try:
         return load_config(cfg_path)
     except FileNotFoundError as e:
+        if getattr(args, "config_source", None) == "LCSAS_CONFIG":
+            raise ConfigError(
+                f"LCSAS_CONFIG names {cfg_path}, which does not exist.",
+                recovery_hint="Correct the variable, or unset it.",
+            ) from e
         raise ConfigError(
             f"--config path does not exist: {cfg_path}",
-            recovery_hint=(
-                "Check the path, or omit --config to use ./catalog.db."
-            ),
+            recovery_hint="Check the path.",
         ) from e
     except tomllib.TOMLDecodeError as e:
         # MUST precede the ValueError arm below — TOMLDecodeError is a
@@ -106,18 +167,18 @@ def _resolve_db_path(
     args: argparse.Namespace,
     config: object | None = None,
 ) -> Path:
-    """Resolve the catalog path from CLI args, config, or default.
+    """Resolve the catalog path from CLI args or config.
 
-    Priority: ``--catalog`` flag > config ``[paths].catalog`` > ``catalog.db``
-    relative to the current working directory.
+    Priority: ``--catalog`` flag > config ``[paths].catalog``.  With
+    neither, a :class:`ConfigError` that names the ways to give one
+    (#964): there is no current-folder fallback, which made a forgotten
+    ``--config`` create ``./catalog.db`` wherever the owner stood.
 
     *config* is an optimisation, not a switch: handlers that already
     loaded it pass it in to avoid a second parse.  When it is omitted this
-    still honours ``--config``, because a handler that forgets to load one
+    still honours the config, because a handler that forgets to load one
     must not end up addressing a *different* catalog than the rest of the
-    CLI — that silently creates an empty ``catalog.db`` in whatever
-    directory the owner happened to be standing in, while ``scan`` and
-    ``stage`` keep using the configured path.
+    CLI.
     """
     if getattr(args, "db", None):
         return Path(args.db)
@@ -125,7 +186,14 @@ def _resolve_db_path(
         config = _load_config_opt(args)
     if config is not None and hasattr(config, "db_path"):
         return Path(config.db_path)
-    return Path("catalog.db")
+    from lcsas.exceptions import ConfigError
+
+    raise ConfigError(
+        "No config found, so no catalog is named.",
+        recovery_hint=(
+            f"{_no_config_hint()}  Or name the catalog with --catalog PATH."
+        ),
+    )
 
 
 def _resolve_device(
@@ -272,7 +340,9 @@ def _refuse_too_old_or_close(conn: sqlite3.Connection) -> None:
         raise
 
 
-_CatalogMode = Literal["write", "write-existing", "read", "unlocked-migrate", "unlocked"]
+_CatalogMode = Literal[
+    "create", "write", "write-existing", "read", "unlocked-migrate", "unlocked",
+]
 
 
 @contextmanager
@@ -286,45 +356,46 @@ def _open_catalog(
     """Open the catalog a command addresses; close it (and the lock) on exit.
 
     The path is *db_path* when the handler already has it, else
-    :func:`_resolve_db_path` of *args* and *config*.  *mode*:
+    :func:`_resolve_db_path` of *args* and *config*.  Only ``create``
+    makes a catalog that is not there (#941, #964): for every other mode
+    a missing or uninitialised catalog is a :class:`CatalogError` ("No
+    catalog at X.  Run `lcsas init` first."), so a mistyped path is an
+    error and not a new, empty catalog.  *mode*:
 
-    ``write`` (the default)
-        Take the catalog lock (waiting up to ``--lock-timeout``), create
-        the catalog when it is not there, and bring its schema up to date.
-    ``write-existing``
-        The same, but a missing or uninitialised catalog is a
-        :class:`CatalogError` ("Run `lcsas init` first") instead of a new
-        catalog.
+    ``create``
+        ``lcsas init`` alone.  Take the catalog lock, create the catalog
+        when it is not there, and bring its schema up to date.
+    ``write`` (the default), ``write-existing``
+        Take the catalog lock (waiting up to ``--lock-timeout``) and bring
+        the schema up to date.  The two are the same since #964.
     ``read``
-        No lock.  The catalog must exist and is not migrated
+        No lock.  The catalog is not migrated
         (:func:`_open_existing_catalog`).
     ``unlocked-migrate``, ``unlocked``
-        No lock; the catalog is created when missing, and migrated or not.
-        Only ``volume impact`` and ``session list`` open it this way, as
-        they did before this helper existed.
+        No lock; migrated or not.  Only ``volume impact`` and ``session
+        list`` open it this way, as they did before this helper existed.
 
-    No mode creates a catalog while an ``archive.db`` (its default name
-    before rc11, #934) sits beside the missing path: that is an install
-    whose config was renamed but not its catalog file, and a new, empty
-    catalog beside the real one would hide every volume
+    ``create`` refuses too while an ``archive.db`` (the catalog's default
+    name before rc11, #934) sits beside the missing path: that is an
+    install whose config was renamed but not its catalog file, and a new,
+    empty catalog beside the real one would hide every volume
     (:func:`_refuse_beside_old_catalog`).
     """
-    from lcsas.db.connection import get_connection, locked_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
 
     if db_path is None:
         db_path = _resolve_db_path(args, config)
     _refuse_beside_old_catalog(db_path)
-    if mode in ("write", "write-existing"):
-        if mode == "write-existing":
+    if mode in ("create", "write", "write-existing"):
+        if mode != "create":
             _open_existing_catalog(db_path).close()
         with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
             ensure_schema(conn)
             yield conn
         return
-    conn = _open_existing_catalog(db_path) if mode == "read" else get_connection(db_path)
-    if mode == "unlocked":
-        _refuse_too_old_or_close(conn)
+    # _open_existing_catalog refuses a catalog too old to read (#968).
+    conn = _open_existing_catalog(db_path)
     try:
         if mode == "unlocked-migrate":
             ensure_schema(conn)

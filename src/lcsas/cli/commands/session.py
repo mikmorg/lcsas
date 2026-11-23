@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from lcsas.cli.common import _load_config_opt, _open_catalog
+from lcsas.cli.common import _load_config_opt, _log_no_config, _open_catalog
 from lcsas.log import get_logger
 
 logger = get_logger()
@@ -16,7 +16,7 @@ def cmd_session_list(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for session list.")
+        _log_no_config("session list")
         return 1
     with _open_catalog(args, config, mode="unlocked") as conn:
         sessions = list_sessions(conn, status_filter=args.status)
@@ -59,7 +59,7 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for session abort.")
+        _log_no_config("session abort")
         return 1
 
     with _open_catalog(args, config) as conn:

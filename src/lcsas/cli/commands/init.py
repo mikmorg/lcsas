@@ -17,8 +17,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     Resolution order for the catalog path:
       1. ``--catalog-path`` on ``init`` (when provided)
       2. global ``--catalog``
-      3. ``[paths] catalog`` from the TOML config (``--config``)
-      4. ``catalog.db`` in the current working directory
+      3. ``[paths] catalog`` from the config (``--config``, else
+         ``$LCSAS_CONFIG``, else ``~/.config/lcsas/lcsas.toml``, #964)
+
+    With none of them it refuses: there is no current-folder default.
+    ``init`` is the only command that creates a catalog (#941).
 
     With a config, its ``[defaults] location`` is registered too, as
     ``location add`` would (#968): plain ``stage`` stages for it, and
@@ -35,7 +38,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     # Ensure parent directory exists (XDG paths may not exist yet)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with _open_catalog(args, db_path=db_path) as conn:
+    with _open_catalog(args, db_path=db_path, mode="create") as conn:
         # Opening it creates and migrates the catalog.
         if config is not None:
             from lcsas.db.locations import ensure_location, get_location

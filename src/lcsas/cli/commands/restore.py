@@ -10,6 +10,7 @@ import argparse
 
 from lcsas.cli.common import (
     _load_config_opt,
+    _log_no_config,
     _open_catalog,
     _validate_config_or_exit,
 )
@@ -29,7 +30,7 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
     """Generate a restore pick list for a snapshot."""
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for restore plan.")
+        _log_no_config("restore plan")
         return 1
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
@@ -117,7 +118,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     """Execute a restore operation."""
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for restore exec.")
+        _log_no_config("restore exec")
         return 1
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1

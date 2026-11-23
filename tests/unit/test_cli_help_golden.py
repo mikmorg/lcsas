@@ -114,14 +114,17 @@ def test_bare_group_prints_usage(
 
 
 def test_bare_location_needs_config(caplog: pytest.LogCaptureFixture) -> None:
-    """``lcsas location`` goes to its handler, which asks for --config."""
+    """``lcsas location`` goes to its handler, which asks for a config
+    (#964: and names where it looks)."""
+    from lcsas.cli.common import _no_config_hint
     from lcsas.cli.main import main
 
     with caplog.at_level(logging.ERROR, logger="lcsas"):
         rc = main(["location"])
     assert rc == 1
     assert [r.getMessage() for r in caplog.records] == [
-        "--config is required for location."
+        "A config is required for location, and none was found.",
+        f"Hint: {_no_config_hint()}",
     ]
 
 

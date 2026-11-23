@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from lcsas.cli.common import _load_config_opt, _open_catalog, _resolve_db_path
+from lcsas.cli.common import _load_config_opt, _log_no_config, _open_catalog, _resolve_db_path
 from lcsas.log import get_logger
 
 logger = get_logger()
@@ -29,7 +29,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required to generate an estate card.")
+        _log_no_config("estate card")
         return 1
     # #960: the card prints the same hint the discs carry.
     from lcsas.config.settings import password_hint_problem, usable_password_hint

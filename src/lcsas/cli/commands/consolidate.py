@@ -5,7 +5,13 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from lcsas.cli.common import _confirm, _load_config_opt, _open_catalog, _unknown_location_msg
+from lcsas.cli.common import (
+    _confirm,
+    _load_config_opt,
+    _log_no_config,
+    _open_catalog,
+    _unknown_location_msg,
+)
 from lcsas.log import get_logger
 
 logger = get_logger()
@@ -132,7 +138,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             return 0
 
         if config is None or orch is None:
-            logger.error("--config is required for --execute.")
+            _log_no_config("consolidate --execute")
             return 1
 
         # #677: only VERIFIED volumes can become CONSOLIDATING.  Refuse

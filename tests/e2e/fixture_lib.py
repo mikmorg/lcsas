@@ -56,6 +56,33 @@ def _ensure_src_on_path() -> None:
         sys.path.insert(0, src)
 
 
+def _lcsas(argv: list[str], db_path: Path) -> int:
+    """Run ``lcsas`` in this process on the fixture's own catalog, with
+    its log on stderr.
+
+    No config is looked up (#964): the blind harness and the drill-kit
+    builder run outside pytest, where the developer's own
+    ``LCSAS_CONFIG`` or ``~/.config/lcsas/lcsas.toml`` would otherwise be
+    read alongside ``--catalog`` (``init`` would register its default
+    location in the fixture's catalog).
+    """
+    _ensure_src_on_path()
+    from lcsas.cli.main import main as lcsas_main
+
+    saved = {k: os.environ.get(k) for k in ("LCSAS_CONFIG", "XDG_CONFIG_HOME")}
+    os.environ.pop("LCSAS_CONFIG", None)
+    os.environ["XDG_CONFIG_HOME"] = str(db_path.parent / ".no-config")
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            return lcsas_main(argv)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 # ---------------------------------------------------------------------------
 # Backup sets, registered the way an owner does
 # ---------------------------------------------------------------------------
@@ -70,12 +97,15 @@ def add_repo(db_path: Path, name: str, mirror: Path) -> str:
     ``repo_id == name``, so no gate ever saw an id that differs from the
     name, and drill #476 found the set menu showing UUIDs (#606, #617).
     The CLI log line goes to stderr, so a caller's stdout stays its own.
+    The first call makes the catalog with ``lcsas init``: no other
+    command creates one (#964).
     """
-    _ensure_src_on_path()
-    from lcsas.cli.main import main as lcsas_main
-
-    with contextlib.redirect_stdout(sys.stderr):
-        rc = lcsas_main(["--catalog", str(db_path), "repo", "add", name, str(mirror)])
+    if not db_path.exists():
+        rc = _lcsas(["--catalog", str(db_path), "init"], db_path)
+        if rc != 0:
+            raise RuntimeError(f"lcsas init {db_path} exited {rc}")
+    rc = _lcsas(["--catalog", str(db_path), "repo", "add", name, str(mirror)],
+                db_path)
     if rc != 0:
         raise RuntimeError(f"lcsas repo add {name!r} {mirror} exited {rc}")
     with contextlib.closing(sqlite3.connect(db_path)) as conn:

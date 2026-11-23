@@ -38,6 +38,8 @@ from tests.unit.test_cli_key import PASSWORD, _make_key_file, _write_pw_file
 
 def _repo_add(db: Path, name: str, mirror: Path) -> int:
     mirror.mkdir(parents=True, exist_ok=True)
+    if not db.exists():  # only init creates a catalog (#964)
+        assert main(["--catalog", str(db), "init"]) == 0
     return main(["--catalog", str(db), "repo", "add", "--force", name, str(mirror)])
 
 
@@ -124,6 +126,7 @@ def _renamed_setup(tmp_path: Path) -> tuple[Path, Path, str]:
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
         f'[repos.pics]\nmirror_path = "{mirror}"\npassword_file = "{pw}"\n'
     )
+    assert main(["--catalog", str(db), "init"]) == 0  # #964
     assert main(["--catalog", str(db), "repo", "add", "--force", "photos", str(mirror)]) == 0
     conn = get_connection(db)
     repo_id = list_repos(conn)[0].repo_id

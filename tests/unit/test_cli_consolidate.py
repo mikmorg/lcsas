@@ -219,7 +219,7 @@ class TestCmdConsolidate:
             "--execute",
         ])
         assert result == 1
-        assert "--config is required" in caplog.text
+        assert "A config is required for" in caplog.text
 
     def test_consolidate_execute_confirmation_declined(
         self, tmp_path, capsys, caplog, monkeypatch

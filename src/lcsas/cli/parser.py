@@ -155,7 +155,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config", type=Path, default=None,
-        help="Path to TOML configuration file.",
+        help="Path to the TOML config. Default: $LCSAS_CONFIG, else "
+             "~/.config/lcsas/lcsas.toml ($XDG_CONFIG_HOME/lcsas/lcsas.toml) "
+             "when it is there.",
     )
     parser.add_argument(
         "--catalog", dest="db", type=Path, default=None,
@@ -174,11 +176,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # --- init ---
-    init_p = subparsers.add_parser("init", help="Initialize the LCSAS catalog and config.")
+    init_p = subparsers.add_parser(
+        "init", help="Create the LCSAS catalog (the only command that does).")
     init_p.set_defaults(func=cmd_init)
     init_p.add_argument("--catalog-path", dest="db_path", type=Path, default=None,
                         help="Path for the SQLite catalog file. "
-                             "Overrides --config's [paths].catalog when set.")
+                             "Overrides the config's [paths].catalog when set.")
 
     # --- repo ---
     repo_p = subparsers.add_parser("repo", help="Manage backup repositories.")

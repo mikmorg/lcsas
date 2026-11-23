@@ -4,6 +4,16 @@ First-time setup and ongoing config management: create the SQLite catalog and va
 
 Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the TOML loader resolves relative paths against the config file's parent dir (`src/lcsas/config/settings.py`).
 
+**Where the config and the catalog come from (#964).** Every command finds its config the same way, before it runs (`_look_up_config` in `src/lcsas/cli/common.py`, called once by `main`):
+
+1. `--config PATH`;
+2. else the environment variable `LCSAS_CONFIG` (a path that is not there is an error naming the variable, not a fallback);
+3. else `$XDG_CONFIG_HOME/lcsas/lcsas.toml`, which is `~/.config/lcsas/lcsas.toml` when `XDG_CONFIG_HOME` is not set, if that file is there.
+
+So on a configured machine `lcsas status` needs no flags. `--verbose` says which config a lookup found. The catalog is `--catalog PATH`, else the config's `[paths] catalog`; with neither there is no catalog, and the command refuses with `No config found, so no catalog is named.` and a hint naming the three places above and `--catalog`. There is no current-folder `catalog.db` any more. A command that needs the config itself (`scan`, `stage`, `burn`, ...) says `A config is required for <command>, and none was found.` with the same hint.
+
+**Only `lcsas init` creates a catalog (#941, #964).** Every other command opens an existing one: a missing or mistyped path is `No catalog at X.` with the hint ``Run `lcsas init` first.``, and no file is made (`_open_catalog`'s `create` mode is `init`'s alone). `catalog rebuild --output` still writes the catalog it rebuilds.
+
 ## Table of contents
 
 - [`lcsas init`](#lcsas-init) — initialize the SQLite catalog
@@ -18,12 +28,13 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 
 **Prerequisites:**
 - A writable parent directory for the chosen catalog path; missing intermediate dirs are fine — the handler calls `mkdir(parents=True, exist_ok=True)`.
-- Optional TOML config — when `--config` is set, `paths.catalog` from the config is used as the catalog path.
+- A TOML config (found as above), whose `paths.catalog` is the catalog path; or `--catalog-path` / `--catalog`, which need no config.
 
 **Steps:**
 1. `lcsas [--config FILE] init [--catalog-path PATH]` — create the SQLite file and run `ensure_schema()` (which calls `create_all()` on a fresh catalog). (`cmd_init`, `src/lcsas/cli/commands/init.py`)
    - Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/parser.py`).
-   - Catalog path resolution order: explicit `--catalog-path` > global `--catalog` > `--config`'s `paths.catalog` > `catalog.db` in cwd.
+   - Catalog path resolution order: explicit `--catalog-path` > global `--catalog` > the config's `paths.catalog`. With none of them `init` refuses (#964); it never creates `catalog.db` in the current folder.
+   - `init` is the only command that creates a catalog.
 2. `create_all()` issues `CREATE TABLE IF NOT EXISTS` for every table and inserts a row into `schema_version` if empty. (`src/lcsas/db/schema.py`)
 3. With a config, its `[defaults] location` (`Home_Shelf` when the config sets none) is registered as `lcsas location add` would, so plain `stage`, `burn` and `stage --collection` agree on it (#968). Re-running `init` registers a default the config has changed to; the old one stays registered.
 
@@ -43,6 +54,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 **Test coverage:**
 - Existing:
   - `tests/unit/test_cli_init.py::TestCLIInit::test_init_creates_db` — catalog file created.
+  - `tests/unit/test_config_lookup.py` — the config lookup order, the refusals with no config, and two walks over every command the parser has: with no config nothing is written anywhere, and with a mistyped `[paths] catalog` every command that opens the catalog says `No catalog at X` and none creates X (#964). `tests/integration/test_default_config_real.py` runs `init`, `repo add`, `scan` and `stage` on real rustic with the config at `~/.config/lcsas/lcsas.toml` and no `--config`.
   - `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` — `--config` is honored (regression test for issue #17).
   - `tests/unit/test_cli.py::TestCLIParsing::test_init_command` — argparse wiring.
   - `tests/unit/test_cli_init.py::TestCmdInit::test_reinit_on_existing_db` — idempotent re-init.
@@ -65,13 +77,13 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 **Purpose:** Load a TOML config and report every validation error in a single pass.
 
 **Prerequisites:**
-- A TOML file at the path passed via the global `--config` flag (lives on the top-level parser, not the `config check` subparser — `--config` in `build_parser()`, `src/lcsas/cli/parser.py`).
+- A TOML file: the global `--config` flag (on the top-level parser, not the `config check` subparser — `--config` in `build_parser()`, `src/lcsas/cli/parser.py`), else `LCSAS_CONFIG`, else `~/.config/lcsas/lcsas.toml` (see the top of this page).
 - Paths referenced in the TOML must exist and be the correct type for a clean run.
 
 **Steps:**
-1. `lcsas --config PATH config check` — load and validate. (`cmd_config_check`, `src/lcsas/cli/commands/config.py`)
+1. `lcsas [--config PATH] config check` — load and validate. (`cmd_config_check`, `src/lcsas/cli/commands/config.py`)
    - Parser: `config` subparser in `build_parser()` (`src/lcsas/cli/parser.py`).
-   - Missing `--config` logs `--config is required for config check.` and returns 1.
+   - With no config found it logs `A config is required for config check, and none was found.` and the hint naming the three places, and returns 1.
 2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py`) It stops with an error naming the key, for every command, when (#682):
    - a known key has the wrong TOML type: strings must be quoted, numbers and `true`/`false` must not be (`split = "false"`, `split_threshold = "3"`, `metadata_reserve_mb = "100"`, `media_type = 25`, `label_prefix = 7` are all errors);
    - `split_threshold`/`split_shares` (in `[defaults]`, or the pair a `[repos.<name>]` table makes by overriding either) is not `2 <= K <= N <= 16`, or `K = N = 1` for no split;
@@ -137,7 +149,7 @@ Observations from reading the source; **not** fixes.
 
 - **Every disc carries a disc catalog.** The complete SQLite catalog is copied onto every burned disc by `staging/metadata.py::HolographicInjector`, so any single disc is self-describing. There is no separate JSON-export step. (intentional: design note, not a defect.)
 - **True backup = copy the `.sqlite` file.** There is no `db import` and no `db export` command; an owner wanting an off-disc copy of the master catalog should copy the raw SQLite file. The catalog runs in WAL mode (`get_connection` in `src/lcsas/db/connection.py`), so copy it while no `lcsas` command is running (a copy taken mid-command can miss the `-wal` sidecar), or take a consistent copy with `sqlite3 catalog.db ".backup copy.db"`. (intentional: the disc catalog on every disc is the designed backup; no export command is planned.)
-- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.catalog` (resolution order: `--catalog-path` > `--catalog` > `--config` > `./catalog.db`) — fixed in issue #17 and pinned by `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/commands/init.py`). Resolved; kept as a behaviour note.
+- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.catalog` (resolution order: `--catalog-path` > `--catalog` > the config's `paths.catalog`; no `./catalog.db` fallback since #964) — fixed in issue #17 and pinned by `tests/unit/test_cli_init.py::TestCLIInit::test_init_honors_config_flag` (`cmd_init`, `src/lcsas/cli/commands/init.py`). Resolved; kept as a behaviour note.
 - **`init` migrates if needed.** On an existing catalog `ensure_schema()` calls `migrate()` to bring an older catalog up to `CURRENT_SCHEMA_VERSION`; on a fresh catalog `create_all()` stamps the current version directly (`src/lcsas/db/schema.py`). Pinned by `tests/unit/test_db_schema.py` (`TestSchema`, `TestMigrateV3ToV4`). Resolved; kept as a behaviour note.
 - **`config check` does not validate `optical_device`** — typos surface only at burn time. (intentional: see the Gaps bullet under `lcsas config check`.)
 - **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse (`lcsas: error: unrecognized arguments: --config foo.toml`); correct form is `lcsas --config foo.toml config check`. The error now adds `--config: top-level option(s); put them before the subcommand, ...` (the same for `--catalog`, `--lock-timeout` and `--verbose`); the exit is still argparse's status 2 with nothing run (`_LcsasArgumentParser` in `src/lcsas/cli/parser.py`; `tests/unit/test_cli_config_placement.py`, #517).

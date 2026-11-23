@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from lcsas.cli.common import _confirm, _load_config_opt, _open_catalog
+from lcsas.cli.common import _confirm, _load_config_opt, _log_no_config, _open_catalog
 from lcsas.log import get_logger
 
 logger = get_logger()
@@ -38,7 +38,7 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for staging clean.")
+        _log_no_config("staging clean")
         return 1
     # Hold the catalog lock across detection AND the confirm prompt so a
     # concurrent `lcsas stage` cannot commit a new in-flight session whose

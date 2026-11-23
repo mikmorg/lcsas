@@ -17,6 +17,7 @@ from lcsas.cli.common import (
     _config_mirror,
     _confirm,
     _load_config_opt,
+    _log_no_config,
     _open_catalog,
     _resolve_db_path,
 )
@@ -91,7 +92,7 @@ def cmd_key_card(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required to render a password card.")
+        _log_no_config("password card")
         return 1
 
     repo_name = args.repo
@@ -501,7 +502,7 @@ def _record_existing_split(args: argparse.Namespace) -> int:
     name = args.repo
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for password split --record-existing.")
+        _log_no_config("password split --record-existing")
         return 1
     if not args.share_files:
         logger.error(
@@ -1187,7 +1188,7 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for password verify.")
+        _log_no_config("password verify")
         return 1
     if bool(args.share_files) == bool(args.password_file):
         logger.error(

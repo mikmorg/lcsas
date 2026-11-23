@@ -156,7 +156,7 @@ def test_cli_non_split_to_stdout(tmp_path: Path, capsys) -> None:
 def test_cli_requires_config(capsys) -> None:
     rc = main(["estate", "card"])
     assert rc == 1
-    assert "--config is required" in capsys.readouterr().out
+    assert "A config is required for" in capsys.readouterr().out
 
 
 def test_cli_disc_count_from_catalog(tmp_path: Path) -> None:

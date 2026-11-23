@@ -1466,7 +1466,7 @@ class TestKeyVerify:
         rc = main(["password", "verify", "--repo", "alpha",
                    "--password-file", str(tmp_path / "x")])
         assert rc == 1
-        assert "--config is required" in capsys.readouterr().out
+        assert "A config is required for" in capsys.readouterr().out
 
     def test_key_verify_requires_exactly_one_source(
         self, tmp_path: Path, capsys
