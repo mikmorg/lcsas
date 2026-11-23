@@ -43,8 +43,17 @@ def create_location(
     description: str = "",
 ) -> Location:
     """Register a new location."""
+    from lcsas.exceptions import InputError
     from lcsas.utils.timestamps import utc_now
 
+    if conn.execute(
+        "SELECT 1 FROM locations WHERE name = ?", (name,)
+    ).fetchone() is not None:
+        # #968: worded, not the UNIQUE constraint's "Unexpected error".
+        raise InputError(
+            f"Location '{name}' already exists.",
+            recovery_hint="See 'lcsas location list'.",
+        )
     conn.execute(
         "INSERT INTO locations (name, description, created_at) "
         "VALUES (?, ?, ?)",

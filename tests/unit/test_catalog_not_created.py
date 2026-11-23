@@ -50,7 +50,7 @@ def upgraded(tmp_path: Path) -> tuple[Path, Path, Path]:
         ["scan"],
         ["status"],
         ["stage", "--media", "TEST_TINY", "--dry-run"],
-        ["repo", "add", "alpha", "MIRROR/alpha"],
+        ["repo", "add", "--force", "alpha", "MIRROR/alpha"],
         ["session", "list"],
         ["location", "list"],
     ],

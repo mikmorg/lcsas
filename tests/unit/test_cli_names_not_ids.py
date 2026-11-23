@@ -70,7 +70,7 @@ def test_the_id_only_list_has_no_stale_entries() -> None:
 def _catalog(tmp_path: Path) -> tuple[Path, str]:
     db = tmp_path / "test.db"
     assert main(["init", "--catalog-path", str(db)]) == 0
-    assert main(["--catalog", str(db), "repo", "add", "Family", "/mnt/family"]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "--force", "Family", "/mnt/family"]) == 0
     conn = get_connection(db)
     repo_id = next(r.repo_id for r in list_repos(conn) if r.name == "Family")
     conn.close()
@@ -107,7 +107,7 @@ def test_repo_remove_takes_the_name(tmp_path: Path, capsys) -> None:
 
 def test_ambiguous_name_asks_for_the_id(tmp_path: Path, capsys) -> None:
     db, _ = _catalog(tmp_path)
-    assert main(["--catalog", str(db), "repo", "add", "family", "/mnt/other"]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "--force", "family", "/mnt/other"]) == 0
     # "FAMILY" matches both case-insensitively.
     assert main(["--catalog", str(db), "repo", "retire", "FAMILY"]) == 1
     assert "matches 2 repositories" in capsys.readouterr().out

@@ -40,7 +40,9 @@ key ID from the mirror's `keys/` directory.
 
 **Steps:**
 
-1. `lcsas repo add <name> <mirror_path>` — scan `keys/` for the first
+1. `lcsas repo add <name> <mirror_path>` — refuse a path with no rustic
+   repository (no `config` file: a typo, or a mirror not mounted), before
+   the catalog is opened, unless `--force` (#968); scan `keys/` for the first
    key filename; refuse a mirror that is a **retired** repository (its
    recorded key is in the mirror's `keys/`, or, when either side has no key, its
    mirror path is the same): the error names that repository and offers

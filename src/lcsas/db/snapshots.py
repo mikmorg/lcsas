@@ -145,7 +145,13 @@ def list_snapshots(
     sql = "SELECT * FROM snapshots"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    rows = conn.execute(sql + " ORDER BY timestamp", params).fetchall()
+    # #968: by time, not text.  rustic writes the backup machine's local
+    # offset, so text order is wrong across time zones; julianday() reads
+    # any offset (utils/timestamps.py).  An unreadable time sorts last.
+    rows = conn.execute(
+        sql + " ORDER BY julianday(timestamp) IS NULL, julianday(timestamp),"
+        " timestamp, snapshot_id", params,
+    ).fetchall()
     return [_row_to_snapshot(r) for r in rows]
 
 

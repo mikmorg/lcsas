@@ -13,7 +13,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from lcsas.exceptions import CatalogLockTimeout
+from lcsas.db.schema import CURRENT_SCHEMA_VERSION, get_schema_version
+from lcsas.exceptions import CatalogLockTimeout, CatalogUnreadableError
 
 # Command label written into the lock file so a waiter can name the holder.
 # Set by the CLI before taking the lock; falls back to a generic label.
@@ -28,6 +29,19 @@ def set_lock_holder_label(label: str) -> None:
     """
     global _HOLDER_CMD
     _HOLDER_CMD = label
+
+
+def _unreadable(db_path: Path | str, why: str) -> CatalogUnreadableError:
+    """The refusal for a catalog file SQLite cannot read (#968)."""
+    return CatalogUnreadableError(
+        f"The catalog at {db_path} is damaged or is not a catalog ({why}). "
+        "Nothing was changed.",
+        recovery_hint=(
+            "Restore the file from a backup copy, or rebuild the catalog "
+            "from the discs: 'lcsas catalog rebuild --output <new catalog> "
+            "<disc folder> ...', then point [paths] catalog at the new file."
+        ),
+    )
 
 
 def get_connection(db_path: Path | str) -> sqlite3.Connection:
@@ -56,20 +70,27 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
             os.close(fd)
     conn = sqlite3.connect(db_str)
     # Everything after connect() can fail on a truncated or corrupt
-    # catalog (journal_mode is usually the first statement to read the
+    # catalog (the first statement is usually the first to read the
     # header), so close the connection before the error propagates (#769).
     try:
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
+        # #968: the version first.  A file SQLite cannot read is refused
+        # in words, and a catalog newer than this build keeps its journal
+        # mode: ensure_schema refuses to write it, and a command that only
+        # reads it must not change it either.
+        try:
+            version = get_schema_version(conn)
+        except sqlite3.DatabaseError as exc:
+            raise _unreadable(db_path, str(exc)) from exc
+        if version <= CURRENT_SCHEMA_VERSION:
+            conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA wal_autocheckpoint=1000;")  # explicit: checkpoint every 1000 pages
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.execute("PRAGMA busy_timeout=30000;")
         result = conn.execute("PRAGMA quick_check(1);").fetchone()
         if result is not None and result[0] != "ok":
-            raise RuntimeError(
-                f"Catalog integrity check failed for '{db_path}': {result[0]}. "
-                "The catalog may be corrupted. Restore it from backup before continuing."
-            )
+            raise _unreadable(
+                db_path, f"integrity check failed: {result[0]}")
     except Exception:
         conn.close()
         raise

@@ -722,6 +722,59 @@ def password_file_lines_warning(path: Path) -> str | None:
     )
 
 
+_BOM = b"\xef\xbb\xbf"
+
+
+def password_typing_warnings(path: Path, *, multi_line: bool = False) -> list[str]:
+    """One warning per thing in password file *path* that a person cannot
+    type back from a card (#968).
+
+    rustic and every LCSAS reader take the first line, less its line end,
+    as the password, byte for byte: a byte-order mark, a space at either
+    end and a tab are all part of it, and none shows on a card.  A letter
+    outside ASCII may not be on the heir's keyboard, or may be typed as
+    other bytes.  An empty password gets its own warning; *multi_line*
+    says :func:`password_file_lines_warning` has already reported the
+    file (with its empty first line).  Empty when the file cannot be read.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return []
+    line = data.split(b"\n", 1)[0].removesuffix(b"\r")
+    head = f"password_file {path}"
+    notes: list[str] = []
+    if line.startswith(_BOM):
+        notes.append(
+            f"{head} starts with a byte-order mark (an invisible mark some "
+            "editors add). It is part of the password and nobody can type "
+            "it. Save the file without a BOM (as plain UTF-8 or ASCII).")
+        line = line[len(_BOM):]
+    if not line:
+        if not multi_line:
+            notes.append(f"{head} is empty, so the password is empty.")
+        return notes
+    if line[:1].isspace() and line[:1] != b"\t":
+        notes.append(
+            f"{head}: the password begins with a space. The space is part of "
+            "the password and does not show on a card.")
+    if line[-1:].isspace() and line[-1:] != b"\t":
+        notes.append(
+            f"{head}: the password ends with a space. The space is part of "
+            "the password and does not show on a card.")
+    if b"\t" in line:
+        notes.append(
+            f"{head}: the password holds a tab, which is part of it and "
+            "reads as spaces on a card.")
+    if any(b > 0x7F for b in line):
+        odd = sorted({c for c in line.decode("utf-8", "replace") if ord(c) > 0x7F})
+        notes.append(
+            f"{head}: the password holds a letter outside ASCII "
+            f"({' '.join(odd)}), which another keyboard may not have or may "
+            "type as other bytes.")
+    return notes
+
+
 # #960: the example hint of load_config's docstring; an owner who copied
 # it has not written a hint of their own.
 _EXAMPLE_PASSWORD_HINT = "Sealed envelope with the family attorney (see my will)"
@@ -881,6 +934,9 @@ def validate_config(config: LCSASConfig) -> list[str]:
             note = password_file_lines_warning(repo.password_file)
             if note is not None:
                 _logger.warning("repo '%s': %s", name, note)
+            for typing_note in password_typing_warnings(
+                    repo.password_file, multi_line=note is not None):
+                _logger.warning("repo '%s': %s", name, typing_note)
 
     # Check for critical path overlaps that could cause data loss during cleanup.
     # The staging area must not hold, or sit inside, a repository mirror:

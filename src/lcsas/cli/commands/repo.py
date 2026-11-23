@@ -28,6 +28,17 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
     from lcsas.utils.fs import read_repo_key_ids
     from lcsas.utils.labels import generate_uuid
 
+    # #968: a mistyped or unmounted path registered silently.  Checked
+    # before the catalog is opened, so a refusal creates nothing.
+    if not (args.mirror_path / "config").is_file() and not getattr(
+            args, "force", False):
+        logger.error(
+            f"{args.mirror_path} holds no rustic repository (no "
+            f"'config' file). Nothing was registered. Check the path (is the "
+            f"mirror mounted?), or pass --force to register it anyway."
+        )
+        return 1
+
     with _open_catalog(args) as conn:
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()

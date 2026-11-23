@@ -10,6 +10,40 @@ from contextlib import contextmanager
 from typing import TextIO
 
 
+def stdout_closed() -> bool:
+    """True when nothing reads stdout any more (#968): a pipe whose reader
+    exited, as ``lcsas ... | head`` leaves it."""
+    import select
+
+    try:
+        poller = select.poll()
+        poller.register(sys.stdout.fileno(), select.POLLOUT)
+        events = poller.poll(0)
+    except (AttributeError, OSError, ValueError):
+        return False
+    return any(ev & select.POLLERR for _fd, ev in events)
+
+
+def silence_stdout() -> None:
+    """Send the rest of stdout to the null device (#968).
+
+    Called once, when the reader of stdout has gone away: the command
+    goes on (a stage or burn must not stop half way because ``head``
+    exited) and nothing more is said about the closed pipe, neither per
+    log line nor at exit.
+    """
+    try:
+        fd = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):
+        sys.stdout = open(os.devnull, "w")  # noqa: SIM115 - lives to exit
+        return
+    null = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(null, fd)
+    finally:
+        os.close(null)
+
+
 class _StdoutHandler(logging.StreamHandler[TextIO]):
     """Handler that always writes to the *current* ``sys.stdout``.
 
@@ -29,6 +63,13 @@ class _StdoutHandler(logging.StreamHandler[TextIO]):
     @stream.setter
     def stream(self, _value: TextIO) -> None:
         pass  # ignore attempts to set the stream
+
+    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802
+        """A closed stdout is silenced once, not reported per line (#968)."""
+        if isinstance(sys.exc_info()[1], BrokenPipeError):
+            silence_stdout()
+            return
+        super().handleError(record)
 
 
 class _StderrHandler(logging.StreamHandler[TextIO]):

@@ -100,8 +100,8 @@ def test_interrupted_session_numbers_are_not_reused(
 
     monkeypatch.setattr(orch_mod.BurnOrchestrator, "_stage_single_volume",
                         stop_after_first)
-    with pytest.raises(KeyboardInterrupt):
-        inst.lcsas("stage")
+    # #968: main() ends a Ctrl-C quietly with 130.
+    assert inst.lcsas("stage") == 130
     monkeypatch.undo()
     kept = inst.labels()
     assert len(kept) == 1, kept

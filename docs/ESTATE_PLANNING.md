@@ -101,7 +101,9 @@ theft.
   catalog** so disc instructions can be derived from the split you actually
   performed (and the next-step reminder is printed).
   Register the repository with `lcsas repo add` first. If the catalog does
-  not list the repository, `password split` stops before it writes any share.
+  not list the repository, or cannot be opened (damaged, or written by a
+  newer LCSAS), `password split` stops before it writes any share. A split
+  needs at least 2 shares.
 
 - [ ] **Mark the password as split** so the discs print share instructions —
   set `split = true` (and your `split_threshold` / `split_shares`) in

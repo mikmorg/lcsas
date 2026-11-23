@@ -189,6 +189,10 @@ def build_parser() -> argparse.ArgumentParser:
     repo_add.set_defaults(func=cmd_repo_add)
     repo_add.add_argument("name", help="Repository name (e.g., 'family').")
     repo_add.add_argument("mirror_path", type=Path, help="Path to the local mirror.")
+    repo_add.add_argument("--force", action="store_true",
+                          help="Register mirror_path even though it holds no "
+                               "rustic repository (no 'config' file) yet, "
+                               "e.g. a mirror that is not mounted now.")
 
     repo_list = repo_sub.add_parser("list", help="List registered repositories.")
     repo_list.set_defaults(func=cmd_repo_list)
@@ -435,7 +439,9 @@ def build_parser() -> argparse.ArgumentParser:
                                 "if missing; any other path is the file.")
     burniso_p.add_argument("--label", type=str, default=None,
                            help="Volume label for the receipt. Defaults to the "
-                                "ISO's parent directory name.")
+                                "ISO's volume ID (the label `lcsas stage` "
+                                "mastered it with); for an ISO with none, "
+                                "the name of its folder.")
     burniso_p.add_argument("--location", type=str, default=None,
                            help="Location tag for the receipt "
                                 "(required with --emit-receipt).")

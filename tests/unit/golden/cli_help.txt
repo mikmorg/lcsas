@@ -72,7 +72,7 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
 ===== lcsas repo add --help =====
-usage: lcsas repo add [-h] name mirror_path
+usage: lcsas repo add [-h] [--force] name mirror_path
 
 positional arguments:
   name         Repository name (e.g., 'family').
@@ -80,6 +80,8 @@ positional arguments:
 
 options:
   -h, --help   show this help message and exit
+  --force      Register mirror_path even though it holds no rustic repository
+               (no 'config' file) yet, e.g. a mirror that is not mounted now.
 ===== lcsas repo list --help =====
 usage: lcsas repo list [-h]
 
@@ -278,7 +280,8 @@ options:
                         name with no extension) gets <label>_<location>.json
                         and is created if missing; any other path is the file.
   --label LABEL         Volume label for the receipt. Defaults to the ISO's
-                        parent directory name.
+                        volume ID (the label `lcsas stage` mastered it with);
+                        for an ISO with none, the name of its folder.
   --location LOCATION   Location tag for the receipt (required with --emit-
                         receipt).
   --session SESSION     Optional session ID to record in the receipt.

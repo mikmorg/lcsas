@@ -44,6 +44,7 @@ def cmd_config_check(args: argparse.Namespace) -> int:
         args, config,
         explicit=isinstance(defaults, dict) and "location" in defaults,
     ))
+    _warn_repo_names(args, config)
     # #960: the hint goes on every disc; meet the problem here, not at
     # the first stage.
     from lcsas.config.settings import password_hint_problem
@@ -109,6 +110,44 @@ def _config_check_default_location(
     ]
 
 
+def _warn_repo_names(args: argparse.Namespace, config: LCSASConfig) -> None:
+    """Warn for a ``[repos.X]`` table whose mirror the catalog registered
+    under another name (#968).
+
+    New discs name a backup set by its config key, while the catalog and
+    the discs already burned keep the name it was registered under: a
+    table renamed in the config only splits one set into two names.  A
+    warning, not an error: a key that differs from the catalog name is
+    resolved by its mirror path on purpose (#687).  Nothing to check
+    without a catalog.
+    """
+    from lcsas.db.repos import list_repos, same_mirror_path
+    from lcsas.exceptions import CatalogError
+
+    if not config.repositories:
+        return
+    db_path = _resolve_db_path(args, config)
+    if not db_path.exists():
+        return
+    try:
+        with _open_catalog(args, mode="read", db_path=db_path) as conn:
+            registered = list_repos(conn)
+    except CatalogError:
+        return  # no catalog yet, or one the collections check reports
+    for key, repo_cfg in config.repositories.items():
+        for repo in registered:
+            if (repo.name != key and repo.mirror_path
+                    and same_mirror_path(repo.mirror_path, repo_cfg.mirror_path)):
+                logger.warning(
+                    f"[repos.{key}]: its mirror {repo_cfg.mirror_path} is "
+                    f"registered in the catalog as '{repo.name}'. New discs "
+                    f"name the backup set '{key}' while the catalog and the "
+                    f"discs already burned name it '{repo.name}'. If the "
+                    f"table was renamed, rename it back to "
+                    f"[repos.{repo.name}]."
+                )
+
+
 def _config_check_collections(
     args: argparse.Namespace, config: LCSASConfig,
 ) -> list[str]:
@@ -120,7 +159,7 @@ def _config_check_collections(
     The catalog is never created here.
     """
     from lcsas.config.settings import collection_password_errors
-    from lcsas.exceptions import CatalogError
+    from lcsas.exceptions import CatalogError, CatalogUnreadableError
 
     errors = collection_password_errors(config)
     db_path = _resolve_db_path(args, config)
@@ -129,6 +168,8 @@ def _config_check_collections(
             conn = stack.enter_context(
                 _open_catalog(args, mode="read", db_path=db_path)
             )
+        except CatalogUnreadableError as e:  # #968: there, but damaged
+            return [*errors, str(e)]
         except CatalogError:
             logger.warning(
                 "No catalog at %s yet: the collections' locations and "

@@ -516,11 +516,14 @@ This is the `.packs` field of the `MirrorScanResult` returned by
   *silently* missing a sub-threshold set of files will still flag those as
   pruned with no further check. Use `--no-prune-sync` whenever a mirror's
   completeness is uncertain.
-- **Snapshot listing failure is per-repository soft-fail.** If
+- **Snapshot listing failure is per-repository, and the scan exits 1.** If
   `rustic snapshots` raises for a given repository, the error is logged and the loop continues
-  (snapshot block of `cmd_scan`). The overall scan still returns 0, which
-  can mask partial outages. No metric or audit-trail event is emitted, and
-  no test covers the branch.
+  (snapshot block of `cmd_scan`): the other repositories are listed and
+  every pack is still registered.  The closing line names the repositories
+  whose listing failed and the scan exits 1 (#968; it exited 0 before,
+  which masked a wrong password file).  No audit-trail event is emitted.
+  `tests/integration/test_scan_packs_repos_checks.py` covers it with a
+  wrong password file and real rustic.
 - (Resolved, #536) Every snapshot used to be stored as one row with an
   empty `snapshot_id`: rustic 0.11 groups `snapshots --json` output by
   host/label/paths (`[{"group_key": …, "snapshots": […]}]`) and

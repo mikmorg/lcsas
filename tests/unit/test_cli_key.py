@@ -555,7 +555,7 @@ class TestSplitRecordedUnderRepoId:
         assert main(["--config", str(cfg), "init"]) == 0
         assert main([
             "--config", str(cfg),
-            "repo", "add", "alpha", str(tmp_path / "mirror"),
+            "repo", "add", "--force", "alpha", str(tmp_path / "mirror"),
         ]) == 0
         assert main([
             "--config", str(cfg),
@@ -727,30 +727,32 @@ class TestSplitRecordedUnderRepoId:
         assert "No shares were written." in msg
         assert not out.exists()
 
-    def test_unreadable_catalog_still_writes_cards_and_warns(
+    def test_unreadable_catalog_refused_before_any_share(
         self, tmp_path: Path, capsys
     ) -> None:
-        """A catalog that exists but cannot be read keeps the old behaviour:
-        the cards are written and the owner is told to re-run later."""
+        """A catalog that exists but cannot be read: refused before any
+        share is made (#968), where it used to split and then fail to
+        record the split."""
         cfg = _config_file(tmp_path, register=False)
         (tmp_path / "catalog.db").write_bytes(b"this is not an SQLite file" * 64)
         out = tmp_path / "shares"
         assert main([
             "--config", str(cfg),
             "password", "split", "--repo", "alpha", "--out", str(out),
-        ]) == 0
+        ]) == 1
         msg = capsys.readouterr().out
-        assert "Could not read the catalog at" in msg
-        assert "Split succeeded but recording it in the catalog failed" in msg
-        assert "password split --repo alpha' so burn drift-checking works" in msg
-        assert len(_share_card_files(out)) == 5
+        assert "Could not open the catalog at" in msg
+        assert "No shares were written." in msg
+        assert "Split succeeded but recording it in the catalog failed" not in msg
+        assert not out.exists()
 
-    def test_damaged_catalog_still_writes_cards_and_warns(
+    def test_damaged_catalog_refused_before_any_share(
         self, tmp_path: Path, capsys, monkeypatch
     ) -> None:
         """get_connection raises RuntimeError when the catalog's integrity
-        check fails.  That is a catalog that cannot be read, so it takes the
-        same warn-and-go-ahead path, not main()'s "Unexpected error"."""
+        check fails.  That is a catalog that cannot be opened, so the split
+        is refused before any share (#968), not main()'s "Unexpected
+        error"."""
         import lcsas.db.connection as connection
 
         cfg = _config_file(tmp_path)  # catalog.db exists, alpha registered
@@ -765,15 +767,12 @@ class TestSplitRecordedUnderRepoId:
         assert main([
             "--config", str(cfg),
             "password", "split", "--repo", "alpha", "--out", str(out),
-        ]) == 0
+        ]) == 1
         msg = capsys.readouterr().out
-        assert (
-            f"Could not read the catalog at {db} ({damage}). The split will "
-            f"go ahead, but it may not be recorded."
-        ) in msg
+        assert f"Could not open the catalog at {db}: {damage}" in msg
+        assert "No shares were written." in msg
         assert "Unexpected error" not in msg
-        assert "Split succeeded but recording it in the catalog failed" in msg
-        assert len(_share_card_files(out)) == 5
+        assert not out.exists()
 
     def test_resplit_drops_a_legacy_name_keyed_record(
         self, tmp_path: Path

@@ -40,6 +40,20 @@ class CatalogError(LcsasError):
     """Catalog validation or rebuild failed."""
 
 
+class CatalogUnreadableError(CatalogError, RuntimeError):
+    """The catalog file is there but is not a readable SQLite catalog
+    (#968): damaged, or some other file.  A RuntimeError too, as the
+    integrity check raised before."""
+
+
+class InputError(LcsasError, ValueError):
+    """A value the owner typed is not usable, or names nothing (#968).
+
+    A ValueError too, so the callers that already catch ValueError keep
+    doing so; ``main()`` words the rest instead of "Unexpected error".
+    """
+
+
 class StagingError(LcsasError):
     """Error assembling a volume's tree in the staging area."""
 

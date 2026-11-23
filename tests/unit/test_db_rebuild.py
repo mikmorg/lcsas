@@ -1133,7 +1133,7 @@ def test_repo_remove_drops_its_split_record(tmp_path: Path, capsys) -> None:
 
     db = tmp_path / "test.db"
     assert main(["init", "--catalog-path", str(db)]) == 0
-    assert main(["--catalog", str(db), "repo", "add", "photos", "/mnt/photos"]) == 0
+    assert main(["--catalog", str(db), "repo", "add", "--force", "photos", "/mnt/photos"]) == 0
     conn = get_connection(db)
     repo_id = next(r.repo_id for r in list_repos(conn) if r.name == "photos")
     record_split(conn, repo_id, 2, 3, 7)
