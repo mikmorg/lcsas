@@ -13,15 +13,21 @@ heir's path from the estate card.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import os
 import random
 import shutil
 import sqlite3
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lcsas.cli.main import main
+
+if TYPE_CHECKING:
+    from lcsas.burn.orchestrator import BurnOrchestrator
 
 HINT = "Sealed envelope held by the test custodian"
 
@@ -124,7 +130,7 @@ class ScratchInstall:
             conn.close()
 
     def repo_id(self, name: str) -> str:
-        (row,) = self.query("SELECT repo_id FROM repos WHERE name = ?", name)
+        (row,) = self.query("SELECT repo_id FROM repositories WHERE name = ?", name)
         return str(row[0])
 
     def sessions(self) -> list[str]:
@@ -135,8 +141,9 @@ class ScratchInstall:
         return [str(r[0]) for r in self.query(
             "SELECT label FROM volumes ORDER BY label")]
 
-    def mark_burned(self, session_id: str, location: str | None = None) -> None:
-        """Record *session_id*'s volumes as burned, no disc written."""
+    @contextlib.contextmanager
+    def orchestrator(self) -> Iterator[BurnOrchestrator]:
+        """The owner's orchestrator on the master catalog."""
         from lcsas.burn.orchestrator import BurnOrchestrator
         from lcsas.cli.common import _load_config_opt, _open_catalog
         from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
@@ -146,15 +153,31 @@ class ScratchInstall:
         config = _load_config_opt(args)
         assert config is not None
         with _open_catalog(args, config) as conn:
-            orch = BurnOrchestrator(
+            yield BurnOrchestrator(
                 config, conn,
                 SubprocessXorrisoRunner(tmpdir=config.staging_path),
                 SubprocessDVDisasterRunner(tmpdir=config.staging_path),
             )
+
+    def mark_burned(self, session_id: str, location: str | None = None) -> None:
+        """Record *session_id*'s volumes as burned, no disc written."""
+        with self.orchestrator() as orch:
             orch.burn_session(
-                session_id, location=location or config.default_location,
+                session_id,
+                location=location or orch._config.default_location,
                 skip_burn=True, interactive=False,
             )
+
+    def snapshot(self) -> tuple[list[tuple[object, ...]], list[str]]:
+        """The catalog's volumes and sessions, and the staging area's
+        entries: what a refused command must leave unchanged."""
+        rows = [tuple(r) for r in self.query(
+            "SELECT label, status FROM volumes ORDER BY label")]
+        rows += [tuple(r) for r in self.query(
+            "SELECT session_id FROM burn_sessions ORDER BY session_id")]
+        files = sorted(str(p.relative_to(self.staging))
+                       for p in self.staging.rglob("*"))
+        return rows, files
 
     # -- staged discs --------------------------------------------------
     def disc_trees(self) -> dict[str, Path]:

@@ -112,6 +112,16 @@ class DiscMetadataTooLargeError(StagingError):
     """One disc cannot hold the disc metadata and a pack (#811)."""
 
 
+class WaitingSessionGapError(StagingError):
+    """Staging now would leave snapshots off the new discs for good (#946).
+
+    A snapshot whose packs sit only on a volume waiting to be burned
+    cannot go on this session's discs.  Once both sessions are burned,
+    the highest-labelled disc would lack it, and nothing would ever stage
+    it again; the heir restores from that disc.
+    """
+
+
 def _describe_waiting(held: dict[str, list[str]]) -> str:
     """``LABEL, LABEL in session S; ...`` for the waiting-volume messages."""
     return "; ".join(
@@ -1122,6 +1132,10 @@ class BurnOrchestrator:
         snapshot_needs, left_out, unchecked = self._snapshot_coverage(
             session_packs)
 
+        # #946: refuse a stage whose discs would lack, for good, a
+        # snapshot that only a waiting volume's packs keep off them.
+        self._refuse_waiting_gap(snapshot_needs, session_packs)
+
         # #753: every repository of the plan has its mirror data, checked
         # before the burn session exists (a missing mirror used to fail
         # inside the first volume, leaving the session behind).
@@ -1525,6 +1539,101 @@ class BurnOrchestrator:
             if rest:
                 left_out[repo.name] = rest
         return needs, left_out, unchecked
+
+    def _refuse_waiting_gap(
+        self,
+        snapshot_needs: dict[str, dict[str, frozenset[str]]],
+        session_packs: set[str],
+    ) -> None:
+        """#946: refuse the stage when a waiting session makes a gap.
+
+        A snapshot is left off this session's discs when it needs packs
+        that are neither on a durable volume nor in this session.  When
+        every such pack sits on a volume that waits to be burned (never
+        burned, its disc not failed), burning both sessions would leave
+        the highest-labelled disc without that snapshot, and no later
+        ``stage`` would carry it: every pack is then archived.  So stop
+        before anything is created and name the waiting session.
+
+        Checked on every path (plain, ``--for-location``, consolidation).
+        A snapshot that is also missing a pack held back by ``--min-fill``
+        (or unreadable, ``?tree:``) is not refused here: a later stage
+        carries it once those packs are staged.
+        """
+        waiting = self._waiting_pack_holders()
+        if not waiting:
+            return
+        from lcsas.db.repos import get_repo
+
+        # waiting session -> repository name -> snapshot IDs it keeps off
+        gaps: dict[str, dict[str, set[str]]] = {}
+        for repo_id, needs in sorted(snapshot_needs.items()):
+            for snap_id, need in needs.items():
+                missing = need - session_packs
+                if not missing or not all(m in waiting for m in missing):
+                    continue
+                name = get_repo(self._conn, repo_id).name
+                for m in missing:
+                    session_id = waiting[m][1]
+                    gaps.setdefault(session_id, {}).setdefault(
+                        name, set()).add(snap_id)
+        if not gaps:
+            return
+        labels: dict[str, set[str]] = {}
+        locations: dict[str, set[str]] = {}
+        for label, session_id, location in waiting.values():
+            labels.setdefault(session_id, set()).add(label)
+            locations.setdefault(session_id, set()).add(location)
+        parts: list[str] = []
+        for session_id, per_repo in sorted(gaps.items()):
+            sets = ", ".join(f"{len(snaps)} snapshot(s) of '{name}'"
+                             for name, snaps in sorted(per_repo.items()))
+            location = (sorted(locations[session_id])[0]
+                        if len(locations[session_id]) == 1 else "<location>")
+            parts.append(
+                f"Session {session_id} "
+                f"({', '.join(sorted(labels[session_id]))}) is staged and "
+                f"waits to be burned. Staging now would leave {sets} off "
+                f"the new discs for good. Burn it first (lcsas burn "
+                f"--session {session_id} --location {location}), or "
+                f"discard it (lcsas session abort {session_id}) and stage "
+                f"again."
+            )
+        raise WaitingSessionGapError(" ".join(parts))
+
+    def _waiting_pack_holders(self) -> dict[str, tuple[str, str, str]]:
+        """#946: packs on volumes that wait to be burned.
+
+        Pack SHA-256 -> (label, burn session, location) for every pack
+        on a never-burned volume (STAGING/BURNING) of a burn session
+        whose disc did not fail verification.  Broader than
+        :meth:`_hold_back_waiting` on purpose: a pack this stage does not
+        take only matters when it is on such a volume, whichever path
+        left it out (plain stage holds back the finished ones,
+        ``--for-location`` every one staged for that location).
+        """
+        rows = self._conn.execute(
+            """SELECT p.sha256, v.label, v.location,
+                      (SELECT sv.session_id FROM session_volumes sv
+                       JOIN burn_sessions bs USING (session_id)
+                       WHERE sv.volume_id = v.volume_id
+                       ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC
+                       LIMIT 1) AS session_id
+               FROM volumes v
+               JOIN volume_packs vp ON vp.volume_id = v.volume_id
+               JOIN packs p ON p.pack_id = vp.pack_id
+               WHERE v.status IN ('STAGING', 'BURNING')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_events e
+                     WHERE e.volume_id = v.volume_id
+                       AND e.event_type = 'VERIFY_FAIL'
+                 )"""
+        ).fetchall()
+        return {
+            str(r["sha256"]): (str(r["label"]), str(r["session_id"]),
+                               str(r["location"] or ""))
+            for r in rows if r["session_id"] is not None
+        }
 
     def burn_session(
         self,
