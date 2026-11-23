@@ -198,6 +198,11 @@ class TestConfig:
                      "'famliy'", id="unknown-repo"),
         pytest.param('location = "X"\nrepos = ["fam"]\nmin_fill_pct = 150\n',
                      "between 0 and 100", id="fill-over-100"),
+        pytest.param('location = "X"\nrepos = ["fam"]\nmax_volumes = 0\n',
+                     "max_volumes must be 1 or more", id="max-volumes-0"),
+        pytest.param('location = "X"\nrepos = ["fam"]\nmax_volumes = "2"\n',
+                     "max_volumes must be a whole number",
+                     id="max-volumes-quoted"),
         pytest.param('location = "X"\nrepos = ["fam"]\nmedia_type = "BD26"\n',
                      "media_type 'BD26' is unknown", id="bad-media"),
     ])
@@ -424,6 +429,24 @@ class TestMinFill:
         assert len(_volumes(db)) == 1
         assert _unstaged(db) == 1
         assert "below the minimum fill of 90%" in capsys.readouterr().out
+
+    def test_collection_max_volumes_applies(self, tmp_path, capsys):
+        """#965: the collection's max_volumes caps the volumes staged."""
+        cfg, db = _setup(tmp_path, _BANK + "max_volumes = 1\n",
+                         sizes=self.SIZES)
+        assert load_config(cfg).collections["bank"].max_volumes == 1
+        assert _stage(cfg, "--collection", "bank") == 0
+        assert len(_volumes(db)) == 1
+        assert _unstaged(db) == 1
+        assert ("Staging 1 of the 2 planned volumes (--max-volumes 1)"
+                in capsys.readouterr().out)
+
+    def test_max_volumes_flag_overrides_the_collection(self, tmp_path):
+        cfg, db = _setup(tmp_path, _BANK + "max_volumes = 1\n",
+                         sizes=self.SIZES)
+        assert _stage(cfg, "--collection", "bank", "--max-volumes", "2") == 0
+        assert len(_volumes(db)) == 2
+        assert _unstaged(db) == 0
 
     def test_min_fill_flag_overrides_the_collection(self, tmp_path):
         cfg, db = _setup(tmp_path, _BANK + "min_fill_pct = 90\n",

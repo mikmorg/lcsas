@@ -213,10 +213,12 @@ class ScratchInstall:
     # -- the heir ------------------------------------------------------
     def heir_restore(
         self, name: str, out: Path, labels: list[str] | None = None,
+        password_file: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run the real ``restore.sh`` of a META disc built from this
         checkout against copies of the staged disc trees (*labels*, all
-        by default), with no questions."""
+        by default), with no questions.  *password_file* is what the heir
+        types (the set's own key file by default)."""
         from lcsas.meta.builder import MetaVolumeBuilder
 
         work = self.root / f"heir-{out.name}"
@@ -244,7 +246,7 @@ class ScratchInstall:
         }
         return subprocess.run(
             ["sh", str(mnt / "LCSAS_META" / "restore.sh"),
-             "--password-file", str(self.key(name)),
+             "--password-file", str(password_file or self.key(name)),
              "--restore-folder", str(out)],
             capture_output=True, text=True, env=env,
             stdin=subprocess.DEVNULL, timeout=600,

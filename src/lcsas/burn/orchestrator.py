@@ -112,6 +112,17 @@ class DiscMetadataTooLargeError(StagingError):
     """One disc cannot hold the disc metadata and a pack (#811)."""
 
 
+class PasswordChangedAfterSplitError(StagingError):
+    """A split password no longer opens the repository (#956).
+
+    The key file the split password opened (recorded by ``password
+    split``) is no longer in the mirror: the password was changed.  New
+    discs carry only the mirror's key files, so the share cards would
+    rebuild a password that does not open them.  Not overridable: split
+    the new password, or clear the record (owner decision on #956).
+    """
+
+
 class WaitingSessionGapError(StagingError):
     """Staging now would leave snapshots off the new discs for good (#946).
 
@@ -120,6 +131,27 @@ class WaitingSessionGapError(StagingError):
     the highest-labelled disc would lack it, and nothing would ever stage
     it again; the heir restores from that disc.
     """
+
+
+def _device_of(path: Path) -> int:
+    """The file system *path* is on (``st_dev``); raises OSError (#965)."""
+    return os.stat(path).st_dev
+
+
+def _size_text(n: int) -> str:
+    """A byte count for the owner: GB, MB, KB or bytes (#965)."""
+    for unit, size in (("GB", 10**9), ("MB", 10**6), ("KB", 10**3)):
+        if n >= size:
+            return f"{n / size:.1f} {unit}"
+    return f"{n:,} bytes"
+
+
+def _nearest_existing(path: Path) -> Path:
+    """*path*, or its nearest ancestor that exists (#965: a dry run may
+    plan before the staging folder is made)."""
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return path
 
 
 def _describe_waiting(held: dict[str, list[str]]) -> str:
@@ -953,6 +985,74 @@ class BurnOrchestrator:
             return message
         raise EscrowDriftError(message)
 
+    def _password_change_preflight(self) -> dict[str, str]:
+        """#956: notice a repository password changed since it was recorded.
+
+        ``repositories.encryption_key_id`` names the key file the
+        password opened when it was recorded: the one a split password
+        opens (``password split``), else the first key file at ``repo
+        add``.  Every repository whose ``keys/`` go on the discs is
+        checked (every disc carries every repository's metadata, so a
+        password change needs no new packs to matter).  When that key
+        file is no longer in the mirror:
+
+        - a split is recorded: raise :class:`PasswordChangedAfterSplitError`
+          (the cards rebuild a password that does not open new discs);
+        - no split: warn, and return ``{repo_id: current key file}`` for
+          :meth:`stage` to record once the stage passes its checks.
+
+        A mirror with no readable or no non-empty ``keys/`` (not mounted,
+        a retired repository), or no recorded key file, is skipped: that
+        is not a password change.
+        """
+        from lcsas.db.repos import get_repo
+        from lcsas.utils.fs import read_repo_key_ids
+
+        names = self._config_names()
+        refusals: list[str] = []
+        updates: dict[str, str] = {}
+        for repo_id, mirror in sorted(self._get_mirror_paths().items()):
+            try:
+                repo = get_repo(self._conn, repo_id)
+            except ValueError:  # the "default" fallback: no catalog row
+                continue
+            recorded = repo.encryption_key_id
+            if not recorded:
+                continue
+            try:
+                keys = read_repo_key_ids(mirror)
+            except OSError:
+                continue
+            if not keys or recorded in keys:
+                continue
+            name = names.get(repo_id, repo.name)
+            record = get_split_for_repo(self._conn, repo_id)
+            if record is not None:
+                refusals.append(
+                    f"The password of '{name}' was changed after it was "
+                    f"split on {record.split_at[:10]}: the share cards "
+                    f"rebuild a password that no longer opens new discs. "
+                    f"Split the new password (lcsas password split --repo "
+                    f"{name}) and hand out new cards, or clear the record "
+                    f"(lcsas password unsplit --repo {name}). If the cards "
+                    f"were made after the change, show that with K of them "
+                    f"(lcsas password split --repo {name} --record-existing "
+                    f"--share-file CARD ...)."
+                )
+                continue
+            _logger.warning(
+                "The password of '%s' changed since it was registered: "
+                "password cards and hints written before today name the old "
+                "one. Write new ones (lcsas password card --repo %s).",
+                name, name,
+            )
+            updates[repo_id] = keys[0]
+        if refusals:
+            raise PasswordChangedAfterSplitError(
+                " ".join(refusals) + " Nothing was staged."
+            )
+        return updates
+
     def _effective_kn(self, repo_ids: list[str]) -> tuple[int, int] | None:
         """K/N to render on this volume's disc text, from the record when present.
 
@@ -982,6 +1082,7 @@ class BurnOrchestrator:
         dry_run: bool = False,
         min_fill_pct: float = 0.0,
         partial: bool = False,
+        max_volumes: int | None = None,
     ) -> StageResult:
         """Stage all unarchived packs into ISOs, creating a burn session.
 
@@ -1010,6 +1111,9 @@ class BurnOrchestrator:
                 space (#701); the volumes before it are.  Its packs wait
                 for a later stage.
             partial: Stage the last volume even below ``min_fill_pct``.
+            max_volumes: If set, stage only the first this many volumes
+                of the plan (made after ``min_fill_pct``); the packs of
+                the rest stay unarchived for the next stage (#965).
 
         Returns:
             StageResult with burn session ID, manifests, and ISO paths.
@@ -1018,6 +1122,8 @@ class BurnOrchestrator:
         logger = get_logger()
 
         mt = media_type or self._config.default_media_type
+        if max_volumes is not None and max_volumes < 1:
+            raise ValueError(f"max_volumes must be 1 or more, not {max_volumes}")
 
         # 1. Gather packs to stage
         if pack_sha256s is not None:
@@ -1097,6 +1203,22 @@ class BurnOrchestrator:
                 underfilled.describe(mt.name),
             )
 
+        # #965: only the first max_volumes volumes are staged.  The rest
+        # of the packs stay unarchived; the next stage plans them again.
+        # A snapshot that needs them is left off these discs and carried
+        # by a later one (#657), and #946 refuses a later stage that would
+        # leave it off for good while these volumes wait to be burned.
+        if max_volumes is not None and len(volume_plans) > max_volumes:
+            logger.info(
+                "%sStaging %d of the %d planned volumes (--max-volumes %d). "
+                "The packs of %d more volume(s) stay unarchived: burn these "
+                "discs, then run 'lcsas stage' again for the next ones.",
+                "[DRY RUN] " if dry_run else "", max_volumes,
+                len(volume_plans), max_volumes,
+                len(volume_plans) - max_volumes,
+            )
+            volume_plans = volume_plans[:max_volumes]
+
         participating_repos = {p.repo_id for _packs, _b in volume_plans
                                for p in _packs}
 
@@ -1108,6 +1230,10 @@ class BurnOrchestrator:
         # each volume; a dry run warns here.
         if dry_run or not self._allow_escrow_drift:
             self._escrow_preflight(sorted(participating_repos))
+        # #956: a split password that no longer opens the repository is
+        # refused whatever --allow-split-drift says; with no split, a
+        # changed password is only reported.
+        key_updates = self._password_change_preflight()
 
         # --- Dry-run: report the plan without side effects ---
         if dry_run:
@@ -1122,6 +1248,23 @@ class BurnOrchestrator:
                             f"{vol_bytes:,} bytes ({fill_pct:.1f}% fill, "
                             f"{space_pct:.1f}% of its pack space)")
             logger.info(f"  Total data: {total_bytes:,} bytes")
+            # #965: the space the real run needs, and what is free now.
+            required, copied = self._staging_space_needed(
+                volume_plans, mt, reserve)
+            where = _nearest_existing(self._config.staging_path)
+            try:
+                free = f"{_size_text(shutil.disk_usage(where).free)}"
+            except OSError as exc:
+                free = f"unknown ({exc})"
+            logger.info(
+                "[DRY RUN] Free space the stage needs in the staging area: "
+                "%s (%s bytes); free now: %s at %s.%s",
+                _size_text(required), f"{required:,}", free,
+                self._config.staging_path,
+                " The packs count in full: they are copied, not hardlinked, "
+                "because the staging area is not on the file system of "
+                "every mirror." if copied else "",
+            )
             return StageResult(
                 session_id="dry-run", media_type=mt,
                 staging_dir=Path("/dev/null"),
@@ -1157,30 +1300,8 @@ class BurnOrchestrator:
         self._mirror_preflight(volume_plans)
 
         # 3. Disk space pre-flight check [BURN-07]
-        # Per volume we hold the staging tree (packs + disc catalog +
-        # repository metadata) AND its ISO — ISOs persist for the whole
-        # burn session (BURN-06), so the padded ISO sizes are SUMMED, not
-        # maxed.  On ECC media (ecc_overhead_pct > 0) dvdisaster's RS03
-        # augmented mode pads each ISO up to a full medium (a 1 GB ISO
-        # becomes a 4.7 GB DVD image; #732 padding may move a thin one up
-        # a rung, which rs03_staged_image_bytes counts), and augment_iso
-        # additionally duplicates the ISO while augmenting — budget one
-        # extra copy of the largest padded ISO.
-        apply_ecc = mt.ecc_overhead_pct > 0
-        metadata_reserve = reserve
-        required_bytes = 0
-        max_padded_iso = 0
-        for _, vol_bytes in volume_plans:
-            # ~5% ISO 9660 filesystem overhead on top of the staged tree.
-            est_iso = int(vol_bytes * 1.05) + metadata_reserve
-            padded_iso = (
-                rs03_staged_image_bytes(est_iso, mt.capacity_bytes)
-                if apply_ecc else est_iso
-            )
-            required_bytes += vol_bytes + metadata_reserve + padded_iso
-            max_padded_iso = max(max_padded_iso, padded_iso)
-        if apply_ecc:
-            required_bytes += max_padded_iso  # augment_iso temp copy
+        required_bytes, _copied = self._staging_space_needed(
+            volume_plans, mt, reserve)
         staging_usage = shutil.disk_usage(self._config.staging_path)
         if staging_usage.free < required_bytes:
             avail_gb = staging_usage.free / 1e9
@@ -1189,12 +1310,23 @@ class BurnOrchestrator:
                 f"Insufficient disk space in the staging area: "
                 f"{avail_gb:.1f} GB available, ~{need_gb:.1f} GB needed "
                 f"including RS03 medium padding "
-                f"(at {self._config.staging_path})"
+                f"(at {self._config.staging_path}). Stage a few volumes at "
+                f"a time with 'lcsas stage --max-volumes N' (burn them, "
+                f"then stage the next N), or free space."
             )
 
         # #947: after the space check, which tests drive with packs that
         # are not in the mirror; still before any side effect.
         self._lost_pack_preflight(volume_plans)
+
+        # #956: every check passed, so the changed password reported above
+        # is recorded now (once: the next stage does not report it again).
+        if key_updates:
+            from lcsas.db.repos import set_encryption_key_id
+            for repo_id, key_id in key_updates.items():
+                set_encryption_key_id(self._conn, repo_id, key_id,
+                                      commit=False)
+            self._conn.commit()
 
         # 4. Create the burn session.  FUP-02: commit the burn_sessions row
         # BEFORE the directory exists on disk.  Invariant: any session-named dir on disk
@@ -1321,6 +1453,65 @@ class BurnOrchestrator:
             if manifest.iso_path:
                 iso_paths.append(manifest.iso_path)
         self._snapshot_allow = None
+
+    def _packs_copied(
+        self, volume_plans: list[tuple[list[Pack], int]],
+    ) -> bool:
+        """Whether staging copies the packs rather than hardlinking (#965).
+
+        The staged tree hardlinks each pack when the staging area and
+        the pack's mirror are on one file system; then the packs take no
+        new space.  True when any mirror of the plan is elsewhere, or
+        when that cannot be told (a stat fails): count them.
+        """
+        mirrors = self._get_mirror_paths()
+        repo_ids = {p.repo_id for packs, _b in volume_plans for p in packs}
+        try:
+            staging = _device_of(_nearest_existing(self._config.staging_path))
+            for repo_id in repo_ids:
+                mirror = mirrors.get(repo_id)
+                if mirror is None or _device_of(mirror / "data") != staging:
+                    return True
+        except OSError:
+            return True
+        return False
+
+    def _staging_space_needed(
+        self,
+        volume_plans: list[tuple[list[Pack], int]],
+        mt: MediaType,
+        reserve: int,
+    ) -> tuple[int, bool]:
+        """Free bytes :meth:`stage` needs in the staging area [BURN-07].
+
+        Per volume we hold the staging tree (packs + disc catalog +
+        repository metadata) AND its ISO — ISOs persist for the whole
+        burn session (BURN-06), so the padded ISO sizes are SUMMED, not
+        maxed.  On ECC media (ecc_overhead_pct > 0) dvdisaster's RS03
+        augmented mode pads each ISO up to a full medium (a 1 GB ISO
+        becomes a 4.7 GB DVD image; #732 padding may move a thin one up
+        a rung, which rs03_staged_image_bytes counts), and augment_iso
+        additionally duplicates the ISO while augmenting — budget one
+        extra copy of the largest padded ISO.  The packs themselves count
+        only when they are copied, not hardlinked (#965).  Returns the
+        bytes and whether the packs are copied.  No side effect.
+        """
+        copied = self._packs_copied(volume_plans)
+        apply_ecc = mt.ecc_overhead_pct > 0
+        required = 0
+        max_padded_iso = 0
+        for _, vol_bytes in volume_plans:
+            # ~5% ISO 9660 filesystem overhead on top of the staged tree.
+            est_iso = int(vol_bytes * 1.05) + reserve
+            padded_iso = (
+                rs03_staged_image_bytes(est_iso, mt.capacity_bytes)
+                if apply_ecc else est_iso
+            )
+            required += (vol_bytes if copied else 0) + reserve + padded_iso
+            max_padded_iso = max(max_padded_iso, padded_iso)
+        if apply_ecc:
+            required += max_padded_iso  # augment_iso temp copy
+        return required, copied
 
     def _tool_version_preflight(self, *, apply_ecc: bool) -> None:
         """Refuse a stage whose xorriso or dvdisaster is too old (#731).

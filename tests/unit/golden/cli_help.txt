@@ -199,8 +199,8 @@ options:
 ===== lcsas stage --help =====
 usage: lcsas stage [-h] [--media MEDIA] [--for-location FOR_LOCATION]
                    [--repo [REPO ...]] [--collection NAME] [--min-fill PCT]
-                   [--partial] [--clean] [--force] [--session SESSION]
-                   [--dry-run] [--allow-split-drift]
+                   [--max-volumes N] [--partial] [--clean] [--force]
+                   [--session SESSION] [--dry-run] [--allow-split-drift]
                    [--allow-no-password-hint] [--allow-low-redundancy]
 
 options:
@@ -211,12 +211,17 @@ options:
   --repo [REPO ...]     Names of the repositories to stage (default: all).
   --collection NAME     Stage the [collections.NAME] of the config: its repos,
                         for its location (as --for-location), on its
-                        media_type, with its min_fill_pct. Not with --repo,
-                        --for-location or --media.
+                        media_type, with its min_fill_pct and max_volumes. Not
+                        with --repo, --for-location or --media.
   --min-fill PCT        Do not stage a last volume whose packs fill less than
                         PCT% of its pack space (0-100); the full volumes
                         before it are staged. Overrides a collection's
                         min_fill_pct.
+  --max-volumes N       Stage only the first N volumes of the plan; the other
+                        packs stay unarchived for the next stage. Burn these,
+                        then stage again: staging space for a few discs
+                        suffices for a backup of any size. Overrides a
+                        collection's max_volumes.
   --partial             Stage the last volume even if it is below the minimum
                         fill.
   --clean               Clean up staged ISOs for a session.

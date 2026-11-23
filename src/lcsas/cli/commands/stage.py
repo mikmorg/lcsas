@@ -117,6 +117,20 @@ def _stage_collection_and_fill(
     return collection, float(min_fill)
 
 
+def _stage_max_volumes(
+    args: argparse.Namespace, collection: CollectionConfig | None,
+) -> int | None:
+    """The ``--max-volumes`` in effect (#965): the flag, else the
+    collection's ``max_volumes``, else None (the whole plan).  Raises
+    ValueError below 1."""
+    max_volumes = getattr(args, "max_volumes", None)
+    if max_volumes is None:
+        return collection.max_volumes if collection else None
+    if max_volumes < 1:
+        raise ValueError(f"--max-volumes must be 1 or more, not {max_volumes}")
+    return int(max_volumes)
+
+
 def _collection_catalog_check(
     conn: sqlite3.Connection,
     config: LCSASConfig,
@@ -209,6 +223,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
         return 1
     try:
         collection, min_fill = _stage_collection_and_fill(args, config)
+        max_volumes = _stage_max_volumes(args, collection)
     except ValueError as e:
         logger.error("%s", e)
         return 1
@@ -306,6 +321,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 dry_run=getattr(args, "dry_run", False),
                 min_fill_pct=min_fill,
                 partial=getattr(args, "partial", False),
+                max_volumes=max_volumes,
             )
         except EscrowDriftError as e:
             logger.error("%s", e)
@@ -344,7 +360,8 @@ def _report_snapshot_coverage(result: Any) -> None:
     newest backup.  A stage that would leave a snapshot off for good,
     because its packs wait on another session's volumes, is refused
     before this point (#946); what is left here are packs this stage did
-    not take (``--min-fill``, ``--repo``), which a later ``lcsas stage``
+    not take (``--min-fill``, ``--max-volumes``, ``--repo``), which a
+    later ``lcsas stage``
     stages.
     """
     for repo_name, snaps in sorted(result.snapshots_left_out.items()):
@@ -359,9 +376,9 @@ def _report_snapshot_coverage(result: Any) -> None:
                 snap.snapshot_id[:8], snap.time, snap.missing_packs,
             )
         logger.warning(
-            "  Their packs are not staged yet (held back by --min-fill, or "
-            "not selected by --repo); a later 'lcsas stage' stages them, "
-            "and its discs carry these snapshots."
+            "  Their packs are not staged yet (held back by --min-fill or "
+            "--max-volumes, or not selected by --repo); a later 'lcsas "
+            "stage' stages them, and its discs carry these snapshots."
         )
     for repo_name, reason in sorted(result.snapshots_unchecked.items()):
         logger.warning(

@@ -185,6 +185,23 @@ round-trip, so it will refuse to split a password that does not unlock the
 repository. But that protects the *moment of splitting* — it cannot reach
 cards already in the field after a later password change.
 
+What the tool does catch (#956): `password split` records the key file the
+split password opens, and once a password change has removed that key file
+from the mirror, `lcsas stage` refuses to stage, naming the repository and
+the date of the split, until you split the new password (or clear the record
+with `lcsas password unsplit --repo R`, if the password is no longer split).
+New discs carry only the mirror's current key files, so a disc staged after
+the change would tell the heir to gather cards that do not open it. For a
+repository that is not split, `stage` only warns once that the password
+changed since it was registered: write a new password card.
+
+A password change also does nothing against someone who holds an **older**
+disc and the **old** password: rustic's master key does not change with the
+password, so that disc's old key file, together with the index and snapshots
+of a newer disc, opens everything backed up after the change too. Changing
+the password protects nothing that an old disc and an old card already reach
+(see [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md), section 4).
+
 Procedure after any password change:
 
 1. **Re-split** with the new password: `lcsas --config ... password split --repo R`.

@@ -71,6 +71,7 @@ repos        = ["family"]
 | `repos` | yes | A non-empty list of `[repos.<name>]` names. |
 | `media_type` | no | The media type of the volumes. Default: `[defaults] media_type`. |
 | `min_fill_pct` | no | 0 to 100. A last volume filled less than this is not staged. Default: 0 (no minimum). |
+| `max_volumes` | no | 1 or more. Stage at most this many volumes per run; the rest of the packs wait for the next run ([stage-and-burn.md](stage-and-burn.md#staging-space-and---max-volumes)). `--max-volumes` overrides it. Default: no limit. |
 
 `sources` in a `[repos.<name>]` table is optional: the folders backed up
 into that repository, as a list of strings. **It is descriptive only.**
@@ -81,8 +82,8 @@ never written to a disc.
 
 Every command loads the config, so every command refuses one in which a
 collection has no location or no repositories, names a repository with
-no `[repos.<name>]` table, has an unknown media type, or a minimum fill
-outside 0 to 100. The error names the collection and the key.
+no `[repos.<name>]` table, has an unknown media type, a minimum fill
+outside 0 to 100, or a `max_volumes` below 1. The error names the collection and the key.
 
 **Source refs:** `load_config`, `_load_collections`, `CollectionConfig`
 (`src/lcsas/config/settings.py`).
@@ -135,6 +136,8 @@ This is `stage --for-location Bank_Box --repo family --media MDISC100
 - The volumes use the collection's media type.
 - The collection's minimum fill applies (see the next section).
   `--min-fill` overrides it; `--partial` turns it off for one run.
+- The collection's `max_volumes`, if set, caps the volumes staged;
+  `--max-volumes` overrides it.
 
 `--collection` cannot be combined with `--repo`, `--for-location` or
 `--media`: the collection sets them. Stage stops, before it does
