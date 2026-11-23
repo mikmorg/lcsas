@@ -834,7 +834,13 @@ service or destroying them.
 4. Compute the at-risk packs — packs on this volume that no live disc
    of **any other volume** holds — via `get_at_risk_packs_for_volume`
    (`src/lcsas/db/queries.py`).
-5. If nothing is at risk, log "Blast radius: NONE" and return 0.
+5. If nothing is at risk, log "Blast radius: NONE" ("every live pack"
+   when the volume also holds pruned packs) or, when every pack on the
+   volume was pruned from the mirror, "Blast radius: no live pack".
+   Pruned packs that no other volume in service holds are counted apart
+   with a warning (#968): no snapshot in the mirror needs them, but an
+   older one kept only in older disc catalogs may, and `copy destroy` of
+   the last disc calls losing them `DATA LOSS`.
    Otherwise warn with the total pack count / GB, broken down per
    repository (`cmd_volume_impact`).
 6. With `--snapshots`, additionally print which snapshots each

@@ -814,7 +814,12 @@ The pipeline is interrupt-safe in three places:
    waiting volumes with `lcsas burn --session <id>`, or discard the
    session with `lcsas session abort <id>` (`cmd_session_abort`,
    `BurnOrchestrator.abort_session`) and stage again. An INCOMPLETE
-   volume must always be discarded this way.
+   volume must always be discarded this way, and so must a session whose
+   stage was killed hard (no `session.json`, #862): `stage` then names
+   it as a session whose stage did not finish and gives only the abort
+   step, as `status` does (#968). While a stage runs, `status` from
+   another terminal says "A stage is running" (it sees the stage hold
+   the catalog lock) instead of calling its volumes INCOMPLETE.
 2. **Inside `burn_session()` between volumes** — if volume 3 of 5 fails,
    volumes 1-2 are `VERIFIED`, volume 3 is back to `STAGING`, volumes 4-5
    are still `STAGING`, session is `PARTIAL`. **Resume** by re-running
@@ -844,13 +849,17 @@ The pipeline is interrupt-safe in three places:
 to resume against. To discard a never-burned session entirely (deleting its
 volumes and returning their packs to the unarchived pool), use
 `lcsas session abort [<id|latest>]` (`cmd_session_abort`); the aborted
-burn session is recorded as `CLEANED`.
+burn session is recorded as `CLEANED`. A session with no volume left
+that was never burned has nothing to abort: the command cleans it, as
+`stage --clean` would, and says "Cleaned session <id>" (#968).
 
 ### Cleaning a session
 
 `lcsas stage --clean --session <id|latest>` deletes the staged ISOs and
-the staging directory and marks the session `CLEANED`
-(`cmd_stage`, `BurnOrchestrator.clean_session`). Add `--force` to also abort
+the staging directory, marks the session `CLEANED` and prints its id
+(`cmd_stage`, `BurnOrchestrator.clean_session`). `lcsas burn --session
+<id> --dry-run` of a cleaned session marks each volume a real burn would
+stop on because its ISO is gone (#968). Add `--force` to also abort
 a never-burned session, deleting its volumes and returning their packs to the
 unarchived pool. Volumes that already reached `VERIFIED` keep their catalog
 rows; the disc remains the source of truth. On a consolidation session,

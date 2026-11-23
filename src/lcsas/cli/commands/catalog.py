@@ -107,6 +107,84 @@ def _receipt_already_imported(
     )
 
 
+def _receipt_session(
+    conn: sqlite3.Connection, volume_id: int, named: object,
+) -> str | None:
+    """The burn session a receipt's disc was burned from: the one the
+    receipt names when it holds the volume (``burn --session`` receipts
+    do; ``burn-iso`` ones may not), else the volume's newest session."""
+    rows = [str(r[0]) for r in conn.execute(
+        "SELECT sv.session_id FROM session_volumes sv "
+        "JOIN burn_sessions bs USING (session_id) WHERE sv.volume_id = ? "
+        "ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC",
+        (volume_id,),
+    )]
+    if isinstance(named, str) and named in rows:
+        return named
+    return rows[0] if rows else None
+
+
+def _after_receipts_imported(
+    conn: sqlite3.Connection,
+    recorded: list[tuple[int, Path, dict[str, object], bool]],
+    receipts_dir: Path,
+) -> None:
+    """What a local burn leaves that an import of its receipts did not
+    (#968).
+
+    - The burn session's status: PARTIAL when a disc of it failed
+      verification in this import, else COMPLETE once every volume of it
+      has a disc in service (a session with receipts still to come stays
+      STAGED).  A CLEANED session stays CLEANED.
+    - A durable copy of each imported receipt in ``<catalog dir>/receipts``,
+      named as the local burn names its own, so ``catalog import-receipts
+      <catalog dir>/receipts/*.json`` replays it onto a rebuilt catalog.
+      A receipt imported from there is not copied onto itself.
+    """
+    import os
+
+    from lcsas.constants import SESSION_CLEANED
+    from lcsas.db.sessions import get_session, update_session_status
+
+    failed_in: dict[str, bool] = {}
+    for volume_id, source, receipt, failed in recorded:
+        session_id = _receipt_session(conn, volume_id, receipt.get("session_id"))
+        if session_id is None:
+            continue
+        failed_in[session_id] = failed_in.get(session_id, False) or failed
+
+        label = str(receipt["volume_label"])
+        location = str(receipt["location"])
+        target = receipts_dir / (
+            f"{session_id.replace(':', '-')}_{label}_{location}.json"
+        )
+        if target.exists() and target.resolve() == source.resolve():
+            continue
+        receipts_dir.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump({**receipt, "session_id": session_id}, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        logger.info(
+            f"Burn receipt: {target} — print it and file it with the disc."
+        )
+
+    for session_id, failed in sorted(failed_in.items()):
+        if get_session(conn, session_id).status == SESSION_CLEANED:
+            continue
+        if failed:
+            update_session_status(conn, session_id, "PARTIAL")
+            continue
+        (without,) = conn.execute(
+            "SELECT COUNT(*) FROM session_volumes sv WHERE sv.session_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM volume_copies vc WHERE "
+            "vc.volume_id = sv.volume_id AND vc.status = 'ACTIVE')",
+            (session_id,),
+        ).fetchone()
+        if without == 0:
+            update_session_status(conn, session_id, "COMPLETE")
+
+
 def cmd_catalog_import(args: argparse.Namespace) -> int:
     """Import burn receipts from remote burns.
 
@@ -160,6 +238,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     already = 0
     imported = 0
     superseded = 0
+    recorded: list[tuple[int, Path, dict[str, object], bool]] = []
     with _open_catalog(args, config) as conn:
         for receipt_file in args.receipt_files:
             # A receipt that cannot be imported is refused with a message
@@ -549,6 +628,14 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             )
             conn.commit()
             imported += 1
+            recorded.append((vol.volume_id, Path(receipt_file), receipt,
+                             verify_failed))
+
+        # #968: leave what a local burn leaves: the session's status, and
+        # a durable receipt beside the catalog.
+        _after_receipts_imported(
+            conn, recorded, _resolve_db_path(args, config).parent / "receipts",
+        )
 
     logger.info(f"Imported {imported} receipt(s).")
     if already:

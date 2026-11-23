@@ -367,10 +367,21 @@ B.
 - (Resolved) The `session_id` carried by a remote-burn receipt is
   preserved verbatim in the `BURN_RECEIPT_IMPORTED` audit event and
   asserted by `tests/unit/test_cli_catalog.py::TestCmdCatalogImport::test_import_persists_receipt_provenance`.
-  `cmd_catalog_import` does **not** otherwise act on it — for status
-  transitions it consults only `volume_label`, `location`,
-  `verify_passed`, `burn_date`, `iso_sha256`, and `iso_size_bytes`
-  (intentional: a session id is free-form metadata on the portable path).
+  For volume status transitions `cmd_catalog_import` consults only
+  `volume_label`, `location`, `verify_passed`, `burn_date`, `iso_sha256`,
+  and `iso_size_bytes` (a session id is free-form metadata on the
+  portable path).
+- (Resolved, #968) An import leaves what a local `lcsas burn` leaves. The
+  burn session (the one the receipt names when it holds the volume, else
+  the volume's newest) becomes `PARTIAL` when a disc of it failed
+  verification in the import, and `COMPLETE` once every volume of it has
+  a disc in service; one still waiting for receipts stays `STAGED`, and
+  a `CLEANED` one stays `CLEANED`. Each imported receipt is also copied
+  to `<catalog dir>/receipts/<session>_<label>_<location>.json`, the name
+  the local burn gives its own, with the session filled in, so the
+  documented replay of that folder covers remote burns too. A receipt
+  imported from that folder is not copied onto itself.
+  `tests/integration/test_session_cleanup_messages.py`.
 
 **Source refs:**
 

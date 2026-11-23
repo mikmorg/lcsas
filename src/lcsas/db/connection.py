@@ -98,6 +98,35 @@ def _read_holder(lock_path: Path) -> str:
         return "another lcsas process"
 
 
+def catalog_lock_holder(db_path: Path | str) -> dict[str, object] | None:
+    """The stamp of the command holding the catalog lock, or None when the
+    lock is free (#968: ``status`` tells a running stage from a dead one).
+
+    A non-blocking probe of ``<db_path>.lock``: it never creates the lock
+    file, never waits and never re-stamps it.  The stamp is what
+    :func:`locked_connection` wrote (``pid``, ``cmd``, ``since``); an
+    unreadable one is an empty dict.
+    """
+    lock_path = Path(str(db_path) + ".lock")
+    try:
+        fd = os.open(lock_path, os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:
+                info = json.loads(lock_path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                return {}
+            return info if isinstance(info, dict) else {}
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    finally:
+        os.close(fd)
+
+
 @contextmanager
 def locked_connection(
     db_path: Path | str,

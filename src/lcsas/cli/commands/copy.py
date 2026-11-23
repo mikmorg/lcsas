@@ -161,4 +161,19 @@ def cmd_copy(args: argparse.Namespace) -> int:
                 "lcsas stage --for-location %s",
                 args.location, args.location,
             )
+        else:
+            # #968: another disc keeps the volume in service, so a plain
+            # stage has nothing to do; only --for-location burns its packs
+            # again for this location.
+            from lcsas.db.queries import get_packs_missing_at_location
+
+            behind = get_packs_missing_at_location(conn, args.location)
+            if behind:
+                logger.info(
+                    "  %s now lacks %d pack(s) that discs elsewhere hold. "
+                    "A plain 'lcsas stage' does not burn them again; to "
+                    "bring %s back up to date, run: "
+                    "lcsas stage --for-location %s",
+                    args.location, len(behind), args.location, args.location,
+                )
     return 0

@@ -51,10 +51,10 @@ can reference it via foreign key.
 4. `create_location(conn, name, description)`
    (`src/lcsas/db/locations.py`) inserts a row into `locations`
    (PK = `name` — the `locations` table DDL in `src/lcsas/db/schema.py`).
-5. `INSERT` raises `sqlite3.IntegrityError` on duplicate names — nothing
-   catches it inside `cmd_location()`; the top-level handler in `main()`
-   reports it as `Unexpected error: …` (suggesting `--verbose` for the
-   full traceback) and exits 1.
+5. A name already registered is not an error: it logs `Location <name>
+   is already registered.` and exits 0 (#968: `lcsas init` registers the
+   config's `[defaults] location`, so the documented `location add` of
+   it finds it there).
 6. On success, logs `Added location: <name>` (the `"add"` branch of
    `cmd_location()`).
 
@@ -107,13 +107,16 @@ summary (volume count, pack count, packs behind the whole archive).
    (`BURNED`/`VERIFIED`/`CONSOLIDATING`) volume that links it and the
    pack is not pruned (`_HELD_AT_LOCATION`, #680). `location status` and
    `stage --for-location` use the same rule, so all three agree.
-6. The handler emits one line per location with a status of either
-   `all current` or `<N> packs behind` (the `"list"` branch of
+6. The handler emits one line per location with a status of
+   `all current`, `holds every burned pack` (when some packs are on no
+   disc at all) or `<N> packs behind` (the `"list"` branch of
    `cmd_location()`). A location with no disc in service shows every
-   archived pack as behind.
+   archived pack as behind. A last line counts the packs on no disc at
+   all, staged or not (#968).
 
 **Expected outcome:** One line per registered location:
-`<name>  <N> volumes, <M> packs, all current | K packs behind`.
+`<name>  <N> volumes, <M> packs, all current | holds every burned pack | K packs behind`,
+then `<N> pack(s) are on no disc at all, ...` when there are any.
 
 **Variant axes that apply:**
 - Multi-copy — coverage "behind" only makes sense once two or more
@@ -159,8 +162,9 @@ which packs are present there, which ones are missing, grouped by repository.
 4. `get_packs_missing_at_location(conn, name)` returns Pack rows that
    are archived (not pruned, on a durable volume) but **not** held at
    this location (`src/lcsas/db/queries.py`).
-5. The handler logs the totals, then bins missing packs by `repo_id`
-   and reports `repo=<id>: <N> packs (<size> GB)`
+5. The handler logs the totals, then bins missing packs by repository
+   and reports `<name>: <N> packs (<size> GB)`, then the packs on no
+   disc at all, as `location list` does
    (the `"status"` branch of `cmd_location()`).
 
 **Expected outcome:** Output of the form
@@ -169,8 +173,8 @@ which packs are present there, which ones are missing, grouped by repository.
 Location: Offsite_Safe
   Packs archived here: 1245
   Packs missing: 73
-    repo=family: 52 packs (5.4 GB)
-    repo=work:   21 packs (1.9 GB)
+    family: 52 packs (5.4 GB)
+    work: 21 packs (1.9 GB)
 ```
 
 **Variant axes that apply:**
@@ -519,7 +523,11 @@ Key behaviours derived from the schema (the `locations` and
   the new name, repoints every disc record, audit event and volume in one
   transaction, and drops the old name; `lcsas location remove <name>`
   refuses while any disc record or audit event still names the location
-  (#491).  `lcsas location status <unknown>` is an error, not
+  (#491).  The config names locations too (`[defaults] location`, each
+  `[collections.<name>] location`), which the catalog cannot change: a
+  rename prints each config line that still names the old location, and
+  `config check` reports a `[defaults] location` that is not registered
+  (#968).  `lcsas location status <unknown>` is an error, not
   "0 archived / 0 missing".
 
 ---
@@ -558,7 +566,7 @@ operating LCSAS in a multi-location production setup:
 5. **`location move` operates on `ACTIVE` discs only.**
    A `DEPRECATED` or `DESTROYED` disc at the source location is invisible
    to `move_volume_copy` and the command reports
-   `No in-service disc of volume X at '<from>'`
+   `No in-service disc of <label> at '<from>'`
    (the zero-row check in `move_volume_copy()`,
    `src/lcsas/db/volume_copies.py`). Putting a deprecated disc back in
    service requires a manual SQL update.

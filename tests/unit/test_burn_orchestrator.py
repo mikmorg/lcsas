@@ -593,10 +593,11 @@ class TestStageFailsLoudOnMissingMirror:
 
         real_stage_packs = StagingBuilder.stage_packs
 
-        def partial_stage(self, repo_packs, mirror_data_dir):
+        def partial_stage(self, repo_packs, mirror_data_dir, **kw):
             # Silently drop the last pack — simulates a miscounting
             # stage_packs regression that does not raise on its own.
-            return real_stage_packs(self, repo_packs[:-1], mirror_data_dir)
+            return real_stage_packs(self, repo_packs[:-1], mirror_data_dir,
+                                    **kw)
 
         monkeypatch.setattr(StagingBuilder, "stage_packs", partial_stage)
 

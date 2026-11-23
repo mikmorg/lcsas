@@ -378,8 +378,8 @@ lcsas --config /etc/lcsas/config.toml location status Offsite_Safe
 #   Location: Offsite_Safe
 #   Packs archived here: 803
 #   Packs missing: 44
-#     repo=family:    20 packs (2.1 GB)
-#     repo=personal:  24 packs (1.8 GB)
+#     family: 20 packs (2.1 GB)
+#     personal: 24 packs (1.8 GB)
 
 # ── Stage & burn only the packs missing from a location ──
 

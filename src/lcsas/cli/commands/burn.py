@@ -75,6 +75,13 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
                     or not has_verified_disc_at(conn, sv.volume_id, location)
                     else f"  (verified disc at {location}: skipped)"
                 )
+                if not skip and not Path(sv.iso_path).is_file():
+                    # #968: what the real burn stops on.
+                    skip = (
+                        "  (its ISO is gone: the session's staging area was "
+                        "cleaned; a burn stops here. Stage it again with "
+                        f"'lcsas stage --for-location {location}')"
+                    )
                 logger.info(f"  {vol.label}  status={shown}{skip}")
             return 0
 

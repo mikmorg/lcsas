@@ -102,6 +102,9 @@ class StagingBuilder:
     def __init__(self, staging_root: Path) -> None:
         self._root = staging_root
         self._data_dir = staging_root / "data"
+        # Bytes hashed by every stage_packs call so far: the progress line
+        # counts the whole volume, not one repository (#968).
+        self._hashed_bytes = 0
 
     @property
     def root(self) -> Path:
@@ -120,6 +123,9 @@ class StagingBuilder:
         self,
         packs: list[Pack],
         mirror_data_dir: Path,
+        *,
+        done_before: int = 0,
+        volume_total: int | None = None,
     ) -> int:
         """Hardlink selected packs from the mirror to the staging data dir.
 
@@ -139,6 +145,11 @@ class StagingBuilder:
         Args:
             packs: List of Pack objects to stage.
             mirror_data_dir: Path to the mirror's data/ directory.
+            done_before: Packs of this volume staged by earlier calls (one
+                call per repository); the progress line counts on from it.
+            volume_total: The volume's pack count, all repositories
+                (default: ``done_before`` plus these packs).  The
+                "complete" line is printed once, when it is reached.
 
         Returns:
             Number of packs successfully staged.
@@ -154,8 +165,9 @@ class StagingBuilder:
         missing: list[str] = []
         corrupt: list[tuple[str, str]] = []  # (expected, actual)
         staged = 0
-        hashed_bytes = 0
         total = len(packs)
+        overall = (volume_total if volume_total is not None
+                   else done_before + total)
 
         for i, pack in enumerate(packs, 1):
             short = pack.sha256[:12]
@@ -189,7 +201,7 @@ class StagingBuilder:
                     if dst_hash == pack.sha256:
                         # File is valid
                         staged += 1
-                        hashed_bytes += dst_size
+                        self._hashed_bytes += dst_size
                         _logger.debug(
                             "Pack %s already staged, skipping (%d/%d)", short, i, total
                         )
@@ -233,13 +245,14 @@ class StagingBuilder:
                 corrupt.append((pack.sha256, dst_hash))
                 dst.unlink(missing_ok=True)
                 continue
-            hashed_bytes += dst.stat().st_size
+            self._hashed_bytes += dst.stat().st_size
 
             staged += 1
-            if i % 100 == 0 or i == total:
+            done = done_before + i
+            if done % 100 == 0 or done == overall:
                 _logger.info(
                     "Staging packs: %d/%d complete (%.1f MB hashed)",
-                    i, total, hashed_bytes / 1e6,
+                    done, overall, self._hashed_bytes / 1e6,
                 )
 
         if corrupt:

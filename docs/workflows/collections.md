@@ -243,7 +243,8 @@ output of plain `lcsas status` is unchanged.
   "partial_sessions": [],
   "needs_reburn": [],
   "single_disc_packs": 0,
-  "stale_discs": {"count": 0, "older_than_days": 365}
+  "stale_discs": {"count": 0, "older_than_days": 365},
+  "stage_running": null
 }
 ```
 
@@ -269,6 +270,12 @@ output of plain `lcsas status` is unchanged.
   record of whether they were burned (#758). Record each disc you hold
   the same way; `lcsas session abort --volume <label> --never-burned`
   deletes one that was never burned.
+- `stage_running` is null unless a `stage` (or `consolidate --execute`)
+  holds the catalog lock now (#968). Then it gives that command, its
+  `pid`, `since` (when it took the lock), the `session_id` it is making
+  and the `labels` of its volumes so far. Those volumes are being made:
+  they are not listed as `incomplete`, and the text output says "A stage
+  is running" instead of advising `session abort`.
 - `format` is 1. It changes only when a field changes meaning or is
   removed. New fields can appear without a change.
 
