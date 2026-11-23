@@ -2,8 +2,8 @@
  * main.c -- lcsas-shares CLI.
  *
  * Usage:
- *   lcsas-shares [--passphrase X] SHARE_FILE...
- *   lcsas-shares [--passphrase X] < shares.txt   (one mnemonic per line)
+ *   lcsas-shares SHARE_FILE...
+ *   lcsas-shares < shares.txt   (one mnemonic per line)
  *   lcsas-shares --help
  *
  * Each SHARE_FILE is a bare mnemonic file OR a printed share card (the
@@ -22,9 +22,15 @@
  * changed).  Any failure prints a message to stderr and exits non-zero
  * WITHOUT printing a partial password.  Exit status: see usage() below.
  *
- * Passphrase: default empty.  Overridden by --passphrase X, else by the
- * environment variable LCSAS_SHARE_PASSPHRASE.  The old name,
- * LCSAS_KEYSHARE_PASSPHRASE, is refused if set (#934: renamed outright).
+ * A file may be UTF-8 (with or without a BOM) or UTF-16 with a BOM, the
+ * form Windows PowerShell's `>` writes (#967).
+ *
+ * No passphrase (#967): `lcsas password split` makes cards with the
+ * SLIP-0039 passphrase empty and has no option for one, so this tool
+ * reads none: --passphrase is an unknown option, and
+ * LCSAS_SHARE_PASSPHRASE is not read.  The old name,
+ * LCSAS_KEYSHARE_PASSPHRASE, is still refused if set (#934), as the
+ * Python combiner refuses it.
  *
  * C89; reuses the SLIP-0039 combiner library.
  */
@@ -51,8 +57,8 @@
 
 static void usage(FILE *o)
 {
-    fputs("usage: lcsas-shares [--passphrase X] SHARE_FILE...\n"
-          "       lcsas-shares [--passphrase X] < shares.txt\n"
+    fputs("usage: lcsas-shares SHARE_FILE...\n"
+          "       lcsas-shares < shares.txt\n"
           "\n"
           "Rebuilds an LCSAS repository password from its share cards and\n"
           "writes it to standard output (raw bytes, no newline).\n"
@@ -203,6 +209,37 @@ static int is_mistyped_share_line(const char *line, size_t len)
     return tokens >= 13 && (tokens - words) * 4 <= tokens;
 }
 
+/* #967: undo a byte-order mark at the start of `buf` (`*len` bytes),
+ * in place.  A UTF-8 BOM is dropped.  UTF-16 (little- or big-endian,
+ * with its BOM: what Windows PowerShell's `>` writes) becomes one byte a
+ * character: ASCII as it is, anything else '?', which no share word
+ * holds.  `buf` is NUL-terminated on return. */
+static void undo_bom(char *buf, size_t *len)
+{
+    const unsigned char *u = (const unsigned char *)buf;
+    size_t n = *len;
+    size_t i;
+    size_t out = 0;
+    int big;
+
+    if (n >= 3 && u[0] == 0xEF && u[1] == 0xBB && u[2] == 0xBF) {
+        memmove(buf, buf + 3, n - 3);
+        n -= 3;
+    } else if (n >= 2 && ((u[0] == 0xFF && u[1] == 0xFE) ||
+                          (u[0] == 0xFE && u[1] == 0xFF))) {
+        big = (u[0] == 0xFE);
+        for (i = 2; i + 1 < n; i += 2) {
+            unsigned int unit = big
+                ? ((unsigned int)u[i] << 8) | u[i + 1]
+                : ((unsigned int)u[i + 1] << 8) | u[i];
+            buf[out++] = (unit != 0 && unit < 0x80) ? (char)unit : '?';
+        }
+        n = out;
+    }
+    buf[n] = '\0';
+    *len = n;
+}
+
 /* Read an entire file (bare mnemonic OR printed share card), extract the
  * embedded share mnemonic into `buf` (NUL-terminated, capacity `cap`).
  * Returns 0 on success, or an exit status on error (an explanatory
@@ -231,7 +268,7 @@ static int read_file_mnemonic(const char *path, char *buf, size_t cap)
         return EXIT_USAGE;
     }
     fclose(f);
-    filebuf[got] = '\0';
+    undo_bom(filebuf, &got);
 
     err[0] = '\0';
     if (lcsas_keyshare_extract(filebuf, buf, cap, err, sizeof(err)) == 0) {
@@ -277,9 +314,6 @@ int main(int argc, char **argv)
     static char labels[MAX_MNEMONICS][MAX_LINE];
     const char *mnemonics[MAX_MNEMONICS];
     size_t n = 0;
-    const unsigned char *passphrase = (const unsigned char *)"";
-    size_t plen = 0;
-    const char *pp_opt = NULL;
     int argi = 1;
     int from_stdin;
     unsigned char pw[LCSAS_KEYSHARE_MAX_PW];
@@ -289,23 +323,17 @@ int main(int argc, char **argv)
     int any_bad = 0;
 
     /* #934: the old variable is refused, first, so a passphrase set
-     * under the old name is never silently ignored. */
+     * under the old name is never silently ignored.  (No passphrase is
+     * read under any name, #967: the cards are made without one.) */
     if (getenv("LCSAS_KEYSHARE_PASSPHRASE") != NULL) {
         fprintf(stderr, "lcsas-shares: LCSAS_KEYSHARE_PASSPHRASE was "
                         "renamed: use LCSAS_SHARE_PASSPHRASE\n");
         return EXIT_USAGE;
     }
 
-    /* Parse options (--passphrase X and --help). */
+    /* Parse options (--help). */
     while (argi < argc) {
-        if (strcmp(argv[argi], "--passphrase") == 0) {
-            if (argi + 1 >= argc) {
-                fprintf(stderr, "lcsas-shares: --passphrase needs a value\n");
-                return EXIT_USAGE;
-            }
-            pp_opt = argv[argi + 1];
-            argi += 2;
-        } else if (strcmp(argv[argi], "--help") == 0 ||
+        if (strcmp(argv[argi], "--help") == 0 ||
                    strcmp(argv[argi], "-h") == 0) {
             usage(stdout);
             return 0;
@@ -318,18 +346,6 @@ int main(int argc, char **argv)
             return EXIT_USAGE;
         } else {
             break;
-        }
-    }
-
-    /* Resolve the passphrase: --passphrase, else env, else empty. */
-    if (pp_opt != NULL) {
-        passphrase = (const unsigned char *)pp_opt;
-        plen = strlen(pp_opt);
-    } else {
-        const char *env = getenv("LCSAS_SHARE_PASSPHRASE");
-        if (env != NULL) {
-            passphrase = (const unsigned char *)env;
-            plen = strlen(env);
         }
     }
 
@@ -429,7 +445,8 @@ int main(int argc, char **argv)
         return EXIT_BAD_SHARE;
     }
 
-    if (lcsas_keyshare_recover_password(mnemonics, n, passphrase, plen,
+    if (lcsas_keyshare_recover_password(mnemonics, n,
+                                        (const unsigned char *)"", 0,
                                         pw, &pwlen) != 0) {
         /* Every share is internally valid, so the failure is a set-level
          * problem: too few shares, or shares from different splits. */

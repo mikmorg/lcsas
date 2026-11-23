@@ -23,8 +23,9 @@ checksummed, word-mnemonic share format.
 
 The **secret being split is the repository password itself** (the "master
 secret" in SLIP-0039 terms). SLIP-0039 also has a separate optional
-*passphrase* — LCSAS leaves that empty by default; if used, it is an extra
-factor the heir must also supply.
+*passphrase*: LCSAS always leaves it empty (`lcsas password split` has no
+option for one), and its combiners read none, so the heir needs only the
+cards.
 
 If you are holding **share cards** (20 or 33 words each), you have SLIP-0039
 shares — read on. If you are holding a single password (no shares), this

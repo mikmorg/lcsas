@@ -38,6 +38,10 @@
 #    1  the shares could not be combined (too few, or mixed splits)
 #    2  usage error, a file could not be read, or no shares given
 #    3  a share is not valid (a word is mistyped or missing)
+#
+#  A card file may be UTF-8 or UTF-16 with a BOM (what Windows
+#  PowerShell's `>` writes).  No passphrase is read (#967): the cards
+#  are made without one, as for lcsas-shares.
 # ═══════════════════════════════════════════════════════════════════
 """Standalone SLIP-0039 share combiner for the LCSAS meta disc.
 
@@ -53,6 +57,7 @@ Both import forms are tried so the same script works in either layout.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -76,9 +81,11 @@ try:  # source checkout / dev: lcsas.keyshare
         KeyShareError,
         check_share,
         decode_master_secret,
+        decode_share_text,
         extract_mnemonic,
         is_share_line,
         normalize_share_line,
+        read_share_stream,
         recover_secret,
     )
 except ImportError:  # pragma: no cover - meta disc top-level bundle path
@@ -90,9 +97,11 @@ except ImportError:  # pragma: no cover - meta disc top-level bundle path
         KeyShareError,
         check_share,
         decode_master_secret,
+        decode_share_text,
         extract_mnemonic,
         is_share_line,
         normalize_share_line,
+        read_share_stream,
         recover_secret,
     )
 
@@ -100,6 +109,25 @@ except ImportError:  # pragma: no cover - meta disc top-level bundle path
 EXIT_CANNOT_COMBINE = 1
 EXIT_USAGE = 2
 EXIT_BAD_SHARE = 3
+
+_PROG = "combine_shares.py"
+
+_USAGE = (
+    "Usage: python3 combine_shares.py SHARE_FILE [SHARE_FILE ...]\n"
+    "       cat share1 share2 | python3 combine_shares.py\n"
+    "\n"
+    "Reconstructs the repository password from any K SLIP-0039\n"
+    "shares (more than K is fine) and writes it (raw bytes, no\n"
+    "newline) to stdout.\n"
+    "A word may be cut to its first 4 letters.\n"
+    "\n"
+    "Exit status:\n"
+    "  0  the password was rebuilt and written\n"
+    "  1  the shares could not be combined: too few, or not all\n"
+    "     from the same split (compare the Split ID on the cards)\n"
+    "  2  usage error, a file could not be read, or no shares given\n"
+    "  3  a share is not valid: a word is mistyped or missing\n"
+)
 
 
 def _skipped_hint(skipped: int) -> str:
@@ -137,13 +165,14 @@ def _read_mnemonics(
     mnemonics: list[tuple[str, str]] = []
     if paths:
         for p in paths:
-            text = Path(p).read_text(encoding="utf-8")
+            text = decode_share_text(Path(p).read_bytes())
             mnemonics.append(
                 (p, extract_mnemonic(text, source=p, keep_mistyped=True))
             )
     else:
         n_skipped = 0
-        for lineno, line in enumerate(sys.stdin.read().splitlines(), start=1):
+        stdin = read_share_stream(sys.stdin)
+        for lineno, line in enumerate(stdin.splitlines(), start=1):
             if is_share_line(line):
                 mnemonics.append(
                     (f"stdin line {lineno}", normalize_share_line(line))
@@ -163,26 +192,35 @@ def main(argv: list[str] | None = None) -> int:
     not be combined, 2 usage / unreadable file / no shares, 3 a share is
     not valid.
     """
-    args = sys.argv[1:] if argv is None else argv
+    args = list(sys.argv[1:] if argv is None else argv)
 
-    if args and args[0] in ("-h", "--help"):
+    # #934, #967: the old variable is refused first, as lcsas-shares
+    # refuses it, so a passphrase set under it is never silently ignored.
+    if "LCSAS_KEYSHARE_PASSPHRASE" in os.environ:
         sys.stderr.write(
-            "Usage: python3 combine_shares.py SHARE_FILE [SHARE_FILE ...]\n"
-            "       cat share1 share2 | python3 combine_shares.py\n"
-            "\n"
-            "Reconstructs the repository password from any K SLIP-0039\n"
-            "shares (more than K is fine) and writes it (raw bytes, no\n"
-            "newline) to stdout.\n"
-            "A word may be cut to its first 4 letters.\n"
-            "\n"
-            "Exit status:\n"
-            "  0  the password was rebuilt and written\n"
-            "  1  the shares could not be combined: too few, or not all\n"
-            "     from the same split (compare the Split ID on the cards)\n"
-            "  2  usage error, a file could not be read, or no shares given\n"
-            "  3  a share is not valid: a word is mistyped or missing\n"
+            f"{_PROG}: LCSAS_KEYSHARE_PASSPHRASE was renamed: use "
+            "LCSAS_SHARE_PASSPHRASE\n"
         )
-        return 0
+        return EXIT_USAGE
+
+    # Options, as lcsas-shares reads them: --help, and -- before a file
+    # whose name starts with '-'.  Any other option (--passphrase among
+    # them: the cards are made without one) is a usage error.
+    files: list[str] = []
+    while args:
+        arg = args.pop(0)
+        if arg in ("-h", "--help"):
+            sys.stderr.write(_USAGE)
+            return 0
+        if arg == "--":
+            break
+        if arg.startswith("-") and arg != "-":
+            sys.stderr.write(f"{_PROG}: unknown option '{arg}'\n{_USAGE}")
+            return EXIT_USAGE
+        files.append(arg)
+        break
+    files += args
+    args = files
 
     skipped: list[int] = []
     try:

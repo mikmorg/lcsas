@@ -27,6 +27,8 @@ ships in the meta disc bundle and works under both the ``lcsas.keyshare``
 
 from __future__ import annotations
 
+from typing import TextIO
+
 from .slip39 import MIN_MNEMONIC_LENGTH_WORDS, KeyShareError, _word_index, check_share
 from .wordlist import WORDLIST
 
@@ -42,6 +44,31 @@ _MIN_WORDS = MIN_MNEMONIC_LENGTH_WORDS
 # mistakes rather than prose (the C combiner uses the same floor for a
 # file's fallback line and for a mistyped stdin line).
 _MIN_CANDIDATE_TOKENS = 13
+
+
+def decode_share_text(data: bytes) -> str:
+    """Return the text of a share file or of standard input (#967).
+
+    UTF-16 with its byte-order mark (what Windows PowerShell's ``>``
+    writes) is decoded; a UTF-8 BOM is dropped; anything else is read as
+    UTF-8, a byte that is not becoming U+FFFD, which no share word holds.
+    So a file that is not text is read like the C combiner reads it: it
+    has no share words, and no decoding error escapes.
+    """
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    return data.decode("utf-8", errors="replace")
+
+
+def read_share_stream(stream: TextIO) -> str:
+    """Return all of *stream* (standard input) as :func:`decode_share_text`
+    reads it: through its bytes when it has them, else as the text it is."""
+    raw = getattr(stream, "buffer", None)
+    if raw is not None:
+        return decode_share_text(raw.read())
+    return stream.read()
 
 
 def _share_word(token: str) -> str | None:

@@ -703,18 +703,6 @@ LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER
   Why:      Opt-IN.  Restoring over unrelated existing files can
             silently overwrite them; scripted runs must opt in.
 
-LCSAS_SHARE_PASSPHRASE
-  Default:  unset (empty passphrase)
-  Since:    Key escrow (C5, 2026-05)
-  Read by:  lcsas-shares, so it works with restore.sh and
-            restore.bat when they combine share cards
-  What:     Passphrase for SLIP-0039 share combination, read by the
-            tier-1 `lcsas-shares` combiner when no --passphrase
-            flag is given.  Only relevant for splits created with a
-            non-default passphrase.
-  Why:      Opt-in — same credentials reasoning as LCSAS_PASSWORD:
-            secrets enter the environment only by explicit action.
-
 BUILD / CI GATES
 ────────────────
 
@@ -809,7 +797,6 @@ LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
 LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_CHECK_DISC_AUTOFIX    0         opt-in      unattended ECC repair
 LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER 0         opt-in      scripted overwrite ack
-LCSAS_SHARE_PASSPHRASE   unset     opt-in      share passphrase
 LCSAS_PROGRESS              unset     opt-out     set 0 to quiet tier 3
 LCSAS_TIER3_AES             auto      opt-out     set pure on shared hosts
 LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
