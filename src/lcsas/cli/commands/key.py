@@ -152,6 +152,7 @@ def cmd_key_card(args: argparse.Namespace) -> int:
 
 def _verify_password_unlocks_repo(
     keys_dir: Path, password: bytes, repo: str, *, for_split: bool = True,
+    source: str = "the password in this file",
 ) -> str | None:
     """Authenticate *password* against a repo's ``keys/`` directory.
 
@@ -161,7 +162,8 @@ def _verify_password_unlocks_repo(
     wrong).  For ``password split`` (*for_split*) the error names the
     ``--no-verify-repo`` override; ``password verify`` has none, and says
     instead that a password which does not open the repository is most
-    often the one from before a password change (#956).
+    often the one from before a password change (#956).  *source* names
+    the password checked: a file's, or the one the shares rebuild (#968).
     """
     from lcsas.restore.restic_fallback import (
         IntegrityError,
@@ -200,7 +202,7 @@ def _verify_password_unlocks_repo(
                 + skip("dangerous")
             )
         msg = (
-            f"the password in this file does NOT unlock repository "
+            f"{source} does NOT unlock repository "
             f"'{repo}' ({len(e.rejected)} key file(s) checked under "
             f"{keys_dir}). "
         )
@@ -355,26 +357,29 @@ def _check_split_repo_registered(
     ``password split`` records the split under the catalog repo_id that
     ``repo add`` assigned, because that is the ID the burn pipeline looks
     it up by.  Raises ValueError (the message to print) when there is no
-    catalog or the repository is not registered in it, so the caller can
-    stop before any share exists.  A catalog that exists but cannot be
-    read only logs a warning: the split goes ahead without being recorded.
+    catalog, when it cannot be opened the way the record step opens it
+    (locked, its schema checked: a damaged file, a newer schema, #968), or
+    when the repository is not registered in it, so the caller can stop
+    before any share exists.
     """
     from lcsas.db.repos import resolve_repo
-    from lcsas.exceptions import CatalogError, CatalogUnreadableError
+    from lcsas.exceptions import (
+        CatalogError,
+        CatalogLockTimeout,
+        CatalogUnreadableError,
+    )
 
     name = args.repo
     repo_cfg = config.repositories.get(name)
     mirror = str(repo_cfg.mirror_path) if repo_cfg is not None else "<mirror_path>"
     db_path = _resolve_db_path(args, config)
     try:
-        with _open_catalog(args, mode="read", db_path=db_path) as conn:
+        with _open_catalog(args, mode="write-existing", db_path=db_path) as conn:
             repo = resolve_repo(conn, name, _config_mirror(config, name))
+    except CatalogLockTimeout:
+        raise  # main() names the holder; nothing was written
     except CatalogUnreadableError as e:  # a damaged file: there, not missing
-        logger.warning(
-            "Could not read the catalog at %s (%s). The split will go ahead, "
-            "but it may not be recorded.", db_path, e,
-        )
-        return
+        raise ValueError(_unopenable_catalog(db_path, e)) from None
     except CatalogError:  # no file, or never initialised
         # An unmounted drive looks the same as a new archive here, so the
         # mount check comes first: 'init' on an empty mount point would
@@ -391,19 +396,28 @@ def _check_split_repo_registered(
             f"{e} The split cannot tell which one to record. No shares were "
             f"written."
         ) from None
-    # RuntimeError: get_connection's integrity check failed (a damaged file).
+    # #968: a catalog the record step could not open either (a newer
+    # schema, a failed integrity check): refused before any share exists,
+    # where it used to split first and then fail to record.
     except (sqlite3.Error, OSError, RuntimeError) as e:
-        logger.warning(
-            "Could not read the catalog at %s (%s). The split will go ahead, "
-            "but it may not be recorded.", db_path, e,
-        )
-        return
+        raise ValueError(_unopenable_catalog(db_path, e)) from None
     if repo is None:
         raise ValueError(
             f"Repository '{name}' is not registered in the catalog at "
             f"{db_path}. Register it first with 'lcsas --config ... repo add "
             f"{name} {mirror}', then split again. No shares were written."
         )
+
+
+def _unopenable_catalog(db_path: Path, exc: BaseException) -> str:
+    """The refusal for a split whose catalog cannot be opened (#968)."""
+    hint = getattr(exc, "recovery_hint", "")
+    return (
+        f"Could not open the catalog at {db_path}: {exc}"
+        + (f" {hint}" if hint else "")
+        + " The split would not be recorded, so it was not made. No shares "
+        "were written."
+    )
 
 
 def _record_split_by_name(
@@ -727,6 +741,16 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     pair_problem = key_split_pair_error(threshold, shares)
     if pair_problem is not None:
         logger.error("Could not split password: %s.", pair_problem)
+        return 1
+    if shares < 2:
+        # #968: the config's 1-of-1 means "not split"; as a split it
+        # would hand one holder the whole password as a share card.
+        logger.error(
+            "Could not split password: %d-of-%d is no split. A split needs "
+            "at least 2 shares (--shares N, N >= 2) and --threshold K with "
+            "2 <= K <= N. To keep the password whole, do not split it.",
+            threshold, shares,
+        )
         return 1
 
     # #683: never mix two splits in one folder.  A second split with a
@@ -1215,6 +1239,8 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
     keys_dir = repo_cfg.mirror_path / "keys"
     err = _verify_password_unlocks_repo(
         keys_dir, password, args.repo, for_split=False,
+        source=("the password in this file" if not n_shares else
+                f"the password these {n_shares} share(s) rebuild"),
     )
     if err is not None:
         logger.error("%s", err)
