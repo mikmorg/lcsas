@@ -1608,7 +1608,7 @@ REM is named as it is typed, not at the end.
 call :share_key
 set "SH_DUP="
 set /a SH_PREV=SI-1
-for /l %%J in (1,1,%SH_PREV%) do if /i "!SKEY%%J!"=="!SK!" set "SH_DUP=1"
+for /l %%J in (1,1,%SH_PREV%) do call :share_dup %%J
 if defined SH_DUP (
     del "%SH_DIR%\card%SI%.txt" 2>nul
     echo That is a card you already typed.  Type a different card.
@@ -1634,34 +1634,48 @@ goto :share_next
 rmdir /s /q "%SH_DIR%" 2>nul
 goto :shares_ask
 
+:share_dup
+REM Card %1's key is this card's: SH_DUP.
+if /i "!SKEY%1!"=="!SK!" set "SH_DUP=1"
+exit /b 0
+
 :share_key
 REM From SH_TYPED, the card as typed: SK, its words each cut to four
 REM letters, the numbers a card prints beside them left out (lcsas-shares
 REM reads a word by its first four letters, and skips the numbers);
 REM SK2, the first two of those; SKW, the first two words as typed.
-REM The line was accepted by lcsas-shares, so it holds only letters,
-REM digits, dots, brackets and blanks: with the dots and brackets made
-REM blanks, the plain for list takes its words, and a word that is only
-REM digits is a number.
+REM The line was accepted by lcsas-shares: its words are letters, and a
+REM token that starts with a digit is a number.  One word at a time, read
+REM back from a file with for /f, so no character of the line is ever
+REM parsed as part of a command (a typed "1)" included).
 set "SK="
 set "SK2="
 set "SKW="
 set "SK_N=0"
-set "SK_ALL=!SH_TYPED:.= !"
-set "SK_ALL=!SK_ALL:)= !"
-for %%W in (%SK_ALL%) do call :share_key_word %%W
-exit /b 0
-:share_key_word
-set "SK_W=%~1"
-REM (# first: the variable is never empty while digits are taken out.)
-set "SK_D=#%~1"
-for %%D in (0 1 2 3 4 5 6 7 8 9) do set "SK_D=!SK_D:%%D=!"
-if "!SK_D!"=="#" exit /b 0
+set "SK_FILE=%SH_DIR%\key.txt"
+set "SK_REST=!SH_TYPED!"
+:share_key_next
+if not defined SK_REST goto :share_key_done
+> "%SK_FILE%" echo !SK_REST!
+set "SK_W="
+set "SK_REST="
+for /f "usebackq tokens=1,*" %%A in ("%SK_FILE%") do (
+    set "SK_W=%%A"
+    set "SK_REST=%%B"
+)
+if not defined SK_W goto :share_key_done
+set "SK_F=!SK_W:~0,1!"
+set "SK_NUM="
+for %%D in (0 1 2 3 4 5 6 7 8 9) do if "!SK_F!"=="%%D" set "SK_NUM=1"
+if defined SK_NUM goto :share_key_next
 set /a SK_N+=1
 set "SK=!SK! !SK_W:~0,4!"
 if !SK_N! equ 2 set "SK2=!SK!"
 if !SK_N! equ 1 set "SKW=!SK_W!"
 if !SK_N! equ 2 set "SKW=!SKW! !SK_W!"
+goto :share_key_next
+:share_key_done
+del /f /q "%SK_FILE%" >nul 2>nul
 exit /b 0
 
 :share_one_word

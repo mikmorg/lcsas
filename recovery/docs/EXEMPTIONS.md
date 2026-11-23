@@ -62,20 +62,20 @@ permitted (ignored by the parser).
 catalog.c:171   INTRACTABLE   lcsas_catalog_check (#788): sqlite3_prepare_v2 of PRAGMA quick_check fails only on malloc inside SQLite (fault-inject cannot reach)
 
 # disc_locator.c
-disc_locator.c:1201  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
-disc_locator.c:1203  DEFENSIVE   "
-disc_locator.c:1210  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
-disc_locator.c:1212  DEFENSIVE   "
-disc_locator.c:1223  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
-disc_locator.c:1225  DEFENSIVE   "
-disc_locator.c:1230  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
-disc_locator.c:1232  DEFENSIVE   "
-disc_locator.c:1355   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
+disc_locator.c:1193  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:1195  DEFENSIVE   "
+disc_locator.c:1202  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:1204  DEFENSIVE   "
+disc_locator.c:1215  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
+disc_locator.c:1217  DEFENSIVE   "
+disc_locator.c:1222  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
+disc_locator.c:1224  DEFENSIVE   "
+disc_locator.c:1347   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
+disc_locator.c:1348   VOLATILE   "
 disc_locator.c:1356   VOLATILE   "
-disc_locator.c:1364   VOLATILE   "
-disc_locator.c:1365   VOLATILE   "
-disc_locator.c:1367   VOLATILE   "  (#786: the disc that did not fit is remembered)
-disc_locator.c:1368   VOLATILE   "
+disc_locator.c:1357   VOLATILE   "
+disc_locator.c:1359   VOLATILE   "  (#786: the disc that did not fit is remembered)
+disc_locator.c:1360   VOLATILE   "
 
 # lcsas_io.c
 lcsas_io.c:30   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection

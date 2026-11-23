@@ -1622,17 +1622,21 @@ def test_tier1_missing_stops_a_set_read_from_the_discs(
 
 
 def test_cards_from_two_splits_then_q_at_a_card(fresh: _Wine, tmp_path: Path) -> None:
-    """#607: two cards of the same password from two different splits are
-    each good alone, and together "do not fit together"; ENTER types the
-    cards again, and Q at "Words of card 2" (a card file already written)
-    ends the run with 77, with no lcsas-shares-* folder and no password
-    file left in %TEMP%."""
+    """#607: a card of the same password from another split is good
+    alone.  #966: it is named as it is typed ("not from the same split as
+    card 1") and card 2 is asked again; R starts again with card 1.  Two
+    cards of one 3-of-3 split, where the set says 2, are each good alone
+    and together "do not fit together"; ENTER types the cards again, and
+    Q at "Words of card 2" (a card file already written) ends the run
+    with 77, with no lcsas-shares-* folder and no password file left in
+    %TEMP%."""
     from lcsas.keyshare import encode_master_secret, split_secret
 
     wine = fresh
     photos = _photos(split=(2, 3))
     _build_set(tmp_path, photos)
     other = split_secret(encode_master_secret(photos.password.encode()), 2, 3)
+    three = split_secret(encode_master_secret(photos.password.encode()), 3, 3)
     meta = tmp_path / "meta"
     _write_meta(meta, [photos])
     disc_b = tmp_path / "disc_b"
@@ -1646,6 +1650,9 @@ def test_cards_from_two_splits_then_q_at_a_card(fresh: _Wine, tmp_path: Path) ->
         run.answer("Restore to which folder?", "C:\\photos-mix")
         run.answer("Words of card 1: ", photos.shares[0])
         run.answer("Words of card 2: ", other[1])
+        named = run.answer("Words of card 2: ", "R")
+        run.answer("Words of card 1: ", three[0])
+        run.answer("Words of card 2: ", three[1])
         misfit = run.answer(
             "Press ENTER to type the cards again, or Q then ENTER to quit: ", "")
         run.answer("Words of card 1: ", photos.shares[0])
@@ -1656,6 +1663,9 @@ def test_cards_from_two_splits_then_q_at_a_card(fresh: _Wine, tmp_path: Path) ->
     out = run.text
     _assert_clean(out)
     assert rc == 77, f"rc={rc}\n{out}"
+    assert "Card 2 is not from the same split as card 1" in named, named
+    begins = " ".join(photos.shares[0].split()[:2])
+    assert f"Card 1 begins '{begins}'" in named, named
     assert "Those share cards do not fit together" in misfit, misfit
     assert "No password was given, so nothing was restored." in out, out
     assert "[tier 1] running" not in out, out
