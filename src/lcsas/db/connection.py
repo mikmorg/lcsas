@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from lcsas.db.schema import get_schema_version
+from lcsas.db.schema import CURRENT_SCHEMA_VERSION, get_schema_version
 from lcsas.exceptions import CatalogLockTimeout, CatalogUnreadableError
 
 # Command label written into the lock file so a waiter can name the holder.
@@ -74,12 +74,16 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
     # header), so close the connection before the error propagates (#769).
     try:
         conn.row_factory = sqlite3.Row
-        # #968: a file SQLite cannot read is refused in words.
+        # #968: the version first.  A file SQLite cannot read is refused
+        # in words, and a catalog newer than this build keeps its journal
+        # mode: ensure_schema refuses to write it, and a command that only
+        # reads it must not change it either.
         try:
-            get_schema_version(conn)
+            version = get_schema_version(conn)
         except sqlite3.DatabaseError as exc:
             raise _unreadable(db_path, str(exc)) from exc
-        conn.execute("PRAGMA journal_mode=WAL;")
+        if version <= CURRENT_SCHEMA_VERSION:
+            conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA wal_autocheckpoint=1000;")  # explicit: checkpoint every 1000 pages
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.execute("PRAGMA busy_timeout=30000;")

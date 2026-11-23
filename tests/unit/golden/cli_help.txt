@@ -280,7 +280,8 @@ options:
                         name with no extension) gets <label>_<location>.json
                         and is created if missing; any other path is the file.
   --label LABEL         Volume label for the receipt. Defaults to the ISO's
-                        parent directory name.
+                        volume ID (the label `lcsas stage` mastered it with);
+                        for an ISO with none, the name of its folder.
   --location LOCATION   Location tag for the receipt (required with --emit-
                         receipt).
   --session SESSION     Optional session ID to record in the receipt.

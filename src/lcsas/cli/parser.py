@@ -439,7 +439,9 @@ def build_parser() -> argparse.ArgumentParser:
                                 "if missing; any other path is the file.")
     burniso_p.add_argument("--label", type=str, default=None,
                            help="Volume label for the receipt. Defaults to the "
-                                "ISO's parent directory name.")
+                                "ISO's volume ID (the label `lcsas stage` "
+                                "mastered it with); for an ISO with none, "
+                                "the name of its folder.")
     burniso_p.add_argument("--location", type=str, default=None,
                            help="Location tag for the receipt "
                                 "(required with --emit-receipt).")
