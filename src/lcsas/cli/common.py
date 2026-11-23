@@ -243,6 +243,21 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+def _note_newer_catalog(conn: sqlite3.Connection, db_path: Path | str) -> None:
+    """One line when a command that does not migrate reads a catalog newer
+    than this code (#968): writing commands refuse it, and what a read
+    shows may leave out what the newer version records."""
+    from lcsas.db.schema import CURRENT_SCHEMA_VERSION, get_schema_version
+
+    version = get_schema_version(conn)
+    if version > CURRENT_SCHEMA_VERSION:
+        logger.warning(
+            "Note: the catalog at %s is schema v%d, newer than this LCSAS "
+            "(v%d). What this command shows may be incomplete; use a newer "
+            "LCSAS.", db_path, version, CURRENT_SCHEMA_VERSION,
+        )
+
+
 _CatalogMode = Literal["write", "write-existing", "read", "unlocked-migrate", "unlocked"]
 
 
@@ -297,6 +312,8 @@ def _open_catalog(
     try:
         if mode == "unlocked-migrate":
             ensure_schema(conn)
+        else:
+            _note_newer_catalog(conn, db_path)
         yield conn
     finally:
         conn.close()

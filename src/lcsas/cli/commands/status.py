@@ -7,11 +7,13 @@ import json
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
-from lcsas.cli.common import _open_catalog, _reburn_hint
+from lcsas.cli.common import _open_catalog, _reburn_hint, _resolve_db_path
 from lcsas.constants import SESSION_CLEANED
 from lcsas.log import get_logger, log_to_stderr
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from lcsas.db.models import Pack
 
 logger = get_logger()
@@ -204,6 +206,7 @@ def _status_json(
     single_disc_packs: int,
     stale_count: int,
     older_than_days: int,
+    stage_running: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The ``lcsas status --json`` document (#701).
 
@@ -284,7 +287,55 @@ def _status_json(
         "single_disc_packs": single_disc_packs,
         "stale_discs": {"count": stale_count,
                         "older_than_days": older_than_days},
+        "stage_running": stage_running,
     }
+
+
+def _running_stage(
+    conn: sqlite3.Connection, db_path: Path,
+) -> dict[str, Any] | None:
+    """The stage running now, or None (#968).
+
+    A stage holds the catalog lock from start to end, and stamps it with
+    its command, pid and start time.  Its burn session is the newest one
+    created since then; its volumes are those of that session not yet
+    burned.  ``consolidate --execute`` stages the same way.
+    """
+    from datetime import timedelta
+
+    from lcsas.db.connection import catalog_lock_holder
+    from lcsas.utils.timestamps import parse_utc
+
+    holder = catalog_lock_holder(db_path)
+    if holder is None:
+        return None
+    cmd = str(holder.get("cmd", ""))
+    if cmd.split()[1:2] not in (["stage"], ["consolidate"]):
+        return None
+    since = parse_utc(holder.get("since"))
+    session_id: str | None = None
+    labels: list[str] = []
+    row = conn.execute(
+        "SELECT session_id, created_at FROM burn_sessions "
+        "ORDER BY julianday(created_at) DESC, rowid DESC LIMIT 1"
+    ).fetchone()
+    created = parse_utc(row["created_at"]) if row is not None else None
+    if (since is not None and created is not None
+            and created >= since - timedelta(seconds=1)):
+        session_id = str(row["session_id"])
+        labels = [str(r["label"]) for r in conn.execute(
+            "SELECT v.label FROM session_volumes sv JOIN volumes v "
+            "USING (volume_id) WHERE sv.session_id = ? "
+            "AND v.status IN ('STAGING', 'BURNING') ORDER BY v.label",
+            (session_id,),
+        )]
+    when = str(holder.get("since", ""))
+    holder_text = f"'{cmd}', pid {holder.get('pid', '?')}"
+    if len(when) >= 16:
+        holder_text += f", since {when[11:16]}"
+    return {"command": cmd, "pid": holder.get("pid"),
+            "since": holder.get("since"), "session_id": session_id,
+            "labels": labels, "holder": holder_text}
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -322,7 +373,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     from lcsas.db.volumes import list_volumes
 
     doc: dict[str, Any] = {}
-    with _open_catalog(args, mode="read") as conn:
+    db_path = _resolve_db_path(args)
+    with _open_catalog(args, mode="read", db_path=db_path) as conn:
         if args.stale_copies:
             return _print_stale_copies(conn, args.older_than_days)
         if args.redundancy:
@@ -399,6 +451,12 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 unread.append(v)
         burned_unrecorded.sort()
         unburned = unread
+        # #968: a stage running now (it holds the catalog lock) is making
+        # its volumes: they are neither incomplete nor killed.
+        running = _running_stage(conn, db_path)
+        if running is not None:
+            unburned = [v for v in unburned
+                        if v.label not in running["labels"]]
         # #665: a stage that did not finish (no ISO hash recorded) is
         # incomplete, whatever is in the staging area: never burn it.
         incomplete = [v.label for v in unburned
@@ -421,6 +479,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
         killed: list[tuple[str, list[str]]] = []
         for s in list_sessions(conn):
             if s.status == SESSION_CLEANED:
+                continue
+            if running is not None and s.session_id == running["session_id"]:
                 continue
             session_dir = recorded_path(s.staging_dir)
             if (session_dir is None or unfinished_stage_refusal(
@@ -471,6 +531,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 single_disc_packs=len(single_disc_packs),
                 stale_count=stale_count,
                 older_than_days=args.older_than_days,
+                stage_running=None if running is None else {
+                    k: v for k, v in running.items() if k != "holder"},
             )
 
     if getattr(args, "json", False):
@@ -493,6 +555,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
             where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
                      else "(no disc in service)")
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
+    if running is not None:
+        making = ""
+        if running["session_id"] is not None:
+            making = f": burn session {running['session_id']} is being made"
+            if running["labels"]:
+                making += f" ({', '.join(running['labels'])})"
+        logger.info(
+            "A stage is running (%s)%s. Do not abort or burn it; run "
+            "'lcsas status' again when it has finished.",
+            running["holder"], making,
+        )
     for sid, labels in killed:
         logger.warning(
             "WARNING: the stage of burn session %s did not finish: its "
@@ -554,7 +627,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     # re-burn" with their step.
     if summary["staged"] > 0 and not (
         with_iso or ghost_labels or incomplete or burn_unknown
-        or staged_but_burned or reburn_hints or killed
+        or staged_but_burned or reburn_hints or killed or running
     ):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "

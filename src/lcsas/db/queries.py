@@ -616,6 +616,8 @@ def get_live_volumes_for_packs(
 def get_at_risk_packs_for_volume(
     conn: sqlite3.Connection,
     volume_id: int,
+    *,
+    pruned: bool = False,
 ) -> list[Pack]:
     """Return packs whose ONLY live replica is the given volume (FMA-08).
 
@@ -624,13 +626,17 @@ def get_at_risk_packs_for_volume(
     ``check_deprecation_safe`` (``db/volumes.py``): another volume counts
     iff it is BURNED/VERIFIED and has >=1 ACTIVE ``volume_copies`` row
     (or zero ``volume_copies`` rows at all — legacy).
+
+    With *pruned*, the same for the packs pruned from the mirror: no live
+    snapshot needs them, but an older one kept only in older disc
+    catalogs may (#968; ``copy destroy`` calls losing them DATA LOSS).
     """
     rows = conn.execute(
         """SELECT p.*
            FROM volume_packs vp
            JOIN packs p ON p.pack_id = vp.pack_id
            WHERE vp.volume_id = ?
-             AND p.is_pruned = 0
+             AND p.is_pruned = ?
              AND NOT EXISTS (
                  SELECT 1 FROM volume_packs vp2
                  JOIN volumes v2 ON v2.volume_id = vp2.volume_id
@@ -646,7 +652,7 @@ def get_at_risk_packs_for_volume(
                    )
              )
            ORDER BY p.repo_id, p.sha256""",
-        (volume_id, volume_id),
+        (volume_id, int(pruned), volume_id),
     ).fetchall()
     return [_row_to_pack(r) for r in rows]
 

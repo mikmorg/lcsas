@@ -736,7 +736,12 @@ The pipeline is interrupt-safe in three places:
    waiting volumes with `lcsas burn --session <id>`, or discard the
    session with `lcsas session abort <id>` (`cmd_session_abort`,
    `BurnOrchestrator.abort_session`) and stage again. An INCOMPLETE
-   volume must always be discarded this way.
+   volume must always be discarded this way, and so must a session whose
+   stage was killed hard (no `session.json`, #862): `stage` then names
+   it as a session whose stage did not finish and gives only the abort
+   step, as `status` does (#968). While a stage runs, `status` from
+   another terminal says "A stage is running" (it sees the stage hold
+   the catalog lock) instead of calling its volumes INCOMPLETE.
 2. **Inside `burn_session()` between volumes** — if volume 3 of 5 fails,
    volumes 1-2 are `VERIFIED`, volume 3 is back to `STAGING`, volumes 4-5
    are still `STAGING`, session is `PARTIAL`. **Resume** by re-running

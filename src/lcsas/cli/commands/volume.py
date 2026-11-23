@@ -199,11 +199,39 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
                 "again. 'lcsas catalog reconcile' lists this drift.",
                 vol.status,
             )
+        # #968: a pruned pack is not "live", but losing its last disc
+        # still loses it (copy destroy says DATA LOSS): count it apart.
+        pruned_only = get_at_risk_packs_for_volume(
+            conn, vol.volume_id, pruned=True,
+        )
+        live = conn.execute(
+            "SELECT COUNT(*) FROM volume_packs vp JOIN packs p "
+            "USING (pack_id) WHERE vp.volume_id = ? AND p.is_pruned = 0",
+            (vol.volume_id,),
+        ).fetchone()[0]
         if not at_risk:
-            logger.info(
-                "Blast radius: NONE — every pack on this volume is also "
-                "on another live volume."
+            if live:
+                logger.info(
+                    "Blast radius: NONE — every %spack on this volume is "
+                    "also on another live volume.",
+                    "live " if pruned_only else "",
+                )
+            else:
+                logger.info(
+                    "Blast radius: no live pack — every pack on this "
+                    "volume was pruned from the mirror."
+                )
+        if pruned_only:
+            logger.warning(
+                "%d pruned pack(s) (%.2f GB) on this volume are on no other "
+                "volume in service. No snapshot in the mirror needs them, "
+                "but an older snapshot kept only in older disc catalogs may: "
+                "if every disc of %s fails, it can no longer be fully "
+                "restored.",
+                len(pruned_only),
+                sum(p.size_bytes for p in pruned_only) / 1e9, vol.label,
             )
+        if not at_risk:
             return 0
 
         by_repo: dict[str, list[Pack]] = {}

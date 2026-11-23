@@ -474,6 +474,7 @@ class BurnOrchestrator:
         # an abort leaves no wrong-instruction disc behind.
         drift_msg = self._escrow_preflight(list(packs_by_repo))
 
+        done = 0
         for repo_id, repo_packs in packs_by_repo.items():
             mirror_path = mirror_paths.get(repo_id)
             data_dir = mirror_path / "data" if mirror_path is not None else None
@@ -483,7 +484,9 @@ class BurnOrchestrator:
                 raise MirrorUnavailableError(
                     repo_id, mirror_path, [p.sha256[:12] for p in repo_packs],
                 )
-            builder.stage_packs(repo_packs, data_dir)
+            builder.stage_packs(repo_packs, data_dir, done_before=done,
+                                volume_total=len(selected_packs))
+            done += len(repo_packs)
 
         # Post-stage invariant: every selected pack must be present in the
         # staging tree before anything is written to the catalog.
@@ -1035,8 +1038,24 @@ class BurnOrchestrator:
         # #672: plain stage leaves out packs whose disc is on its way: a
         # never-burned volume whose finished ISO waits in the staging area.
         held: dict[str, list[str]] = {}
+        killed: dict[str, list[str]] = {}
         if for_location is None:
             packs_to_stage, held = self._hold_back_waiting(packs_to_stage)
+            # #968: a session whose stage was killed hard is not waiting
+            # to be burned: 'status' says do not burn it, and so does this.
+            killed = self._killed_stage_sessions(held)
+            if killed:
+                logger.warning(
+                    "Not staging packs that are on volumes of a burn session "
+                    "whose stage did not finish: %s. Do not burn %s. Remove "
+                    "%s with %s, then run 'lcsas stage' again.",
+                    _describe_waiting(killed),
+                    "it" if len(killed) == 1 else "them",
+                    "it" if len(killed) == 1 else "each",
+                    " and ".join(f"'lcsas session abort {sid}'"
+                                 for sid in sorted(killed)),
+                )
+                held = {s: v for s, v in held.items() if s not in killed}
             if held and packs_to_stage:
                 logger.warning(
                     "Not staging packs that are already on volumes waiting "
@@ -1046,6 +1065,12 @@ class BurnOrchestrator:
                 )
 
         if not packs_to_stage:
+            if killed and not held:
+                raise NothingToStageError(
+                    "No packs need staging: every unarchived pack is on a "
+                    "volume of a burn session whose stage did not finish "
+                    f"({_describe_waiting(killed)}).",
+                )
             if held:
                 raise NothingToStageError(
                     "No packs need staging: every unarchived pack is on a "
@@ -1655,6 +1680,17 @@ class BurnOrchestrator:
                              for name, snaps in sorted(per_repo.items()))
             location = (sorted(locations[session_id])[0]
                         if len(locations[session_id]) == 1 else "<location>")
+            if self._killed_stage_sessions({session_id: []}):
+                # #968: as 'status' says, a session whose stage was killed
+                # hard must not be burned.
+                parts.append(
+                    f"The stage of burn session {session_id} "
+                    f"({', '.join(sorted(labels[session_id]))}) did not "
+                    f"finish, so it must not be burned. Staging now would "
+                    f"leave {sets} off the new discs for good. Remove it "
+                    f"(lcsas session abort {session_id}) and stage again."
+                )
+                continue
             parts.append(
                 f"Session {session_id} "
                 f"({', '.join(sorted(labels[session_id]))}) is staged and "
@@ -2562,6 +2598,21 @@ class BurnOrchestrator:
             return [p for rid in repo_ids
                     for p in get_unarchived_packs(self._conn, rid)]
         return get_unarchived_packs(self._conn)
+
+    def _killed_stage_sessions(
+        self, held: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        """The sessions of *held* whose stage was killed hard (#862):
+        :func:`unfinished_stage_refusal` refuses to burn them."""
+        from lcsas.db.sessions import get_session, recorded_path
+
+        killed: dict[str, list[str]] = {}
+        for sid, labels in held.items():
+            session_dir = recorded_path(get_session(self._conn, sid).staging_dir)
+            if (session_dir is not None
+                    and unfinished_stage_refusal(session_dir, sid) is not None):
+                killed[sid] = labels
+        return killed
 
     def _hold_back_waiting(
         self, packs: list[Pack],
