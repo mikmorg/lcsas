@@ -222,6 +222,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
             allow_low_redundancy=getattr(
                 args, "allow_low_redundancy", False,
             ),
+            allow_no_password_hint=getattr(
+                args, "allow_no_password_hint", False,
+            ),
         )
 
         if args.clean:
@@ -233,6 +236,18 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 return 1
             logger.info(f"Cleaned session: {session_ref}")
             return 0
+
+        # #960: no disc without a password hint, unless the owner says so.
+        from lcsas.config.settings import password_hint_problem
+        hint_problem = password_hint_problem(config)
+        if hint_problem is not None:
+            if not getattr(args, "allow_no_password_hint", False):
+                logger.error("%s", hint_problem)
+                return 1
+            logger.warning(
+                "Staging with no password hint (--allow-no-password-hint): "
+                "the discs say no hint was given."
+            )
 
         media_type = None
         if args.media:
@@ -323,7 +338,11 @@ def _report_snapshot_coverage(result: Any) -> None:
     A snapshot goes on a disc only when every pack it needs is on a
     burned disc or on this session's discs.  The rest wait for a later
     disc; until then the newest snapshot on the discs is older than the
-    newest backup.
+    newest backup.  A stage that would leave a snapshot off for good,
+    because its packs wait on another session's volumes, is refused
+    before this point (#946); what is left here are packs this stage did
+    not take (``--min-fill``, ``--repo``), which a later ``lcsas stage``
+    stages.
     """
     for repo_name, snaps in sorted(result.snapshots_left_out.items()):
         logger.warning(
@@ -337,8 +356,9 @@ def _report_snapshot_coverage(result: Any) -> None:
                 snap.snapshot_id[:8], snap.time, snap.missing_packs,
             )
         logger.warning(
-            "  A later disc carries them once their packs are burned "
-            "(run 'lcsas stage' again after these discs are burned)."
+            "  Their packs are not staged yet (held back by --min-fill, or "
+            "not selected by --repo); a later 'lcsas stage' stages them, "
+            "and its discs carry these snapshots."
         )
     for repo_name, reason in sorted(result.snapshots_unchecked.items()):
         logger.warning(

@@ -38,6 +38,19 @@ def cmd_config_check(args: argparse.Namespace) -> int:
             )
     if config.collections:
         errors.extend(_config_check_collections(args, config))
+    # #960: the hint goes on every disc; meet the problem here, not at
+    # the first stage.
+    from lcsas.config.settings import password_hint_problem
+    hint_problem = password_hint_problem(config)
+    if hint_problem is not None:
+        errors.append(hint_problem)
+    for key, value in (("archive_owner", config.archive_owner),
+                       ("technical_contact", config.technical_contact)):
+        if not value.strip():
+            logger.warning(
+                "[survivability] %s is not set: the discs and the estate "
+                "card leave it out.", key,
+            )
 
     if not errors:
         if not config.repositories:

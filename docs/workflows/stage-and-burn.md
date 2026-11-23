@@ -319,7 +319,25 @@ restore would ask, again and again, for a disc that does not exist.
 how many of their packs are not on a disc.  This happens when a backup
 ran after the last `lcsas scan`, or when packs are left over for a later
 disc.  A later session carries those snapshots once their packs are
-burned.
+staged.
+
+**A waiting session (#946).**  A snapshot whose packs are on volumes that
+wait to be burned (staged, never burned) cannot go on a new session's
+discs.  Burning both sessions would leave the newest disc without it,
+and no later stage would carry it, because by then every pack is
+archived; the heir, who starts from the newest disc, would restore an
+older backup.  So `lcsas stage` refuses that stage before anything is
+created (`BurnOrchestrator._refuse_waiting_gap`, on every path: plain,
+`--for-location`, `--collection` and consolidation), exit 1:
+
+    Session S1 (LCSAS_..._0002) is staged and waits to be burned. Staging
+    now would leave 1 snapshot(s) of 'alpha' off the new discs for good.
+    Burn it first (lcsas burn --session S1 --location Home_Shelf), or
+    discard it (lcsas session abort S1) and stage again.
+
+There is no override.  Staging a second location while the first
+location's session waits is not refused: that session holds every pack
+itself.  The same holds for collections that each hold every repository.
 
 A repository with no `password_file` cannot be checked: every snapshot
 file is copied, as before, and `lcsas stage` says so.  The check is fast

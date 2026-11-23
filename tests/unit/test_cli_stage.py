@@ -24,6 +24,8 @@ mirror_base = "{mirror}"
 staging = "{staging}"
 catalog = "{db}"
 
+[survivability]
+password_hints = "Test hint: sealed envelope"
 [defaults]
 media_type = "TEST_TINY"
 metadata_reserve_mb = 0

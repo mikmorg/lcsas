@@ -136,7 +136,17 @@ catalogued yet?" command.
       but **only when the scan was complete** (`scan_result.errors` empty)
       and only if the mass-prune guard passes (see §5)
       (`cmd_scan`; `DeltaAnalyzer.detect_pruned`, `src/lcsas/packs/delta.py`;
-      `bulk_mark_pruned`, `src/lcsas/db/packs.py`).
+      `bulk_mark_pruned`, `src/lcsas/db/packs.py`).  A pack gone from
+      `data/` is pruned only when the mirror's index no longer lists it,
+      or lists it "to delete" (rustic's two-step prune).  One the index
+      still lists is **mirror damage** (#947): it is not marked pruned,
+      scan prints `Mirror of '<set>' is damaged` with each lost pack's
+      path and the discs that hold it, and exits 1
+      (`DeltaAnalyzer.split_gone`, `src/lcsas/packs/mirror_damage.py`).
+      Without a `password_file`, or when the index cannot be read, the
+      check is skipped (scan says so) and the pack is recorded as pruned,
+      as before.  Repair: see `docs/TROUBLESHOOTING.md`, "Mirror of ... is
+      damaged".
    e. Compute unarchived totals via `get_unarchived` /
       `get_total_unarchived_bytes` (`DeltaAnalyzer`,
       `src/lcsas/packs/delta.py`), after steps c and d, so the count is
@@ -153,8 +163,9 @@ catalogued yet?" command.
 - Already-known packs are not re-inserted; `INSERT OR IGNORE` makes the
   command safe to re-run (`bulk_register`, `src/lcsas/db/packs.py`).
 - Packs in the catalog but missing from the mirror are flagged as pruned (unless
-  `--no-prune-sync`, the scan was incomplete, or the mass-prune guard
-  trips — see §5); their `is_pruned` flag flips to 1.
+  `--no-prune-sync`, the scan was incomplete, the mass-prune guard
+  trips — see §5 — or the mirror's index still lists them, which is
+  mirror damage, #947); their `is_pruned` flag flips to 1.
 - Pruned packs that are in the mirror again (a share that was briefly
   unavailable) flip back to `is_pruned = 0`, and the next `lcsas stage`
   selects them if they are not on a disc (#667).

@@ -287,7 +287,7 @@ def _write_cfg(root: Path, config: Any) -> None:
         f'mirror_base = "{config.mirror_base_path}"\n'
         f'staging = "{config.staging_path}"\n'
         f'catalog = "{config.db_path}"\n'
-        "[defaults]\n"
+        "[survivability]\npassword_hints = 'Test hint: sealed envelope'\n[defaults]\n"
         'media_type = "TEST_TINY"\n'
         'label_prefix = "TEST"\n'
         'location = "Home"\n'

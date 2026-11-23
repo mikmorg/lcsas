@@ -131,7 +131,16 @@ def check_repo_recoverable(mirror_path: Path, password_file: Path) -> None:
         )
         return
 
-    sample_blob_id = next(iter(blob_index))
+    # #947: sample a blob whose pack file is in the mirror.  A pack file
+    # the mirror lost is mirror damage, which scan and stage report with
+    # the discs that hold it; it is not a format the readers cannot decode.
+    data = mirror_path / "data"
+    sample_blob_id = next(
+        (bid for bid, loc in blob_index.items()
+         if (data / loc.pack_id[:2] / loc.pack_id).is_file()
+         or (data / loc.pack_id).is_file()),
+        next(iter(blob_index)),
+    )
     try:
         restorer._read_blob(sample_blob_id)
     except (IntegrityError, ValueError, KeyError, OSError) as exc:

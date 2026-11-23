@@ -714,6 +714,40 @@ def password_file_lines_warning(path: Path) -> str | None:
     )
 
 
+# #960: the example hint of load_config's docstring; an owner who copied
+# it has not written a hint of their own.
+_EXAMPLE_PASSWORD_HINT = "Sealed envelope with the family attorney (see my will)"
+
+
+def usable_password_hint(config: LCSASConfig) -> str:
+    """The ``[survivability] password_hints`` text, or "" when it is not
+    a real hint (#960): missing, empty, or a placeholder (it contains
+    ``EDIT ME``, any case, or is the example text of the config docs)."""
+    hint = (config.key_storage_hints or "").strip()
+    if not hint or "edit me" in hint.lower():
+        return ""
+    if " ".join(hint.split()) == _EXAMPLE_PASSWORD_HINT:
+        return ""
+    return config.key_storage_hints
+
+
+def password_hint_problem(config: LCSASConfig) -> str | None:
+    """Why the config's password hint cannot go on a disc, or None (#960).
+
+    The hint is printed on every disc and on the estate card, and it is
+    how the heir finds the password.  ``stage``, ``consolidate --execute``
+    and ``estate card`` refuse without one (unless
+    ``--allow-no-password-hint``); ``config check`` reports it as an error.
+    """
+    if usable_password_hint(config):
+        return None
+    return (
+        "[survivability] password_hints is not set. It is printed on every "
+        "disc and is how the heir finds the password. Set it in lcsas.toml, "
+        "or pass --allow-no-password-hint to stage without one."
+    )
+
+
 def validate_config(config: LCSASConfig) -> list[str]:
     """Validate an ``LCSASConfig`` and return a list of error strings.
 

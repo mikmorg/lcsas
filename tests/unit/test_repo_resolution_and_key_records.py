@@ -120,6 +120,7 @@ def _renamed_setup(tmp_path: Path) -> tuple[Path, Path, str]:
     cfg.write_text(
         f'[paths]\nmirror_base = "{tmp_path / "mirror"}"\n'
         f'staging = "{tmp_path / "staging"}"\ncatalog = "{db}"\n'
+        '[survivability]\npassword_hints = "Test hint: sealed envelope"\n'
         '[defaults]\nmedia_type = "TEST_TINY"\nmetadata_reserve_mb = 0\n'
         f'[repos.pics]\nmirror_path = "{mirror}"\npassword_file = "{pw}"\n'
     )

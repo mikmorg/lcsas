@@ -112,6 +112,16 @@ class DiscMetadataTooLargeError(StagingError):
     """One disc cannot hold the disc metadata and a pack (#811)."""
 
 
+class WaitingSessionGapError(StagingError):
+    """Staging now would leave snapshots off the new discs for good (#946).
+
+    A snapshot whose packs sit only on a volume waiting to be burned
+    cannot go on this session's discs.  Once both sessions are burned,
+    the highest-labelled disc would lack it, and nothing would ever stage
+    it again; the heir restores from that disc.
+    """
+
+
 def _describe_waiting(held: dict[str, list[str]]) -> str:
     """``LABEL, LABEL in session S; ...`` for the waiting-volume messages."""
     return "; ".join(
@@ -376,6 +386,7 @@ class BurnOrchestrator:
         allow_escrow_drift: bool = False,
         prompt: OperatorPrompt | None = None,
         allow_low_redundancy: bool = False,
+        allow_no_password_hint: bool = False,
     ) -> None:
         self._config = config
         self._conn = conn
@@ -397,6 +408,9 @@ class BurnOrchestrator:
         # #674 escape hatch: stage a volume whose RS03 redundancy is below
         # MIN_EFFECTIVE_REDUNDANCY_PCT (recorded as a volume event).
         self._allow_low_redundancy = allow_low_redundancy
+        # #960: the owner staged with no password hint on purpose; each
+        # volume records it (the CLI refuses otherwise).
+        self._allow_no_password_hint = allow_no_password_hint
 
     def _stage_single_volume(
         self,
@@ -410,6 +424,7 @@ class BurnOrchestrator:
         session_id: str,
         burn_session_position: tuple[int, int],
         location: str | None = None,
+        reserve_through: int = 0,
     ) -> BurnManifest:
         """Build staging dir, register volume, inject metadata, create the ISO.
 
@@ -436,6 +451,8 @@ class BurnOrchestrator:
             burn_session_position: ``(N, M)``: this is volume N of the M
                 volumes ``stage`` builds in one burn session; printed in
                 the disc's VOLUME_INFO.txt.
+            reserve_through: The last label number of the burn session
+                (#957); the label mark is raised to it with this volume.
 
         Returns:
             BurnManifest describing the staged volume.
@@ -512,9 +529,11 @@ class BurnOrchestrator:
         )
         # #676: remember the label number in the same transaction, so it
         # is never issued again even if this volume is later deleted.
+        # #957: with the session's last number, before this volume's disc
+        # catalog is copied.
         issued = label_seq(vol_label)
         if issued is not None:
-            raise_label_high_water(self._conn, issued)
+            raise_label_high_water(self._conn, max(issued, reserve_through))
 
         pack_ids = [p.pack_id for p in selected_packs]
         bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
@@ -529,6 +548,18 @@ class BurnOrchestrator:
                 detail=f"KEY-08 split drift override: {drift_msg}",
                 commit=False,
             )
+        if self._allow_no_password_hint:
+            from lcsas.config.settings import usable_password_hint
+            if not usable_password_hint(self._config):
+                add_event(
+                    self._conn,
+                    volume.volume_id,
+                    "NOTE",
+                    detail=("#960 no password hint: staged with "
+                            "--allow-no-password-hint; the disc says no "
+                            "hint was given"),
+                    commit=False,
+                )
         # Same transaction as the volume row: a volume can never exist
         # outside session_volumes (the ISO hash is filled in later via
         # update_session_volume_iso once the ISO has been mastered).
@@ -1117,6 +1148,10 @@ class BurnOrchestrator:
         snapshot_needs, left_out, unchecked = self._snapshot_coverage(
             session_packs)
 
+        # #946: refuse a stage whose discs would lack, for good, a
+        # snapshot that only a waiting volume's packs keep off them.
+        self._refuse_waiting_gap(snapshot_needs, session_packs)
+
         # #753: every repository of the plan has its mirror data, checked
         # before the burn session exists (a missing mirror used to fail
         # inside the first volume, leaving the session behind).
@@ -1157,6 +1192,10 @@ class BurnOrchestrator:
                 f"including RS03 medium padding "
                 f"(at {self._config.staging_path})"
             )
+
+        # #947: after the space check, which tests drive with packs that
+        # are not in the mirror; still before any side effect.
+        self._lost_pack_preflight(volume_plans)
 
         # 4. Create the burn session.  FUP-02: commit the burn_sessions row
         # BEFORE the directory exists on disk.  Invariant: any session-named dir on disk
@@ -1237,6 +1276,12 @@ class BurnOrchestrator:
         # #676: above every label number ever issued, not only those of
         # the volumes still in the catalog.
         seq = next_label_seq(self._conn, self._config.label_prefix)
+        # #957: the session's numbers are reserved with its first volume,
+        # so every disc of the session carries the session's last number
+        # and a catalog rebuilt from any one of them continues after it.
+        # Numbers of an interrupted session are not reused (as for an
+        # aborted one, #676): a gap never means a missing disc.
+        reserve_through = seq + len(volume_plans) - 1
 
         # #657: _stage_single_volume reads this for the whole session.
         session_packs = {p.sha256 for packs, _b in volume_plans for p in packs}
@@ -1267,6 +1312,7 @@ class BurnOrchestrator:
                 session_id=session_id,
                 burn_session_position=(i + 1, len(volume_plans)),
                 location=for_location,
+                reserve_through=reserve_through,
             )
 
             # The ISO hash + byte length are already on the session
@@ -1314,6 +1360,38 @@ class BurnOrchestrator:
             mirror_path = mirror_paths.get(repo_id)
             if mirror_path is None or not (mirror_path / "data").is_dir():
                 raise MirrorUnavailableError(repo_id, mirror_path, shas)
+
+    def _lost_pack_preflight(
+        self, volume_plans: list[tuple[list[Pack], int]],
+    ) -> None:
+        """#947: refuse when a pack to stage has no file in the mirror.
+
+        A consolidation of a volume whose pack the mirror lost, or an
+        unarchived pack lost after scan.  Named with the discs that hold
+        it, before the burn session exists.
+        """
+        from lcsas.db.repos import get_repo
+        from lcsas.packs.mirror_damage import (
+            MirrorDamageError,
+            damage_message,
+            discs_holding,
+        )
+
+        mirror_paths = self._get_mirror_paths()
+        lost: dict[str, list[str]] = {}
+        for packs, _bytes in volume_plans:
+            for p in packs:
+                data = mirror_paths[p.repo_id] / "data"
+                if not ((data / p.sha256[:2] / p.sha256).is_file()
+                        or (data / p.sha256).is_file()):
+                    lost.setdefault(p.repo_id, []).append(p.sha256)
+        if lost:
+            raise MirrorDamageError("\n".join(
+                damage_message(get_repo(self._conn, rid).name,
+                               discs_holding(self._conn, shas),
+                               to_stage=True)
+                for rid, shas in sorted(lost.items())
+            ))
 
     def _after_failed_stage(
         self,
@@ -1503,6 +1581,20 @@ class BurnOrchestrator:
                     repo.name, exc,
                 )
                 continue
+            # #947: a tree that cannot be read although its pack is on a
+            # burned disc: the mirror lost (or broke) that pack.  Never
+            # report it as "packs not on any disc yet".
+            damaged = cov.unreadable_tree_packs & held
+            if damaged:
+                from lcsas.packs.mirror_damage import (
+                    MirrorDamageError,
+                    damage_message,
+                    discs_holding,
+                )
+                raise MirrorDamageError(damage_message(
+                    repo.name, discs_holding(self._conn, damaged),
+                    unreadable=True,
+                ))
             needs[repo_id] = dict(cov.missing)
             rest = [
                 LeftOutSnapshot(snapshot_id=sid, time=cov.times.get(sid, ""),
@@ -1513,6 +1605,101 @@ class BurnOrchestrator:
             if rest:
                 left_out[repo.name] = rest
         return needs, left_out, unchecked
+
+    def _refuse_waiting_gap(
+        self,
+        snapshot_needs: dict[str, dict[str, frozenset[str]]],
+        session_packs: set[str],
+    ) -> None:
+        """#946: refuse the stage when a waiting session makes a gap.
+
+        A snapshot is left off this session's discs when it needs packs
+        that are neither on a durable volume nor in this session.  When
+        every such pack sits on a volume that waits to be burned (never
+        burned, its disc not failed), burning both sessions would leave
+        the highest-labelled disc without that snapshot, and no later
+        ``stage`` would carry it: every pack is then archived.  So stop
+        before anything is created and name the waiting session.
+
+        Checked on every path (plain, ``--for-location``, consolidation).
+        A snapshot that is also missing a pack held back by ``--min-fill``
+        (or unreadable, ``?tree:``) is not refused here: a later stage
+        carries it once those packs are staged.
+        """
+        waiting = self._waiting_pack_holders()
+        if not waiting:
+            return
+        from lcsas.db.repos import get_repo
+
+        # waiting session -> repository name -> snapshot IDs it keeps off
+        gaps: dict[str, dict[str, set[str]]] = {}
+        for repo_id, needs in sorted(snapshot_needs.items()):
+            for snap_id, need in needs.items():
+                missing = need - session_packs
+                if not missing or not all(m in waiting for m in missing):
+                    continue
+                name = get_repo(self._conn, repo_id).name
+                for m in missing:
+                    session_id = waiting[m][1]
+                    gaps.setdefault(session_id, {}).setdefault(
+                        name, set()).add(snap_id)
+        if not gaps:
+            return
+        labels: dict[str, set[str]] = {}
+        locations: dict[str, set[str]] = {}
+        for label, session_id, location in waiting.values():
+            labels.setdefault(session_id, set()).add(label)
+            locations.setdefault(session_id, set()).add(location)
+        parts: list[str] = []
+        for session_id, per_repo in sorted(gaps.items()):
+            sets = ", ".join(f"{len(snaps)} snapshot(s) of '{name}'"
+                             for name, snaps in sorted(per_repo.items()))
+            location = (sorted(locations[session_id])[0]
+                        if len(locations[session_id]) == 1 else "<location>")
+            parts.append(
+                f"Session {session_id} "
+                f"({', '.join(sorted(labels[session_id]))}) is staged and "
+                f"waits to be burned. Staging now would leave {sets} off "
+                f"the new discs for good. Burn it first (lcsas burn "
+                f"--session {session_id} --location {location}), or "
+                f"discard it (lcsas session abort {session_id}) and stage "
+                f"again."
+            )
+        raise WaitingSessionGapError(" ".join(parts))
+
+    def _waiting_pack_holders(self) -> dict[str, tuple[str, str, str]]:
+        """#946: packs on volumes that wait to be burned.
+
+        Pack SHA-256 -> (label, burn session, location) for every pack
+        on a never-burned volume (STAGING/BURNING) of a burn session
+        whose disc did not fail verification.  Broader than
+        :meth:`_hold_back_waiting` on purpose: a pack this stage does not
+        take only matters when it is on such a volume, whichever path
+        left it out (plain stage holds back the finished ones,
+        ``--for-location`` every one staged for that location).
+        """
+        rows = self._conn.execute(
+            """SELECT p.sha256, v.label, v.location,
+                      (SELECT sv.session_id FROM session_volumes sv
+                       JOIN burn_sessions bs USING (session_id)
+                       WHERE sv.volume_id = v.volume_id
+                       ORDER BY julianday(bs.created_at) DESC, sv.rowid DESC
+                       LIMIT 1) AS session_id
+               FROM volumes v
+               JOIN volume_packs vp ON vp.volume_id = v.volume_id
+               JOIN packs p ON p.pack_id = vp.pack_id
+               WHERE v.status IN ('STAGING', 'BURNING')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_events e
+                     WHERE e.volume_id = v.volume_id
+                       AND e.event_type = 'VERIFY_FAIL'
+                 )"""
+        ).fetchall()
+        return {
+            str(r["sha256"]): (str(r["label"]), str(r["session_id"]),
+                               str(r["location"] or ""))
+            for r in rows if r["session_id"] is not None
+        }
 
     def burn_session(
         self,

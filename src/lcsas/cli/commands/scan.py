@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from typing import Any
 
 from lcsas.cli.common import _load_config_opt, _open_catalog, _validate_config_or_exit
 from lcsas.log import get_logger
@@ -34,6 +35,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         repos_scanned = 0
         repos_unregistered: list[str] = []
         snapshot_failures: list[str] = []
+        repos_damaged: list[str] = []
 
         # An unknown --repo name is a typo, not a skip: scanning the rest and
         # exiting 0 hid it (#516).
@@ -96,6 +98,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     )
                 else:
                     pruned = analyzer.detect_pruned()
+                    if pruned:
+                        # #947: a pack the index still lists is damage.
+                        live = _live_packs(repo_name, repo_cfg)
+                        pruned, damaged = DeltaAnalyzer.split_gone(
+                            pruned, live)
+                        if damaged:
+                            from lcsas.packs.mirror_damage import (
+                                damage_message,
+                                discs_holding,
+                            )
+                            logger.error("%s", damage_message(
+                                repo_name, discs_holding(
+                                    conn, [p.sha256 for p in damaged])))
+                            repos_damaged.append(repo_name)
                     if pruned:
                         from lcsas.db.packs import bulk_mark_pruned, list_packs
                         active_total = len(list_packs(
@@ -258,4 +274,39 @@ def cmd_scan(args: argparse.Namespace) -> int:
                f"{summary['archived']} archived, "
                f"{summary['staged']} staged, "
                f"{summary['unarchived']} unarchived")
+    if repos_damaged:
+        # #947: scan found a problem the owner must act on.
+        logger.error(
+            "The mirror of %s is damaged (see above); its lost packs were "
+            "NOT recorded as pruned.", ", ".join(repos_damaged),
+        )
+        return 1
     return 0
+
+
+def _live_packs(repo_name: str, repo_cfg: Any) -> set[str] | None:
+    """The pack IDs the mirror's index lists as live, or None (#947).
+
+    None when the check cannot run (no password_file, or the index
+    cannot be read): every gone pack then counts as pruned, as before,
+    and the log says the check was skipped.
+    """
+    from lcsas.packs.mirror_damage import live_pack_ids
+
+    password_file = repo_cfg.password_file
+    if password_file is None or not password_file.is_file():
+        logger.warning(
+            f"    {repo_name}: no password_file, so packs gone from the "
+            "mirror could not be checked against its index (damage or "
+            "prune); they are recorded as pruned."
+        )
+        return None
+    try:
+        return live_pack_ids(repo_cfg.mirror_path, password_file)
+    except Exception as exc:  # noqa: BLE001 - any reader failure: skip the check
+        logger.warning(
+            f"    {repo_name}: could not read the mirror's index ({exc}), so "
+            "packs gone from the mirror could not be checked for damage; "
+            "they are recorded as pruned."
+        )
+        return None
