@@ -14,6 +14,10 @@ The second set's password is split 2-of-3 as an owner splits it (#607):
 set says ``split=2-of-3`` with the cards' split id, the first set's says
 ``split=none``, and two of the printed cards rebuild the password.
 windows-e2e types two of those cards into restore.bat on real Windows.
+
+The restored set has a second password with ! % and ^ in it (#967), a
+second key added before the burn: it opens the set from every disc's
+copy of its metadata, as tier 1 reads it, and windows-e2e types it.
 """
 
 from __future__ import annotations
@@ -68,6 +72,28 @@ def _packs_of(iso: Path) -> set[str]:
     }
 
 
+def _assert_typed_password_opens(meta: Path, pwfile: Path | None,
+                                 disc: str) -> None:
+    """#967: the typed password (the restored set's second key) opens
+    the set from this disc's copy of its metadata, by tier 1's
+    ``--list-snapshots`` (what restore.bat's password check runs)."""
+    from tests.recovery_hardening._diff_helpers import find_restore_bin
+
+    assert pwfile is not None
+    assert pwfile.read_bytes() == fixture_lib.WINDOWS_E2E_TYPED_PASSWORD.encode()
+    assert len(list((meta / "keys").iterdir())) == 2, disc
+    tier1 = find_restore_bin()
+    if tier1 is None:
+        pytest.skip("no lcsas-restore binary; run `make -C recovery`")
+    res = subprocess.run(
+        [str(tier1), "--repo", str(meta), "--password-file", str(pwfile),
+         "--list-snapshots"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, (disc, res.stderr)
+    assert res.stdout.count("\n") >= 2, (disc, res.stdout)
+
+
 def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> None:
     """windows-e2e's fixture exactly as the workflow builds it."""
     fx = fixture_lib.build_windows_fixture(
@@ -78,6 +104,7 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
         set_name=fixture_lib.WINDOWS_E2E_SET_NAME,
         other_set_names=fixture_lib.WINDOWS_E2E_OTHER_SET_NAMES,
         split_sets=fixture_lib.WINDOWS_E2E_SPLIT_SETS,
+        typed_password=fixture_lib.WINDOWS_E2E_TYPED_PASSWORD,
     )
     sets = json.loads(fx.sets_path.read_text(encoding="ascii"))
     every = [sets["restore"], *sets["others"]]
@@ -115,6 +142,9 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
                 want["split"], want.get("split_id", "")
             ), (iso.name, want["name"])
             seen.add(folder)
+            if folder == restore["id"]:
+                _assert_typed_password_opens(tmp_path / f"x{n}" / folder,
+                                             fx.typed_password_file, iso.name)
     assert restore["id"] in seen
 
     # The multi-disc proof (#517, #617): the restored set's OWN packs need

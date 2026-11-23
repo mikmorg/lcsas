@@ -323,6 +323,9 @@ function Get-TempNames {
 # snapshots), say so, ask again with no `pause` on the way (a pause would
 # eat the right password from the answers file), and then restore: rc 0,
 # the tree byte-exact, tier 1 run once, no lcsas-pw-* file left.
+#
+# -PasswordFile (#967): the fixture file whose password is typed (default
+# repo.pw); repo-typed.pw holds the set's second password, with ! % ^.
 # ---------------------------------------------------------------------
 function Invoke-RelocationLeg {
     param(
@@ -334,7 +337,8 @@ function Invoke-RelocationLeg {
         # LCSAS_BACKUP_SET names the set by its id, or by the name restore.bat
         # shows (name_cmd), which it must match too (#606).
         [ValidateSet('id', 'name_cmd')]
-        [string]$PickBy = 'id'
+        [string]$PickBy = 'id',
+        [string]$PasswordFile = 'repo.pw'
     )
     $ErrorActionPreference = 'Stop'
     $PSNativeCommandUseErrorActionPreference = $false
@@ -367,7 +371,7 @@ function Invoke-RelocationLeg {
     $target = Join-Path $env:RUNNER_TEMP $TargetName
     if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
     New-Item -ItemType Directory -Force -Path $target | Out-Null
-    $pw = (Get-Content (Join-Path $Fixture 'repo.pw') -Raw).Trim()
+    $pw = (Get-Content (Join-Path $Fixture $PasswordFile) -Raw).Trim()
     $answers = Join-Path $env:RUNNER_TEMP "answers-$TargetName.txt"
     $lines = @($target)
     if ($WrongFirst) { $lines += 'definitely-the-wrong-password' }
