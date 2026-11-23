@@ -547,8 +547,9 @@ usage: lcsas restore from-disc [-h] --password-file PASSWORD_FILE
 
 Restore from a mounted or extracted LCSAS disc without any config file or live
 mirror. Works offline from any disc that contains catalog.db and the
-repository metadata. Falls back to the tier-3 Python reader if rustic is not
-available.
+repository metadata. The restore is done by the tier-3 Python reader: it reads
+packs from this disc and the discs under --volume-dir, and asks for any other
+disc it needs.
 
 positional arguments:
   disc                  Path to a mounted or extracted LCSAS disc (must
@@ -563,14 +564,16 @@ options:
                         repository is on the disc).
   --snapshot SNAPSHOT   Snapshot ID to restore (default: latest).
   --volume-dir VOLUME_DIR
-                        Directory containing all pre-extracted volumes (no
-                        disc prompts).
+                        Directory of further discs, one per sub-directory
+                        (mounted or extracted); no disc prompts.
   --catalog CATALOG     Explicit path to catalog.db (default:
                         <disc>/catalog.db).
   --cache-dir CACHE_DIR
-                        Reuse an existing restore cache directory instead of a
-                        temp dir.
-  --skip-verify         Skip SHA-256 verification of ingested packs.
+                        Pack cache directory: each disc's packs are copied
+                        here the first time the disc is read, so each disc is
+                        needed once.
+  --skip-verify         No effect: the Python reader checks every blob it
+                        reads.
 ===== lcsas consolidate --help =====
 usage: lcsas consolidate [-h] [--media-type TARGET_MEDIA] [--execute]
                          [--deprecate] [--location LOCATION]

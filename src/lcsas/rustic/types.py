@@ -30,18 +30,12 @@ class SnapshotInfo:
 
 @dataclass(frozen=True)
 class RestorePlan:
-    """Result of a restore dry-run: the list of required pack IDs."""
+    """The packs a snapshot needs (``packs_for_snapshot``, #948).
+
+    ``snapshot_id`` is the full ID the request resolved to.
+    """
 
     snapshot_id: str
     required_pack_hashes: list[str] = field(default_factory=list)
     total_size_bytes: int = 0
     file_count: int = 0
-
-
-@dataclass(frozen=True)
-class PruneResult:
-    """Result of a prune dry-run."""
-
-    packs_to_delete: list[str] = field(default_factory=list)
-    packs_to_repack: list[str] = field(default_factory=list)
-    space_freed_bytes: int = 0

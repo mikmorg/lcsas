@@ -9,8 +9,6 @@ import pytest
 from lcsas.db.models import Pack
 from lcsas.rustic.parser import (
     parse_backup_output,
-    parse_prune_output,
-    parse_restore_plan_output,
     parse_snapshots_output,
 )
 from lcsas.staging.builder import StagingBuilder
@@ -56,36 +54,6 @@ class TestParserEdgeCases:
     def test_snapshots_invalid_json(self):
         result = parse_snapshots_output("not json")
         assert result == []
-
-    def test_restore_plan_pack_ids_key(self):
-        """Alternative 'pack_ids' key for pack hashes."""
-        output = '{"pack_ids": ["p1", "p2"], "total_size": 1024, "file_count": 5}'
-        result = parse_restore_plan_output("snap1", output)
-        assert result.required_pack_hashes == ["p1", "p2"]
-
-    def test_restore_plan_non_dict_json(self):
-        """Non-dict JSON returns default RestorePlan."""
-        result = parse_restore_plan_output("snap1", "[1, 2, 3]")
-        assert result.required_pack_hashes == []
-
-    def test_restore_plan_invalid_json(self):
-        with pytest.raises(ValueError, match="failed to parse JSON"):
-            parse_restore_plan_output("snap1", "bad json")
-
-    def test_restore_plan_packs_not_list(self):
-        """When packs value is not a list, falls back to empty list."""
-        output = '{"packs": "not_a_list"}'
-        result = parse_restore_plan_output("snap1", output)
-        assert result.required_pack_hashes == []
-
-    def test_prune_non_dict_json(self):
-        """Non-dict JSON returns default PruneResult."""
-        result = parse_prune_output("[1, 2, 3]")
-        assert result.packs_to_delete == []
-
-    def test_prune_invalid_json(self):
-        result = parse_prune_output("bad")
-        assert result.packs_to_delete == []
 
 
 # =========================================================================

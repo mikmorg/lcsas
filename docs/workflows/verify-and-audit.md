@@ -366,11 +366,19 @@ Follow this schedule while you, the owner, maintain the archive.
 
    `stage --for-location` stages every pack that has no in-service disc at that location, but it skips pruned packs (see [location-management.md](location-management.md#multi-copy-sync-via---for-location)).
 
-3. **Every month, run a test restore** of the latest snapshot into a scratch directory, and check that it exits 0:
+3. **Every month, run a test restore** of the latest snapshot into a scratch directory, and check that it exits 0. First list the discs it needs:
+
+   ```bash
+   lcsas --config lcsas.toml restore plan latest --repo <REPO>
+   ```
+
+   The plan is worked out from the mirror (the snapshot's trees are read with the password file of `<REPO>`); no disc is read and rustic is not needed. Then restore:
 
    ```bash
    lcsas --config lcsas.toml restore exec latest <SCRATCH_DIR> --repo <REPO> --password-file <PASSWORD_FILE>
    ```
+
+   `restore exec` asks for each disc the plan names: mount it and type its mount path. To run it without questions, mount or extract every disc of the plan into one folder, one sub-folder per disc label, and add `--volume-dir <FOLDER>`. The packs come from the discs only, and rustic (on `PATH`) restores the snapshot the plan resolved `latest` to. Compare a few restored files with the originals.
 
    This is the MONTHLY TEST-RESTORE item in `docs/development/recovery/READINESS_CHECKLIST.txt` (in the source repository, not on this disc).
 

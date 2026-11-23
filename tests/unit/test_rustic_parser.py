@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from lcsas.rustic.parser import (
     parse_backup_output,
-    parse_prune_output,
-    parse_restore_plan_output,
     parse_snapshots_output,
 )
 
@@ -117,40 +113,3 @@ class TestParseSnapshots:
     def test_no_result_ever_has_an_empty_id(self):
         output = json.dumps([{"group_key": {}, "snapshots": []}, {}, 3, "x", None])
         assert parse_snapshots_output(output) == []
-
-
-class TestParseRestorePlan:
-    def test_parse_with_packs(self):
-        output = json.dumps({
-            "packs": ["hash1", "hash2", "hash3"],
-            "total_size": 1500,
-            "file_count": 10,
-        })
-        result = parse_restore_plan_output("snap_x", output)
-        assert result.snapshot_id == "snap_x"
-        assert len(result.required_pack_hashes) == 3
-        assert result.total_size_bytes == 1500
-
-    def test_parse_restore_plan_empty(self):
-        result = parse_restore_plan_output("snap_y", "{}")
-        assert result.required_pack_hashes == []
-
-    def test_parse_restore_plan_invalid(self):
-        with pytest.raises(ValueError, match="failed to parse JSON"):
-            parse_restore_plan_output("snap_z", "nope")
-
-
-class TestParsePrune:
-    def test_parse_prune(self):
-        output = json.dumps({
-            "packs_to_delete": ["dead1", "dead2"],
-            "packs_to_repack": ["repack1"],
-            "space_freed": 50000,
-        })
-        result = parse_prune_output(output)
-        assert len(result.packs_to_delete) == 2
-        assert result.space_freed_bytes == 50000
-
-    def test_parse_prune_empty(self):
-        result = parse_prune_output("{}")
-        assert result.packs_to_delete == []

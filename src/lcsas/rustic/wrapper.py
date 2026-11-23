@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
-from lcsas.rustic.types import BackupResult, PruneResult, RestorePlan, SnapshotInfo
+from lcsas.rustic.types import BackupResult, SnapshotInfo
 from lcsas.utils.subprocess import SubprocessRunnerBase
 
 _logger = logging.getLogger(__name__)
@@ -16,7 +16,11 @@ _logger = logging.getLogger(__name__)
 class RusticRunner(Protocol):
     """Abstract interface for Rustic operations.
 
-    Implementations may use real subprocess calls or mocks.
+    Implementations may use real subprocess calls or mocks.  A test
+    double defines only what ``SubprocessRusticRunner`` has
+    (``tests/unit/test_rustic_doubles.py``).  Which packs a snapshot
+    needs is not asked of rustic (0.11 has no JSON for a restore dry
+    run): see ``lcsas.packs.snapshot_coverage.packs_for_snapshot``.
     """
 
     def init_repo(
@@ -39,13 +43,6 @@ class RusticRunner(Protocol):
         password_file: Path,
     ) -> list[SnapshotInfo]: ...
 
-    def restore_dry_run(
-        self,
-        snapshot_id: str,
-        repo_path: Path,
-        password_file: Path,
-    ) -> RestorePlan: ...
-
     def restore(
         self,
         snapshot_id: str,
@@ -53,12 +50,6 @@ class RusticRunner(Protocol):
         password_file: Path,
         target_path: Path,
     ) -> None: ...
-
-    def prune_dry_run(
-        self,
-        repo_path: Path,
-        password_file: Path,
-    ) -> PruneResult: ...
 
 
 class SubprocessRusticRunner(SubprocessRunnerBase):
@@ -147,16 +138,6 @@ class SubprocessRusticRunner(SubprocessRunnerBase):
         result = self._run(args, repo_path, password_file)
         return _parse_snapshots(result.stdout)
 
-    def restore_dry_run(
-        self,
-        snapshot_id: str,
-        repo_path: Path,
-        password_file: Path,
-    ) -> RestorePlan:
-        args = ["restore", snapshot_id, "--dry-run", "--json", "/dev/null"]
-        result = self._run(args, repo_path, password_file)
-        return _parse_restore_plan(snapshot_id, result.stdout)
-
     def restore(
         self,
         snapshot_id: str,
@@ -173,15 +154,6 @@ class SubprocessRusticRunner(SubprocessRunnerBase):
         args = ["restore", snapshot_id, str(target_path)]
         self._run(args, repo_path, password_file, timeout=21600)  # 6 hours
 
-    def prune_dry_run(
-        self,
-        repo_path: Path,
-        password_file: Path,
-    ) -> PruneResult:
-        args = ["prune", "--dry-run", "--json"]
-        result = self._run(args, repo_path, password_file)
-        return _parse_prune_result(result.stdout)
-
 
 # ---------------------------------------------------------------------------
 # Output parsers (separated for independent testing)
@@ -197,15 +169,3 @@ def _parse_snapshots(output: str) -> list[SnapshotInfo]:
     """Parse rustic snapshots --json output."""
     from lcsas.rustic.parser import parse_snapshots_output
     return parse_snapshots_output(output)
-
-
-def _parse_restore_plan(snapshot_id: str, output: str) -> RestorePlan:
-    """Parse rustic restore --dry-run --json output."""
-    from lcsas.rustic.parser import parse_restore_plan_output
-    return parse_restore_plan_output(snapshot_id, output)
-
-
-def _parse_prune_result(output: str) -> PruneResult:
-    """Parse rustic prune --dry-run --json output."""
-    from lcsas.rustic.parser import parse_prune_output
-    return parse_prune_output(output)

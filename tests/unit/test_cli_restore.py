@@ -25,11 +25,24 @@ from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
 from lcsas.restore.executor import IngestionResult, RestoreError, RestoreExecutor
 from lcsas.rustic.types import RestorePlan
+from lcsas.rustic.wrapper import SubprocessRusticRunner
 from lcsas.utils.labels import generate_uuid
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _packs(plan: RestorePlan):  # type: ignore[no-untyped-def]
+    """``packs_for_snapshot`` (#948) answering *plan*.
+
+    The walk itself is tested against real rustic repositories in
+    ``tests/integration/test_owner_restore_commands.py``; these tests are
+    about what the commands do with the packs.
+    """
+    return patch(
+        "lcsas.packs.snapshot_coverage.packs_for_snapshot", return_value=plan,
+    )
+
 
 
 def _setup_db_with_packs(
@@ -149,9 +162,6 @@ class TestRestoreParser:
 
 
 class TestCmdRestorePlan:
-    @pytest.mark.skipif(
-        not shutil.which("rustic"), reason="rustic binary not installed"
-    )
     def test_plan_displays_pick_list(self, tmp_path, caplog):
         """restore plan logs volumes and pack counts."""
         import logging
@@ -176,8 +186,7 @@ class TestCmdRestorePlan:
             ),
         }
 
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = mock_plan
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
 
         args = _make_args(restore_command="plan", snapshot_id="snap1")
 
@@ -186,6 +195,7 @@ class TestCmdRestorePlan:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            _packs(mock_plan),
             caplog.at_level(logging.INFO),
         ):
             result = cmd_restore_plan(args)
@@ -196,9 +206,6 @@ class TestCmdRestorePlan:
         assert "3 packs" in all_msgs
         assert "family" in all_msgs
 
-    @pytest.mark.skipif(
-        not shutil.which("rustic"), reason="rustic binary not installed"
-    )
     def test_plan_output_shows_alternates(self, tmp_path, caplog):
         """RST-07: `restore plan` shows an 'also on:' column for multi-copy
         packs and omits it when packs have only a single source.
@@ -219,8 +226,8 @@ class TestCmdRestorePlan:
                 password_file=Path("/root/keys/family.key"),
             ),
         }
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = RestorePlan(
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
+        mock_plan = RestorePlan(
             snapshot_id="snap1", required_pack_hashes=[dup],
         )
         args = _make_args(restore_command="plan", snapshot_id="snap1")
@@ -230,6 +237,7 @@ class TestCmdRestorePlan:
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(mock_plan),
             caplog.at_level(logging.INFO),
         ):
             result = cmd_restore_plan(args)
@@ -245,7 +253,7 @@ class TestCmdRestorePlan:
         create_all(conn2)
         solo = "bb" * 32
         _setup_db_with_packs(conn2, "family", [solo], "VOL_SOLO")
-        mock_runner.restore_dry_run.return_value = RestorePlan(
+        mock_plan = RestorePlan(
             snapshot_id="snap2", required_pack_hashes=[solo],
         )
         args2 = _make_args(restore_command="plan", snapshot_id="snap2")
@@ -255,6 +263,7 @@ class TestCmdRestorePlan:
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(mock_plan),
             caplog.at_level(logging.INFO),
         ):
             result2 = cmd_restore_plan(args2)
@@ -288,9 +297,6 @@ class TestCmdRestorePlan:
         assert "nonexistent" in all_msgs
         assert "not found" in all_msgs
 
-    @pytest.mark.skipif(
-        not shutil.which("rustic"), reason="rustic binary not installed"
-    )
     def test_plan_shows_missing_packs(self, caplog):
         """restore plan errors and returns 1 when packs are not found in any volume."""
         import logging
@@ -319,8 +325,7 @@ class TestCmdRestorePlan:
             ),
         }
 
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = mock_plan
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
 
         args = _make_args(restore_command="plan", snapshot_id="snap1")
 
@@ -329,6 +334,7 @@ class TestCmdRestorePlan:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            _packs(mock_plan),
             caplog.at_level(logging.ERROR),
         ):
             result = cmd_restore_plan(args)
@@ -339,9 +345,6 @@ class TestCmdRestorePlan:
         assert "not found" in all_msgs
         assert any(r.levelno >= logging.ERROR for r in caplog.records)
 
-    @pytest.mark.skipif(
-        not shutil.which("rustic"), reason="rustic binary not installed"
-    )
     def test_plan_no_packs_needed(self, caplog):
         """restore plan with no required packs logs summary."""
         import logging
@@ -363,8 +366,7 @@ class TestCmdRestorePlan:
             ),
         }
 
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = mock_plan
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
 
         args = _make_args(restore_command="plan", snapshot_id="snap1")
 
@@ -373,6 +375,7 @@ class TestCmdRestorePlan:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            _packs(mock_plan),
             caplog.at_level(logging.INFO),
         ):
             result = cmd_restore_plan(args)
@@ -446,8 +449,7 @@ class TestCmdRestoreExec:
             ),
         }
 
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = mock_plan
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
 
         args = _make_args(
             restore_command="exec",
@@ -463,6 +465,7 @@ class TestCmdRestoreExec:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            _packs(mock_plan),
             caplog.at_level(logging.ERROR),
         ):
             result = cmd_restore_exec(args)
@@ -511,8 +514,7 @@ class TestCmdRestoreExec:
             ),
         }
 
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = mock_plan
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
 
         cache_dir = tmp_path / "cache"
         target_dir = tmp_path / "restored"
@@ -532,6 +534,7 @@ class TestCmdRestoreExec:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            _packs(mock_plan),
             caplog.at_level(logging.INFO),
         ):
             result = cmd_restore_exec(args)
@@ -578,8 +581,8 @@ class TestCmdRestoreExec:
         mock_config.repositories = {
             "family": MagicMock(mirror_path=mirror_path, password_file=key_file),
         }
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = RestorePlan(
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
+        mock_plan = RestorePlan(
             snapshot_id="snap1", required_pack_hashes=[pack],
         )
 
@@ -602,6 +605,7 @@ class TestCmdRestoreExec:
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(mock_plan),
             patch("builtins.input", side_effect=fake_input),
             patch("sys.stdin") as mock_stdin,
             caplog.at_level(logging.INFO),
@@ -640,8 +644,8 @@ class TestCmdRestoreExec:
         mock_config.repositories = {
             "family": MagicMock(mirror_path=mirror_path, password_file=key_file),
         }
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = RestorePlan(
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
+        mock_plan = RestorePlan(
             snapshot_id="snap1", required_pack_hashes=[pack],
         )
 
@@ -657,6 +661,7 @@ class TestCmdRestoreExec:
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(mock_plan),
             patch("builtins.input", return_value="skip"),
             patch("sys.stdin") as mock_stdin,
             pytest.raises(PackCorruptionError) as exc,
@@ -732,8 +737,8 @@ class TestRestoreExecSpacePreflight:
                                 password_file=key_file),
         }
 
-        mock_runner = MagicMock()
-        mock_runner.restore_dry_run.return_value = RestorePlan(
+        mock_runner = MagicMock(spec=SubprocessRusticRunner)
+        self._plan = RestorePlan(
             snapshot_id="snap1", required_pack_hashes=hashes,
         )
         return conn, mock_config, mock_runner, key_file
@@ -764,6 +769,7 @@ class TestRestoreExecSpacePreflight:
             patch("lcsas.utils.subprocess.check_binary_version"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(self._plan),
             patch("shutil.disk_usage", return_value=self._usage(10)),
             patch("lcsas.restore.executor.RestoreExecutor") as mock_exec_cls,
             patch("sys.stdin") as mock_stdin,
@@ -797,6 +803,7 @@ class TestRestoreExecSpacePreflight:
             patch("lcsas.utils.subprocess.check_binary_version"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(self._plan),
             patch("shutil.disk_usage", return_value=self._usage(10)),
             patch("sys.stdin") as mock_stdin,
             caplog.at_level(logging.INFO),
@@ -824,6 +831,7 @@ class TestRestoreExecSpacePreflight:
             patch("lcsas.utils.subprocess.check_binary_version"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(self._plan),
             patch("shutil.disk_usage", return_value=self._usage(10)),
             patch("lcsas.restore.executor.RestoreExecutor") as mock_exec_cls,
             patch("sys.stdin") as mock_stdin,
@@ -856,6 +864,7 @@ class TestRestoreExecSpacePreflight:
             patch("lcsas.utils.subprocess.check_binary_version"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(self._plan),
             patch("shutil.disk_usage", side_effect=fake_disk_usage),
             # Mock the two paths onto distinct filesystems.
             patch("lcsas.restore.orchestrator.fs_dev",
@@ -886,6 +895,7 @@ class TestRestoreExecSpacePreflight:
             patch("lcsas.utils.subprocess.check_binary_version"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=mock_runner),
+            _packs(self._plan),
             patch("sys.stdin") as mock_stdin,
             caplog.at_level(logging.INFO),
         ):
@@ -1325,8 +1335,8 @@ class _Env:
         )
         bulk_link_packs(self.conn, self.volume.volume_id, [pack.pack_id])
 
-        self.runner = MagicMock()
-        self.runner.restore_dry_run.return_value = RestorePlan(
+        self.runner = MagicMock(spec=SubprocessRusticRunner)
+        self.plan = RestorePlan(
             snapshot_id="snap1", required_pack_hashes=[_PACK],
         )
         self.config = MagicMock()
@@ -1361,6 +1371,7 @@ class _Env:
             patch("lcsas.db.connection.get_connection", return_value=self.conn),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
                   return_value=self.runner),
+            _packs(self.plan),
             patch("lcsas.utils.subprocess.check_binary_version"),
             patch(_SELECT_ECC, self.select),
         ):

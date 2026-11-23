@@ -802,11 +802,5 @@ class _NoOpRustic:
     def snapshots(self, *a, **kw):
         return []
 
-    def restore_dry_run(self, *a, **kw):
-        pass
-
     def restore(self, *a, **kw):
-        pass
-
-    def prune_dry_run(self, *a, **kw):
         pass

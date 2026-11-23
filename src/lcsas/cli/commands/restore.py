@@ -45,7 +45,10 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
 def _log_pick_list(args: argparse.Namespace, planned: PlannedRestore) -> int:
     """Print the ``restore plan`` pick list; 1 when packs are missing."""
     pick_list = planned.pick_list
-    logger.info(f"Restore Pick List for snapshot {args.snapshot_id}")
+    resolved = planned.plan.snapshot_id
+    asked = (f" ({args.snapshot_id})"
+             if args.snapshot_id != resolved else "")
+    logger.info(f"Restore Pick List for snapshot {resolved}{asked}")
     logger.info(f"  Repository: {args.repo}")
     logger.info(f"  Required packs: {len(planned.plan.required_pack_hashes)}")
     logger.info("")
@@ -153,6 +156,10 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
         lcsas restore from-disc /mnt/disc1 ~/restored/ \\
             --password-file ~/secret.key
+
+    The restore is done by the Python reader (tier 3), which looks for
+    each pack on the disc given and under ``--volume-dir``, and asks for
+    a further disc at the terminal when neither has it (#948).
 
     For scripted restores with pre-extracted discs::
 

@@ -131,24 +131,6 @@ class TestSnapshots:
         assert snaps[0].snapshot_id == "snap1"
 
 
-class TestRestoreDryRun:
-    @patch("lcsas.rustic.wrapper.subprocess.run")
-    def test_restore_dry_run_command(self, mock_run, runner):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
-            stdout='{"packs":["p1","p2"],"total_size":4096,"file_count":10}',
-            stderr="",
-        )
-        plan = runner.restore_dry_run("snap1", REPO, PW)
-
-        cmd = mock_run.call_args[0][0]
-        assert "restore" in cmd
-        assert "--dry-run" in cmd
-        assert "--json" in cmd
-        assert plan.required_pack_hashes == ["p1", "p2"]
-        assert plan.total_size_bytes == 4096
-
-
 class TestRestore:
     @patch("lcsas.rustic.wrapper.subprocess.run")
     def test_restore_command(self, mock_run, runner):
@@ -162,24 +144,6 @@ class TestRestore:
         assert "restore" in cmd
         assert "snap1" in cmd
         assert str(target) in cmd
-
-
-class TestPruneDryRun:
-    @patch("lcsas.rustic.wrapper.subprocess.run")
-    def test_prune_dry_run(self, mock_run, runner):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
-            stdout='{"packs_to_delete":["p1"],"space_freed":65536}',
-            stderr="",
-        )
-        result = runner.prune_dry_run(REPO, PW)
-
-        cmd = mock_run.call_args[0][0]
-        assert "prune" in cmd
-        assert "--dry-run" in cmd
-        assert "--json" in cmd
-        assert result.packs_to_delete == ["p1"]
-        assert result.space_freed_bytes == 65536
 
 
 class TestPasswordPathMasking:

@@ -31,7 +31,7 @@ Sibling restore routes (more capable, prefer them when available):
 2. [What every data disc contains](#what-every-data-disc-contains)
 3. [Workflow A — Mount a single data disc anywhere Python runs](#workflow-a--mount-a-single-data-disc-anywhere-python-runs)
 4. [Workflow B — Run `python_reader.py` from the disc](#workflow-b--run-python_readerpy-from-the-disc)
-5. [Workflow C — `lcsas restore from-disc` (convenience wrapper)](#workflow-c--lcsas-restore-standalone-convenience-wrapper)
+5. [Workflow C — `lcsas restore from-disc` (convenience wrapper)](#workflow-c--lcsas-restore-from-disc-convenience-wrapper)
 6. [Workflow D — Use the disc catalog](#workflow-d--use-the-disc-catalog)
 7. [Workflow E — AES-256-CTR + Poly1305 + zstd decrypt path](#workflow-e--aes-256-ctr--poly1305--zstd-decrypt-path)
 8. [Workflow F — Restore a single file vs a full snapshot](#workflow-f--restore-a-single-file-vs-a-full-snapshot)
@@ -56,8 +56,7 @@ disc, or answer the interactive disc-swap prompt
 Pick Tier 3 when, and only when:
 
 - No working `rustic` or `restic` binary is available for the host
-  architecture (the rustic probe in `restore_from_disc()`,
-  `src/lcsas/restore/orchestrator.py`).
+  architecture.
 - The meta disc is lost, damaged, or its bundled binaries cannot
   execute (different CPU, glibc ABI break).
 - Internet access is unavailable, so a new binary cannot be downloaded.
@@ -66,9 +65,9 @@ Pick Tier 3 when, and only when:
 
 If the snapshot you want spans multiple discs and rustic is unavailable,
 either extract pack files from every relevant disc into a single cache
-directory **before** invoking the restorer (the merge hint logged by
-`_restore_with_python_reader()` in `src/lcsas/restore/orchestrator.py`), or lean on the
-restorer's own disc handling: since #234 `python_reader.py`
+directory **before** invoking the restorer, or lean on the
+restorer's own disc handling (which `lcsas restore from-disc`, Workflow C,
+uses): since #234 `python_reader.py`
 accepts repeatable `--mount-point` roots and, when interactive, prompts
 for the next disc whenever a pack is not found in any search path
 (`PurePythonRestorer._find_pack_path()`).
@@ -211,9 +210,7 @@ disc — no LCSAS install, no rustic, no network.
    (`PurePythonRestorer._find_pack_path()` in
    `src/lcsas/restore/restic_fallback.py`), so
    the on-disc tree can be linked verbatim. Linking (instead of
-   copying) the on-disc `data/` keeps the cache footprint near zero
-   (the data-symlink step in `_restore_with_python_reader()`,
-   `src/lcsas/restore/orchestrator.py`).
+   copying) the on-disc `data/` keeps the cache footprint near zero.
 2. Run the restorer from the disc using the host's `python3`
    (the "pure Python" section of the on-disc
    `RESTORE_INSTRUCTIONS.txt`, written by
@@ -311,19 +308,24 @@ effort (`PurePythonRestorer._restore_tree()` / `_apply_metadata()`).
 ## Workflow C — `lcsas restore from-disc` (convenience wrapper)
 
 **Purpose:** When LCSAS *is* installed (e.g., from the meta disc's
-source bundle) but no working `rustic`/`restic` binary is present, the
-`lcsas restore from-disc` subcommand orchestrates Workflow B and
-auto-falls-back to `PurePythonRestorer`.
+source bundle) but there is no config file or mirror, the
+`lcsas restore from-disc` subcommand hands the restore to
+`PurePythonRestorer` (tier 3) and its own disc loop (#948).  No `rustic`
+is used: on a multi-disc archive the tree packs are spread over discs
+not yet read, so the packs cannot be planned before reading.
 
 **Prerequisites:**
 
 - LCSAS package importable on the host (`pip install -e .` from the
   bundled `lcsas_src/` or the meta disc's tree).
-- A mounted disc (path `DISC`) containing `catalog.db` and
-  `metadata/<repo>/`.
+- A mounted or extracted disc (path `DISC`) containing `catalog.db`
+  and `metadata/<repo_id>/`.  It may be read-only (a mounted disc, or
+  an `xorriso -osirrox` extract whose files are 0444); an ordinary
+  user is enough.
 - The password file.
-- Optional: `--volume-dir` of pre-extracted other discs for batch
-  restore.
+- Optional: `--volume-dir` holding the other discs, one per
+  sub-directory (mounted or extracted), for a restore with no disc
+  prompts.
 
 All step references below are to `restore_from_disc()` in
 `src/lcsas/restore/orchestrator.py` (called by the
@@ -332,97 +334,88 @@ unless noted otherwise.
 
 **Steps:**
 
-1. Check that the disc path is a directory
-   (early validation in `restore_from_disc()`).
+1. Check that the disc path is a directory and the password file
+   exists (early validation in `restore_from_disc()`).
 2. Locate `catalog.db` — default `DISC/catalog.db`, override with
    `--catalog`.
-3. Copy `catalog.db` into a temp dir to avoid locking the read-only
-   mount.
+3. Open it read-only where it is (`open_disc_catalog()` in
+   `src/lcsas/db/disc_catalog.py`: `mode=ro&immutable=1`, no WAL, no
+   copy, nothing written beside it).  A catalog written by a newer
+   LCSAS (a newer schema) is refused in words.
 4. Read the disc catalog to pick the repository (single repository
    = auto-selected; several repositories = `--repo NAME`).
-5. Locate `metadata/<repo>/` on the disc.  It looks the folder up by
-   the repository's catalog NAME, but discs name the folders by id, so
-   for a repository whose name differs from its id this step finds
-   nothing (#618).  Until that is fixed, run Workflow B by hand:
-   build its cache (step 1) from `DISC/metadata/<id>/` and the disc's
-   `data/`, or point the restorer at the folder and add the disc as a
-   pack source, `python_reader.py --repo DISC/metadata/<id>
-   --mount-point DISC ...` (without `--mount-point` it looks for packs
-   only in `<repo>/data/`, which `metadata/<id>/` does not have).
-6. Probe for a usable `rustic` binary; if absent, mark
-   `rustic_available = False`
-   (the `check_binary_version("rustic", ...)` probe).
-7. `RestoreExecutor.prepare_cache()` copies the disc's repository
-   metadata into the temp cache (`src/lcsas/restore/executor.py`).
-8. If no rustic, symlink `DISC/data/` into `cache/data/` so the
-   restorer can read packs without copying gigabytes
-   (the data-symlink block). For multi-disc snapshots,
-   merge other discs' `data/` into the cache *before* running.
-9. Invoke `PurePythonRestorer.restore(target, snapshot_id)` —
-   `--snapshot latest` is mapped to `None`.
-10. Errors print a fallback hint pointing back to
-    `python_reader.py` if rustic was expected but absent
-    (the `FileNotFoundError` handlers around the dry-run and
-    `execute_restore()` calls).
+5. Locate `metadata/<repo_id>/` on the disc (the folder is named by the
+   repository's id; a folder named by the repository's name is tried
+   too).  A disc with no snapshot of that repository is refused in
+   words: use a newer disc.
+6. Run `PurePythonRestorer` with `metadata/<repo_id>/` as the
+   repository, `DISC` and `--volume-dir` as its pack search paths
+   (each disc found one level below `--volume-dir`), the disc's
+   catalog to name the disc a missing pack is on, and `--cache-dir`
+   as its pack cache (each disc's packs are copied there the first
+   time the disc is read).  Without `--volume-dir` and at a terminal,
+   the reader asks for each further disc, as `python_reader.py` does;
+   with `--volume-dir`, or with no terminal, it does not ask.
+   `--snapshot latest` (the default) restores the newest snapshot by
+   time; a full ID or a unique prefix names one.  `--skip-verify` has
+   no effect: the reader authenticates every blob.
 
 **Expected outcome:** Files restored to `restore_folder`, log line
 identifying the snapshot ID and hostname
-(the pure-Python success log in `_restore_with_python_reader()`).
-A partial pure-Python restore — some items not restored under
-tolerant traversal — exits `4` (as tier 1; `2` before rc10, #875)
-and leaves a `RESTORE_FAILURES.txt`
+(the success log in `_restore_with_python_reader()`).
+A partial restore — some items not restored under
+tolerant traversal (a disc that was not at hand, a damaged pack) —
+exits `4` (as tier 1; `2` before rc10, #875) and leaves a
+`RESTORE_FAILURES.txt`
 manifest under the target (special files this system cannot create
 and links the target cannot hold are listed there too, with exit
 `0`).  `q` (or the end of input) at the Python reader's
 disc box stops the whole restore with exit code `75`, as the bundled
 `python_reader.py` does.  A full disk stops it with exit code `74`.
 A wrong password (a key file rejects it) stops it with exit code `77`,
-as in the bundled reader (it was `1`); key files that cannot be read
-at all give `1`.
+as in the bundled reader; key files that cannot be read at all, an
+unknown snapshot or a damaged disc catalog give `1`, with a message
+that does not blame the password.
 
 **Variant axes that apply:**
 
 - OS: Linux/macOS/Windows wherever LCSAS imports.
-- Recovery tier: 3 (auto-degrades from 2 if rustic missing).
-- Mode: interactive (single disc + prompts) or batch
-  (`--volume-dir`)
-  (the two ingest branches of `restore_from_disc()`). Note: batch
-  and interactive multi-disc modes are rustic-paths; the pure-Python
-  branch of `restore_from_disc()` returns before the rustic-path
-  code, after restoring whatever packs are reachable from the
-  mounted/symlinked `data/`.
-- Skip-verify: `--skip-verify` disables the SHA-256 ingest check
-  (passed through to `ingest_volume()` by
-  `restore_from_disc()`).
+- Recovery tier: 3 (the Python reader), whatever is installed.
+- Mode: interactive (the reader's disc prompt) or batch
+  (`--volume-dir`).
+- Multi-disc: the reader finds each pack on whichever disc holds it;
+  the tree packs need not be on the disc given.
 
 **Test coverage:**
 
+- Existing, real discs: `tests/integration/test_owner_restore_commands.py`
+  — `test_from_disc_single_disc` and `test_from_disc_two_discs`
+  restore byte-identically, as an ordinary user, from discs extracted
+  from real staged ISOs with `xorriso -osirrox` (read-only files);
+  in the two-disc test the second disc is reachable only through
+  `--volume-dir` (#948).
 - Existing: argparse registration and option defaults —
   `tests/unit/test_restore_from_disc.py::TestFromDiscParser`.
 - Existing: validation failures (missing disc path, missing catalog,
-  no repositories, missing repository metadata, no rustic, no TTY) —
-  `tests/unit/test_restore_from_disc.py::TestFromDiscValidation`.
-- Existing: batch mode + repository auto-select + custom catalog —
-  `tests/unit/test_restore_from_disc.py::TestFromDiscBatchMode`.
-- Existing: end-to-end behaviour of the wrapper components is
-  exercised by `tests/integration/test_disc_only_restore.py` (rustic
-  path) and `tests/integration/test_pure_python_restore.py` (fallback
-  path).
-- Existing: the pure-Python branch's exit codes (75 for `q` at the
-  disc box, 1 for a full disk or a failed start), with the reader
-  faked — `tests/unit/test_restore_from_disc.py::TestFromDiscPythonReader`.
-- Gap: no test drives the pure-Python branch of `cmd_restore_from_disc`
-  end-to-end through the CLI with a real repository (that branch
-  returns separately, before the rustic-path code).
+  no repositories, missing repository metadata, no snapshot on the
+  disc) — `tests/unit/test_restore_from_disc.py::TestFromDiscValidation`.
+- Existing: the read-only catalog (nothing written beside it; a newer
+  schema or a damaged file refused in words) —
+  `tests/unit/test_restore_from_disc.py::TestFromDiscReadOnlyCatalog`.
+- Existing: what the reader is handed (search paths, catalog, pack
+  cache, snapshot, prompts) —
+  `tests/unit/test_restore_from_disc.py::TestFromDiscHandsTheReader`.
+- Existing: exit codes (75, 77, 4, 1), with the reader faked —
+  `tests/unit/test_restore_from_disc.py::TestFromDiscPythonReader`.
 
 **Source refs:**
-the `restore standalone` subparser in `build_parser()`
+the `restore from-disc` subparser in `build_parser()`
 (`src/lcsas/cli/parser.py`),
 `cmd_restore_from_disc()` in `src/lcsas/cli/commands/restore.py`,
-`_restore_with_python_reader()` in `src/lcsas/restore/orchestrator.py`
-(pure-Python branch),
-`dispatch()` in `src/lcsas/cli/main.py`,
-`RestoreExecutor.prepare_cache()` in `src/lcsas/restore/executor.py`.
+`restore_from_disc()` and `_restore_with_python_reader()` in
+`src/lcsas/restore/orchestrator.py`,
+`open_disc_catalog()` in `src/lcsas/db/disc_catalog.py`,
+`dispatch()` in `src/lcsas/cli/main.py`.
 
 ---
 
@@ -456,7 +449,7 @@ belong to — all without any central server.
 
 3. List repositories the archive knows about
    (the same query `restore_from_disc()` runs against the
-   disc catalog):
+   disc catalog, opened read-only by `open_disc_catalog()`):
 
    ```
    SELECT repo_id, name, mirror_path FROM repositories;
@@ -734,10 +727,8 @@ This path deliberately trades capability for portability. It **cannot**:
   per disc, or answer the interactive disc-swap prompt when a pack is
   not found (`_find_pack_path()`, added in #234). There is no
   automated pick-list orchestration like the rustic paths have; the
-  `lcsas restore from-disc` wrapper likewise symlinks only the
-  mounted disc's `data/` and tells the heir to merge other
-  discs manually (`_restore_with_python_reader()` in
-  `src/lcsas/restore/orchestrator.py`).
+  `lcsas restore from-disc` wrapper uses the same disc loop, with the
+  given disc and `--volume-dir` as its search paths (#948).
 - **Locate missing packs by itself (non-interactive).** In
   non-interactive mode a required pack absent from every search path
   raises `FileNotFoundError` (`_find_pack_path()`); under tolerant
@@ -815,8 +806,8 @@ disc catalog this tier relies on.
 | Packs span multiple discs | `...::test_packs_span_multiple_discs` | Covered |
 | `cmd_restore_from_disc` argparser registration | `tests/unit/test_restore_from_disc.py::TestFromDiscParser` | Covered |
 | `cmd_restore_from_disc` validation paths | `tests/unit/test_restore_from_disc.py::TestFromDiscValidation` | Covered |
-| `cmd_restore_from_disc` batch mode | `tests/unit/test_restore_from_disc.py::TestFromDiscBatchMode` | Covered |
-| `cmd_restore_from_disc` pure-Python branch E2E | — | **Gap** |
+| `cmd_restore_from_disc` hands the reader its search paths | `tests/unit/test_restore_from_disc.py::TestFromDiscHandsTheReader` | Covered |
+| `cmd_restore_from_disc` E2E, read-only discs, one and two discs | `tests/integration/test_owner_restore_commands.py` | Covered |
 | Generated `python_reader.py` run as subprocess | — | **Gap** |
 | `volume_info.json` shape | — | **Gap** (existence only) |
 | Single-file extraction API | — | **Gap** (by design — not exposed) |
@@ -828,7 +819,7 @@ disc catalog this tier relies on.
 Required reading (repo-relative):
 
 - `CLAUDE.md`
-- `src/lcsas/cli/parser.py` — the `restore standalone` subparser in
+- `src/lcsas/cli/parser.py` — the `restore from-disc` subparser in
   `build_parser()`; `src/lcsas/cli/commands/restore.py` — handler
   `cmd_restore_from_disc()`; `src/lcsas/restore/orchestrator.py` —
   `restore_from_disc()`, the restore itself; `src/lcsas/cli/main.py` —
