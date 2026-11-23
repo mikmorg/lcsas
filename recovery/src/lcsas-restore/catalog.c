@@ -33,86 +33,72 @@ struct lcsas_catalog {
     int skew_warned;      /* emit the newer-schema warning at most once */
 };
 
+/* The longest catalog path opened: the locator's own paths are 4 KiB. */
+#define CATALOG_PATH_MAX 4096
+
 /*
- * A "file:" URI for `path` with ?immutable=1.  '%', '?' and '#' would
- * escape or end the path inside a URI, so they are percent-encoded.  An
- * absolute path gets an empty authority ("file://" + "/abs"), so a
- * leading "//" can't be read as a host.  NULL when out of memory.
+ * Write into `u` (CATALOG_URI_MAX bytes) a "file:" URI for `path` with
+ * ?immutable=1.  '%', '?' and '#' would escape or end the path inside a
+ * URI, so they are percent-encoded.  An absolute path gets an empty
+ * authority ("file://" + "/abs"), so a leading "//" can't be read as a
+ * host.  -1 when the path is longer than CATALOG_PATH_MAX.
  */
-static char *
-immutable_uri(const char *path)
+#define CATALOG_URI_MAX (7 + 3 * CATALOG_PATH_MAX + sizeof "?immutable=1")
+static int
+immutable_uri(const char *path, char *u)
 {
     static const char hexd[] = "0123456789ABCDEF";
     static const char query[] = "?immutable=1";
     size_t n = strlen(path);
     size_t i;
     size_t j;
-    char *u = (char *)malloc(7 + 3 * n + sizeof query);
 
-    if (u) {
-        strcpy(u, path[0] == '/' ? "file://" : "file:");
-        j = strlen(u);
-        for (i = 0; i < n; i++) {
-            unsigned char ch = (unsigned char)path[i];
-            if (ch == '%' || ch == '?' || ch == '#') {
-                u[j++] = '%';
-                u[j++] = hexd[ch >> 4];
-                u[j++] = hexd[ch & 15];
-            } else {
-                u[j++] = (char)ch;
-            }
+    if (n > CATALOG_PATH_MAX) return -1;
+    strcpy(u, path[0] == '/' ? "file://" : "file:");
+    j = strlen(u);
+    for (i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)path[i];
+        if (ch == '%' || ch == '?' || ch == '#') {
+            u[j++] = '%';
+            u[j++] = hexd[ch >> 4];
+            u[j++] = hexd[ch & 15];
+        } else {
+            u[j++] = (char)ch;
         }
-        memcpy(u + j, query, sizeof query);
     }
-    return u;
+    memcpy(u + j, query, sizeof query);
+    return 0;
 }
 
 /*
- * #543: a WAL-mode catalog on read-only media opens, but every query
- * then fails ("unable to open database file"): SQLite has to create
- * the -shm and -wal files beside it, and can't.  A disc never changes,
- * so read it as immutable (no locks, no -shm, no -wal), as the Python
- * readers do.  Only after a plain open's first query has failed that
- * way (see lcsas_catalog_open): immutable would also ignore a live
- * -wal next to a catalog copied off a running system.  Keeps the plain
- * handle, and its error, when this doesn't help.
+ * A catalog is always opened as immutable: no locks, no -shm, no -wal.
+ * A disc never changes, and tier 1 reads only a disc's catalog or a
+ * copy of one.  #543: a WAL-mode catalog on read-only media opened
+ * plainly, but every query then failed ("unable to open database
+ * file"): SQLite has to create the -shm and -wal files beside it, and
+ * can't.  #967: on a disc copied to a folder, where it can, the plain
+ * open left an empty -shm and -wal beside the copy.  A -wal beside a
+ * copy is not read: a disc's catalog is whole in its main file.  The
+ * Python readers open it the same way.
  */
-static void
-reopen_immutable(lcsas_catalog *c, const char *path)
-{
-    char *uri = immutable_uri(path);
-    sqlite3 *plain = c->db;
-    sqlite3 *db = NULL;
-    int version = -1;
-
-    if (uri && sqlite3_open_v2(uri, &db,
-                               SQLITE_OPEN_READONLY | SQLITE_OPEN_URI,
-                               NULL) == SQLITE_OK) {
-        c->db = db;
-        version = lcsas_catalog_schema_version(c);
-    }
-    if (version >= 0) {
-        sqlite3_close(plain);
-        c->schema_version = version;
-    } else {
-        sqlite3_close(db);
-        c->db = plain;
-    }
-    free(uri);
-}
-
 lcsas_catalog *
 lcsas_catalog_open(const char *path)
 {
     lcsas_catalog *c;
+    char uri[CATALOG_URI_MAX];
     int rc;
 
+    if (immutable_uri(path, uri) != 0) {
+        fprintf(stderr, "catalog open failed: the path is too long\n");
+        return NULL;
+    }
     c = (lcsas_catalog *)malloc(sizeof(*c));
     if (!c) return NULL;
     c->db = NULL;
     c->schema_version = -1;
     c->skew_warned = 0;
-    rc = sqlite3_open_v2(path, &c->db, SQLITE_OPEN_READONLY, NULL);
+    rc = sqlite3_open_v2(uri, &c->db,
+                         SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "catalog open failed: %s\n",
                 c->db ? sqlite3_errmsg(c->db) : "unknown");
@@ -121,14 +107,6 @@ lcsas_catalog_open(const char *path)
         return NULL;
     }
     c->schema_version = lcsas_catalog_schema_version(c);
-    /* The -shm SQLite can't create shows up as SQLITE_CANTOPEN on a
-     * read-only mount and SQLITE_READONLY in an unwritable directory.
-     * Nothing else (not a database, no such table) is helped by
-     * reopening, so don't spend a second open on it. */
-    rc = sqlite3_errcode(c->db);
-    if (c->schema_version < 0
-            && (rc == SQLITE_CANTOPEN || rc == SQLITE_READONLY))
-        reopen_immutable(c, path);
     return c;
 }
 

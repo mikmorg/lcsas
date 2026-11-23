@@ -327,6 +327,64 @@ test_volumes_read_frozen_columns_only(void)
     unlink(p);
 }
 
+/*
+ * #967: a catalog in WAL format, in a folder that can be written (a
+ * disc copied to a folder): reading it leaves no -shm or -wal file
+ * beside it.
+ */
+static void
+test_wal_catalog_leaves_nothing_behind(void)
+{
+    char dir[256];
+    char path[300];
+    char side[320];
+    sqlite3 *w = NULL;
+    lcsas_catalog *c;
+    lcsas_catalog_pack pk;
+    struct stat st;
+    int left = 0;
+
+    snprintf(dir, sizeof dir, "/tmp/lcsas_catalog_test_wal_%ld",
+             (long)getpid());
+    snprintf(path, sizeof path, "%s/catalog.db", dir);
+    mkdir(dir, 0755);
+    if (sqlite3_open(path, &w) != SQLITE_OK
+            || exec_sql(w,
+                "PRAGMA journal_mode=WAL;"
+                "CREATE TABLE schema_version (version INTEGER);"
+                "INSERT INTO schema_version VALUES (10);"
+                "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY,"
+                "  sha256 TEXT, size_bytes INTEGER, repo_id TEXT);"
+                "INSERT INTO packs VALUES (1, 'aa11', 1024, 'r');") < 0) {
+        fprintf(stderr, "FAIL #967: WAL fixture\n");
+        fails++;
+    }
+    sqlite3_close(w);   /* the last close checkpoints and removes both */
+    c = lcsas_catalog_open(path);
+    if (!c || lcsas_catalog_find_pack(c, "aa11", &pk) != 0) {
+        fprintf(stderr, "FAIL #967: WAL catalog not read\n");
+        fails++;
+    }
+    snprintf(side, sizeof side, "%s-shm", path);
+    if (stat(side, &st) == 0) left++;
+    snprintf(side, sizeof side, "%s-wal", path);
+    if (stat(side, &st) == 0) left++;
+    lcsas_catalog_close(c);
+    snprintf(side, sizeof side, "%s-shm", path);
+    if (stat(side, &st) == 0) left++;
+    unlink(side);
+    snprintf(side, sizeof side, "%s-wal", path);
+    if (stat(side, &st) == 0) left++;
+    unlink(side);
+    if (left) {
+        fprintf(stderr, "FAIL #967: reading a WAL catalog left %d -shm/-wal "
+                "file(s) beside it\n", left);
+        fails++;
+    }
+    unlink(path);
+    rmdir(dir);
+}
+
 int main(void)
 {
     const char *db_path = "/tmp/lcsas_catalog_test.db";
@@ -600,11 +658,11 @@ int main(void)
      * URI.  (As root the directory stays writable and the plain open
      * works; the outcome is the same.)
      *
-     * A second WAL database there has no schema_version table, so the
-     * immutable reopen doesn't help either: the catalog keeps the plain
-     * handle, and lookups fail with its read error, which is not skew.
-     * Not as root: there the plain handle reads, and the missing tables
-     * rightly count as skew.
+     * A second WAL database there has no schema_version table.  Since
+     * #967 every catalog is opened immutable, so it reads (it was kept
+     * on a plain handle that could not read, and its lookups failed
+     * with that read error); its missing tables then rightly count as
+     * skew, as they did as root.
      */
     {
         char ro_dir[256];
@@ -649,13 +707,13 @@ int main(void)
             fails++;
         }
         lcsas_catalog_close(cw);
-        cw = geteuid() != 0 ? lcsas_catalog_open(nv_path) : NULL;
-        if (geteuid() != 0
-                && (!cw || lcsas_catalog_find_pack(cw, "aa11", &pk) != -1
-                    || lcsas_catalog_error_is_skew(cw))) {
+        cw = lcsas_catalog_open(nv_path);
+        if (!cw || lcsas_catalog_schema_version(cw) != -1
+                || lcsas_catalog_find_pack(cw, "aa11", &pk) != -1
+                || !lcsas_catalog_error_is_skew(cw)) {
             fprintf(stderr,
                     "FAIL #543: no-version WAL catalog: want an open handle"
-                    " whose lookups fail, not as skew (got: %s)\n",
+                    " whose lookups fail as skew (got: %s)\n",
                     cw ? lcsas_catalog_errmsg(cw) : "NULL");
             fails++;
         }
@@ -793,6 +851,21 @@ int main(void)
     test_pending_unreadable();
     test_schema_version_is_the_highest_row();
     test_volumes_read_frozen_columns_only();
+    test_wal_catalog_leaves_nothing_behind();
+
+    /* A path longer than tier 1 ever builds (4 KiB) is refused. */
+    {
+        static char longp[4200];
+        memset(longp, 'a', sizeof longp - 1);
+        longp[0] = '/';
+        longp[sizeof longp - 1] = '\0';
+        c = lcsas_catalog_open(longp);
+        if (c) {
+            fprintf(stderr, "FAIL #967: a 4 KiB+ path opened\n");
+            lcsas_catalog_close(c);
+            fails++;
+        }
+    }
 
     if (fails == 0) printf("test_catalog: OK\n");
     return fails ? 1 : 0;

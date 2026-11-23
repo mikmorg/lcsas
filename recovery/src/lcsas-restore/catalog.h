@@ -31,9 +31,8 @@ typedef struct {
 } lcsas_catalog_volume;
 
 /*
- * Open a catalog file (read-only).  Returns NULL on error.  When the
- * first query on a plain read-only open fails (a WAL-mode catalog on
- * read-only media), it is reopened as immutable (#543).
+ * Open a catalog file read-only and immutable (#543, #967: no -shm or
+ * -wal is made or read beside it).  Returns NULL on error.
  */
 lcsas_catalog *lcsas_catalog_open(const char *path);
 
