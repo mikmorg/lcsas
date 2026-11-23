@@ -74,16 +74,19 @@ def test_snapshot_flag_restores_that_snapshot(tmp_path: Path) -> None:
     assert "proof.txt" in {p.name for p in non_marker_files(meta / "restored")}, out
 
 
-def test_snapshot_flag_reaches_tier_1(tmp_path: Path) -> None:
-    """An id the set has no snapshot for: tier 1 is asked for it and
-    fails, so the restore does not finish (with latest it would)."""
+def test_snapshot_flag_of_no_snapshot_is_said_before_tier_1(tmp_path: Path) -> None:
+    """An id the set has no snapshot for: up to rc11 tier 1 was asked for
+    it and failed, and the way to carry on carried the same id.  Since
+    #966 the list of snapshots says so first: exit 1, tier 1 not run,
+    nothing restored."""
     env, meta, snap = _built_meta(tmp_path)
     assert not snap.startswith("0000aaaa")
     res = _run(env, ["--snapshot", "0000aaaa"], "E:\\restored\n", LCSAS_PASSWORD="test")
     out = res.stdout + res.stderr
-    assert "[tier 1] running" in out, out
-    assert res.returncode != 0, out
-    assert "Files restored to" not in out, out
+    assert "No snapshot of" in out and "starts with 0000aaaa" in out, out
+    assert "[tier 1] running" not in out, out
+    assert res.returncode == 1, out
+    assert "restored to" not in out, out
     restored = meta / "restored"
     assert not restored.exists() or not non_marker_files(restored), out
 

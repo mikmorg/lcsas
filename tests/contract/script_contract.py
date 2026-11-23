@@ -181,7 +181,7 @@ SCRIPT_CASES: tuple[ScriptCase, ...] = (
                          resume_advice=False, tools_kept=False,
                          another_set=True, log="ok"),
         bat=ScriptOutcome(exit=ScriptExit.OK,
-                          says=r"Restore complete\.  Files restored to: E:\\restored",
+                          says=r"Restore complete\.  \d+ files? restored to:\s+E:\\restored",
                           resume_advice=False, tools_kept=False,
                           another_set=True),
     ),

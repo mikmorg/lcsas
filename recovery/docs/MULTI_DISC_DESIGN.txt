@@ -615,8 +615,6 @@ WORKFLOW EXAMPLE (one-drive case)
 
   $ sh /mnt/recovery/scripts/restore.sh --restore-folder ~/restored
   [lcsas-restore] copied recovery binaries to /home/alice/lcsas-tools
-  [lcsas-restore] you may eject the meta disc when the binary
-                  prompts for a data disc.
   (the newest-data-disc step, the set menu and the password; see
    THE NEWEST DATA DISC FIRST below.  With S at the first, no data
    disc and no catalog is in yet when tier 1 starts)

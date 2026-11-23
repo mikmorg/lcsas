@@ -52,7 +52,10 @@ REM own environment; without this a later run from the same prompt
 REM would think it had already been relocated.
 for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")
 REM The script's own state, never taken from the caller's environment.
-for %%V in (CACHE_SET_HERE ANOTHER_PASS STAYING_ON_DISC METADATA_SET_HERE PW_NOTE_SAID NEWEST_ROOT) do set "%%V="
+for %%V in (CACHE_SET_HERE ANOTHER_PASS STAYING_ON_DISC METADATA_SET_HERE PW_NOTE_SAID NEWEST_ROOT LIST_SNAPSHOTS) do set "%%V="
+REM The ids of the backup sets restored in this run, and how many (#966).
+set "RESTORED_LIST= "
+set "RESTORED_N=0"
 
 REM A retired environment variable, set, is refused before anything else
 REM happens (#934): its value would be silently ignored otherwise.  Top
@@ -117,12 +120,16 @@ set "ARG_OLD="
 set "ARG_OLD_NEW="
 set "FOLDER_ARG="
 set "FOLDER_BASE="
+set "PWFILE_ARG="
 call :parse_args %*
 REM Top level, not in a ( ) block: an exit /b inside one does not reach
 REM `cmd /c` on real Windows (see the exit 77 note at tier 1).
 if defined ARG_OLD goto :arg_old
 if defined ARG_MISSING goto :arg_missing
 if defined ARG_BAD goto :arg_bad
+REM A password file that is not there fails now, in one line, before
+REM any question, as in restore.sh (#953).
+if defined PWFILE_ARG if not exist "!LCSAS_PASSWORD_FILE!" goto :arg_pwfile_bad
 if not defined SNAP_BAD goto :snap_ok
 echo ERROR: --snapshot needs a snapshot id: the letters 0-9 and a-f,
 echo as the list of snapshots shows it, or the word latest.
@@ -134,6 +141,7 @@ pause
 exit /b 2
 :arg_missing
 if "!ARG_MISSING!"=="--restore-folder" goto :arg_missing_folder
+if "!ARG_MISSING!"=="--password-file" goto :arg_missing_pwfile
 echo ERROR: --backup-set needs the name or the id of a backup set.
 call :arg_usage
 pause
@@ -141,6 +149,15 @@ exit /b 2
 :arg_missing_folder
 echo ERROR: --restore-folder needs a folder.
 call :arg_usage
+pause
+exit /b 2
+:arg_missing_pwfile
+echo ERROR: --password-file needs a file.
+call :arg_usage
+pause
+exit /b 2
+:arg_pwfile_bad
+echo restore.bat: --password-file: cannot read '!LCSAS_PASSWORD_FILE!'
 pause
 exit /b 2
 :arg_bad
@@ -605,6 +622,11 @@ call :find_newest
 if defined NEWEST_ROOT goto :newest_found
 set /a ND_TRIES+=1
 if defined DATA_SEEN goto :newest_unlabelled
+if not defined FOREIGN_ROOT goto :newest_none
+REM #952: a disc of another archive is refused.
+call :say_foreign "!FOREIGN_ROOT!"
+goto :newest_again
+:newest_none
 echo  No data disc is in a drive yet.  Wait until File Explorer shows
 echo  it, then press ENTER again.
 goto :newest_again
@@ -626,7 +648,9 @@ goto :newest_done
 if not defined NEWEST_ROOT goto :newest_done
 echo.
 echo [lcsas-restore] newest data disc: !NEWEST_LABEL! in drive !NEWEST_ROOT:~0,2!
+set "OC_QUIT="
 call :merge_newest
+if defined OC_QUIT goto :newest_quit
 :newest_done
 
 REM ----- Find the restic repository ---------------------------------
@@ -665,8 +689,9 @@ call :scan_metadata "%DISC_ROOT%\metadata"
 call :scan_metadata "%RECOVERY%\metadata"
 REM -- Repository metadata on every other mounted disc (data discs carry
 REM    metadata\<repo>\ too).
+REM    A disc of another archive is left out, and said so (#952).
 for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-    call :scan_metadata "%%L:\metadata"
+    call :scan_drive %%L
 )
 
 if !NCAND! equ 0 (
@@ -731,6 +756,10 @@ echo Type the number of the one to restore, or Q then ENTER to quit.
 :pick_repo
 set "REPO_PICK="
 set /p "REPO_PICK=Which one do you want to restore? [1]: "
+REM Spaces around the number, and "1)" or "1.", are taken (#966).
+if defined REPO_PICK set "REPO_PICK=!REPO_PICK: =!"
+if defined REPO_PICK if "!REPO_PICK:~-1!"==")" set "REPO_PICK=!REPO_PICK:~0,-1!"
+if defined REPO_PICK if "!REPO_PICK:~-1!"=="." set "REPO_PICK=!REPO_PICK:~0,-1!"
 if "!REPO_PICK!"=="" set "REPO_PICK=1"
 if /i "!REPO_PICK!"=="q" goto :menu_quit
 set "SEL="
@@ -893,6 +922,19 @@ set "MK_N="
 set "MK_SID="
 goto :eof
 
+:scan_drive
+REM %1 = a drive letter: its sets, unless it holds a disc of another
+REM archive (#952), which is said once.
+call :disc_foreign "%1:\"
+if not defined DF_FOREIGN goto :scan_drive_ours
+if defined FOREIGN_SAID_%1 goto :eof
+set "FOREIGN_SAID_%1=1"
+call :say_foreign "%1:\"
+goto :eof
+:scan_drive_ours
+call :scan_metadata "%1:\metadata"
+goto :eof
+
 :scan_metadata
 REM %~1 = a "...\metadata" dir.  Enumerate its immediate subdirs (one per
 REM repository) and offer each as a candidate.  `dir /ad /b` is used instead
@@ -905,6 +947,7 @@ goto :eof
 
 :repo_selected
 set "REPO=!CAND_%SEL%!"
+set "SET_ID=!CAND_NAME_%SEL%!"
 set "SET_NAME=!CAND_NC_%SEL%!"
 if not defined SET_NAME set "SET_NAME=!CAND_NAME_%SEL%!"
 set "SPLIT_K=!CAND_K_%SEL%!"
@@ -943,6 +986,9 @@ if exist "%RECOVERY%\bin\%ARCH%\lcsas-restore.exe" goto :tier1_present
 if exist "%REPO%\data\" goto :tier1_present
 goto :tier1_missing
 :tier1_present
+REM --list-snapshots (#966): nothing is restored, so no folder is asked
+REM for: straight to the password, then the list.
+if defined LIST_SNAPSHOTS goto :pw_section
 REM A restore that carries on goes into the folder it was going into.
 if not defined RESUME goto :ask_target
 set "TARGET=!RESUME_TARGET!"
@@ -1006,36 +1052,69 @@ REM Warn BEFORE the password prompt when %TARGET% already holds the
 REM heir's OWN files (same names would silently overwrite live data).
 REM Re-running into a prior LCSAS restore is the supported resume from
 REM an interrupted run, so we skip the prompt when the hidden marker
-REM file .lcsas-restore-marker is present (and when
+REM file .lcsas-restore-marker names this backup set (and when
 REM LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER=1).  The marker is written after
 REM confirmation/creation so subsequent re-runs are silent.
+REM The marker lists the ids of the sets restored into the folder, one a
+REM line, as restore.sh's does (#953): another set restored on top of one
+REM would keep (tier 1 skips a file of the same size and date) or
+REM overwrite the first set's files with no word, so a folder that holds
+REM ANOTHER set's restore is warned about too.  An empty marker, from an
+REM older restore.bat, names no set: it is warned about the same way.
+REM Not when carrying on a restore: that goes on into its own folder.
 set "MARKER=%TARGET%\.lcsas-restore-marker"
 REM An earlier restore wrote into this folder: the free-space check below
 REM counts what it wrote (#660).  Asked before the marker is written.
 set "TARGET_RESUMED="
 if exist "%MARKER%" set "TARGET_RESUMED=1"
-if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER%"=="1" (
-    dir /b "%TARGET%" 2>nul | findstr "." >nul
-    if not errorlevel 1 (
-        echo.
-        echo ==========================================================
-        echo   WARNING: the folder
-        echo       !TARGET!
-        echo   already contains files that do not look like a previous
-        echo   LCSAS restore.  Restored files with the same names will
-        echo   OVERWRITE what is there now.
-        echo.
-        echo   Safest choice: stop, and restore into a NEW, empty
-        echo   folder instead.
-        echo ==========================================================
-        set /p "OVERWRITE_ANS=Type YES to overwrite, anything else to stop: "
-        if /i not "!OVERWRITE_ANS!"=="YES" (
-            echo Aborting; nothing was written.
-            pause
-            exit /b 65
-        )
-    )
-)
+set "TG_OTHER="
+if "%LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER%"=="1" goto :target_guarded
+if not exist "%TARGET%\" goto :target_guarded
+if not exist "%MARKER%" goto :target_files
+if defined RESUME goto :target_guarded
+call :marker_read
+if defined MR_SAME goto :target_guarded
+set "TG_OTHER=1"
+if not defined MR_ANY set "TG_OTHER=2"
+:target_files
+REM Only files other than the marker count: a folder emptied but for it
+REM has nothing to overwrite.
+set "TG_FILES="
+for /f "delims=" %%F in ('dir /a /b "%TARGET%" 2^>nul ^<nul') do if /i not "%%F"==".lcsas-restore-marker" set "TG_FILES=1"
+if not defined TG_FILES goto :target_guarded
+echo.
+echo ==========================================================
+echo   WARNING: the folder
+echo       !TARGET!
+if "!TG_OTHER!"=="1" goto :target_warn_other
+if "!TG_OTHER!"=="2" goto :target_warn_unknown
+echo   already contains files that do not look like a previous
+echo   LCSAS restore.  Restored files with the same names will
+echo   OVERWRITE what is there now.
+echo.
+echo   Safest choice: stop, and restore into a NEW, empty
+echo   folder instead.
+goto :target_warned
+:target_warn_unknown
+echo   already holds an earlier LCSAS restore, which does not say
+echo   which backup set it was: it may be ANOTHER backup set.
+:target_warn_other
+if "!TG_OTHER!"=="1" echo   already holds the restore of ANOTHER backup set.  Files
+echo   of !SET_NAME! with the same names as that set's
+echo   would be mixed in with them: some OVERWRITE them, and
+echo   some are skipped as already restored.
+echo.
+echo   Safest choice: stop, and restore this set into a NEW,
+echo   empty folder instead.
+:target_warned
+echo ==========================================================
+set "OVERWRITE_ANS="
+set /p "OVERWRITE_ANS=Type YES to overwrite, anything else to stop: "
+if /i "!OVERWRITE_ANS!"=="YES" goto :target_guarded
+echo Aborting; nothing was written.
+pause
+exit /b 65
+:target_guarded
 
 if not exist "%TARGET%" mkdir "%TARGET%" 2>nul
 if not exist "%TARGET%" (
@@ -1043,9 +1122,11 @@ if not exist "%TARGET%" (
     pause
     exit /b 1
 )
-REM Mark this folder so a later resume into it does not re-prompt.
+REM Mark this folder so a later resume into it does not re-prompt: the
+REM set's id goes in, unless it is there already.
 REM Kept intentionally simple: a bare redirect, no `if`/`attrib` around
-REM it.  Anything more here sits between the target prompt and the
+REM it (the test is a goto on the line before).  Anything more here sits
+REM between the target prompt and the
 REM password prompt, and a subtle cmd parse of a conditional redirect
 REM can swallow the next piped stdin line -- which silently ate the
 REM password on the windows-e2e runner (issue #384).  The marker is a
@@ -1054,7 +1135,10 @@ REM negative case, the shell/wine tests) exclude it BY NAME rather than
 REM relying on a hidden attribute.  2>nul first, as for the probe: a
 REM folder that cannot be written to says so below, not with "Access is
 REM denied." here (#611).
-(2>nul > "%MARKER%" echo.) 2>nul
+call :marker_read
+if defined MR_SAME goto :target_marked
+(2>nul >> "%MARKER%" echo !SET_ID!) 2>nul
+:target_marked
 
 REM ----- Pack cache and the local copy of the catalog (#610) ---------
 REM Both live in the tools folder, TOOLS (see "The tools folder" above).
@@ -1189,10 +1273,9 @@ if exist "%TOOLS%\merged-from.txt" goto :catalog_picked
 :catalog_scan
 if exist "%RECOVERY%\catalog.db" set "CATALOG_PICK=%RECOVERY%\catalog.db"
 if exist "%REPO%\catalog.db"     set "CATALOG_PICK=%REPO%\catalog.db"
+REM Not the catalog of a disc of another archive (#952).
 for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-    if exist "%%L:\catalog.db" (
-        set "CATALOG_PICK=%%L:\catalog.db"
-    )
+    if exist "%%L:\catalog.db" call :catalog_drive %%L
 )
 :catalog_picked
 if not defined CATALOG_PICK goto :catalog_done
@@ -1278,6 +1361,7 @@ set "RESUME_CMD="
 set "DESK_LAUNCHER="
 if defined LCSAS_RELOCATED call :save_resume
 
+:pw_section
 REM ----- The password (#607, #608) -----------------------------------
 REM The password reaches the programs in a file in %TEMP%, PWFILE, which
 REM is deleted on every way out.  It comes from the first of:
@@ -1617,6 +1701,37 @@ pause
 goto :wrong_password
 
 :pw_ok
+if defined LIST_SNAPSHOTS goto :list_snapshots
+REM --snapshot ID that is the start of no snapshot of the set (#966): said
+REM now, and no way to carry on is offered, as it would fail the same
+REM way.  The list prints the first 8 letters of each id.  Only a list
+REM that came out (its "ID" header line) is judged: else tier 1 says.
+REM findstr with /c and /i only, the forms wine's findstr takes too: an
+REM id found anywhere in the list counts as found (tier 1 then says).
+if /i "!SNAP!"=="latest" goto :snap_found
+if not exist "%BIN%" goto :snap_found
+set "SNAP8=%SNAP:~0,8%"
+set "SNAP_LIST=%TEMP%\lcsas-snaps-%RANDOM%.txt"
+"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots >"%SNAP_LIST%" 2>nul <nul
+set "SNAP_MISSING="
+findstr /c:"ID " "%SNAP_LIST%" >nul 2>nul <nul
+if errorlevel 1 goto :snap_listed
+findstr /i /c:"%SNAP8%" "%SNAP_LIST%" >nul 2>nul <nul
+if errorlevel 1 set "SNAP_MISSING=1"
+:snap_listed
+del /f /q "%SNAP_LIST%" >nul 2>nul
+if not defined SNAP_MISSING goto :snap_found
+del /f /q "%PWFILE%" >nul 2>nul
+if defined DESK_LAUNCHER del /f /q "!DESK_LAUNCHER!" >nul 2>nul
+del /f /q "%TOOLS%\resume.cfg" >nul 2>nul
+del /f /q "%TOOLS%\Resume LCSAS restore.bat" >nul 2>nul
+echo.
+echo No snapshot of !SET_NAME! starts with !SNAP!.  List them with
+echo     restore.bat --list-snapshots
+echo and give one with --snapshot ID ^(or leave --snapshot out: the latest^).
+pause
+exit /b 1
+:snap_found
 
 REM ----- Tier 1: prebuilt lcsas-restore.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
@@ -1736,9 +1851,16 @@ REM row says "pack not found": see :restore_discs_missing.
 :restore_done
 set "PARTIAL="
 del /f /q "%PWFILE%" >nul 2>nul
+REM Where the files are and how many (#966); the marker is not one.
+set "RC_N=0"
+for /f "delims=" %%F in ('dir /s /b /a-d "%TARGET%" 2^>nul ^<nul') do set /a RC_N+=1
+if exist "%MARKER%" set /a RC_N-=1
+set "RC_F=files"
+if "%RC_N%"=="1" set "RC_F=file"
 echo.
 echo ============================================================
-echo  Restore complete.  Files restored to: !TARGET!
+echo  Restore complete.  !RC_N! !RC_F! restored to:
+echo     !TARGET!
 echo ============================================================
 goto :restore_asked
 :restore_partial
@@ -1760,13 +1882,33 @@ REM tools folder, the pack cache (the discs read so far) and the
 REM catalog copy as they are.  Only no (or LCSAS_ANOTHER_SET=0) ends the
 REM run, and only then is the tools folder deleted (C6).  The end of the
 REM input reads as no.
+REM Not when every set has been restored (#966).  An empty answer asks
+REM again: an ENTER pressed late, after a disc that mounted by itself,
+REM ended the run and deleted the tools folder and the pack cache.  Only
+REM n (or Q) ends.  cmd cannot tell an empty answer from the end of its
+REM input, so the third empty answer in a row ends too.
+set "_T=!RESTORED_LIST: %SET_ID% =!"
+if not "!_T!"=="!RESTORED_LIST!" goto :restored_counted
+set "RESTORED_LIST=!RESTORED_LIST!%SET_ID% "
+set /a RESTORED_N+=1
+:restored_counted
+if %NCAND% leq 1 goto :all_done
+if "%LCSAS_ANOTHER_SET%"=="0" goto :all_done
+if %RESTORED_N% geq %NCAND% goto :all_done
+set "AN_EMPTY=0"
+:another_ask
 set "ANOTHER_ANS="
-if %NCAND% gtr 1 if not "%LCSAS_ANOTHER_SET%"=="0" (
-    echo.
-    set /p "ANOTHER_ANS=Restore another backup set from these discs? [y/N]: "
-)
+echo.
+set /p "ANOTHER_ANS=Restore another backup set from these discs? [y/N]: "
 if /i "!ANOTHER_ANS!"=="y" goto :another_set
 if /i "!ANOTHER_ANS!"=="yes" goto :another_set
+if /i "!ANOTHER_ANS!"=="n" goto :all_done
+if /i "!ANOTHER_ANS!"=="no" goto :all_done
+if /i "!ANOTHER_ANS!"=="q" goto :all_done
+if not defined ANOTHER_ANS set /a AN_EMPTY+=1
+if %AN_EMPTY% geq 3 goto :all_done
+echo Please type y or n, then ENTER.
+goto :another_ask
 :all_done
 REM The pack cache is no longer needed.  Only remove a folder this
 REM script chose; one named in LCSAS_PACK_CACHE_DIR stays.
@@ -1809,13 +1951,30 @@ goto :choose_set
 
 REM ----- Subroutines --------------------------------------------------
 
+:marker_read
+REM MR_ANY = the restore folder's marker, MARKER, names a backup set;
+REM MR_SAME = one of them is this one, SET_ID (#953).  Read line by line
+REM with for /f (which skips empty lines), not findstr /x or /r, which
+REM wine's findstr does not take.
+set "MR_ANY="
+set "MR_SAME="
+if not exist "%MARKER%" goto :eof
+for /f "usebackq delims=" %%L in ("%MARKER%") do call :marker_line "%%L"
+goto :eof
+:marker_line
+REM %~1 = a line of the marker.
+set "MR_ANY=1"
+if "%~1"=="%SET_ID%" set "MR_SAME=1"
+goto :eof
+
 :parse_args
 REM %* = this script's arguments (#925).  SNAP = the ID of --snapshot ID
 REM (latest when none); SNAP_BAD = 1 when the ID is missing, or holds
 REM anything but 0-9 and a-f: it goes on the lcsas-restore.exe command
 REM line.  --backup-set NAME sets LCSAS_BACKUP_SET, and --restore-folder DIR
-REM sets FOLDER_ARG and FOLDER_BASE (ARG_MISSING = the flag, without its
-REM value).  The retired --repo and --target set ARG_OLD and ARG_OLD_NEW.
+REM sets FOLDER_ARG and FOLDER_BASE, --password-file FILE sets
+REM LCSAS_PASSWORD_FILE, as restore.sh takes it (#953) (ARG_MISSING = the
+REM flag, without its value).  The retired --repo and --target set ARG_OLD and ARG_OLD_NEW.
 REM --resume and --check-disc IMAGE are read where they are used, and
 REM only as the first argument; the IMAGE is checked there.  Any other
 REM word: ARG_BAD = it, and the rest is not read.  Flat, with goto: a
@@ -1826,6 +1985,8 @@ if "%~1"=="" goto :eof
 if /i "%~1"=="--snapshot" goto :pa_snapshot
 if /i "%~1"=="--backup-set" goto :pa_repo
 if /i "%~1"=="--restore-folder" goto :pa_folder
+if /i "%~1"=="--password-file" goto :pa_password_file
+if /i "%~1"=="--list-snapshots" goto :pa_list
 if /i "%~1"=="--repo" goto :pa_old_repo
 if /i "%~1"=="--target" goto :pa_old_target
 if defined PA_FIRST if /i "%~1"=="--resume" goto :pa_resume
@@ -1862,6 +2023,26 @@ goto :pa_next
 :pa_folder_missing
 set "ARG_MISSING=--restore-folder"
 goto :eof
+:pa_password_file
+set "PA_FIRST="
+if "%~2"=="" goto :pa_password_file_missing
+REM As a full path: the copy in the tools folder runs from %SystemDrive%\
+REM and gets the same arguments, so it keeps the path this run made.
+set "PWFILE_ARG=1"
+if defined LCSAS_RELOCATED if defined LCSAS_PASSWORD_FILE goto :pa_password_file_kept
+set "LCSAS_PASSWORD_FILE=%~f2"
+:pa_password_file_kept
+shift
+shift
+goto :pa_next
+:pa_password_file_missing
+set "ARG_MISSING=--password-file"
+goto :eof
+:pa_list
+set "PA_FIRST="
+set "LIST_SNAPSHOTS=1"
+shift
+goto :pa_next
 :pa_old_repo
 set "ARG_OLD=--repo"
 set "ARG_OLD_NEW=--backup-set"
@@ -1899,6 +2080,8 @@ echo it, or run it on its own, and it asks its questions.  It also takes:
 echo    --backup-set NAME  restore the backup set NAME ^(its name or its id^)
 echo    --restore-folder DIR  restore into the folder DIR
 echo    --snapshot ID      restore that snapshot, not the latest one
+echo    --password-file FILE  the password is in the file FILE
+echo    --list-snapshots   list the backup set's snapshots, restore nothing
 echo    --check-disc IMAGE check a disc image for damage, and repair it
 echo See RESTORE_WINDOWS.txt.
 goto :eof
@@ -2196,6 +2379,7 @@ REM DATA_SEEN = a drive D: to Z: holds a data disc.  NEWEST_ROOT ("E:\")
 REM and NEWEST_LABEL = the one whose label is newest, by year, then by
 REM number (C2); nothing when no data disc has a label.
 set "DATA_SEEN="
+set "FOREIGN_ROOT="
 set "NEWEST_ROOT="
 set "NEWEST_LABEL="
 set "NEWEST_Y=-1"
@@ -2211,6 +2395,12 @@ set "CD_DATA="
 if exist "%1:\data\" set "CD_DATA=1"
 if exist "%1:\volume_info.json" if not exist "%1:\recovery\scripts\restore.bat" set "CD_DATA=1"
 if not defined CD_DATA goto :eof
+REM A disc of another archive (#952): FOREIGN_ROOT = the first one.
+call :disc_foreign "%1:\"
+if not defined DF_FOREIGN goto :consider_ours
+if not defined FOREIGN_ROOT set "FOREIGN_ROOT=%1:\"
+goto :eof
+:consider_ours
 set "DATA_SEEN=1"
 call :read_label "%1:\"
 if not defined RL_LABEL goto :eof
@@ -2230,6 +2420,143 @@ set "NEWEST_ROOT=%1:\"
 set "NEWEST_LABEL=!RL_LABEL!"
 set "NEWEST_Y=%PL_YEAR%"
 set "NEWEST_S=%PL_SEQ%"
+goto :eof
+
+:disc_foreign
+REM %~1 = a disc root ("E:\").  DF_FOREIGN = 1 when it holds backup sets
+REM and none of them is this archive's (#952).  A disc carries no
+REM archive id (the owner's decision on #952): an archive is known by its
+REM sets' ids, which every disc carries as metadata\<id>\.  This
+REM archive's sets are those of the META disc (or its copy in the tools
+REM folder, DISC_ROOT_S) and, once merged, of the tools folder's copy.  A
+REM META disc that carries none says nothing: then the first data disc
+REM accepted defines the archive, as its sets are merged.
+set "DF_FOREIGN="
+set "DF_ANY="
+set "DF_OURS="
+set "DF_KNOWN="
+for /f "delims=" %%T in ('dir /ad /b "%DISC_ROOT_S%metadata" 2^>nul ^<nul') do set "DF_KNOWN=1"
+if defined METADATA_SET_HERE for /f "delims=" %%T in ('dir /ad /b "%TOOLS%\metadata" 2^>nul ^<nul') do set "DF_KNOWN=1"
+if not defined DF_KNOWN goto :eof
+for /f "delims=" %%T in ('dir /ad /b "%~1metadata" 2^>nul ^<nul') do call :df_one "%~1" "%%T"
+if defined DF_OURS goto :eof
+if defined DF_ANY set "DF_FOREIGN=1"
+goto :eof
+:df_one
+REM %~1 = a disc root, %~2 = a folder in its metadata\.
+if not exist "%~1metadata\%~2\keys\" goto :eof
+set "DF_ANY=1"
+if exist "%DISC_ROOT_S%metadata\%~2\keys\" set "DF_OURS=1"
+if defined METADATA_SET_HERE if exist "%TOOLS%\metadata\%~2\keys\" set "DF_OURS=1"
+goto :eof
+
+:say_foreign
+REM %~1 = the root of a disc of another archive (#952).
+call :read_label "%~1"
+echo.
+if defined RL_LABEL echo  The disc labelled !RL_LABEL! belongs to a
+if not defined RL_LABEL echo  The disc in drive %~d1 belongs to a
+echo  different LCSAS archive ^(it has none of this archive's backup
+echo  sets^).  Take it out and insert a disc of this archive.
+goto :eof
+
+:catalog_drive
+REM %1 = a drive letter with a catalog.db: CATALOG_PICK, unless the disc
+REM is of another archive (#952).
+call :disc_foreign "%1:\"
+if not defined DF_FOREIGN set "CATALOG_PICK=%1:\catalog.db"
+goto :eof
+
+:older_check
+REM #952.  The newest data disc in reach, NEWEST_ROOT, may know fewer
+REM backups of a set than the copy in hand: the META disc's, or the one
+REM read from an earlier disc (merged-from.txt).  It is the authority for
+REM the set's snapshots, and they are never merged across discs (a
+REM backup the owner removed would come back), but it may be an older
+REM disc, or a newer one from which a backup was removed: the script
+REM cannot tell, so it asks.  Snapshot files are named by their content,
+REM so the lists compare by name.  ENTER: this disc (also when the input
+REM has ended), after looking again, as a newer disc may have been put
+REM in.  S: the copy in hand stays for those sets (KEPT_<id>, for the
+REM rest of the run).  Q: OC_QUIT.  Labels are not compared: they are
+REM numbered across all locations.
+set "OC_QUIT="
+:older_again
+set "OC_ANY="
+set "OC_LIST="
+set "OC_LABEL=!NEWEST_LABEL!"
+set "OC_ROOT=!NEWEST_ROOT!"
+for /f "delims=" %%T in ('dir /ad /b "!NEWEST_ROOT!metadata" 2^>nul ^<nul') do call :older_one "%%T"
+if not defined OC_ANY goto :eof
+echo  It may be an older disc, or a newer one from which a backup was removed.
+:older_ask
+echo.
+echo  Insert a newer data disc if you have one, then press ENTER.
+echo  ENTER: use this disc.  S then ENTER: use that copy.  Q then ENTER: quit.
+set "OC_ANS="
+set /p "OC_ANS=ENTER (this disc), S (the copy) or Q: "
+if /i "!OC_ANS!"=="q" goto :older_quit
+if /i "!OC_ANS!"=="s" goto :older_keep
+if not defined OC_ANS goto :older_look
+echo  Press ENTER, or type S or Q, then ENTER.
+goto :older_ask
+:older_look
+call :find_newest
+if not defined NEWEST_ROOT goto :older_gone
+if "!NEWEST_LABEL!"=="!OC_LABEL!" goto :eof
+echo.
+echo [lcsas-restore] newest data disc: !NEWEST_LABEL! in drive !NEWEST_ROOT:~0,2!
+goto :older_again
+:older_gone
+REM The disc was taken out: the copy in hand is used as it is.
+set "NEWEST_ROOT=%OC_ROOT%"
+goto :eof
+:older_keep
+for %%T in (%OC_LIST%) do set "KEPT_%%T=1"
+echo  Using that copy: the restore asks for the discs it needs.
+goto :eof
+:older_quit
+set "OC_QUIT=1"
+goto :eof
+
+:older_one
+REM %~1 = a backup set's folder on the disc NEWEST_ROOT.  When its
+REM snapshots are a strict subset of the copy in hand's, say so, and add
+REM it to OC_LIST.
+set "OS_SRC=!NEWEST_ROOT!metadata\%~1"
+if not exist "!OS_SRC!\keys\" goto :eof
+if not exist "!OS_SRC!\snapshots\" goto :eof
+if "!KEPT_%~1!"=="1" goto :eof
+set "OS_WHERE=the copy from the META disc"
+set "OS_COPY=%DISC_ROOT_S%metadata\%~1"
+if not defined LCSAS_RELOCATED goto :older_copy_known
+set "OS_COPY=%TOOLS%\metadata\%~1"
+if defined MF_LABEL set "OS_WHERE=the copy read from the disc labelled !MF_LABEL!"
+:older_copy_known
+if not exist "!OS_COPY!\snapshots\" goto :eof
+set "OS_N=0"
+set "OS_M=0"
+set "OS_BAD="
+for /f "delims=" %%F in ('dir /b /a-d "%OS_SRC%\snapshots" 2^>nul') do call :older_file "%%F"
+if defined OS_BAD goto :eof
+for /f "delims=" %%F in ('dir /b /a-d "%OS_COPY%\snapshots" 2^>nul') do set /a OS_M+=1
+if %OS_M% leq %OS_N% goto :eof
+call :read_marker "%OS_SRC%"
+set "OS_NAME=!MK_NC!"
+if not defined OS_NAME set "OS_NAME=%~1"
+set "OS_B=backups"
+if %OS_N% equ 1 set "OS_B=backup"
+if not defined OC_ANY echo.
+echo  This disc carries !OS_N! !OS_B! of '!OS_NAME!'; !OS_WHERE! knows !OS_M!.
+set "OC_ANY=1"
+set "OC_LIST=!OC_LIST! %~1"
+goto :eof
+
+:older_file
+REM %~1 = a snapshot file's name on the disc: counted, and OS_BAD when the
+REM copy in hand has no file of that name.
+set /a OS_N+=1
+if not exist "%OS_COPY%\snapshots\%~1" set "OS_BAD=1"
 goto :eof
 
 :file_newer
@@ -2356,6 +2683,8 @@ echo [lcsas-restore] keeping the backup sets read from !MF_LABEL!, a newer disc
 set "NEWEST_ROOT="
 goto :eof
 :merge_fresh
+call :older_check
+if defined OC_QUIT goto :eof
 if not exist "!NEWEST_ROOT!metadata\" goto :eof
 if defined LCSAS_RELOCATED goto :merge_into
 REM Not relocated: TOOLS is TOOLS\in-place, this run's own.
@@ -2388,6 +2717,8 @@ REM it replaces added: keys are named by their content, so a name in
 REM both is the same key.  Then the old copy moves aside and the new one
 REM into place, and back again if that fails: a disc that cannot be read
 REM leaves the copy that was there as it was.
+REM A set whose copy in hand the reader chose to keep (#952) stays.
+if "!KEPT_%~1!"=="1" goto :eof
 set "MS_SRC=!NEWEST_ROOT!metadata\%~1"
 set "MS_DST=!TOOLS!\metadata\%~1"
 set "MS_NEW=!TOOLS!\metadata-new\%~1"
@@ -2505,6 +2836,21 @@ echo itself.  Set LCSAS_TOOLS_DIR to a new or empty folder, or leave it
 echo unset to use the usual one, %%LOCALAPPDATA%%\lcsas-tools.
 pause
 exit /b 1
+
+REM Reached only via `goto` from :pw_ok: --list-snapshots (#966), the
+REM set's snapshots with their dates, from lcsas-restore.exe.
+:list_snapshots
+set "LS_RC=1"
+echo.
+if not exist "%BIN%" echo No reader here can list them ^(see RESTORE_WINDOWS.txt^).
+if not exist "%BIN%" goto :list_done
+echo The snapshots of !SET_NAME! ^(give one to --snapshot ID^):
+"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots <nul
+set "LS_RC=%ERRORLEVEL%"
+:list_done
+del /f /q "%PWFILE%" >nul 2>nul
+pause
+exit /b %LS_RC%
 
 REM Reached only via `goto` from the newest-data-disc step: Q (C5: 65).
 :newest_quit

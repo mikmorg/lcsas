@@ -12,6 +12,7 @@ from tests.contract.journeys import (
     DIFFERENCES,
     JOURNEYS,
     PROMPTS,
+    Folder,
     box_labels,
     find_prompt,
 )
@@ -42,8 +43,15 @@ def test_journey_names_are_unique_and_typed_lines_cover_the_questions() -> None:
             for script in ("sh", "bat"):
                 asked = [k for k in leg.expect_for(script).asked
                          if k not in driver_keys]
-                # One typed line per question the person answers.
-                assert len(asked) == len(leg.typed_for(script)), (j.name, script, asked)
+                typed = leg.typed_for(script)
+                # One typed line per question the person answers; a
+                # Folder answers a folder question, which the driver
+                # answers when no Folder is typed (#953).
+                lines = [t for t in typed if not isinstance(t, Folder)]
+                assert len(asked) == len(lines), (j.name, script, asked)
+                folders = [t for t in typed if isinstance(t, Folder)]
+                assert len(folders) <= leg.expect_for(script).asked.count("folder"), (
+                    j.name, script)
 
 
 def _keys(text: str, script: str) -> list[str]:

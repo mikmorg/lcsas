@@ -95,7 +95,10 @@ def test_restore_bat_probes_holographic_metadata_layout():
     # The drive-letter scan (D..Z) for other mounted discs must be present,
     # so a data disc carrying metadata\<tenant>\ is discoverable when the
     # meta disc itself ships no repo.
-    assert "%%L:\\metadata" in content, (
+    # (Through :scan_drive, which leaves out a disc of another archive,
+    # #952.)
+    assert "call :scan_drive %%L" in content
+    assert 'call :scan_metadata "%1:\\metadata"' in content, (
         "no per-drive-letter metadata probe (other mounted discs)"
     )
 
@@ -423,7 +426,8 @@ def test_restore_bat_write_probes_send_errors_away_first():
     relocation leg check for "Access is denied"."""
     code = _code(RESTORE_BAT.read_text())
     assert '(2>nul > "%PROBE%" echo.) 2>nul' in code
-    assert '(2>nul > "%MARKER%" echo.) 2>nul' in code
+    # The marker lists the ids of the sets restored there (#953).
+    assert '(2>nul >> "%MARKER%" echo !SET_ID!) 2>nul' in code
     assert not [ln for ln in code if ln.startswith("2>nul >") or ln.startswith("(>")]
     names = ("%PROBE%", "%MARKER%", '%TOOLS%\\.done', '%~1\\.lcsas-tools',
              '%TOOLS%\\archive.txt', '%TOOLS%\\merged-from.txt')
@@ -752,7 +756,9 @@ def test_restore_bat_tries_the_password_before_tier1():
     answer asks again, Q quits with 77."""
     content = RESTORE_BAT.read_text()
     code = _code(content)
-    check = [ln for ln in code if "--list-snapshots" in ln]
+    # (--list-snapshots also lists them for the reader, and checks a
+    # --snapshot ID, #966: the check is the one whose output goes nowhere.)
+    check = [ln for ln in code if "--list-snapshots >nul" in ln]
     head = '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" '
     assert check == [head + "--list-snapshots >nul 2>nul <nul"], check
     tier1 = [i for i, ln in enumerate(code)
@@ -795,7 +801,12 @@ def test_restore_bat_asks_for_another_set_before_cleaning_up():
     assert ask[0] < done.index(rm_cache)
     assert ask[0] < done.index('(2>nul > "%TOOLS%\\.done" echo.) 2>nul')
     assert 'if /i "!ANOTHER_ANS!"=="y" goto :another_set' in done
-    assert 'if not "%LCSAS_ANOTHER_SET%"=="0"' in "\n".join(done)
+    assert 'if "%LCSAS_ANOTHER_SET%"=="0" goto :all_done' in done
+    # #966: an empty answer asks again (three at most), only n ends, and
+    # with every set restored it is not asked.
+    assert 'if /i "!ANOTHER_ANS!"=="n" goto :all_done' in done
+    assert "goto :another_ask" in done
+    assert "if %RESTORED_N% geq %NCAND% goto :all_done" in done
 
 
 def test_restore_bat_c4_variables_are_documented():
@@ -1002,7 +1013,8 @@ def test_restore_bat_helpers_never_read_the_scripts_input():
         ln.strip() for ln in RESTORE_BAT.read_text().splitlines()
         if ln.strip() and not ln.strip().upper().startswith(("REM", "::"))
     ]
-    hits = [ln for ln in lines if calls.search(ln) and not ln.startswith("echo")]
+    hits = [ln for ln in lines if calls.search(ln) and not ln.startswith("echo")
+            and not ln.startswith('if /i "%~1"==')]
     assert len(hits) >= 13, f"self-check: only {len(hits)} calls found:\n" + "\n".join(hits)
     missing = [ln for ln in hits
                if "<nul" not in ln.replace(" ", "") and "^<nul" not in ln]
@@ -1159,3 +1171,79 @@ def test_restore_bat_missing_disc_stop_exits_from_top_level():
     assert body[-1] == "exit /b 4", body
     assert 'echo    "!RESUME_CMD!"' in body, body
     assert not any(":all_done" in ln or ".done" in ln for ln in body), body
+
+
+def test_restore_bat_marker_names_the_set_and_guards_another_set():
+    """#953: the marker in the restore folder was an empty file, so a
+    second backup set typed into the first set's folder went in with no
+    word.  It now lists the ids of the sets restored there, as
+    restore.sh's does; a folder whose marker does not name this set (or
+    names none: an older restore.bat) is warned about, not when carrying
+    on.  Functional proof: the second-pass journeys of
+    tests/contract/journeys.py (wine, and real cmd in windows-e2e)."""
+    code = _code(RESTORE_BAT.read_text())
+    assert 'set "SET_ID=!CAND_NAME_%SEL%!"' in code
+    # Read with for /f, not findstr /x or /r (wine's findstr lacks them).
+    check = "call :marker_read"
+    assert code.count(check) == 2, "compared before the warning and before the write"
+    i = code.index(check)
+    assert code[i - 1] == "if defined RESUME goto :target_guarded"
+    assert code[i + 2] == 'set "TG_OTHER=1"'
+    assert 'if "%~1"=="%SET_ID%" set "MR_SAME=1"' in code
+    assert "already holds the restore of ANOTHER backup set.  Files" in "\n".join(code)
+
+
+def test_restore_bat_takes_password_file():
+    """#953: restore.sh takes --password-file FILE; restore.bat refused
+    it as an unknown argument.  It sets LCSAS_PASSWORD_FILE (a full
+    path, kept by the copy in the tools folder), and a file that is not
+    there stops at once with exit 2, as in restore.sh."""
+    code = _code(RESTORE_BAT.read_text())
+    assert 'if /i "%~1"=="--password-file" goto :pa_password_file' in code
+    assert 'set "LCSAS_PASSWORD_FILE=%~f2"' in code
+    assert ('if defined PWFILE_ARG if not exist "!LCSAS_PASSWORD_FILE!" '
+            'goto :arg_pwfile_bad') in code
+
+
+def test_restore_bat_refuses_a_disc_of_another_archive_and_asks_about_an_older_one():
+    """#952: a data disc none of whose sets is this archive's was taken
+    as one of its discs (its sets listed, its catalog used); an older
+    data disc replaced the META disc's snapshot list without a word.
+    Functional proof: the #952 rows of tests/contract/journeys.py (wine,
+    and real cmd in windows-e2e)."""
+    code = _code(RESTORE_BAT.read_text())
+    text = "\n".join(code)
+    # Left out of the newest-disc step, the set list and the catalog.
+    assert text.count('call :disc_foreign "%1:\\"') == 3
+    assert 'call :say_foreign "!FOREIGN_ROOT!"' in code
+    assert "different LCSAS archive ^(it has none of this archive's backup" in text
+    # The older-disc question before the merge, and S keeps the copy.
+    i = code.index(":merge_fresh")
+    assert code[i + 1] == "call :older_check"
+    assert 'set /p "OC_ANS=ENTER (this disc), S (the copy) or Q: "' in code
+    assert 'if "!KEPT_%~1!"=="1" goto :eof' in code
+    assert "if defined OC_QUIT goto :newest_quit" in code
+
+
+def test_restore_bat_heir_inputs_966():
+    """#966: --list-snapshots lists the set's snapshots and restores
+    nothing (no folder asked); a --snapshot ID that starts no snapshot is
+    said before tier 1, with no way to carry on left behind; the end
+    says how many files and where; the menu takes " 2 ", "2)" and "2.".
+    Functional proof: the #966 rows of tests/contract/journeys.py (wine,
+    and real cmd in windows-e2e)."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert 'if /i "%~1"=="--list-snapshots" goto :pa_list' in code
+    assert code[code.index(":tier1_present") + 1] == "if defined LIST_SNAPSHOTS goto :pw_section"
+    assert code[code.index(":pw_ok") + 1] == "if defined LIST_SNAPSHOTS goto :list_snapshots"
+    listing = _label_body(content, ":list_snapshots")
+    assert '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots <nul' in listing
+    i = code.index(":pw_ok")
+    snap = code[i:code.index(":snap_found")]
+    assert 'del /f /q "%TOOLS%\\resume.cfg" >nul 2>nul' in snap
+    assert "echo No snapshot of !SET_NAME! starts with !SNAP!.  List them with" in snap
+    assert "exit /b 1" in snap
+    done = _label_body(content, ":restore_done")
+    assert "echo  Restore complete.  !RC_N! !RC_F! restored to:" in done
+    assert 'if defined REPO_PICK set "REPO_PICK=!REPO_PICK: =!"' in code

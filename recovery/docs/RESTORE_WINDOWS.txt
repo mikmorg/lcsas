@@ -415,6 +415,10 @@ password will do, for example one on a USB stick:
     set LCSAS_PASSWORD_FILE=E:\password.txt
     D:\restore.bat
 
+or, the same, with --password-file:
+
+    D:\restore.bat --password-file E:\password.txt
+
 LCSAS_PASSWORD holds the password itself instead of a file name.
 If the password from either
 is wrong, the script says so and asks for it on the keyboard.
@@ -532,7 +536,8 @@ Type Y and press Enter to choose the next set from the same list.
 The copy on this computer is kept, and so are the copies of the
 discs read so far, so those discs are not asked for again.  The next
 set goes into a folder of its own by default
-(Documents\restored-<its name>).  Enter alone, or N, ends the run,
+(Documents\restored-<its name>).  N ends the run (Enter alone asks
+again; after three it ends too),
 and only then is the tools folder deleted.
 
 To choose a set without the menu, give its name or its code to
@@ -552,6 +557,25 @@ To name the folder without being asked, give it with --restore-folder:
 It answers the folder question for the first set.  When you ask for
 another set, the question comes back, with that folder, a dash and
 the set's name as the default (D:\restored-<its name>).
+
+If you type, for the next set, the folder the first set went into,
+the script warns that the folder already holds the restore of ANOTHER
+backup set: files of the two sets with the same names would be mixed.
+Type YES to restore into it anyway; anything else stops (exit code
+65), and nothing is written.  Choose a new, empty folder instead.
+
+A data disc that knows fewer backups of a set than the copy in hand
+(the META disc's, or one read from a newer disc) is not used without a
+word:
+
+     This disc carries 1 backup of 'documents'; the copy from the META disc knows 2.
+     It may be an older disc, or a newer one from which a backup was removed.
+
+Put in a newer data disc if you have one, then press ENTER.  ENTER
+with that disc still in uses it; S then ENTER uses the copy in hand
+(the newest backup).  A disc of ANOTHER LCSAS archive, none of whose
+backup sets is this archive's, is refused: its sets are not listed.
+See RESTORE.txt, "A WRONG OR MIXED-UP DISC".
 
 ────────────────────────────────────────────────────────────────────
 RESTORE FOLDER NOTES
@@ -917,8 +941,10 @@ Example, with the meta disc in D: and the newest data disc in E:
         --verbose
 
 To restore an older snapshot instead of the latest one, list the
-snapshots as above (--list-snapshots) and give the ID, or the first
-eight characters of it, to restore.bat:
+snapshots (restore.bat --list-snapshots asks for the set and its
+password, lists them with their dates and restores nothing; or run
+lcsas-restore.exe --list-snapshots as above) and give the ID, or the
+first eight characters of it, to restore.bat:
 
     restore.bat --snapshot a1b2c3d4
 
@@ -933,7 +959,8 @@ same as for restore.sh; see RESTORE.txt):
         enough free space, after any answer but y)
     2   restore.bat was called wrongly: an argument it does not
         take (it lists the ones it does), --backup-set without a name,
-        --restore-folder without a folder, a flag or variable that was
+        --restore-folder without a folder, --password-file without a
+        file or with one that is not there, a flag or variable that was
         renamed (the message names the new one), or
         --snapshot without an ID or with something that is not one
         (an ID is made of the digits 0-9 and the letters a-f)

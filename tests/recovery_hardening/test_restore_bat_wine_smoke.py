@@ -395,7 +395,7 @@ def test_target_path_with_parenthesis_restores(tmp_path: Path) -> None:
     assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
     # Under wine the old script still exited 0, but ran the path's tail
     # ("old", "\\restored") as commands and cut the banner short.
-    assert "Files restored to: E:\\out (old)\\restored" in out, out
+    assert " restored to:\n    E:\\out (old)\\restored\n" in out, out
     assert "Can't recognize" not in out and "is not recognized" not in out, out
     restored = non_marker_files(meta / "out (old)" / "restored")
     assert restored, f"nothing restored under the ')' path:\n{out}"
@@ -472,7 +472,7 @@ def test_target_ending_in_backslash_restores(
     )
     out = res.stdout + res.stderr
     assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
-    assert f"Files restored to: E:\\{folder}" in out, out
+    assert f" restored to:\n    E:\\{folder}\n" in out, out  # "1 file", "N files"
     proof = meta / folder / "proof.txt"
     assert proof.is_file() and proof.read_bytes() == b"target folder\n", out
 
@@ -564,8 +564,13 @@ def test_old_failures_list_is_removed_before_tier1(tmp_path: Path) -> None:
     with the tiers' "LCSAS " header) is removed before tier 1 runs, so a
     list there afterwards is this run's.  Here tier 1 fails before its
     walk (no such snapshot) and writes nothing: with the old list left
-    in place, its exit 1 would read as "finished" (exit 4)."""
+    in place, its exit 1 would read as "finished" (exit 4).  The id
+    starts with the first 8 letters of the snapshot's, which is all the
+    list of snapshots shows, so restore.bat's own check (#966) lets it
+    through to tier 1, which finds no snapshot that starts with it."""
     env, meta = _fixture_meta(tmp_path)
+    snap = sorted(p.name for p in (meta / "recovery" / "repo" / "snapshots").iterdir())[0]
+    wrong = snap[:8] + ("0" if snap[8] != "0" else "1")
     target = meta / "restored"
     target.mkdir()
     (target / "RESTORE_FAILURES.txt").write_text(
@@ -577,7 +582,7 @@ def test_old_failures_list_is_removed_before_tier1(tmp_path: Path) -> None:
                "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER": "1"}
     res = subprocess.run(
         ["wine", "cmd", "/c", "E:\\recovery\\scripts\\restore.bat",
-         "--snapshot", "deadbeef"],
+         "--snapshot", wrong],
         input="E:\\restored\n", env=run_env, capture_output=True,
         text=True, timeout=TIMEOUT)
     out = res.stdout + res.stderr

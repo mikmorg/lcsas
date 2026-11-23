@@ -203,6 +203,13 @@ repos        = ["family", "personal"]
 See [docs/workflows/collections.md](docs/workflows/collections.md) for
 collections and `lcsas status --json`.
 
+Give a real archive its own `label_prefix` (above, `ARCHIVE`), and a
+drill or test archive another, so that a person can tell their discs
+apart by the label printed on them.  A disc carries no archive id: the
+restore scripts refuse a data disc none of whose repositories is the
+archive's, but two archives made with the same prefix have discs whose
+labels look alike.
+
 #### How LCSAS Passes Passwords to Rustic
 
 Each `[repos.<name>]` block declares a `password_file` path. LCSAS reads

@@ -218,13 +218,13 @@ def test_tier3_snap_args_non_latest(tmp_path: Path) -> None:
         "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
     }
     res = subprocess.run(
-        ["sh", str(RESTORE_SH), "--restore-folder", str(target), "--snapshot", "abc123snap",
+        ["sh", str(RESTORE_SH), "--restore-folder", str(target), "--snapshot", "abc123de",
          str(recovery)],
         input="stub-password\n",
         capture_output=True, text=True, env=env, timeout=15,
     )
     assert res.returncode == 0, f"rc={res.returncode}\nstderr:{res.stderr}"
-    assert "--snapshot abc123snap" in res.stdout, (
+    assert "--snapshot abc123de" in res.stdout, (
         "TIER3_SNAP_ARGS not forwarded to standalone restorer; "
         f"stdout:\n{res.stdout}"
     )
