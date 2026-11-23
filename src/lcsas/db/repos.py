@@ -210,3 +210,59 @@ def delete_repo(conn: sqlite3.Connection, repo_id: str) -> None:
         )
     conn.execute("DELETE FROM repositories WHERE repo_id = ?", (repo_id,))
     conn.commit()
+
+
+class RetiredSet:
+    """A retired backup set and the disc an heir starts it from (#959)."""
+
+    def __init__(self, name: str, last_label: str | None,
+                 last_date: str | None) -> None:
+        self.name = name
+        #: The highest-numbered burned volume holding a pack of the set
+        #: (None: none of its packs was ever burned).
+        self.last_label = last_label
+        #: The date (YYYY-MM-DD) that volume was prepared.
+        self.last_date = last_date
+
+    def sentence(self) -> str:
+        """The one sentence the discs, the estate card and `repo retire`
+        print.  The catalog records no retirement date, so the date is
+        that of the set's last disc, and the sentence says "after"."""
+        if self.last_label is None:
+            return (f"{self.name}: retired.  None of its backups is on a "
+                    "disc.")
+        return (f"{self.name}: retired after {self.last_date}.  Its backups "
+                f"are on the discs up to {self.last_label}.  To restore it, "
+                'use that disc as the "newest data disc".')
+
+
+def retired_backup_sets(conn: sqlite3.Connection) -> list[RetiredSet]:
+    """Each retired repository, by name, with its last burned disc (#959).
+
+    "Burned" is a volume that has left STAGING/BURNING and was not
+    DESTROYED; the last one is the highest label number (the number at
+    the end of the label, as the heir ranks discs).
+    """
+    from lcsas.db.label_mark import label_seq
+
+    out: list[RetiredSet] = []
+    for repo in sorted(list_repos(conn), key=lambda r: r.name):
+        if repo.status != REPO_STATUS_RETIRED:
+            continue
+        rows = conn.execute(
+            """SELECT DISTINCT v.label, v.created_at FROM volumes v
+               JOIN volume_packs vp ON vp.volume_id = v.volume_id
+               JOIN packs p ON p.pack_id = vp.pack_id
+               WHERE p.repo_id = ?
+                 AND v.status NOT IN ('STAGING', 'BURNING', 'DESTROYED')""",
+            (repo.repo_id,),
+        ).fetchall()
+        if not rows:
+            out.append(RetiredSet(repo.name, None, None))
+            continue
+        label, created = max(
+            ((str(r[0]), str(r[1] or "")) for r in rows),
+            key=lambda lc: (label_seq(lc[0]) or 0, lc[0]),
+        )
+        out.append(RetiredSet(repo.name, label, created[:10]))
+    return out

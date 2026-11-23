@@ -20,6 +20,7 @@ from typing import Any
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
+from lcsas.db.repos import RetiredSet
 from lcsas.db.snapshots import DISC_BLANKED_SNAPSHOT_COLUMNS
 from lcsas.restore.standalone_builder import build_standalone
 from lcsas.staging.builder import MirrorUnavailableError
@@ -596,6 +597,18 @@ def render_volume_info_txt(
     )
 
 
+def _retired_sets_text(retired: Sequence[RetiredSet]) -> str:
+    """VOLUME_INFO.txt's block for the retired backup sets (#959)."""
+    if not retired:
+        return ""
+    lines = ["", "Retired backup sets (their files are not on this disc):"]
+    for rs in retired:
+        lines += textwrap.wrap(rs.sentence(), width=70,
+                               initial_indent="  ", subsequent_indent="    ",
+                               break_on_hyphens=False)
+    return "\n".join(lines) + "\n"
+
+
 def _password_note(config: LCSASConfig) -> list[str]:
     """PASSWORD_INFO.txt's NOTE on how the repositories' passwords relate.
 
@@ -864,6 +877,7 @@ class HolographicInjector:
         packs: Sequence[Pack] = (),
         burn_session_position: tuple[int, int] | None = None,
         repo_names: Mapping[str, str] | None = None,
+        retired: Sequence[RetiredSet] = (),
     ) -> None:
         """Write volume_info.json and VOLUME_INFO.txt to the staging root.
 
@@ -909,11 +923,20 @@ class HolographicInjector:
             )
             info["sha256_manifest"] = sorted(p.sha256 for p in packs)
 
+        # #959: retired backup sets, whose metadata later discs do not
+        # carry, and the disc each one is restored from.
+        if retired:
+            info["retired_backup_sets"] = [
+                {"name": rs.name, "last_label": rs.last_label}
+                for rs in retired
+            ]
+
         self._write_text("volume_info.json", json.dumps(info, indent=2))
 
         text = render_volume_info_txt(
             volume, packs, burn_session_position, repo_names
         )
+        text += _retired_sets_text(retired)
         self._write_text("VOLUME_INFO.txt", text)
 
     def write_lcsas_source(self) -> None:
@@ -1088,6 +1111,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         config: LCSASConfig,
         escrow_override: tuple[int, int] | None = None,
         recorded: Mapping[str, tuple[int, int]] | None = None,
+        retired: Sequence[RetiredSet] = (),
     ) -> None:
         """Write a plain-language START_HERE.txt to the staging root.
 
@@ -1145,6 +1169,12 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
                             first="  Backup sets on these discs: "),
                 "",
             ]
+        if retired:
+            # #959: a retired set's metadata is not on this disc.
+            lines.append("  Retired backup sets (not on this disc):")
+            for rs in retired:
+                lines += _wrap_text(rs.sentence(), "      ", first="    ")
+            lines.append("")
         lines += [
             "  VOLUME_INFO.txt on this disc gives this disc's label,",
             "  when it was prepared, and what it holds.",

@@ -199,6 +199,22 @@ catalog ID (the UUID from `lcsas repo list`) (#581).
 snapshots, and `volume_packs` links are untouched; `lcsas meta build`
 stops failing on that repository's absent keys.
 
+**What later discs say (#959).** Discs staged after a retirement do not
+carry the retired set's metadata (only live repositories' metadata is
+copied, and the mirror may be gone). So every later disc, in
+`VOLUME_INFO.txt`, `volume_info.json` (`retired_backup_sets`) and
+`START_HERE.txt`, and the estate card name each retired set and the disc
+to start it from, and `repo retire` prints the same sentence:
+
+    alpha: retired after 2026-11-23.  Its backups are on the discs up to
+    LCSAS_BD25_2026_0010.  To restore it, use that disc as the "newest
+    data disc".
+
+The disc is the highest-numbered burned volume holding a pack of the set
+(`retired_backup_sets` in `src/lcsas/db/repos.py`); the catalog records
+no retirement date, so the date is that disc's and the sentence says
+"after". Reprint the estate card after retiring a set.
+
 **Also remove its `[repos.<name>]` block from the config.** Retirement is
 a *catalog* fact, but mirror-existence validation is a *config* one:
 `validate_config` (`src/lcsas/config/settings.py`) treats a missing

@@ -601,17 +601,22 @@ class BurnOrchestrator:
 
             # 5. Write volume info files
             vol = get_volume_by_id(self._conn, volume.volume_id)
+            # #959: name each retired backup set and its last disc.
+            from lcsas.db.repos import retired_backup_sets
+            retired = retired_backup_sets(self._conn)
             injector.write_volume_info(
                 vol, packs=selected_packs,
                 burn_session_position=burn_session_position,
                 repo_names={rid: m.name for rid, m in markers.items()},
+                retired=retired,
             )
             injector.write_restore_instructions()
             injector.write_standalone_restorer()
             if not media_type.is_test:
                 injector.write_lcsas_source()
             injector.write_start_here(
-                self._config, escrow_override=escrow_kn, recorded=recorded
+                self._config, escrow_override=escrow_kn, recorded=recorded,
+                retired=retired,
             )
             injector.write_key_info(
                 self._config, escrow_override=escrow_kn, recorded=recorded

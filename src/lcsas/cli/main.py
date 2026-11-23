@@ -181,6 +181,20 @@ def _recovery_card_text(
     return "\n".join(lines) + "\n"
 
 
+def _retired_card_lines(sentences: tuple[str, ...]) -> list[str]:
+    """The estate card's lines for the retired backup sets (#959)."""
+    import textwrap
+
+    if not sentences:
+        return []
+    lines = ["  Retired backup sets (not on the newest discs):"]
+    for sentence in sentences:
+        lines += textwrap.wrap(sentence, width=58, initial_indent="    ",
+                               subsequent_indent="      ",
+                               break_on_hyphens=False)
+    return lines
+
+
 def _estate_card_text(
     *,
     owner: str,
@@ -196,8 +210,12 @@ def _estate_card_text(
     card_date: str,
     split_repos: dict[str, tuple[int, int]] | None = None,
     unsplit_repos: tuple[str, ...] = (),
+    retired_sets: tuple[str, ...] = (),
 ) -> str:
     """Build the one-page whole-archive estate card (UX-09).
+
+    ``retired_sets``: one sentence per retired backup set, naming the
+    disc it is restored from (#959; ``RetiredSet.sentence``).
 
     ``key_split``/``key_threshold``/``key_shares`` describe an archive split
     alike throughout.  A mixed archive (#587) passes ``split_repos`` (name ->
@@ -236,6 +254,7 @@ def _estate_card_text(
         "WHAT IS ON THE DISCS",
         f"  Backup sets : {repos_line}",
         f"  Discs       : {disc_line}",
+        *_retired_card_lines(retired_sets),
         "",
         "WHERE THE PASSWORD IS KEPT",
         f"  {or_blank(key_storage_hints)}",

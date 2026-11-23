@@ -223,6 +223,14 @@ def cmd_repo_retire(args: argparse.Namespace) -> int:
             repo_name or args.repo_id,
         )
         if repo_name:
+            # #959: the sentence every later disc and the estate card print.
+            from lcsas.db.repos import retired_backup_sets
+            with _open_catalog(args, mode="read",
+                               db_path=_resolve_db_path(args)) as conn:
+                for rs in retired_backup_sets(conn):
+                    if rs.name == repo_name:
+                        logger.info("Later discs and the estate card say: %s",
+                                    rs.sentence())
             _warn_if_still_in_config(args, repo_name)
     return rc
 
