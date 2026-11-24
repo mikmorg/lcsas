@@ -21,7 +21,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
     import json as _json
 
     from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.repos import list_repos, refresh_mirror_path, resolve_repo
+    from lcsas.db.repos import (
+        join_config_tables,
+        list_repos,
+        refresh_mirror_path,
+    )
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
@@ -55,29 +59,52 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 )
                 return 1
 
+        # Config key → catalog repository: mirror path, then name (#687),
+        # then key id (#982).  Every table is placed before any pack is
+        # registered, so a table refused for a clash with another one
+        # changes nothing.
+        join = join_config_tables(conn, {
+            name: cfg.mirror_path
+            for name, cfg in config.repositories.items()
+        })
+        repos_refused: list[str] = []
+
         for repo_name, repo_cfg in config.repositories.items():
             if repo_filter and repo_name not in repo_filter:
                 continue
 
-            # Config key → catalog repo_id: mirror path, then name (#687).
-            try:
-                db_repo = resolve_repo(conn, repo_name, repo_cfg.mirror_path)
-            except ValueError as exc:
-                logger.error("%s", exc)
-                return 1
+            if repo_name in join.refused:
+                logger.error("%s", join.refused[repo_name])
+                repos_refused.append(repo_name)
+                continue
+            db_repo = join.placed.get(repo_name)
+            if db_repo is not None and repo_name in join.by_key_id:
+                # #982: the catalog keeps its name; the config key is
+                # this computer's name for it.
+                logger.info(
+                    "  [repos.%s] is the catalog repository '%s': its "
+                    "mirror holds the key file %s that the catalog "
+                    "recorded for it.",
+                    repo_name, db_repo.name,
+                    join.by_key_id[repo_name][:12],
+                )
             db_repo_id = db_repo.repo_id if db_repo is not None else None
             if db_repo_id is None:
                 # #958: a catalog rebuilt from discs has no mirror paths,
                 # so a config key that differs from the catalog name finds
-                # nothing.  'repo add' would register the set twice.
+                # nothing by path or name, and nothing by key id either
+                # here.  'repo add' would register the set twice.
+                placed_ids = {r.repo_id for r in join.placed.values()}
                 unplaced = [r.name for r in list_repos(conn)
-                            if not r.mirror_path]
+                            if not r.mirror_path
+                            and r.repo_id not in placed_ids]
                 if unplaced:
                     logger.warning(
                         f"repository '{repo_name}' is not in the catalog by "
                         f"that name, and the catalog has no mirror path for "
                         f"{', '.join(repr(n) for n in unplaced)} (a catalog "
-                        f"rebuilt from discs). If [repos.{repo_name}] is one "
+                        f"rebuilt from discs), nor a key id that is in this "
+                        f"mirror's keys/. If [repos.{repo_name}] is one "
                         f"of them, rename the [repos.{repo_name}] table to "
                         f"its catalog name and scan again; do not 'repo add' "
                         f"it. Skipping."
@@ -211,6 +238,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
             for repo_name, repo_cfg in config.repositories.items():
                 if repo_filter and repo_name not in repo_filter:
                     continue
+                if repo_name in join.refused:
+                    continue  # refused above, with its reason
                 if repo_cfg.password_file is None:
                     logger.debug(
                         f"  {repo_name}: no password_file configured, "
@@ -311,6 +340,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
         logger.error(
             "The mirror of %s is damaged (see above); its lost packs were "
             "NOT recorded as pruned.", ", ".join(repos_damaged),
+        )
+        return 1
+    if repos_refused:
+        # #982: a table that could be either of two repositories.
+        logger.error(
+            "Not scanned, which catalog repository it is was not clear "
+            "(see above): %s.",
+            ", ".join(f"[repos.{n}]" for n in repos_refused),
         )
         return 1
     if snapshot_failures:
