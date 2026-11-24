@@ -293,22 +293,145 @@ def test_rebuilt_master_with_blank_paths(
     ok()
 
 
-def test_rebuilt_master_config_key_differs_from_catalog_name(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A rebuilt catalog has no mirror path to join a config key to a
-    catalog name that differs from it (#687).  scan names the way out
-    (rename the config table) instead of 'repo add', which would register
-    the backup set a second time; after the rename, scan and stage work.
-    """
-    inst = ScratchInstall(tmp_path / "x", repos=("alpha",))
+def _disc_names(tree: Path, repo_id: str) -> dict[str, object]:
+    """What disc *tree* calls the backup set *repo_id*: its catalog name,
+    its marker's ``name=`` and the sets PASSWORD_INFO.txt lists."""
+    from lcsas.staging.repo_marker import read_repo_marker
+
+    conn = sqlite3.connect(f"file:{tree / 'catalog.db'}?mode=ro", uri=True)
+    try:
+        (row,) = conn.execute(
+            "SELECT name FROM repositories WHERE repo_id = ?", (repo_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+    marker = read_repo_marker(tree / "metadata" / repo_id)
+    assert marker is not None
+    password_info = (tree / "PASSWORD_INFO.txt").read_text()
+    return {
+        "catalog": row[0],
+        "marker": marker["name"],
+        "password_info": sorted(
+            line.removeprefix("Backup set: ")
+            for line in password_info.splitlines()
+            if line.startswith("Backup set: ")),
+    }
+
+
+def _aliased_install(root: Path) -> ScratchInstall:
+    """``repo add "Family Photos"`` under ``[repos.alpha]`` (#687): one
+    disc staged and burned on the first computer."""
+    inst = ScratchInstall(root, repos=("alpha",))
     inst.backup("alpha", "f1.bin")
     assert inst.lcsas("repo", "add", "Family Photos",
                       str(inst.mirror("alpha"))) == 0
     assert inst.lcsas("scan") == 0
     assert inst.lcsas("stage") == 0
     inst.mark_burned(inst.sessions()[-1])
+    return inst
+
+
+def test_rebuilt_master_joins_a_renamed_config_key_by_key_id(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#982: a rebuilt catalog has no mirror path to join ``[repos.alpha]``
+    to the catalog repository 'Family Photos'.  scan joins them by the
+    key id ``repo add`` recorded, found in the mirror's ``keys/``: no
+    rename, no second registration, and the next disc carries the set
+    under the same id and the same names as the disc before.
+    """
+    inst = _aliased_install(tmp_path / "x")
+    repo_id = inst.repo_id("Family Photos")
+    (first,) = inst.labels()
+    before = _disc_names(inst.disc_trees()[first], repo_id)
+    assert before["catalog"] == "Family Photos"
+
     inst, _labels = _replacement_master(inst, tmp_path)
+    (row,) = inst.query(
+        "SELECT repo_id, mirror_path, encryption_key_id FROM repositories")
+    # Joined by key, not by path: the disc copy kept the key id only.
+    assert row["repo_id"] == repo_id
+    assert row["mirror_path"] == ""
+    assert row["encryption_key_id"] in {
+        p.name for p in (inst.mirror("alpha") / "keys").iterdir()}
+    inst.backup("alpha", "f2.bin")
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert inst.lcsas("scan") == 0
+    assert "Unexpected error" not in caplog.text
+    assert "rename the" not in caplog.text
+    assert "repo add" not in caplog.text
+    assert "key file" in caplog.text and "'Family Photos'" in caplog.text
+    assert [tuple(r) for r in inst.query(
+        "SELECT repo_id, name FROM repositories")] == [
+            (repo_id, "Family Photos")]
+    assert _catalog_mirror(inst.db) == str(inst.mirror("alpha"))
+    assert inst.query(
+        "SELECT COUNT(*) FROM packs WHERE repo_id = ? AND pack_id NOT IN "
+        "(SELECT pack_id FROM volume_packs)", repo_id)[0][0] > 0
+
+    # Every later command finds it under the config key.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert inst.lcsas("stage", "--repo", "alpha") == 0
+    assert "Unexpected error" not in caplog.text
+    new = inst.labels()[-1]
+    assert new != first
+    tree = inst.disc_trees()[new]
+    assert (tree / "metadata" / repo_id / "keys").is_dir()
+    assert _disc_names(tree, repo_id) == before
+
+
+def test_rebuilt_master_refuses_a_key_id_of_two_repositories(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#982: a mirror whose key file two catalog repositories recorded (a
+    copied mirror registered twice) is refused, naming both, never
+    guessed; neither repository changes."""
+    inst = ScratchInstall(tmp_path / "x", repos=("alpha",))
+    inst.backup("alpha", "f1.bin")
+    copy = tmp_path / "x" / "copy" / "photos"
+    shutil.copytree(inst.mirror("alpha"), copy)
+    assert inst.lcsas("repo", "add", "Family Photos",
+                      str(inst.mirror("alpha"))) == 0
+    assert inst.lcsas("repo", "add", "Old Photos", str(copy)) == 0
+    assert inst.lcsas("scan") == 0
+    assert inst.lcsas("stage") == 0
+    inst.mark_burned(inst.sessions()[-1])
+    inst, _labels = _replacement_master(inst, tmp_path)
+    rows_before = [tuple(r) for r in inst.query(
+        "SELECT * FROM repositories ORDER BY name")]
+    packs_before = inst.query("SELECT COUNT(*) FROM packs")[0][0]
+    inst.backup("alpha", "f2.bin")
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert inst.lcsas("scan") == 1
+    assert "Unexpected error" not in caplog.text
+    assert "'Family Photos'" in caplog.text
+    assert "'Old Photos'" in caplog.text
+    assert "[repos.alpha]" in caplog.text
+    assert "rename the" not in caplog.text
+    assert [tuple(r) for r in inst.query(
+        "SELECT * FROM repositories ORDER BY name")] == rows_before
+    assert inst.query("SELECT COUNT(*) FROM packs")[0][0] == packs_before
+
+
+def test_rebuilt_master_unplaced_table_keeps_the_rename_advice(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#979, kept for a table neither join places (#982): here the
+    catalog records no key id.  scan names the way out (rename the
+    config table) instead of 'repo add', which would register the
+    backup set a second time; after the rename, scan and stage work.
+    """
+    inst = _aliased_install(tmp_path / "x")
+    inst, _labels = _replacement_master(inst, tmp_path)
+    conn = sqlite3.connect(inst.db)
+    conn.execute("UPDATE repositories SET encryption_key_id = ''")
+    conn.commit()
+    conn.close()
     inst.backup("alpha", "f2.bin")
 
     caplog.clear()

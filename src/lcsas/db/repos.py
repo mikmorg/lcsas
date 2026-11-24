@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lcsas.db.models import Repository
@@ -181,6 +183,101 @@ def resolve_repo(
             "(`lcsas repo list`)."
         )
     return matches[0] if matches else None
+
+
+def holds_recorded_key(repo: Repository, key_ids: Iterable[str]) -> bool:
+    """Whether a mirror whose ``keys/`` holds *key_ids* is *repo* (#962).
+
+    ``repositories.encryption_key_id`` is the first key file name ``repo
+    add`` saw in the mirror's ``keys/`` (or the one a split password
+    opens).  A mirror holding that key file is that repository, wherever
+    it now lives and whatever it is called.  False when *repo* records
+    no key id.
+    """
+    return bool(repo.encryption_key_id) and repo.encryption_key_id in set(key_ids)
+
+
+@dataclass
+class ConfigJoin:
+    """How each ``[repos.<key>]`` table joins its catalog repository (#982)."""
+
+    #: Config key -> its catalog repository.
+    placed: dict[str, Repository] = field(default_factory=dict)
+    #: The keys of *placed* that the key id joined (the name did not).
+    by_key_id: dict[str, str] = field(default_factory=dict)
+    #: Config key -> why it is refused (it names every candidate).
+    refused: dict[str, str] = field(default_factory=dict)
+
+
+def join_config_tables(
+    conn: sqlite3.Connection, mirrors: Mapping[str, Path],
+) -> ConfigJoin:
+    """Join each config key (with its mirror, *mirrors*) to its catalog
+    repository (#982): the ``scan`` join.
+
+    1. :func:`resolve_repo`: the mirror path, then the name (#687).
+    2. Only for a table step 1 did not place: the key id, the catalog's
+       ``encryption_key_id`` against the file names in the mirror's
+       ``keys/`` (:func:`holds_recorded_key`).  A catalog rebuilt from
+       discs has no mirror paths (#958), so a config key that differs
+       from the catalog name joins here.
+
+    Never guesses: a table is refused, naming every candidate, when its
+    key files match more than one catalog repository, or when the
+    repository it matches by key is also placed by another table.  A
+    table neither step places is in none of the three fields.
+    """
+    from lcsas.utils.fs import read_repo_key_ids
+
+    out = ConfigJoin()
+    for key, mirror in mirrors.items():
+        try:
+            repo = resolve_repo(conn, key, mirror)
+        except ValueError as exc:
+            out.refused[key] = str(exc)
+            continue
+        if repo is not None:
+            out.placed[key] = repo
+
+    repos = list_repos(conn)
+    by_key: dict[str, Repository] = {}
+    for key, mirror in mirrors.items():
+        if key in out.placed or key in out.refused:
+            continue
+        try:
+            key_ids = read_repo_key_ids(Path(mirror))
+        except OSError:
+            continue  # an unreadable keys/ places nothing
+        matches = [r for r in repos if holds_recorded_key(r, key_ids)]
+        if len(matches) > 1:
+            names = ", ".join(f"'{r.name}' ({r.repo_id})" for r in matches)
+            out.refused[key] = (
+                f"[repos.{key}]: its mirror {mirror} holds the key files of "
+                f"more than one catalog repository: {names}. Which one it is "
+                f"is not guessed; nothing was done for it."
+            )
+        elif matches:
+            by_key[key] = matches[0]
+
+    named = dict(out.placed)
+    for key, repo in by_key.items():
+        others = sorted(
+            [k for k, r in named.items() if r.repo_id == repo.repo_id]
+            + [k for k, r in by_key.items()
+               if r.repo_id == repo.repo_id and k != key])
+        if others:
+            tables = ", ".join(f"[repos.{k}]" for k in others)
+            out.refused[key] = (
+                f"[repos.{key}]: its mirror {mirrors[key]} holds "
+                f"the key file of catalog repository '{repo.name}' "
+                f"({repo.repo_id}), which {tables} also joins. Which table "
+                f"is that repository is not guessed; nothing was done for "
+                f"[repos.{key}]."
+            )
+            continue
+        out.placed[key] = repo
+        out.by_key_id[key] = repo.encryption_key_id
+    return out
 
 
 def list_repos(conn: sqlite3.Connection) -> list[Repository]:
