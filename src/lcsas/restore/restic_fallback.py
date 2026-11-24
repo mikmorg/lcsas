@@ -540,6 +540,9 @@ _FAILURES_HEADER = (
     "path\treason\tblob_id",
 )
 _FAILURES_NAME = "RESTORE_FAILURES.txt"
+#: The start of a row's reason for a pack on no disc in reach (#909);
+#: the pack id follows.
+_PACK_NOT_FOUND = "pack not found: "
 
 #: Kinds of item not restored: an error, a special file this system
 #: will not create, a link the target file system cannot hold.  Only
@@ -1298,9 +1301,23 @@ class PurePythonRestorer:
                 f"{self._skipped[_NR_LINK]} link(s) were not restored: the "
                 "target file system does not support symlinks."
             )
+        # #983: a run that could not ask for a disc (no terminal) names
+        # the discs that hold the packs it did not find, as the disc box
+        # would have: here and above the rows of RESTORE_FAILURES.txt.
+        discs: list[str] = []
+        if not self._search.interactive:
+            discs = self._search.name_discs(dict.fromkeys(
+                reason[len(_PACK_NOT_FOUND):]
+                for _path, _blob, reason in self._failures
+                if reason.startswith(_PACK_NOT_FOUND)
+            ))
+            # The catalog copies it made are not needed again.
+            self._search.close()
+        for line in discs:
+            _log(line)
         if self._failures:
             _log(f"ERROR: {len(self._failures)} item(s) were NOT restored.")
-        self._write_failure_manifest(target)
+        self._write_failure_manifest(target, discs)
         if self._rows:
             _log(f"See {target}/{_FAILURES_NAME} for the list.")
         # #949: the discs the reader answered 's' for (tier 1 prints the
@@ -1331,12 +1348,16 @@ class PurePythonRestorer:
         file system cannot hold.  Listed in ``RESTORE_FAILURES.txt``."""
         return sum(self._skipped.values())
 
-    def _write_failure_manifest(self, target: Path) -> None:
+    def _write_failure_manifest(
+        self, target: Path, notes: list[str] | None = None,
+    ) -> None:
         """Write ``RESTORE_FAILURES.txt``: one row per item not restored.
 
         Each row is the path, the reason and the blob id implicated
         (empty when the failure was not blob-scoped), tab-separated,
-        exactly as tier 1 writes them.  With no rows, a file of that
+        exactly as tier 1 writes them.  *notes* (#983: the discs that
+        hold the packs not found) go above the column line, where the
+        scripts that count the rows do not read.  With no rows, a file of that
         name left by an earlier run is removed (only one that starts
         with our header), so it never describes an older run.
         """
@@ -1350,7 +1371,10 @@ class PurePythonRestorer:
             except OSError:
                 pass
             return
-        lines = list(_FAILURES_HEADER)
+        lines = list(_FAILURES_HEADER[:-1])
+        if notes:
+            lines += [*notes, ""]
+        lines.append(_FAILURES_HEADER[-1])
         for path, blob_id, reason in self._rows:
             # _visible: a tab or newline in a restored name (#781) must
             # not split the row.

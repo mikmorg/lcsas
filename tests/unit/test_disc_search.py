@@ -400,6 +400,38 @@ class TestNewerThanHint:
         assert _newer_than(box) is None
 
 
+def test_name_discs_reads_each_catalog_once(tmp_path: Path) -> None:
+    """#983: the discs of many packs not found are named with each
+    catalog in reach read once, not once per pack (a disc catalog on an
+    optical drive); packs are grouped by the answer."""
+    disc = tmp_path / "media" / "cdrom"
+    disc.mkdir(parents=True)
+    packs = [f"{n:064x}" for n in range(1, 301)]
+    write_catalog(disc / "catalog.db", packs[:200], [Vol(_OLD)])
+    reads: list[Path] = []
+
+    class CountingFs(ds._DiscFs):
+        def _read_range(self, path: Path, offset: int, length: int) -> bytes:
+            if path.name == "catalog.db" and length == -1:
+                reads.append(path)
+            return super()._read_range(path, offset, length)
+
+    search, _out = _search(tmp_path, [disc], fs=CountingFs())
+    try:
+        lines = search.name_discs(packs)
+    finally:
+        search.close()
+    # The first pack's lookup reads it (once found as --catalog, once
+    # among the catalogs in reach); no other pack's does.
+    assert len(reads) <= 2, reads
+    assert lines[1:3] == [
+        f"  200 pack(s): It is on any disc labelled: {_OLD}",
+        "  100 pack(s): It is on none of the discs the catalog lists.",
+    ], lines
+    assert not any("\t" in line for line in lines)
+    assert search.name_discs([]) == []
+
+
 # ── The prompt loop, through read_pack_range (from test_restic_fallback.py,
 #    TestInteractiveFindPackPath) ──────────────────────────────────
 

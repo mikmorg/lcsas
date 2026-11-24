@@ -395,7 +395,11 @@ to do:
     prints the command; on Windows "Resume LCSAS restore.bat"), or
     from the meta disc.  The files already restored are skipped.  Run
     it in a terminal window and it asks for each disc it needs by its
-    label.
+    label.  The Python reader (tier 3) also names those discs, from
+    the disc catalog, at the end of the restore and above the rows of
+    RESTORE_FAILURES.txt: "It is on any disc labelled: <label>", or
+    "It is on none of the discs the catalog lists." (then insert your
+    newest data disc: its catalog names it).
   * "pack damaged: <id>" or "pack unreadable: <id>": the copy of that
     part of the backup on the disc could not be read correctly (a
     scratched or failing disc).  Run the restore again with another
