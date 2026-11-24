@@ -1183,15 +1183,16 @@ def test_a_split_set_with_no_combiner_asks_for_the_password(tmp_path: Path) -> N
 
 def test_another_set_restores_the_next_set_then_removes_the_tools(tmp_path: Path) -> None:
     """Yes: the script starts again at the set list (the same tools
-    folder, no META disc, the password asked again) into the folder
-    given ("~/" is the home folder); no: the tools folder goes."""
+    folder, no META disc, the password asked again), then asks the
+    folder (#984: after the set, as restore.bat does; "~/" is the
+    home folder); no: the tools folder goes."""
     recovery = _two_sets(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     tools = tmp_path / "tools"
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", HOME=str(home)),
-               stdin=f"1\n{GOOD_PW}\ny\nsecond\n~/second\n2\n{GOOD_PW}\nn\n")
+               stdin=f"1\n{GOOD_PW}\ny\n2\nsecond\n~/second\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
     # Asked once: after the second set no set is left (#966).
     assert res.stderr.count("Restore another backup set from these discs? [y/N]") == 1
@@ -1221,7 +1222,7 @@ def test_another_set_enter_takes_a_new_folder_and_tilde_is_home(
                # The home folder holds the session log by then.
                _env(tmp_path, LCSAS_INTERACTIVE="on", HOME=str(home),
                     LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER="1"),
-               stdin=f"1\n{GOOD_PW}\ny\n{folder}\n2\n{GOOD_PW}\nn\n")
+               stdin=f"1\n{GOOD_PW}\ny\n2\n{folder}\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
     assert f"(ENTER: {tmp_path}/out-3; Q then ENTER: no other set)" in res.stderr
     second = tmp_path / "out-3" if folder == "" else home
@@ -1398,9 +1399,9 @@ def test_another_set_q_or_no_input_at_the_folder_prompt_ends_the_run(
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD=GOOD_PW,
                     LCSAS_BACKUP_SET=DOCS),
-               stdin="y\n" + answer)
+               stdin="y\n2\n" + answer)
     assert res.returncode == 0, res.stderr
-    assert f"No other backup set restored; {DOCS} is done." in res.stderr
+    assert "No other backup set restored." in res.stderr
     assert "Type the full path" not in res.stderr
     assert len(_runs(tmp_path)) == 1
     assert not (tmp_path / "tools").exists()
@@ -1419,7 +1420,7 @@ def test_quitting_the_next_set_does_not_offer_to_resume_the_first(
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on"),
-               stdin=f"1\n{GOOD_PW}\ny\n\n{answer}")
+               stdin=f"1\n{GOOD_PW}\ny\n{answer}")
     assert res.returncode == 0, res.stderr
     assert "starting again for the next backup set" in res.stderr
     assert "No other backup set restored." in res.stderr
@@ -1474,7 +1475,7 @@ def test_another_set_folder_inside_the_tools_folder_is_asked_again(tmp_path: Pat
     tools = tmp_path / "tools"
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on"),
-               stdin=f"1\n{GOOD_PW}\ny\n{tools}/photos\n{tmp_path}/photos\n2\n{GOOD_PW}\nn\n")
+               stdin=f"1\n{GOOD_PW}\ny\n2\n{tools}/photos\n{tmp_path}/photos\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
     assert f"That folder is inside the tools folder {tools}" in res.stderr
     assert _runs(tmp_path)[1].endswith(f"target={tmp_path}/photos pw={GOOD_PW}")
@@ -1528,7 +1529,7 @@ def test_another_set_with_no_tools_folder_leaves_no_cache_behind(tmp_path: Path)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on",
                     LCSAS_TOOLS_DIR=str(blocker / "tools")),
-               stdin=f"1\n{GOOD_PW}\ny\n{tmp_path}/second\n2\n{GOOD_PW}\nn\n")
+               stdin=f"1\n{GOOD_PW}\ny\n2\n{tmp_path}/second\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
     caches = [ln[6:] for ln in _log(tmp_path) if ln.startswith("CACHE ")]
     assert len(caches) == 2 and caches[0] != caches[1], caches

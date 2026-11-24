@@ -687,7 +687,7 @@ owner's #627 decisions):
 | `LCSAS_PASSWORD` / `LCSAS_PASSWORD_FILE` / `LCSAS_SHARES_DIR` for the next set | reused (each is checked first) | dropped: the next set's password is asked |
 | `LCSAS_INTERACTIVE` | passed to tier 1 only; the script's own questions are always asked (cmd cannot test for a console) | also decides whether the script's own questions are asked |
 | Newest-disc step, end of input | five ENTERs go on with the META copies | quits 65 |
-| Another set | asks the set, then the folder (default `restored-<name>`) | asks the folder (default `<target>-2`), then the set |
+| Another set: the folder's default | `restored-<name>` (both ask the set, then the folder, #984) | `<target>-2` |
 | `LCSAS_BACKUP_SET` match | case-blind | exact |
 | Catalog copy with no labelled data disc | the last `catalog.db` by drive letter | the freshest file by mtime (tier 1 takes a newer one either way) |
 | Tools folder reuse | the same `restore.bat` from the same META disc (`created_at`) | the same build from any META disc of the archive (a set id in common) |

@@ -347,23 +347,22 @@ LCSAS_ANOTHER_SET
   What:     After a restore that succeeds, when the discs hold more
             than one set and someone can answer (see
             LCSAS_INTERACTIVE), restore.sh asks "Restore another backup
-            set from these discs? [y/N]".  y asks for the folder and
-            starts again at the set list, reusing the tools folder and
-            its pack cache; N ends the run and deletes the tools
-            folder.  0 never asks.  restore_auto.sh sets it to 0.
+            set from these discs? [y/N]".  y starts again at the set
+            list, reusing the tools folder and its pack cache, and
+            then asks for the folder (default <target>-2); N ends the
+            run and deletes the tools folder.  0 never asks.  restore_auto.sh sets it to 0.
             The next set's password is asked for: LCSAS_PASSWORD,
             LCSAS_PASSWORD_FILE (--password-file) and LCSAS_SHARES_DIR are for the
-            first set only.  Q at the next set list ends the run with
-            0, as N does.
+            first set only.  Q at the next set list, or at its folder
+            question, ends the run with 0, as N does.
   Windows:  restore.bat asks it after a good restore of an archive
             with more than one backup set.  Yes goes back to the menu,
             with the tools folder, the pack cache and the catalog copy
             as they are; only no (or the end of the input) ends the
             run and lets the tools folder be deleted.  It asks for
-            the set first and then the folder, whose default is
-            Documents\restored-<name>; restore.sh asks for the folder
-            first (default <target>-2).  It does not follow
-            LCSAS_INTERACTIVE.
+            the set first and then the folder, as restore.sh does
+            (#984); its default is Documents\restored-<name>.  It
+            does not follow LCSAS_INTERACTIVE.
   Why:      Opt-OUT.  Restoring a second set (documents, then photos)
             would otherwise mean the META disc and the copy again.
 
@@ -780,6 +779,13 @@ LCSAS_ANOTHER_PASS
   (or the end of the input) at that run's list of sets then means
   no other set: the run ends with 0 and the tools folder goes, as
   in restore.bat.  Not a knob; do not set manually.
+
+LCSAS_NEXT_FOLDER
+  Internal: restore.sh passes the default folder for the next backup
+  set (a NEW folder beside the last one, for example ~/restored-2) to
+  its run for that set, which asks "Folder to restore it into" after
+  its list of sets, as restore.bat does (#984).  Not a knob; do not
+  set manually.
 
 LCSAS_SETS_RESTORED
   Internal: restore.sh passes the ids of the backup sets restored so

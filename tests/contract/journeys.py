@@ -211,9 +211,8 @@ PROMPTS: tuple[Phrase, ...] = (
     Phrase("which set",
            sh=r"Choose a backup set \(number or name\): ",
            bat=r"Which one do you want to restore\? \[1\]: "),
-    # The second line of sh: the folder for another backup set (#953),
-    # asked before that set's menu.  restore.bat asks the same question
-    # for every set, after the menu.
+    # The second line of sh: the folder for another backup set (#953).
+    # Both scripts ask it after the set menu (owner, #984).
     Phrase("folder",
            sh=(r"(?:Restore to which folder\? \(ENTER: [^)\r\n]*; Q then ENTER: stop\): "
                r"|Folder to restore it into \(ENTER: [^)\r\n]*; "
@@ -314,15 +313,6 @@ DIFFERENCES: dict[str, Difference] = {
         why=("#627 item 1, kept by the owner 2026-11-05 (menu wording and "
              "the choosing are documented per script)"),
         deliberate=True,
-    ),
-    "folder before the set": Difference(
-        what=("for another backup set, restore.sh asks the folder first, "
-              "then shows the set menu again; restore.bat shows the menu, "
-              "then asks the folder"),
-        why=("found by the second-pass journeys (#953): restore.sh starts "
-             "itself again with the folder it asked for; the questions and "
-             "their answers are the same"),
-        deliberate=False,
     ),
     "empty password": Difference(
         what=("ENTER with no password: restore.sh asks again for as long "
@@ -1451,19 +1441,15 @@ JOURNEYS: tuple[Journey, ...] = (
         name="another set into a folder of its own",
         archive="two sets",
         # Both sets restored: "another set?" is not asked again (#966).
+        # The set first, then its folder (#984).
         typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
-               Folder(2), Pick(DOCS), Card(DOCS, 1), Card(DOCS, 3)),
+               Pick(DOCS), Folder(2), Card(DOCS, 1), Card(DOCS, 3)),
         expect=Expect(exit=ScriptExit.OK,
                       asked=("newest data disc", "which set", "folder",
-                             "password", "another set", "folder", "which set",
+                             "password", "another set", "which set", "folder",
                              "card 1", "card 2"),
                       restored=(PHOTOS, DOCS), tools_folder="removed"),
-        differs={"bat": Differs(
-            because=("menu by number", "folder before the set"),
-            asked=("newest data disc", "which set", "folder", "password",
-                   "another set", "which set", "folder", "card 1", "card 2"),
-            typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
-                   Pick(DOCS), Folder(2), Card(DOCS, 1), Card(DOCS, 3)))},
+        differs={"bat": Differs(because=("menu by number",))},
     ),
     # #953: the second set typed into the first set's folder: both
     # scripts warn and ask; anything but YES stops with 65, and the
@@ -1472,20 +1458,15 @@ JOURNEYS: tuple[Journey, ...] = (
         name="another set into the first set's folder: warned, no stops",
         archive="two sets",
         typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
-               Folder(1), Pick(DOCS), "n"),
+               Pick(DOCS), Folder(1), "n"),
         expect=Expect(exit=ScriptExit.USER_ABORT,
                       asked=("newest data disc", "which set", "folder",
-                             "password", "another set", "folder", "which set",
+                             "password", "another set", "which set", "folder",
                              "overwrite"),
                       restored=PHOTOS,
                       says=(r"already holds the restore of ANOTHER backup set",
                             r"Aborting; nothing was written")),
-        differs={"bat": Differs(
-            because=("menu by number", "folder before the set"),
-            asked=("newest data disc", "which set", "folder", "password",
-                   "another set", "which set", "folder", "overwrite"),
-            typed=(NEWEST, Pick(PHOTOS), Folder(1), Password(PHOTOS), "y",
-                   Pick(DOCS), Folder(1), "n"))},
+        differs={"bat": Differs(because=("menu by number",))},
     ),
     # #953: ENTER with nothing typed at the password.
     Journey(

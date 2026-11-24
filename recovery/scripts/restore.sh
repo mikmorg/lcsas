@@ -3003,7 +3003,20 @@ if [ -z "$RESTORE_FOLDER" ]; then
     else
         _rf_default="/tmp/restored"
     fi
-    if is_interactive; then
+    if [ "${LCSAS_ANOTHER_PASS:-0}" = 1 ] && [ -n "${LCSAS_NEXT_FOLDER:-}" ]; then
+        # The next backup set, chosen above (#984): by default a NEW
+        # folder beside the last one (offer_another_set).  Q, or the end
+        # of the input, restores no other set.
+        _rf_default="$LCSAS_NEXT_FOLDER"
+        if is_interactive; then
+            if ! ask_folder 'Folder to restore it into' "$_rf_default" 'no other set'; then
+                another_pass_done
+            fi
+            RESTORE_FOLDER="$ASK_DIR"
+        else
+            RESTORE_FOLDER="$_rf_default"
+        fi
+    elif is_interactive; then
         if ! ask_folder 'Restore to which folder?' "$_rf_default" 'stop'; then
             printf 'Stopped at your request.\n' >&2
             exit "$EXIT_USER_ABORT"
@@ -4110,11 +4123,10 @@ offer_another_set() {
     while [ -n "$(ls -A "$_os_base-$_os_n" 2>/dev/null)" ]; do
         _os_n=$((_os_n + 1))
     done
-    if ! ask_folder 'Folder to restore it into' "$_os_base-$_os_n" 'no other set'; then
-        printf 'No other backup set restored; %s is done.\n' "$SET_NAME" >&2
-        return 0
-    fi
-    _os_dir="$ASK_DIR"
+    # The folder is asked after the next run's set list, as restore.bat
+    # asks it (#984): pick the set, then where it goes.  This is its
+    # default.
+    LCSAS_NEXT_FOLDER="$_os_base-$_os_n"
     # This run's own files go now (exec skips the exit handler); the
     # tools folder stays for the next set.
     [ -z "${PWFILE_TMP:-}" ] || rm -f "$PWFILE_TMP"
@@ -4128,14 +4140,15 @@ offer_another_set() {
     LCSAS_NEWEST_DISC_PROMPT=0
     # Q at the next run's set list then ends with 0 (another_pass_done).
     LCSAS_ANOTHER_PASS=1
-    export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_PASS LCSAS_SETS_RESTORED
+    export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_PASS LCSAS_SETS_RESTORED \
+           LCSAS_NEXT_FOLDER
     if [ -n "$TOOLS" ]; then
         LCSAS_TOOLS_DIR="$TOOLS"
         export LCSAS_TOOLS_DIR
     fi
     printf '[restore.sh] starting again for the next backup set\n' >&2
     cd / 2>/dev/null || true
-    exec sh "$SCRIPT" --restore-folder "$_os_dir" --snapshot latest -- "$RECOVERY"
+    exec sh "$SCRIPT" --snapshot latest -- "$RECOVERY"
 }
 
 # restore_done: the set is restored.  resume.sh would carry on a

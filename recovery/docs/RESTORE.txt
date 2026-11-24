@@ -197,9 +197,10 @@ in this order.  Each one says how to answer.
          Restore another backup set from these discs? [y/N]
      At [y/N]: N ends the restore, and the tools folder is deleted
      (see "THE TOOLS FOLDER").  ENTER alone asks again: a stray ENTER
-     (pressed for a disc that then mounted by itself) does not end it.  y asks for the folder to
-     restore the next set into, and then starts again at question 2,
-     with no META disc and nothing copied again.
+     (pressed for a disc that then mounted by itself) does not end it.  y starts again at
+     question 2, with no META disc and nothing copied again, and once
+     the set is chosen asks for the folder to restore it into (as
+     restore.bat does).
      At the folder question: ENTER takes a NEW folder beside the
      first (for example ~/restored-2), because two sets restored into
      one folder would be mixed together.  Q then ENTER restores no
@@ -502,8 +503,8 @@ You can stop a restore at any time:
   * Anywhere else, press Ctrl-C.  restore.sh exits with code 130.
 
 Once a backup set is restored there is nothing to carry on: stopping
-at "Restore another backup set?", at the folder question after it,
-or at the list of sets that follows ends the run with exit code 0,
+at "Restore another backup set?", at the list of sets that follows,
+or at the folder question after it ends the run with exit code 0,
 and the tools folder is deleted.
 
 Nothing is lost.  Files restored so far stay in the target folder,

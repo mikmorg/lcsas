@@ -628,7 +628,7 @@ def run_restore_sh(case: ScriptCase, work: Path) -> ScriptOutcome:
     }
     for name in ("LCSAS_PASSWORD_FILE", "LCSAS_SHARES_DIR", "LCSAS_ANOTHER_SET",
                  "LCSAS_FORCE_NONEMPTY_RESTORE_FOLDER", "LCSAS_RESUME",
-                 "LCSAS_ANOTHER_PASS", "LCSAS_PACK_CACHE_DIR"):
+                 "LCSAS_ANOTHER_PASS", "LCSAS_NEXT_FOLDER", "LCSAS_PACK_CACHE_DIR"):
         env.pop(name, None)
     if case.check_disc is not None:
         _sh_ecc_stub(recovery, case.check_disc)
