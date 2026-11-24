@@ -386,6 +386,11 @@ def _estate_card_text(
     lines += [
         "",
         "IF YOU GET STUCK",
+        # #966: where a disc that will not read is repaired.
+        "  A disc that will not read can often be repaired: see",
+        '  "REPAIRING A DAMAGED DISC" in RESTORE.txt (Windows: "A DISC',
+        '  IS MISSING OR WILL NOT READ" in RESTORE_WINDOWS.txt), on the',
+        "  META disc in recovery/docs.",
         f"  Technical contact: {or_blank(technical_contact)}",
         "  Or take ALL the discs AND the password to any computer",
         "  professional — the instructions travel on the discs.",

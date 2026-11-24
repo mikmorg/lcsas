@@ -106,9 +106,14 @@ def test_latest_with_unreadable_snapshot(tmp_path: Path) -> None:
     res = run("--restore-folder", str(t), "--interactive", "on", stdin="y\n")
     assert f"restoring snapshot {older}" in res.stderr, res.stderr
     assert "Not restoring." not in res.stderr
+    # #952: its date is named, but not as the newest (the newest may be
+    # the snapshot that could not be read).
+    assert "Restoring the backup of " in res.stderr, res.stderr
+    assert "newest on these discs" not in res.stderr, res.stderr
 
     # 5. An explicit snapshot id needs no answer.
     t = tmp_path / "t-id"
     res = run("--restore-folder", str(t), "--interactive", "off", "--snapshot", older)
     assert f"restoring snapshot {older}" in res.stderr, res.stderr
     assert "could not be read" not in res.stderr.split("restoring")[1]
+    assert "newest on these discs" not in res.stderr, res.stderr

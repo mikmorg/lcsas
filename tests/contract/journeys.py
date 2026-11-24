@@ -71,6 +71,13 @@ WIN_PROGRAMS = ("lcsas-restore.exe", "lcsas-shares.exe", "lcsas-ecc.exe")
 TYPO_WORD = "zqzq"
 #: A password no set has.
 WRONG_PASSWORD = "not-the-password-1"
+#: A valid share card of a split no archive here has: the SLIP-0039
+#: test vector "Valid mnemonic without sharing (128 bits)"
+#: (tests/fixtures/keyshare/vectors.json).  Valid alone, so a script
+#: can tell it only by its first two words, which are its split's.
+OTHER_SPLIT_CARD = ("duckling enlarge academic academic agency result length "
+                    "solution fridge kidney coal piece deal husband erode duke "
+                    "ajar critical decision keyboard")
 
 
 # ── What the person types ───────────────────────────────────────────
@@ -101,12 +108,21 @@ class Card:
     """The words of share card ``n`` of the set ``name``, on one line;
     with ``typo``, its fifth word replaced by :data:`TYPO_WORD`; with
     ``numbered``, each word after its number, as the card prints them
-    (#955: "1 change 2 marathon ...")."""
+    (#955: "1 change 2 marathon ..."); with ``short``, each word cut to
+    its first four letters, in capitals, as lcsas-shares also reads it
+    (#966)."""
 
     name: str
     n: int
     typo: bool = False
     numbered: bool = False
+    short: bool = False
+
+
+@dataclass(frozen=True)
+class OtherCard:
+    """A share card of another split (:data:`OTHER_SPLIT_CARD`), typed
+    at a card question (#966)."""
 
 
 @dataclass(frozen=True)
@@ -140,7 +156,8 @@ class Insert:
     which: str
 
 
-Typed = str | Newest | Pick | Password | Card | Rebuilt | Folder | Insert
+Typed = (str | Newest | Pick | Password | Card | OtherCard | Rebuilt | Folder
+         | Insert)
 NEWEST = Newest()
 
 
@@ -837,9 +854,13 @@ def type_line(item: Typed, script: str, archive: Archive, screen: str) -> str:
         words = archive.sets[item.name].cards[item.n - 1].split()
         if item.typo:
             words[4] = TYPO_WORD
+        if item.short:
+            words = [w[:4].upper() for w in words]
         if item.numbered:
             return " ".join(f"{i} {w}" for i, w in enumerate(words, start=1))
         return " ".join(words)
+    if isinstance(item, OtherCard):
+        return OTHER_SPLIT_CARD
     if isinstance(item, Rebuilt):
         return rebuild_password(archive, item)
     raise TypeError(f"cannot type {item!r}")
@@ -1178,13 +1199,21 @@ DOC = "documents"
 #: matched case-blind is #627 item 8).
 UNKNOWN_SET = "Garden photos"
 
+#: #952 b: what the readers say of the backup restored, by its date.
+_DATE = r"\d{4}-\d\d-\d\d \d\d:\d\d"
+
 JOURNEYS: tuple[Journey, ...] = (
+    # #952 b, #966 item 2: before the restore and at its end, the
+    # backup is named by its date.
     Journey(
         name="one set, password typed, one disc",
         archive="one set",
         typed=(NEWEST, Password(PHOTOS)),
         expect=Expect(exit=ScriptExit.OK, asked=("newest data disc", "folder", "password"),
-                      restored=PHOTOS, tools_folder="removed", disc_asked=False),
+                      restored=PHOTOS, tools_folder="removed", disc_asked=False,
+                      says=(rf"Restoring the backup of {_DATE}, the newest on "
+                            r"these discs\.",
+                            rf"The backup of {_DATE} is restored\.")),
     ),
     Journey(
         name="two sets, pick by name, newest data disc asked first",
@@ -1219,6 +1248,50 @@ JOURNEYS: tuple[Journey, ...] = (
                       asked=("newest data disc", "which set", "folder",
                              "card 1", "card 2", "another set"),
                       restored=DOCS, tools_folder="removed"),
+        differs={"bat": Differs(because=("menu by number",))},
+    ),
+    # #966 item 7: the same card typed again, in four-letter words (as
+    # lcsas-shares reads it): caught as typed, not at the end.
+    Journey(
+        name="split password, the same card again in four-letter words",
+        archive="two sets",
+        typed=(NEWEST, Pick(DOCS), Card(DOCS, 1), Card(DOCS, 1, short=True),
+               Card(DOCS, 3), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "card 1", "card 2", "card 2", "another set"),
+                      restored=DOCS, tools_folder="removed",
+                      says=(r"That is a card you already typed",)),
+        differs={"bat": Differs(because=("menu by number",))},
+    ),
+    # #966 item 7: a card of another split is named as it is typed; R
+    # starts again with card 1.
+    Journey(
+        name="split password, a card of another split named, then R",
+        archive="two sets",
+        typed=(NEWEST, Pick(DOCS), OtherCard(), Card(DOCS, 2), "R",
+               Card(DOCS, 1), Card(DOCS, 3), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "card 1", "card 2", "card 2", "card 1", "card 2",
+                             "another set"),
+                      restored=DOCS, tools_folder="removed",
+                      says=(r"Card 2 is not from the same split as card 1",
+                            r"Card 1 begins 'duckling enlarge'")),
+        differs={"bat": Differs(because=("menu by number",))},
+    ),
+    # #966 item 7: P, then a wrong password: C goes back to the cards.
+    Journey(
+        name="split password, P and a wrong password, then C: the cards",
+        archive="two sets",
+        typed=(NEWEST, Pick(DOCS), "P", Password(DOCS, wrong=True), "C",
+               Card(DOCS, 1), Card(DOCS, 3), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "card 1", "password", "password", "card 1",
+                             "card 2", "another set"),
+                      restored=DOCS, tools_folder="removed",
+                      says=(r"C then ENTER to type the share cards\s+instead",)),
         differs={"bat": Differs(because=("menu by number",))},
     ),
     # #955: the password rebuilt by hand from the printed cards with the

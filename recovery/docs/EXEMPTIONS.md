@@ -86,11 +86,11 @@ lcsas_io.c:55   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs
 lcsas_io.c:56   INTRACTABLE   "
 
 # main.c
-main.c:672   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --restore-folder path; needs filesystem-full tmpfs (integration-only)
-main.c:676   INTRACTABLE   "  (exit 74)
-main.c:712   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
-main.c:718   INTRACTABLE   "
-main.c:719   INTRACTABLE   "
+main.c:696   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --restore-folder path; needs filesystem-full tmpfs (integration-only)
+main.c:700   INTRACTABLE   "  (exit 74)
+main.c:732   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+main.c:738   INTRACTABLE   "
+main.c:739   INTRACTABLE   "
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator
@@ -112,15 +112,15 @@ repo.c:491   DEFENSIVE   "
 repo.c:727   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
 repo.c:728   DEFERRED   "
 repo.c:729   DEFERRED   "
-repo.c:1192   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
-repo.c:1193   INTRACTABLE   "
-repo.c:1194   INTRACTABLE   "
-repo.c:1195   INTRACTABLE   "
-repo.c:1199   INTRACTABLE   "
-repo.c:1200   INTRACTABLE   "
-repo.c:1203   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
-repo.c:1206   INTRACTABLE   "
-repo.c:1208   INTRACTABLE   "  (#909: the exit now returns LCSAS_REPO_ERR_UNREADABLE)
+repo.c:1213   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
+repo.c:1214   INTRACTABLE   "
+repo.c:1215   INTRACTABLE   "
+repo.c:1216   INTRACTABLE   "
+repo.c:1220   INTRACTABLE   "
+repo.c:1221   INTRACTABLE   "
+repo.c:1224   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
+repo.c:1227   INTRACTABLE   "
+repo.c:1229   INTRACTABLE   "  (#909: the exit now returns LCSAS_REPO_ERR_UNREADABLE)
 
 # tree.c
 tree.c:235   VOLATILE   nr_report_item row malloc fail (#783): only the fault-inject sweep (coverage-c step 3c) can fail this allocation, and whether its N lands here depends on the allocation count of the test binaries
@@ -141,36 +141,36 @@ tree.c:584   INTRACTABLE   "
 tree.c:585   INTRACTABLE   "
 tree.c:587   INTRACTABLE   "
 tree.c:592   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
-tree.c:1010   INTRACTABLE   restore_file_node ENOSPC/EDQUOT branch when lcsas_create_file fails (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py).  The create failure itself is covered (#909: test_tier1_unit.py, an unwritable target)
-tree.c:1014   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
-tree.c:1015   INTRACTABLE   "
-tree.c:1083   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 1010
+tree.c:1009   INTRACTABLE   restore_file_node ENOSPC/EDQUOT branch when lcsas_create_file fails (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py).  The create failure itself is covered (#909: test_tier1_unit.py, an unwritable target)
+tree.c:1013   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:1014   INTRACTABLE   "
+tree.c:1082   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 1010
+tree.c:1083   INTRACTABLE   "
 tree.c:1084   INTRACTABLE   "
 tree.c:1085   INTRACTABLE   "
-tree.c:1086   INTRACTABLE   "
-tree.c:1093   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
-tree.c:1094   INTRACTABLE   "
-tree.c:1096   INTRACTABLE   "
-tree.c:1162   INTRACTABLE   restore_file_node: lcsas_replace_file (rename of the complete <name>.lcsas-partial onto <name>, in the same folder it was just written in) fails (#909); only a race or a file-system fault does that
+tree.c:1092   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:1093   INTRACTABLE   "
+tree.c:1095   INTRACTABLE   "
+tree.c:1161   INTRACTABLE   restore_file_node: lcsas_replace_file (rename of the complete <name>.lcsas-partial onto <name>, in the same folder it was just written in) fails (#909); only a race or a file-system fault does that
+tree.c:1162   INTRACTABLE   "
 tree.c:1163   INTRACTABLE   "
 tree.c:1164   INTRACTABLE   "
-tree.c:1165   INTRACTABLE   "
-tree.c:1284   DEFENSIVE   decode_link_target: the second lcsas_b64_decode over the same input returns a length other than the sizing pass's; the decoder is deterministic
-tree.c:1543   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
-tree.c:1547   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
-tree.c:1548   INTRACTABLE   "
-tree.c:1618   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on symlink() fail (#221); needs a filesystem-full target - integration-only
-tree.c:1622   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
-tree.c:1623   INTRACTABLE   "
-tree.c:1634   INTRACTABLE   symlink() EPERM/EOPNOTSUPP/ENOSYS: link listed as not restored (#224/#783); needs a non-POSIX (FAT32/exFAT/SMB) target - integration-only (test_tier1_fat32_target.py)
-tree.c:1754   INTRACTABLE   write_failures_file write fail after a successful open (#783); needs a filesystem-full target - integration-only
-tree.c:1760   INTRACTABLE   "
+tree.c:1283   DEFENSIVE   decode_link_target: the second lcsas_b64_decode over the same input returns a length other than the sizing pass's; the decoder is deterministic
+tree.c:1542   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
+tree.c:1546   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:1547   INTRACTABLE   "
+tree.c:1617   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on symlink() fail (#221); needs a filesystem-full target - integration-only
+tree.c:1621   INTRACTABLE   "  (LCSAS_TREE_DISK_FULL, exit 74)
+tree.c:1622   INTRACTABLE   "
+tree.c:1633   INTRACTABLE   symlink() EPERM/EOPNOTSUPP/ENOSYS: link listed as not restored (#224/#783); needs a non-POSIX (FAT32/exFAT/SMB) target - integration-only (test_tier1_fat32_target.py)
+tree.c:1753   INTRACTABLE   write_failures_file write fail after a successful open (#783); needs a filesystem-full target - integration-only
+tree.c:1759   INTRACTABLE   "
+tree.c:1764   INTRACTABLE   "
 tree.c:1765   INTRACTABLE   "
 tree.c:1766   INTRACTABLE   "
 tree.c:1767   INTRACTABLE   "
-tree.c:1768   INTRACTABLE   "
-tree.c:1809   INTRACTABLE   lcsas_tree_restore summary for links the target cannot hold (#783); same constraint as 1634
-tree.c:1832   VOLATILE   lcsas_tree_restore rows-lost summary (#783); reached only when 235/246 are, by the fault-inject sweep
+tree.c:1808   INTRACTABLE   lcsas_tree_restore summary for links the target cannot hold (#783); same constraint as 1634
+tree.c:1831   VOLATILE   lcsas_tree_restore rows-lost summary (#783); reached only when 235/246 are, by the fault-inject sweep
 ```<!-- EXEMPTIONS-FENCE-END -->
 
 ## Path forward

@@ -5,7 +5,7 @@ label via the holographic SQLite catalog burned onto every disc and
 prints an ``It is on any disc labelled:`` block (see
 ``recovery/src/lcsas-restore/disc_locator.c::print_prompt``).  Until
 issue #248 the tier-3 standalone restorer printed only the pack hash
-with the legacy ``(no catalog available)`` line, leaving operators (and
+with a "no catalog available" line, leaving operators (and
 the blind-restore test agent's pattern matcher) without the disc-label
 hint.
 
@@ -16,8 +16,8 @@ This module pins the three branches the framed prompt must drive when
     missing pack: the framed prompt names the volume label in the SAME
     shape tier-1 emits.
 
-  * **No catalog supplied** -- backwards-compat: the legacy
-    ``(no catalog available)`` line still appears.
+  * **No catalog supplied** -- tier 1's
+    ``(no disc catalog yet: insert your newest data disc)`` line (#967).
 
   * **Catalog present but pack absent** -- mirrors tier-1's behaviour
     when ``lcsas_catalog_find_pack`` returns no match
@@ -43,6 +43,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -143,6 +144,7 @@ def _make_search(
     tmp_path: Path,
     *,
     catalog_path: Path | None,
+    log: Callable[[str], None] = lambda _msg: None,
 ) -> DiscSearch:
     """Build the disc search a restorer of a synthetic repository would
     use, with its own ``data/`` as the only search root.
@@ -157,7 +159,7 @@ def _make_search(
         catalog_path=catalog_path,
         interactive=True,
         repo_data=repo / "data",
-        log=lambda _msg: None,
+        log=log,
         prompt_in=lambda: "q\n",
     )
 
@@ -200,8 +202,8 @@ def test_prompt_includes_volume_label_when_catalog_supplied(
     )
     # Legacy line MUST NOT appear when the catalog answered -- otherwise
     # the agent could see contradictory hints.
-    assert "no catalog available" not in captured, (
-        "legacy 'no catalog available' line leaked when catalog was "
+    assert "no disc catalog yet" not in captured, (
+        "the no-catalog line leaked when catalog was "
         f"present; stderr was:\n{captured}"
     )
 
@@ -209,8 +211,9 @@ def test_prompt_includes_volume_label_when_catalog_supplied(
 def test_prompt_falls_back_when_no_catalog_supplied(
     tmp_path: Path, capsys
 ) -> None:
-    """Backwards-compat: with ``catalog_path=None`` the legacy
-    ``(no catalog available)`` line still appears.
+    """With ``catalog_path=None`` the prompt says tier 1's
+    ``(no disc catalog yet: insert your newest data disc)`` (#967: it
+    said "(tier-3 Python reader: no catalog available)").
 
     Tests / fixtures / older meta-discs that ship without a catalog
     must still get the existing tier-3 prompt -- the catalog hint is
@@ -220,9 +223,10 @@ def test_prompt_falls_back_when_no_catalog_supplied(
     _show_prompt(search, _PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
-    assert "(tier-3 Python reader: no catalog available)" in captured, (
-        f"expected legacy fallback line in framed prompt; stderr was:\n{captured}"
+    assert "| (no disc catalog yet: insert your newest data disc)      |" in captured, (
+        f"expected tier 1's no-catalog line in framed prompt; stderr was:\n{captured}"
     )
+    assert "no catalog available" not in captured, captured
     assert "It is on any disc labelled:" not in captured, (
         f"unexpected catalog-success line in no-catalog prompt; stderr was:\n{captured}"
     )
@@ -259,8 +263,8 @@ def test_prompt_reports_unknown_pack_when_catalog_lacks_record(
         "unexpected volume-label line for a pack absent from the catalog; "
         f"stderr was:\n{captured}"
     )
-    assert "no catalog available" not in captured, (
-        "legacy 'no catalog available' line leaked when catalog was "
+    assert "no disc catalog yet" not in captured, (
+        "the no-catalog line leaked when catalog was "
         f"reachable but didn't have the pack; stderr was:\n{captured}"
     )
 
@@ -269,8 +273,9 @@ def test_prompt_handles_corrupt_catalog_gracefully(
     tmp_path: Path, capsys
 ) -> None:
     """A non-SQLite (or otherwise unreadable) catalog must NOT crash the
-    framed prompt mid-restore.  Restoration must continue, falling back
-    to the legacy 'no catalog available' line.
+    framed prompt mid-restore.  Restoration must continue, with tier 1's
+    no-catalog line, and the catalog is named as not used, in tier 1's
+    words (#967).
 
     This pins the try/except around the sqlite3.connect call -- a
     corrupt catalog on a half-mounted disc would otherwise raise
@@ -279,14 +284,19 @@ def test_prompt_handles_corrupt_catalog_gracefully(
     """
     catalog = tmp_path / "catalog.db"
     catalog.write_bytes(b"not a sqlite database")
-    search = _make_search(tmp_path, catalog_path=catalog)
+    said: list[str] = []
+    search = _make_search(tmp_path, catalog_path=catalog, log=said.append)
     _show_prompt(search, _PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
-    assert "(tier-3 Python reader: no catalog available)" in captured, (
-        "corrupt catalog must degrade to the legacy line; "
+    assert "(no disc catalog yet: insert your newest data disc)" in captured, (
+        "a corrupt catalog must give tier 1's no-catalog line; "
         f"stderr was:\n{captured}"
     )
+    assert said == [
+        f"WARNING: the catalog {catalog} is damaged or cut short, or this "
+        "program cannot read it; not using it."
+    ], said
 
 
 def test_prompt_reports_pack_with_no_volume_mapping(
@@ -318,7 +328,7 @@ def test_prompt_reports_pack_with_no_volume_mapping(
     # Not one of the other three states.
     assert "It is on any disc labelled:" not in captured
     assert "(catalog has no record of this pack ID)" not in captured
-    assert "no catalog available" not in captured
+    assert "no disc catalog yet" not in captured
 
 
 def test_standalone_restorer_exposes_catalog_flag(tmp_path: Path) -> None:

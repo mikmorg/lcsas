@@ -174,3 +174,14 @@ def test_password_card_heir_lines() -> None:
         assert needle in card
         assert card.index(needle) > owner, needle
     assert "Password file :" not in card
+
+
+def test_estate_card_points_at_repairing_a_damaged_disc() -> None:
+    """#966 item 8: nothing an heir reads first said where a disc that
+    will not read is repaired.  The estate card, kept with the discs,
+    names the section, as the META disc's START_HERE.txt does."""
+    for card in (_estate(), _estate(key_split=False)):
+        flat = " ".join(card.split())
+        assert ('"REPAIRING A DAMAGED DISC" in RESTORE.txt' in flat), card
+        assert ('"A DISC IS MISSING OR WILL NOT READ" in RESTORE_WINDOWS.txt'
+                in flat), card

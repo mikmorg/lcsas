@@ -460,6 +460,8 @@ class DiscSearch:
         self._repo_id = repo_id
         self._copy_origin: dict[Path, Path] = {}
         self._foreign_named: set[str] = set()
+        # #967: the catalogs already named as not readable (once each).
+        self._bad_named: set[str] = set()
 
         # Discs found one level below a root (refreshed on a miss), and
         # the meta disc, which is skipped while it is mounted.
@@ -936,6 +938,7 @@ class DiscSearch:
         """
         conn = self._fs.open_catalog(path)
         if conn is None:
+            self._name_bad_catalog(path)
             return None
         try:
             if self._repo_id is not None and conn.execute(
@@ -977,6 +980,7 @@ class DiscSearch:
             return vols, known, every
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog.
+            self._name_bad_catalog(path)
             return None
         finally:
             # Explicit close is required: `with sqlite3.connect() as c:`
@@ -984,6 +988,17 @@ class DiscSearch:
             # Leaving the connection open keeps a fd on the iso9660 mount
             # and prevents `umount /media` during disc swaps.
             conn.close()
+
+    def _name_bad_catalog(self, path: Path) -> None:
+        """Say once that the catalog at *path* (or the disc file it was
+        copied from) is not used because it cannot be read: tier 1's
+        words (disc_locator.c::evaluate_catalog), #967."""
+        shown = str(self._copy_origin.get(path, path))
+        if shown not in self._bad_named:
+            self._bad_named.add(shown)
+            self._log(
+                f"WARNING: the catalog {shown} is damaged or cut short, or "
+                "this program cannot read it; not using it.")
 
     def _lookup_volume_labels(
         self, pack_id: str,
@@ -993,9 +1008,8 @@ class DiscSearch:
         Returns
         -------
         ``None``
-            No catalog could be reached or read.  Caller should fall
-            back to the legacy "(no catalog available)" framed-prompt
-            line.
+            No catalog could be reached or read.  The prompt then
+            says tier 1's "(no disc catalog yet: ...)" line (#967).
         ``(labels, status)``
             ``labels`` is the (possibly-empty) list of the labels to
             offer, by tier 1's rule (``_offered_labels``).  ``status``
@@ -1184,18 +1198,14 @@ class DiscSearch:
             cat_result = self._lookup_volume_labels(pack_id)
         names_discs = cat_result is not None and bool(cat_result[0])
         if cat_result is None:
-            # No --catalog supplied (or catalog unreadable).  Keep the
-            # legacy "no catalog available" wording so backwards-compat
-            # callers / tests that match on it still pass.
+            # No catalog in use: none given or found, or none that could
+            # be read (each one that could not is named once, as tier 1
+            # names it).  #967: tier 1's line (disc_locator.c::
+            # print_prompt), byte for byte.  Every data disc carries the
+            # catalog, and the next prompt reads it (#635).
             lines.append(
-                "| (tier-3 Python reader: no catalog available)             |"
+                "| (no disc catalog yet: insert your newest data disc)      |"
             )
-            # #635: say how to get one.  Every data disc carries the
-            # catalog, and the next prompt reads it.
-            lines.extend([
-                "| Insert any data disc, your newest if you know which:     |",
-                "| its catalog names the disc this pack is on.              |",
-            ])
         else:
             labels, status = cat_result
             if labels:

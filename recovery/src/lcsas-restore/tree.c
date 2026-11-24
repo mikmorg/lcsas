@@ -688,11 +688,10 @@ apply_node_xattrs(const char *src, const lcsas_json_tok *toks, long ntoks,
 #endif
 
 void
-lcsas_progress_init(lcsas_progress *p, unsigned long long total_hint)
+lcsas_progress_init(lcsas_progress *p)
 {
     if (!p) return;
     p->enabled = 1;
-    p->total_blob_hint = total_hint;
     p->blobs_done = 0;
     p->bytes_done = 0;
     p->last_tick_blobs = 0;
@@ -704,12 +703,12 @@ lcsas_progress_init(lcsas_progress *p, unsigned long long total_hint)
 static void
 emit_progress_line(const lcsas_progress *p)
 {
-    /* Render bytes as integer MB to keep the format `\d+/\d+` clean
-     * for downstream regex matching (no decimal point in the number). */
+    /* Bytes as whole MB (no decimal point in the number).  No total
+     * (#966): see lcsas_progress in tree.h. */
     unsigned long long mb = p->bytes_done / (1024ULL * 1024ULL);
     fprintf(stderr,
-            "[lcsas-restore] progress: %llu/%llu blobs, %llu MB\n",
-            p->blobs_done, p->total_blob_hint, mb);
+            "[lcsas-restore] progress: %llu blobs, %llu MB\n",
+            p->blobs_done, mb);
 }
 
 void

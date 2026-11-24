@@ -1898,7 +1898,10 @@ class MetaVolumeBuilder:
         recorded = self._recorded_splits()
         if self._config is not None:
             injector.write_key_info(self._config, recorded=recorded)
-            injector.write_config_summary(self._config)
+            # #966: the META disc has START_HERE.txt, not a data
+            # disc's RESTORE_INSTRUCTIONS.txt.
+            injector.write_config_summary(self._config,
+                                          restore_doc="START_HERE.txt")
         text = self._render_meta_start_here(self._config, recorded)
         _write_and_sync(self._output / "START_HERE.txt", text)
 
@@ -2006,7 +2009,8 @@ class MetaVolumeBuilder:
                 # Same share-combining pre-step text as PASSWORD_INFO.txt — one
                 # source so the doc-contract gates cover both.
                 split_block = "\n" + "\n".join(
-                    share_recovery_lines(config, recorded=recorded)
+                    share_recovery_lines(config, recorded=recorded,
+                                         disc=f"/media/$USER/{label}")
                 ).rstrip() + "\n"
             if config.technical_contact:
                 contact_block = (
@@ -2041,8 +2045,10 @@ to restore the files on the LCSAS archive discs.
   >>> Linux <<<
        Open a terminal, then run:
            sh /media/$USER/{label}/restore.sh --restore-folder ~/restored
-       (or:  sudo mount /dev/sr0 /mnt
-        then: sh /mnt/restore.sh --restore-folder ~/restored)
+       If the disc does not open by itself, type
+           sudo mount /dev/sr0 /mnt
+       and then use /mnt in place of /media/$USER/{label}
+       in every command on this page.
        (See recovery/docs/RESTORE.txt for details.)
 
 {no_os_block}
@@ -2080,6 +2086,13 @@ WHAT YOU NEED
   * A USB Blu-ray reader (or any optical drive that can read
     the disc format used by this archive).
 {split_block}
+IF A DISC WILL NOT READ
+
+  A scratched or damaged disc can often be repaired: every
+  disc carries extra repair data.  See "REPAIRING A DAMAGED
+  DISC" in recovery/docs/RESTORE.txt (on Windows, "A DISC IS
+  MISSING OR WILL NOT READ" in recovery/docs/RESTORE_WINDOWS.txt).
+
 WHAT HAPPENS IF YOU LOSE THE PASSWORD
 
   The data cannot be restored.  This is by design — only the

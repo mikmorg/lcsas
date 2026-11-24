@@ -293,9 +293,13 @@ def _split_repo_list(view: SplitView, indent: str) -> list[str]:
 
 
 def _share_card_section(
-    view: SplitView, *, start_here: bool = False,
+    view: SplitView, *, start_here: bool = False, disc: str = "/mnt",
 ) -> list[str]:
     """The share-card section of the heir text: one source (#819).
+
+    *disc* is where the commands find the META disc: ``/mnt``, or
+    ``/media/$USER/LCSAS_META`` on the META disc's own START_HERE.txt,
+    whose commands all use that path (#966).
 
     PASSWORD_INFO.txt and the meta disc's START_HERE.txt show it under a
     ``SPLIT PASSWORD(S) — ...`` heading; a data disc's START_HERE.txt
@@ -359,7 +363,8 @@ def _share_card_section(
         "",
         *gather,
         "",
-        "      /mnt/recovery/bin/<machine>/lcsas-shares <card1> <card2>",
+        *_command_lines(f"{disc}/recovery/bin/<machine>/lcsas-shares",
+                        "<card1> <card2>"),
         "",
         f"  Give {which_cards}, each by its full path, e.g.",
         "  ~/card1.txt (or pipe the share words in).  <machine> is the",
@@ -371,30 +376,31 @@ def _share_card_section(
         "",
         "  If that program will not run, the fallback is:",
         "",
-        "      python3 /mnt/combine_shares.py <card1> <card2>",
+        *_command_lines(f"python3 {disc}/combine_shares.py",
+                        "<card1> <card2>"),
         "",
         "  If python3 is not installed, use the copy bundled on the",
         "  META disc.  <platform> is the same folder as <machine> above",
         "  (for most PCs that is x86_64-unknown-linux-musl):",
         "",
-        "      /mnt/recovery/bin/<platform>/python/bin/python3 \\",
-        "          /mnt/combine_shares.py <card1> <card2>",
+        f"      {disc}/recovery/bin/<platform>/python/bin/python3 \\",
+        f"          {disc}/combine_shares.py <card1> <card2>",
         "",
         "  Either combiner prints the password and nothing else.  Save",
         "  it in your home folder (the disc cannot be written to), e.g.:",
         "",
-        "      /mnt/recovery/bin/<machine>/lcsas-shares \\",
+        f"      {disc}/recovery/bin/<machine>/lcsas-shares \\",
         "          <card1> <card2> > ~/repo.key",
         "",
         "STEP 2: run the normal restore and use that password:",
         "",
-        "      sh /mnt/restore.sh --restore-folder ~/restored",
+        f"      sh {disc}/restore.sh --restore-folder ~/restored",
         "",
         "  When restore.sh shows the  Password:  prompt, type the",
         "  password from STEP 1, or give the saved file by its full",
         "  path:",
         "",
-        "      sh /mnt/restore.sh --password-file ~/repo.key \\",
+        f"      sh {disc}/restore.sh --password-file ~/repo.key \\",
         "          --restore-folder ~/restored",
         "",
         "  If it asks for the share cards instead, type P, then the",
@@ -413,6 +419,15 @@ def _share_card_section(
 
 #: START_HERE.txt on a data disc is at most this wide (#854).
 START_HERE_WIDTH = 78
+
+
+def _command_lines(command: str, args: str) -> list[str]:
+    """A command of the share-card section at column 6, its arguments on
+    a second line when one line would be wider than START_HERE_WIDTH
+    (with the section's column-2 indent added)."""
+    if 2 + 6 + len(command) + 1 + len(args) <= START_HERE_WIDTH:
+        return [f"      {command} {args}"]
+    return [f"      {command} \\", f"          {args}"]
 
 
 def _wrap_text(
@@ -445,6 +460,8 @@ def share_recovery_lines(
     config: LCSASConfig,
     escrow_override: tuple[int, int] | None = None,
     recorded: Mapping[str, tuple[int, int]] | None = None,
+    *,
+    disc: str = "/mnt",
 ) -> list[str]:
     """Plain-language steps for the heir to rebuild a split password.
 
@@ -458,13 +475,14 @@ def share_recovery_lines(
     ``escrow_override`` is the (K, N) of the recorded split (KEY-08); when
     it applies (``split_view``) it overrides the config values so disc
     text reflects the split that was actually performed.  ``recorded``
-    does the same per repository.
+    does the same per repository.  ``disc``: where the commands find
+    the META disc (``_share_card_section``).
     """
     view = split_view(config, escrow_override, recorded) or SplitView(
         by_repo={}, unsplit=(),
         uniform=(config.key_threshold, config.key_shares),
     )
-    return [*_share_card_section(view), ""]
+    return [*_share_card_section(view, disc=disc), ""]
 
 
 def _human_bytes(n: int) -> str:
@@ -1370,7 +1388,10 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 
         self._write_text("PASSWORD_INFO.txt", "\n".join(lines))
 
-    def write_config_summary(self, config: LCSASConfig) -> None:
+    def write_config_summary(
+        self, config: LCSASConfig, *,
+        restore_doc: str = "RESTORE_INSTRUCTIONS.txt",
+    ) -> None:
         """Write a sanitized config summary to the staging root.
 
         Includes repository names, media type, and survivability fields
@@ -1379,6 +1400,10 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 
         Args:
             config: LCSAS configuration.
+            restore_doc: the file on the same disc that tells how to
+                restore: a data disc's RESTORE_INSTRUCTIONS.txt, the META
+                disc's START_HERE.txt (#966: the META disc has no
+                RESTORE_INSTRUCTIONS.txt).
         """
         lines = [
             "LCSAS CONFIGURATION SUMMARY",
@@ -1411,7 +1436,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 
         lines.append("NOTE: Filesystem paths are omitted because they are")
         lines.append("specific to the original system and not useful for")
-        lines.append("restoration. See RESTORE_INSTRUCTIONS.txt instead.")
+        lines.append(f"restoration. See {restore_doc} instead.")
         lines.append("")
 
         self._write_text("CONFIG_SUMMARY.txt", "\n".join(lines))

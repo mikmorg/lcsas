@@ -1066,8 +1066,9 @@ class PurePythonRestorer:
                 ``recovery/src/lcsas-restore/disc_locator.c::print_prompt``).
                 Heirs (and the blind-restore test agent's pattern matcher)
                 rely on that exact phrasing.  A missing, corrupt, or locked
-                catalog falls back to the legacy "(no catalog available)"
-                line; lookups never raise.
+                catalog gives tier 1's "(no disc catalog yet: insert your
+                newest data disc)" line (#967), and one that cannot be
+                read is named once; lookups never raise.
 
                 When ``None`` (the default), the restorer auto-discovers a
                 ``catalog.db`` lazily from ``pack_search_paths``: each
@@ -1227,6 +1228,16 @@ class PurePythonRestorer:
         else:
             snap = self._latest_snapshot()
 
+        # #952: which backup this is, by its date, as tier 1 says it
+        # (main.c).  (A snapshot file that cannot be read stops this
+        # reader before here, so the newest is always known.)
+        date = backup_date(snap.time)
+        newest = self._latest_snapshot()
+        if snap is newest:
+            _log(f"Restoring the backup of {date}, the newest on these discs.")
+        else:
+            _log(f"Restoring the backup of {date}; the newest on these discs "
+                 f"is of {backup_date(newest.time)}.")
         _log(f"Restoring snapshot {snap.snapshot_id[:12]}... "
              f"({', '.join(snap.paths)})")
         _log(f"Target: {target}")
@@ -1297,6 +1308,7 @@ class PurePythonRestorer:
         for line in self._search.report_skips():
             _log(line)
         if not self._failures:
+            _log(f"The backup of {date} is restored.")
             _log("Restore complete.")
         return snap
 
@@ -2342,6 +2354,20 @@ def time_sort_key(ts: str) -> tuple[int, float]:
         return (1, _parse_timestamp(ts))
     except ValueError:
         return (0, 0.0)
+
+
+_BACKUP_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}")
+
+
+def backup_date(when: str) -> str:
+    """A snapshot's date as the heir reads it (#952): "YYYY-MM-DD HH:MM",
+    the date and minute of the backup computer's own clock (the offset
+    is not applied).  A ``time`` of another form is given as it is, an
+    empty one as "(no date recorded)".  Tier 1's
+    ``lcsas_snapshot_date_text`` (repo.c) gives the same."""
+    if _BACKUP_DATE.match(when):
+        return f"{when[:10]} {when[11:16]}"
+    return when or "(no date recorded)"
 
 
 def _snapshot_sort_key(snap: SnapshotMeta) -> tuple[int, float]:

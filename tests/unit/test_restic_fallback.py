@@ -3476,3 +3476,21 @@ class TestTolerantRestoreFailureRecording:
         # Partial scratch file cleaned up; final path never created.
         assert not out.exists()
         assert not out.with_name(out.name + ".lcsas-partial").exists()
+
+
+# #952: the backup's date as the heir reads it.  The same cases as
+# recovery/tests/test_repo.c's for tier 1's lcsas_snapshot_date_text.
+@pytest.mark.parametrize(("when", "want"), [
+    ("2026-11-21T14:02:33.123456789+01:00", "2026-11-21 14:02"),
+    ("2026-01-02T03:04:05Z", "2026-01-02 03:04"),
+    ("2026-01-02 03:04:05-05:00", "2026-01-02 03:04"),
+    ("2026-01-02T03:04", "2026-01-02 03:04"),
+    ("2026-01-02", "2026-01-02"),
+    ("2026-01-02T3:04:05Z", "2026-01-02T3:04:05Z"),
+    ("yesterday", "yesterday"),
+    ("", "(no date recorded)"),
+])
+def test_backup_date(when: str, want: str) -> None:
+    from lcsas.restore.restic_fallback import backup_date
+
+    assert backup_date(when) == want

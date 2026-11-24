@@ -25,6 +25,9 @@ HEADING = "| It is on any disc labelled:                              |"
 NONE_LISTED = "none listed"
 NO_RECORD = "no record"
 NO_PROMPT = "no prompt"
+#: A prompt with no catalog in use (none given or found, or none that
+#: could be read): "(no disc catalog yet: insert your newest data disc)".
+NO_CATALOG = "no catalog"
 NEWER_THAN = "| It is on a disc newer than:                              |"
 
 
@@ -115,7 +118,8 @@ def named_discs(output: str) -> tuple[str, ...] | str:
     """What the first disc prompt in *output* names: the labels under
     its "It is on any disc labelled:" heading, in order, or
     ``NONE_LISTED`` (``newer_than(label)`` when the prompt names the
-    disc the pack is newer than) / ``NO_RECORD`` / ``NO_PROMPT``."""
+    disc the pack is newer than) / ``NO_RECORD`` / ``NO_CATALOG`` /
+    ``NO_PROMPT``."""
     lines = output.splitlines()
     for i, line in enumerate(lines):
         if line == HEADING:
@@ -134,4 +138,6 @@ def named_discs(output: str) -> tuple[str, ...] | str:
             return NONE_LISTED
         if "catalog has no record of this pack" in line:
             return NO_RECORD
+        if "(no disc catalog yet: insert your newest data disc)" in line:
+            return NO_CATALOG
     return NO_PROMPT

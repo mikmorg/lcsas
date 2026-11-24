@@ -26,9 +26,11 @@ sh /mnt/restore.sh --restore-folder ~/restored --snapshot latest
 `restore.sh` asks for your newest data disc, the backup set and the
 password, and then for each disc it needs. It first copies itself off
 the disc, so the meta disc can come out of the drive (set
-`LCSAS_NO_RELOCATE=1` to run it where it is). With a single terminal,
-press Ctrl+Z to pause it, swap the disc (`sudo eject /dev/sr0`), type
-`fg` and press Enter.
+`LCSAS_NO_RELOCATE=1` to run it where it is). To swap a disc that you
+mounted by hand, leave the restore waiting at its question and type
+the commands (`sudo umount /mnt`, `sudo eject /dev/sr0`, then
+`sudo mount /dev/sr0 /mnt` for the next disc) in a second terminal
+window.
 
 RESTORE.txt explains each question, how to stop and carry on later,
 share cards, damaged discs, and what to do when the tools will not run.

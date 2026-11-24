@@ -269,6 +269,7 @@ main(int argc, char **argv)
     lcsas_disc_locator locator;
     int interactive = 0;
     long sidx;
+    char backup_date[64];   /* #952: the date of the backup restored */
     int rc = 1;
     char keys_dir[4096];
 
@@ -663,6 +664,29 @@ main(int argc, char **argv)
         goto out;
     }
 
+    /* #952: which backup this is, by its date, as the heir reads it.
+     * "The newest" only when no snapshot file was unreadable: one that
+     * could not be read may be newer (#662).  The Python reader says
+     * the same (restic_fallback.py, restore() and backup_date). */
+    {
+        long newest = lcsas_snapshot_latest(&snaps);
+        lcsas_snapshot_date_text(snaps.items[sidx].time, backup_date,
+                                 sizeof backup_date);
+        if (snaps.unreadable > 0) {
+            fprintf(stderr, "[lcsas-restore] Restoring the backup of %s.\n",
+                    backup_date);
+        } else if (sidx == newest) {
+            fprintf(stderr, "[lcsas-restore] Restoring the backup of %s, "
+                            "the newest on these discs.\n", backup_date);
+        } else {
+            char newest_date[64];
+            lcsas_snapshot_date_text(snaps.items[newest].time, newest_date,
+                                     sizeof newest_date);
+            fprintf(stderr, "[lcsas-restore] Restoring the backup of %s; "
+                            "the newest on these discs is of %s.\n",
+                    backup_date, newest_date);
+        }
+    }
     fprintf(stderr, "[lcsas-restore] restoring snapshot %.12s -> %s\n",
             snaps.items[sidx].file_name, target);
 
@@ -685,14 +709,10 @@ main(int argc, char **argv)
     {
         lcsas_progress progress;
         int tree_rc;
-        /* total_blob_hint is the loaded index size -- an upper bound
-         * on what this snapshot can reference.  We surface that
-         * explicitly so the heir isn't misled by the denominator. */
-        lcsas_progress_init(&progress, (unsigned long long)ix.count);
-        fprintf(stderr,
-                "[lcsas-restore] progress: 0/%llu blobs, 0 MB"
-                " (denominator is index size, not snapshot subset)\n",
-                progress.total_blob_hint);
+        /* #966: no denominator.  The index size it showed is not the
+         * snapshot's, so a finished restore ended below 100 %. */
+        lcsas_progress_init(&progress);
+        fputs("[lcsas-restore] progress: 0 blobs, 0 MB\n", stderr);
 
         tree_rc = lcsas_tree_restore(repo_path, &mk, &ix,
                                      snaps.items[sidx].tree_id_hex,
@@ -736,6 +756,8 @@ main(int argc, char **argv)
         }
     }
 
+    fprintf(stderr, "[lcsas-restore] The backup of %s is restored.\n",
+            backup_date);
     fprintf(stderr, "[lcsas-restore] restore complete\n");
     if (locator.misses > 0) {
         fprintf(stderr,

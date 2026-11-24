@@ -919,6 +919,27 @@ lcsas_snapshot_time_cmp(const char *a, const char *b)
     return strcmp(a, b);
 }
 
+void
+lcsas_snapshot_date_text(const char *when, char *out, size_t cap)
+{
+    /* "YYYY-MM-DDTHH:MM": 'd' a digit, anything else that very byte. */
+    static const char form[] = "dddd-dd-ddTdd:dd";
+    size_t i;
+    int ok = 1;
+
+    for (i = 0; ok && form[i] != '\0'; i++) {
+        char c = when[i];
+        if (form[i] == 'd') ok = c >= '0' && c <= '9';
+        else if (form[i] == 'T') ok = c == 'T' || c == 't' || c == ' ';
+        else ok = c == form[i];
+    }
+    if (ok) {
+        snprintf(out, cap, "%.10s %.5s", when, when + 11);
+    } else {
+        snprintf(out, cap, "%s", *when ? when : "(no date recorded)");
+    }
+}
+
 static int
 snap_time_qsort_cmp(const void *a, const void *b)
 {

@@ -158,6 +158,13 @@ long lcsas_snapshot_latest(const lcsas_snapshot_list *l);
  * order when either string does not parse.  <0, 0, >0 like strcmp. */
 int lcsas_snapshot_time_cmp(const char *a, const char *b);
 
+/* Issue #952 — a snapshot's date as the heir reads it: "YYYY-MM-DD
+ * HH:MM", the date and minute of the backup computer's own clock (the
+ * offset is not applied).  A `when` (a snapshot's `time`) of another
+ * form is given as it is, an empty one as "(no date recorded)".  Cut
+ * to `cap` bytes. */
+void lcsas_snapshot_date_text(const char *when, char *out, size_t cap);
+
 /* Find snapshot by exact match or unique prefix; -1 if not found. */
 long lcsas_snapshot_find(const lcsas_snapshot_list *l, const char *id);
 

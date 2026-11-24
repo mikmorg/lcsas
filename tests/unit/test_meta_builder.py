@@ -1667,6 +1667,54 @@ class TestMetaStartHereVariants:
         assert (out / "restore.sh").is_file()
         assert (out / "recovery" / "bin").is_dir()
 
+    def test_config_summary_points_at_a_file_on_the_meta_disc(self, meta_tree):
+        """#966 item 8: the META disc's CONFIG_SUMMARY.txt said "See
+        RESTORE_INSTRUCTIONS.txt", a file only data discs have.  Every
+        file it names is on the META disc; a data disc's still names
+        RESTORE_INSTRUCTIONS.txt, which it has."""
+        from lcsas.staging.metadata import HolographicInjector
+
+        out, builder = meta_tree
+        content = (out / "CONFIG_SUMMARY.txt").read_text(encoding="utf-8")
+        assert "RESTORE_INSTRUCTIONS.txt" not in content, content
+        named = re.findall(r"[A-Z][A-Z0-9_]*\.txt", content)
+        assert named, content
+        for name in named:
+            assert (out / name).is_file(), f"CONFIG_SUMMARY.txt names {name}"
+        data = out.parent / "data_disc"
+        data.mkdir(exist_ok=True)
+        HolographicInjector(data).write_config_summary(builder._config)
+        assert "See RESTORE_INSTRUCTIONS.txt instead." in (
+            data / "CONFIG_SUMMARY.txt").read_text(encoding="utf-8")
+
+    def test_start_here_one_linux_mount_path(self, meta_tree):
+        """#966 item 8: START_HERE.txt switched between
+        /media/$USER/LCSAS_META and /mnt.  Every command uses the first;
+        /mnt is the one fallback, for a disc that does not open by
+        itself, and says to use it in place of the first everywhere."""
+        out, builder = meta_tree
+        for text in ((out / "START_HERE.txt").read_text(encoding="utf-8"),
+                     builder._render_meta_start_here(None)):
+            flat = " ".join(text.split())
+            assert "sh /mnt/" not in flat
+            assert "sh /media/$USER/LCSAS_META/restore.sh" in flat
+            assert ("sudo mount /dev/sr0 /mnt and then use /mnt in place of "
+                    "/media/$USER/LCSAS_META in every command on this page"
+                    ) in flat, flat
+
+    def test_start_here_points_at_repairing_a_damaged_disc(self, meta_tree):
+        """#966 item 8: nothing on the META disc's first page said where
+        a disc that will not read is repaired."""
+        out, builder = meta_tree
+        restore_txt = (out / "recovery" / "docs" / "RESTORE.txt").read_text(
+            encoding="utf-8")
+        assert "\nREPAIRING A DAMAGED DISC\n" in restore_txt
+        for text in ((out / "START_HERE.txt").read_text(encoding="utf-8"),
+                     builder._render_meta_start_here(None)):
+            flat = " ".join(text.split())
+            assert ('"REPAIRING A DAMAGED DISC" in recovery/docs/RESTORE.txt'
+                    in flat), flat
+
     def test_start_here_references_only_files_present(self, meta_tree):
         """Generic guard: every file START_HERE.txt names must exist on
         the built meta tree (catches the RESTORE_INSTRUCTIONS.txt class

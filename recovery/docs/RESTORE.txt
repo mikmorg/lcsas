@@ -179,10 +179,18 @@ in this order.  Each one says how to answer.
      cards instead (see "SHARE CARDS (SPLIT PASSWORDS)").
 
   4. The discs, one by one, while the restore runs (see "MULTI-DISC
-     RESTORE").
+     RESTORE").  Before it starts, the restore says which backup it
+     is, by its date (the backup computer's own clock):
+         Restoring the backup of 2026-11-21 14:02, the newest on these discs.
+     An older backup, chosen with --snapshot, is named with the
+     newest beside it.  Check the date: a newer backup than you
+     expected may be on a newer data disc ("A WRONG OR MIXED-UP
+     DISC").
 
-  5. After a restore that succeeds, the end says where the files are
-     and how many:
+  5. After a restore that succeeds, the end says which backup it was,
+     where the files are and how many:
+         The backup of 2026-11-21 14:02 is restored.
+         ...
          Restore complete.  4 files restored to:
              /home/alice/restored
      Then, when the discs hold a set not restored yet:
@@ -690,12 +698,17 @@ Type the words of exactly K different cards, one card per line; the
 words show as you type, and a word may be cut to its first 4 letters.
 The numbers a card prints beside its words may be typed or left out.
 Each card is checked on its own as you type it: a mistyped word is
-named, and that card is asked for again.  The cards are then combined
-with the bundled lcsas-shares.  If they cannot be combined (cards
-from two different splits: compare the Split ID on each card), or the
-password they make is not this set's, it starts again at card 1.
-P then ENTER instead of a card lets you type the password itself; Q
-then ENTER stops (exit code 77).  Each card you type is kept in its
+named, and that card is asked for again.  A card typed twice is named
+(in full or in 4-letter words, it is the same card).  Every card of
+one split begins with the same two words, so a card of another split
+is named as you type it ("Card N is not from the same split as card
+1"), with how card 1 and that card begin: type another card, or R
+then ENTER to start again with card 1 (when card 1 was the odd one).
+The cards are then combined with the bundled lcsas-shares.  If they
+cannot be combined, or the password they make is not this set's, it
+starts again at card 1.  P then ENTER instead of a card lets you
+type the password itself; after a wrong password there, C then ENTER
+goes back to the cards.  Q then ENTER stops (exit code 77).  Each card you type is kept in its
 own private temporary file, deleted as soon as the cards are combined
 and on any exit.
 

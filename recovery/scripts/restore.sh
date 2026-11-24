@@ -3493,7 +3493,10 @@ password_ok() {
     return 0
 }
 
-# ask_password: the password prompt, until a password is accepted.
+# ask_password [cards]: the password prompt, until a password is
+# accepted.  With "cards" (the set's password is split, and the person
+# typed P at the share cards): C goes back to the cards, and returns 1
+# (#966).
 ask_password() {
     printf 'Type the password for %s, then ENTER (Q then ENTER to quit).\n' \
            "$SET_NAME" >&2
@@ -3505,11 +3508,16 @@ ask_password() {
                 printf 'No password typed.  Type the password, or Q then ENTER to quit.\n' >&2
                 continue ;;
             q|Q) quit_password ;;
+            c|C) [ "${1:-}" != cards ] || return 1 ;;
         esac
         printf '%s\n' "$_ap_pw" > "$PWFILE"
         password_ok && return 0
         printf 'That password was not accepted for %s.\n' "$SET_NAME" >&2
-        printf 'Type it again (check the letters and the caps lock), or Q then ENTER to quit.\n' >&2
+        if [ "${1:-}" = cards ]; then
+            printf 'Type it again (check the letters and the caps lock), C then ENTER to type the share cards instead, or Q then ENTER to quit.\n' >&2
+        else
+            printf 'Type it again (check the letters and the caps lock), or Q then ENTER to quit.\n' >&2
+        fi
     done
 }
 
@@ -3529,6 +3537,32 @@ share_words() {
         for (i = 1; i <= NF; i++)
             if ($i !~ /^[0-9]+[.)]?$/) printf "%s%s", (n++ ? " " : ""), $i
     } END { print "" }'
+}
+
+# share_key: a typed share card's words (standard input) as share_words
+# gives them, each cut to its first four letters.  lcsas-shares reads a
+# word by its first four letters, so one card typed in full and in four
+# letters has one key (#966).
+share_key() {
+    share_words | awk '{
+        for (i = 1; i <= NF; i++) printf "%s%s", (i > 1 ? " " : ""), substr($i, 1, 4)
+    } END { print "" }'
+}
+
+# say_cards_err ERRFILE CARDFILE...: lcsas-shares' messages, indented,
+# each card file named "card N" by its place in the list (#966: the
+# temporary files' paths were shown).
+say_cards_err() {
+    _sc_err="$1"; shift
+    SC_FILES="$(printf '%s\n' "$@")" awk '
+        BEGIN { n = split(ENVIRON["SC_FILES"], f, "\n") }
+        {
+            for (i = 1; i <= n; i++) {
+                j = f[i] == "" ? 0 : index($0, f[i])
+                if (j) $0 = substr($0, 1, j - 1) "card " i substr($0, j + length(f[i]))
+            }
+            print "  " $0
+        }' "$_sc_err" >&2
 }
 
 # ask_shares K N: the share card prompts (C7).  Each card is typed on one
@@ -3566,6 +3600,8 @@ ask_shares() {
             case "$_as_line" in
                 q|Q) quit_password ;;
                 p|P) drop_shares; return 1 ;;
+                # Start again with card 1 (#966).
+                r|R) continue 2 ;;
                 *[!' 	']*) ;;
                 *)
                     printf 'No words typed.\n' >&2
@@ -3576,11 +3612,12 @@ ask_shares() {
             printf '%s\n' "$_as_line" > "$_as_f"
             # The same card twice counts once, so the cards could not
             # be combined; say so now.  Typed with or without the
-            # card's numbers, it is the same card (#955).
-            _as_norm="$(printf '%s\n' "$_as_line" | share_words)"
+            # card's numbers (#955), in any case, in full or in four
+            # letters (#966), it is the same card.
+            _as_norm="$(printf '%s\n' "$_as_line" | share_key)"
             _as_dup=0
             for _as_g in "$@"; do
-                if [ "$(share_words < "$_as_g")" = "$_as_norm" ]; then
+                if [ "$(share_key < "$_as_g")" = "$_as_norm" ]; then
                     _as_dup=1
                 fi
             done
@@ -3591,8 +3628,28 @@ ask_shares() {
             fi
             _as_rc=0
             "$KEYSHARE_BIN" "$_as_f" >/dev/null 2>"$SHARE_DIR/check.err" || _as_rc=$?
+            # The first two words of a card are its split's (the split's
+            # id and settings): every card of one split begins with the
+            # same two, so a card of another split is named as it is
+            # typed (#966), not at the end.
+            _as_two="$(printf '%s\n' "$_as_norm" | awk '{ print $1, $2 }')"
+            _as_shown="$(printf '%s\n' "$_as_line" | share_words | awk '{ print $1, $2 }')"
             case "$_as_rc" in
                 0|1)
+                    if [ "$_as_i" -gt 1 ] && [ "$_as_two" != "$_as_first" ]; then
+                        rm -f "$_as_f"
+                        printf 'Card %d is not from the same split as card 1: the cards of one split all begin with the same two words.\n' \
+                               "$_as_i" >&2
+                        printf "Card 1 begins '%s'; this card begins '%s'.\n" \
+                               "$_as_first_shown" "$_as_shown" >&2
+                        printf 'Type card %d again from a card of the same split, or R then ENTER to start again with card 1.\n' \
+                               "$_as_i" >&2
+                        continue
+                    fi
+                    if [ "$_as_i" -eq 1 ]; then
+                        _as_first="$_as_two"
+                        _as_first_shown="$_as_shown"
+                    fi
                     # Valid on its own (1: it cannot rebuild the password
                     # alone, as expected below K).
                     set -- "$@" "$_as_f"
@@ -3628,7 +3685,7 @@ ask_shares() {
                        "$SET_NAME" >&2
                 printf 'The cards may belong to another backup set: compare the Split ID.\n' >&2 ;;
             1|3)
-                sed 's/^/  /' "$SHARE_DIR/check.err" >&2
+                say_cards_err "$SHARE_DIR/check.err" "$@"
                 printf 'These cards could not be combined: they may come from different\n' >&2
                 printf 'splits (compare the Split ID on each card).\n' >&2 ;;
             *)
@@ -3724,8 +3781,11 @@ new_pwfile() {
 # split and the combiner is here, else (or after P) the password.
 ask_typed() {
     if [ -n "$_pw_split" ] && [ -n "$KEYSHARE_BIN" ]; then
-        ask_shares "$_pw_split" || ask_password
-        return 0
+        # P at the cards: the password; C there: the cards again (#966).
+        while :; do
+            ask_shares "$_pw_split" && return 0
+            ask_password cards && return 0
+        done
     fi
     if [ -n "$_pw_split" ]; then
         printf 'The password for %s is split into share cards, but the share\n' "$SET_NAME" >&2
