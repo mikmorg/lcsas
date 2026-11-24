@@ -48,7 +48,7 @@
 #   restore-shell swap-loop [MOUNT_DIR]
 #       The prompts' disc-swap loop, so the agent need not type it or
 #       save it to a file (#827).  At most 40 times: expect
-#       'Insert the right disc|restore complete' (120 s); on a disc box,
+#       'Insert the right disc|[Rr]estore complete' (120 s); on a disc box,
 #       `sudo umount MOUNT_DIR`, `disc-loader eject`, `disc-loader insert`
 #       the disc the box names, `sudo mount /dev/sr0 MOUNT_DIR`, then
 #       `send ""` (ENTER).  MOUNT_DIR defaults to /media.
@@ -63,10 +63,19 @@
 #       A disc box already on the screen and waiting for its answer
 #       (the agent looked at it before starting the loop) is the first
 #       swap; the loop does not wait for it to be printed again (#917).
-#       On "restore complete": prints RESTORE COMPLETE, answers
-#       "Restore another backup set?" with n, exits 0.
+#       On "restore complete" (any tier: "Restore complete" too), it
+#       answers "Restore another backup set?" with n and exits 0.
 #       If expect times out (1) or the session ends (2), it stops and
 #       exits with expect's code; after 40 swaps it exits 1.
+#       Its last line on stdout is always one of these two, and nothing
+#       else prints them (#942):
+#         SWAP-LOOP END: RESTORE COMPLETE   the restore has finished
+#         SWAP-LOOP END: STOPPED            anything else: a timeout (a
+#                                           prompt it cannot answer), the
+#                                           session ended, 40 swaps, no
+#                                           data disc; the line before
+#                                           (stderr) says which
+#       Run in the background, wait for a line starting "SWAP-LOOP END:".
 #       $RESTORE_SHELL_DISC_LABELS overrides ~/disc-labels.txt.
 #
 # The session name is "r" by default; override with $RESTORE_SHELL_SESSION
@@ -74,6 +83,13 @@
 
 set -u
 SESSION="${RESTORE_SHELL_SESSION:-r}"
+
+# swap-loop's last line (#942).  The agent's prompts name these two
+# strings; tests/recovery_hardening/test_agent_prompt.py checks that
+# they do, letter for letter.  Both start with the one prefix an agent
+# waits for, so a wait never outlives the loop.
+SWAP_LOOP_DONE='SWAP-LOOP END: RESTORE COMPLETE'
+SWAP_LOOP_STOPPED='SWAP-LOOP END: STOPPED'
 
 # take_waiting_box: succeed if a disc box is on the screen now, waiting
 # for its answer, and mark it seen, as a matching `expect` would.
@@ -273,6 +289,7 @@ case "${1:-}" in
         discs=$(grep -v '^LCSAS_META$' "$labels" 2>/dev/null | grep -v '^[[:space:]]*$')
         if [ -z "$discs" ]; then
             echo "[restore-shell] swap-loop: no data disc listed in $labels" >&2
+            echo "$SWAP_LOOP_STOPPED"
             exit 2
         fi
         count=$(printf '%s\n' "$discs" | wc -l)
@@ -294,21 +311,29 @@ case "${1:-}" in
                 boxtext=$(tmux capture-pane -p -t "$SESSION" -S -80 2>/dev/null)
                 rc=0
             else
-                out=$(sh "$0" expect 'Insert the right disc|restore complete' 120)
+                # Tier 1 says "restore complete"; tier 3 and restore.sh's
+                # closing frame say "Restore complete." (#942).
+                out=$(sh "$0" expect 'Insert the right disc|[Rr]estore complete' 120)
                 rc=$?
                 boxtext=$out
             fi
             printf '%s\n' "$out"
             if [ "$rc" -ne 0 ]; then
-                echo "[restore-shell] swap-loop: stopped after $swaps disc swaps (expect exit $rc)" >&2
+                if [ "$rc" = 1 ]; then
+                    why="nothing new for 120 s: the restore may be waiting at a prompt swap-loop does not answer; look with restore-shell screen"
+                else
+                    why="the restore's session ended; look with restore-shell screen"
+                fi
+                echo "[restore-shell] swap-loop: stopped after $swaps disc swaps (expect exit $rc): $why" >&2
+                echo "$SWAP_LOOP_STOPPED"
                 exit "$rc"
             fi
             case "$out" in
-                *"restore complete"*)
-                    echo "RESTORE COMPLETE"
+                *"restore complete"*|*"Restore complete"*)
                     # Answer "Restore another backup set?" with no.
                     sh "$0" send n
                     echo "[restore-shell] swap-loop: done after $swaps disc swaps"
+                    echo "$SWAP_LOOP_DONE"
                     exit 0
                     ;;
             esac
@@ -366,6 +391,7 @@ case "${1:-}" in
             sh "$0" send ""
         done
         echo "[restore-shell] swap-loop: stopped after 40 disc swaps" >&2
+        echo "$SWAP_LOOP_STOPPED"
         exit 1
         ;;
     *)
@@ -377,6 +403,7 @@ usage: restore-shell start CMD...
        restore-shell screen
        restore-shell quit
        restore-shell swap-loop [MOUNT_DIR]
+swap-loop's last line is "$SWAP_LOOP_DONE" or "$SWAP_LOOP_STOPPED".
 EOF
         exit 2
         ;;

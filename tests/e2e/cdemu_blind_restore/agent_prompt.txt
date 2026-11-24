@@ -70,10 +70,14 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     with the disc the box names (the next one it names if the same box
     comes back; only for a box that names none, the next data disc of
     ~/disc-labels.txt in label order), `sudo mount /dev/sr0 /media`,
-    then `restore-shell send ""` (ENTER).  On `restore complete` it prints
-    RESTORE COMPLETE, answers "Restore another backup set?" with n,
-    and exits 0.  If the session ends it stops at once (exit 2); if
-    nothing new comes for 120 s it stops (exit 1).  Then look with
+    then `restore-shell send ""` (ENTER).  On `restore complete` it
+    answers "Restore another backup set?" with n, and exits 0.  If the
+    session ends it stops at once (exit 2); if nothing new comes for
+    120 s it stops (exit 1).  Its LAST line is always exactly one of:
+      `SWAP-LOOP END: RESTORE COMPLETE`   the restore has finished
+      `SWAP-LOOP END: STOPPED`            it stopped for another reason
+    If you run it in the background, wait for a line starting
+    `SWAP-LOOP END:`, not for any other text.  After STOPPED, look with
     `restore-shell screen`, and run `restore-shell swap-loop` again
     if a disc box is waiting.
 

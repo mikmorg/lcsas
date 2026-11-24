@@ -636,3 +636,92 @@ def test_swap_loop_inserts_exactly_the_discs_asked_for(
     assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
     assert _inserts(env) == [eight[n - 1] for n in order]
     _wait_on_screen(env, "answer=n")
+
+
+# --- #942: swap-loop always ends with one fixed line ---------------------------
+#
+# The 2026-11-21 tier1-tier2-missing run (#942) started swap-loop in the
+# background and waited for "RESTORE COMPLETE" in its output.  Tier 3
+# says "Restore complete." (capital R), as does restore.sh's own closing
+# frame, so swap-loop's case-sensitive "restore complete" never matched:
+# it stopped on a 120 s timeout, which printed only a stderr line, and the
+# agent's wait ran out its full 600 s.  Every way swap-loop ends now
+# prints one of two fixed lines last on stdout, both starting
+# "SWAP-LOOP END:", and the agent's instructions name them.
+
+
+def _end_line(name: str) -> str:
+    """The value of the sh constant *name* in restore-shell."""
+    for line in RESTORE_SHELL.read_text().splitlines():
+        if line.startswith(f"{name}='"):
+            return line.split("'")[1]
+    pytest.fail(f"restore-shell defines no {name}='...' constant")
+
+
+def _last_line(out: str) -> str:
+    lines = out.rstrip("\n").splitlines()
+    return lines[-1] if lines else ""
+
+
+def test_swap_loop_ends_with_the_done_line(swap_env: dict[str, str]) -> None:
+    _start(swap_env, "sh", "-c", _fake_restore(2))
+    done = _swap_loop_within(swap_env, 60)
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert _last_line(done.stdout) == _end_line("SWAP_LOOP_DONE"), done.stdout
+    _wait_on_screen(swap_env, "answer=n")
+
+
+# How tier 3 and restore.sh end a restore that worked (no lowercase
+# "restore complete" anywhere), then the "another set?" question.
+_TIER3_END = (
+    'echo "[restic-fallback] Restore complete."; '
+    "echo '============================================================'; "
+    "echo ' Restore complete.  4 files restored to:'; "
+    "echo '============================================================'; "
+    "printf 'Restore another backup set from these discs? [y/N] '; "
+    'read a; echo "answer=$a"'
+)
+
+
+def test_swap_loop_sees_a_tier3_restore_complete(
+    swap_env: dict[str, str],
+) -> None:
+    """#942: the tier-3 end is the end, not 120 s of silence."""
+    _start(swap_env, "sh", "-c",
+           f'echo "{_SWAP}"; printf "> "; read x; {_TIER3_END}')
+    done = _swap_loop_within(swap_env, 60)
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert _last_line(done.stdout) == _end_line("SWAP_LOOP_DONE"), done.stdout
+    assert _inserts(swap_env) == ["LCSAS_D1"]
+    _wait_on_screen(swap_env, "answer=n")
+
+
+def test_swap_loop_ends_with_the_stopped_line_when_the_session_ends(
+    swap_env: dict[str, str],
+) -> None:
+    _start(swap_env, "sh", "-c", _fake_restore(1, complete=False))
+    gone = _swap_loop_within(swap_env, 60)
+    assert gone.returncode == 2, f"{gone.stdout}\n{gone.stderr}"
+    assert _last_line(gone.stdout) == _end_line("SWAP_LOOP_STOPPED"), gone.stdout
+    assert "RESTORE COMPLETE" not in gone.stdout
+
+
+def test_swap_loop_ends_with_the_stopped_line_after_40_swaps(
+    swap_env: dict[str, str],
+) -> None:
+    _start(swap_env, "sh", "-c", _fake_restore(41))
+    capped = _swap_loop_within(swap_env, 90)
+    assert capped.returncode == 1, f"{capped.stdout}\n{capped.stderr}"
+    assert "stopped after 40 disc swaps" in capped.stderr
+    assert _last_line(capped.stdout) == _end_line("SWAP_LOOP_STOPPED"), (
+        capped.stdout)
+
+
+def test_swap_loop_ends_with_the_stopped_line_with_no_data_disc(
+    swap_env: dict[str, str], tmp_path: Path,
+) -> None:
+    only_meta = tmp_path / "meta-only.txt"
+    only_meta.write_text("LCSAS_META\n")
+    rc = _rs({**swap_env, "RESTORE_SHELL_DISC_LABELS": str(only_meta)}, "swap-loop")
+    assert rc.returncode == 2
+    assert _last_line(rc.stdout) == _end_line("SWAP_LOOP_STOPPED"), rc.stdout

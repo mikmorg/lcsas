@@ -103,11 +103,16 @@ any data discs one at a time as the recovery process asks for them.
     of ~/disc-labels.txt in label order), mounts /dev/sr0 at /media and
     sends ENTER.
     (`restore-shell swap-loop /mnt` mounts at /mnt instead.)  On
-    `restore complete` it prints RESTORE COMPLETE, answers "Restore
-    another backup set?" with n, and exits 0.
+    `restore complete` it answers "Restore another backup set?" with n,
+    and exits 0.
     If the session ends it stops at once (exit 2); if nothing new comes
-    for 120 s it stops (exit 1).  Then look with `restore-shell screen`,
-    and run `restore-shell swap-loop` again if a disc box is waiting.
+    for 120 s it stops (exit 1).  Its LAST line is always exactly one of:
+      `SWAP-LOOP END: RESTORE COMPLETE`   the restore has finished
+      `SWAP-LOOP END: STOPPED`            it stopped for another reason
+    If you run it in the background, wait for a line starting
+    `SWAP-LOOP END:`, not for any other text.  After STOPPED, look with
+    `restore-shell screen`, and run `restore-shell swap-loop` again if a
+    disc box is waiting.
 
   The recovery process may take up to 60 seconds between progress lines
   on a slow drive — do NOT treat silence as a hang.
