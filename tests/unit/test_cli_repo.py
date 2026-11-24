@@ -19,13 +19,20 @@ class TestCmdRepoAdd:
         out = capsys.readouterr().out
         assert "Registered repository 'family'" in out
 
-    def test_repo_add_without_init(self, tmp_path, capsys):
-        """repo add auto-initializes DB."""
+    def test_repo_add_without_init_is_refused(self, tmp_path, capsys):
+        """Only ``lcsas init`` creates a catalog (#941, #964): repo add at
+        a path with none says so, and makes no file."""
         db = tmp_path / "new.db"
-        result = main(["--catalog", str(db), "repo", "add", "--force", "work", str(tmp_path)])
-        assert result == 0
+        mirror = tmp_path / "work"
+        mirror.mkdir()
+        (mirror / "config").write_text("")  # looks like a rustic repository
+        result = main(["--catalog", str(db), "repo", "add", "work", str(mirror)])
+        assert result == 1
         out = capsys.readouterr().out
-        assert "Registered repository 'work'" in out
+        assert f"No catalog at {db}" in out
+        assert "Run `lcsas init` first" in out
+        assert "Registered" not in out
+        assert not db.exists()
 
 
 class TestCmdRepoAddEdges:

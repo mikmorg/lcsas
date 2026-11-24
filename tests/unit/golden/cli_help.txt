@@ -10,7 +10,7 @@ DVDisaster for optical archival.
 positional arguments:
   {init,repo,scan,pack,status,burn,stage,burn-iso,staging,location,copy,volume,catalog,restore,consolidate,verify,session,config,meta,recovery,password,estate}
                         Available commands
-    init                Initialize the LCSAS catalog and config.
+    init                Create the LCSAS catalog (the only command that does).
     repo                Manage backup repositories.
     scan                Scan mirrors for new packs and register them in the
                         catalog.
@@ -41,7 +41,9 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
-  --config CONFIG       Path to TOML configuration file.
+  --config CONFIG       Path to the TOML config. Default: $LCSAS_CONFIG, else
+                        ~/.config/lcsas/lcsas.toml
+                        ($XDG_CONFIG_HOME/lcsas/lcsas.toml) when it is there.
   --catalog DB          Path to the master catalog (overrides config).
   --verbose, -v         Show full tracebacks on errors.
   --lock-timeout LOCK_TIMEOUT
@@ -54,8 +56,8 @@ usage: lcsas init [-h] [--catalog-path DB_PATH]
 options:
   -h, --help            show this help message and exit
   --catalog-path DB_PATH
-                        Path for the SQLite catalog file. Overrides --config's
-                        [paths].catalog when set.
+                        Path for the SQLite catalog file. Overrides the
+                        config's [paths].catalog when set.
 ===== lcsas repo --help =====
 usage: lcsas repo [-h] {add,list,remove,retire,activate} ...
 

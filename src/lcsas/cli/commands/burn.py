@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from lcsas.cli.common import (
     _load_config_opt,
+    _log_no_config,
     _open_catalog,
     _resolve_device,
     _validate_config_or_exit,
@@ -30,7 +31,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for burn.")
+        _log_no_config("burn")
         return 1
     if not _validate_config_or_exit(config):
         return 1

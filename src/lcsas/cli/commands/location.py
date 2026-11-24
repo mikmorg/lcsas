@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from lcsas.cli.common import _load_config_opt, _open_catalog
+from lcsas.cli.common import _load_config_opt, _log_no_config, _open_catalog
 from lcsas.log import get_logger
 
 logger = get_logger()
@@ -37,7 +37,7 @@ def cmd_location(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for location.")
+        _log_no_config("location")
         return 1
 
     with _open_catalog(args, config) as conn:

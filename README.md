@@ -231,6 +231,16 @@ to generate, store, and back up the password files this field points
 to. Password files are deliberately excluded from the meta disc, so a
 separate backup is mandatory.
 
+**Where `lcsas` finds the config.** `--config PATH` if given, else the
+`LCSAS_CONFIG` environment variable, else `~/.config/lcsas/lcsas.toml`
+(`$XDG_CONFIG_HOME/lcsas/lcsas.toml`) when that file is there. With
+`export LCSAS_CONFIG=/etc/lcsas/config.toml`, or the config at that
+default path, every `--config` below can be left off. The catalog is
+`--catalog`, else the config's `[paths] catalog`; there is no
+current-folder default, and only `lcsas init` creates a catalog (any
+other command at a path with none says `No catalog at X` and names
+`lcsas init`).
+
 ### 5. Register Repositories
 
 ```bash
@@ -825,7 +835,7 @@ Two wrappers ship alongside it — symlink them onto `PATH`:
 
 | Script | Runs |
 |---|---|
-| `docker/lcsas` | LCSAS itself; auto-injects `--config` (the CLI has no default) |
+| `docker/lcsas` | LCSAS itself; auto-injects `--config` (the container sees neither the host's `LCSAS_CONFIG` nor its `~/.config/lcsas`) |
 | `docker/rustic-c` | the image's pinned rustic, so the mirror is written by the same build the recovery cascade reads |
 
 ```bash

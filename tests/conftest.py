@@ -55,6 +55,26 @@ _REQUIRED_BINARIES = {
 }
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_owner_config(tmp_path_factory):  # type: ignore[no-untyped-def]
+    """Keep the developer's own lcsas config out of every test (#964).
+
+    ``lcsas`` finds its config at ``$LCSAS_CONFIG``, else
+    ``$XDG_CONFIG_HOME/lcsas/lcsas.toml`` (``~/.config/lcsas/lcsas.toml``).
+    For the whole session the variable is unset and ``XDG_CONFIG_HOME`` is
+    an empty folder, so a test that runs ``main`` without ``--config``
+    finds none, in this process and in the subprocesses it starts.
+    Session-scoped so it is in place before module and session fixtures
+    run.  HOME is left alone (wine and rustic keep theirs); the lookup
+    tests set HOME, ``XDG_CONFIG_HOME`` and ``LCSAS_CONFIG`` themselves.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.delenv("LCSAS_CONFIG", raising=False)
+    mp.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("no-xdg-config")))
+    yield
+    mp.undo()
+
+
 def pytest_collection_modifyitems(config, items):  # type: ignore[no-untyped-def]
     """Auto-skip tests whose ``requires_*`` marker's binary is absent."""
     for item in items:

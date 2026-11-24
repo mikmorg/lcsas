@@ -52,6 +52,20 @@ def _holder_label(args: argparse.Namespace) -> str:
     return " ".join(p for p in parts if p).strip()
 
 
+def _use_config_lookup(args: argparse.Namespace) -> None:
+    """Find the config when ``--config`` is not given (#964): then
+    ``$LCSAS_CONFIG``, then ``~/.config/lcsas/lcsas.toml``.  With
+    ``--verbose``, say which one a lookup found."""
+    from lcsas.cli.common import _look_up_config
+
+    _look_up_config(args)
+    source = getattr(args, "config_source", None)
+    if source == "LCSAS_CONFIG":
+        logger.debug(f"Using the config {args.config} (from LCSAS_CONFIG).")
+    elif source == "default":
+        logger.debug(f"Using the config {args.config} (the default path).")
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """Run the handler the parsed (sub)command set as ``args.func``."""
     func: Callable[[argparse.Namespace], int] | None = getattr(args, "func", None)
@@ -422,6 +436,7 @@ def main(argv: list[str] | None = None) -> int:
     set_lock_holder_label(_holder_label(args))
 
     try:
+        _use_config_lookup(args)
         rc = dispatch(args)
         # print() output still in the buffer meets a closed pipe here, not
         # as "Exception ignored ... BrokenPipeError" at exit (#968).

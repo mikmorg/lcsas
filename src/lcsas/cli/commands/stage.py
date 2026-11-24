@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from lcsas.cli.common import (
     _config_mirror,
     _load_config_opt,
+    _log_no_config,
     _open_catalog,
     _resolve_repo_names_to_ids,
     _validate_config_or_exit,
@@ -217,7 +218,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for stage.")
+        _log_no_config("stage")
         return 1
     if not _validate_config_or_exit(config):
         return 1

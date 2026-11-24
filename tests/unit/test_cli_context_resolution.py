@@ -118,8 +118,14 @@ class TestResolveDbPath:
             tmp_path / "configured.db"
         )
 
-    def test_falls_back_to_relative_archive_db(self):
-        assert _resolve_db_path(_args()) == Path("catalog.db")
+    def test_no_config_and_no_catalog_is_refused(self):
+        """No current-folder ``catalog.db`` fallback (#964): the error
+        names the ways to give a config or a catalog."""
+        with pytest.raises(ConfigError) as exc:
+            _resolve_db_path(_args())
+        assert "No config found" in str(exc.value)
+        hint = exc.value.recovery_hint or ""
+        assert "LCSAS_CONFIG" in hint and "--catalog" in hint
 
 
 class TestLoadConfigOpt:

@@ -10,6 +10,7 @@ from pathlib import Path
 from lcsas.cli.common import (
     _confirm,
     _load_config_opt,
+    _log_no_config,
     _open_catalog,
     _reburn_hint,
     _resolve_db_path,
@@ -227,7 +228,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for catalog.")
+        _log_no_config("catalog import-receipts")
         return 1
     allow_unhashed = bool(getattr(args, "allow_unhashed", False))
     allow_other_location = bool(getattr(args, "allow_other_location", False))

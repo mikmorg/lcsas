@@ -19,9 +19,9 @@
 #   LCSAS_CONFIG  TOML config                          (default: $LCSAS_ROOT/lcsas.toml)
 #   LCSAS_EXTRA   space-separated extra read-write mounts, e.g. a restore target
 #
-# --config is injected automatically when LCSAS_CONFIG exists and you have not
-# passed your own.  It has no default in the CLI (`--config is required for
-# scan`), so nearly every invocation would otherwise need it spelled out.
+# --config is injected when the LCSAS_CONFIG file exists and you passed none:
+# the container sees neither this LCSAS_CONFIG nor ~/.config/lcsas, where the
+# CLI looks for its config by default, so it would otherwise find no config.
 #
 # LCSAS_ROOT is a single mount on purpose.  staging/builder.py hardlinks packs
 # out of the mirror, and utils/fs.py silently falls back to a full copy on
@@ -67,9 +67,8 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 
 # Run as the invoking user so staged trees and the catalog are not root-owned.
-# -w pins the container cwd to $ROOT so relative paths resolve somewhere
-# predictable — including the last-resort "./catalog.db" that _resolve_db_path
-# falls back to when neither --catalog nor --config names a catalog.
+# -w pins the container cwd to $ROOT so relative paths you type resolve
+# somewhere predictable.
 args+=( -u "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -w "$ROOT" )
 
 for path in ${LCSAS_EXTRA:-}; do

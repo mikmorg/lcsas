@@ -7,7 +7,7 @@ from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
 from lcsas.cli.commands.stage import _collection_catalog_check
-from lcsas.cli.common import _load_config_opt, _open_catalog, _resolve_db_path
+from lcsas.cli.common import _load_config_opt, _log_no_config, _open_catalog, _resolve_db_path
 from lcsas.log import get_logger
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ def cmd_config_check(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required for config check.")
+        _log_no_config("config check")
         return 1
     errors = validate_config(config)
     # Every other command only warns about an unknown key, so a typo never
