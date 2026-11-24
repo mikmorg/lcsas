@@ -582,6 +582,9 @@ Put in a newer data disc if you have one, then press ENTER.  ENTER
 with that disc still in uses it; S then ENTER uses the copy in hand
 (the newest backup).  A disc of ANOTHER LCSAS archive, none of whose
 backup sets is this archive's, is refused: its sets are not listed.
+A disc whose sets were all retired (the META disc's
+metadata\RETIRED_SETS.txt names them) is this archive's: it is used,
+and the script says which disc each retired set is restored from.
 See RESTORE.txt, "A WRONG OR MIXED-UP DISC".
 
 ────────────────────────────────────────────────────────────────────

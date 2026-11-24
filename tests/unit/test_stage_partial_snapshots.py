@@ -103,7 +103,9 @@ def _env(tmp_path, monkeypatch, *, fail_on: int | None = None,
 
 
 def _disc_snapshots(staging_root: Path) -> set[str]:
-    [repo_dir] = (staging_root / "metadata").iterdir()
+    # metadata/ holds one folder per set, beside RETIRED_SETS.txt (#992).
+    [repo_dir] = [p for p in (staging_root / "metadata").iterdir()
+                  if p.is_dir()]
     return {p.name for p in (repo_dir / "snapshots").iterdir()}
 
 

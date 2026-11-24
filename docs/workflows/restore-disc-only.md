@@ -86,6 +86,7 @@ of each ISO contains:
 | `data/` | hardlinked packs (`staging/builder.py`) | The encrypted restic pack files. Two-level `data/<prefix>/<sha256>` layout (`pack_dest_path()` in `src/lcsas/utils/pack_layout.py`); the restorer also accepts flat `data/<sha256>` (`PurePythonRestorer._find_pack_path()`). |
 | `metadata/<repo>/` | mirror copy (`HolographicInjector.inject_metadata()`) | One folder per repository, named by its id (a UUID since `repo add`; the name for older repositories). |
 | `metadata/<repo>/LCSAS_BACKUP_SET.txt` | written by `inject_metadata()` | Plain `key=value` marker: the repository's `id`, `name`, `name_cmd` and `split` (whether its password is split into share cards). `grep -H '^name=' DISC/metadata/*/LCSAS_BACKUP_SET.txt` maps folders to names. |
+| `metadata/RETIRED_SETS.txt` | written by `write_retired_sets()` (#992) | The retired backup sets: `#` comment lines, then one `id\|label\|date\|name` line per set (the last disc that holds its files, the day it was prepared; `-` when none). The restore scripts count these ids as the archive's, so a disc that holds only retired sets is not taken for another archive's. |
 | `metadata/<repo>/index/` | mirror copy (`HolographicInjector.inject_metadata()`) | Encrypted blob → pack offset map. |
 | `metadata/<repo>/snapshots/` | mirror copy (`inject_metadata()`) | Encrypted snapshot pointers (root tree IDs). |
 | `metadata/<repo>/keys/` | mirror copy (`inject_metadata()`) | scrypt-protected master key files. |

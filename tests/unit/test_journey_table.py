@@ -118,3 +118,17 @@ def test_tier1_box_is_one_question_with_its_labels() -> None:
         assert hit.end == len(text)
         assert box_labels(text[hit.start:hit.end]) == ["LCSAS_TEST_TINY_2026_0001"]
     assert box_labels(_box([])) == []
+
+
+def test_the_retired_sentence_is_retiredset_sentence() -> None:
+    """#992: the journeys look for #959's sentence as the scripts print
+    it, whose wording is ``RetiredSet.sentence()``'s (the discs, the
+    estate card and ``repo retire`` print that one)."""
+    import re
+
+    from lcsas.db.repos import RetiredSet
+    from tests.contract.journeys import _RETIRED_SENTENCE
+
+    said = RetiredSet("photos", "LCSAS_BD25_2026_0010", "2026-03-02",
+                      "0f1e2d3c").sentence()
+    assert re.fullmatch(_RETIRED_SENTENCE, said), said

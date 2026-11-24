@@ -335,8 +335,10 @@ room_for() {
 # What a tools folder holds besides the marker, all of it made by this
 # script: .lcsas-build is the build line of the restore.sh that filled
 # it, .lcsas-sets the ids of the META disc's backup sets it was filled
-# for, .lcsas-copy-ok says the copy off the disc finished.
-TOOLS_FILES="recovery metadata catalog.db pack-cache resume.sh python_reader.py tools .lcsas-build .lcsas-sets .lcsas-copy-ok .exec-probe"
+# for, .lcsas-retired the retired-set list taken from a data disc when
+# the META disc has none (#992), .lcsas-copy-ok says the copy off the
+# disc finished.
+TOOLS_FILES="recovery metadata catalog.db pack-cache resume.sh python_reader.py tools .lcsas-build .lcsas-sets .lcsas-retired .lcsas-copy-ok .exec-probe"
 
 build_line() {
     grep '^LCSAS_RESTORE_BUILD_SHA=' "$1" 2>/dev/null | sed -n 1p
@@ -404,6 +406,14 @@ meta_sets() {
         if [ -d "$_ms/keys" ]; then printf '%s\n' "${_ms##*/}"; fi
     done
     return 0
+}
+
+# retired_lines FILE: the set lines of a disc's metadata/RETIRED_SETS.txt
+# (#992), "id|label|date|name" one a line; nothing when there is no
+# FILE.  The file's own comment lines say the format.
+retired_lines() {
+    [ -f "$1" ] || return 0
+    awk '{ sub(/\r$/, "") } /^#/ || !/\|/ { next } { print }' "$1" 2>/dev/null || true
 }
 
 # tools_other_archive DIR MD: 0 when the tools folder DIR was filled for
@@ -666,6 +676,12 @@ relocate_to_ram() {
             fi
             copy_tree "$_meta_set" "$ramdir/metadata/${_meta_set##*/}" || _copy_ok=0
         done
+        # The retired-set list (#992) is this META disc's, every time.
+        rm -f "$ramdir/metadata/RETIRED_SETS.txt" 2>/dev/null || true
+        if [ -f "$_meta_md/RETIRED_SETS.txt" ]; then
+            cp "$_meta_md/RETIRED_SETS.txt" "$ramdir/metadata/RETIRED_SETS.txt" \
+                2>/dev/null || _copy_ok=0
+        fi
     fi
     # Everything copied off the disc can be replaced and removed later.
     make_writable "$ramdir"
@@ -1726,14 +1742,89 @@ if [ -n "$TOOLS" ] && [ -s "$TOOLS/.lcsas-sets" ]; then
 fi
 [ -n "$ARCHIVE_SETS" ] || ARCHIVE_SETS="$(meta_sets "$META_ROOT/metadata")"
 
-# in_archive ID: 0 when ID is one of ARCHIVE_SETS.
+# A retired backup set (#992, #959) is this archive's too, but its
+# metadata is on no later disc and not on the META disc: the disc that
+# defines the list names it in metadata/RETIRED_SETS.txt.  ARCHIVE_RETIRED
+# holds its lines ("id|label|date|name"), RETIRED_IDS their ids.  The
+# META disc's list (or its copy in the tools folder) when it has one;
+# else the one taken from the newest data disc (below), kept in the
+# tools folder as .lcsas-retired.  A disc burned before the file existed
+# has none: nothing is added, as before.
+ARCHIVE_RETIRED=""
+RETIRED_IDS=""
+RETIRED_KNOWN=0
+set_retired() {
+    ARCHIVE_RETIRED="$1"
+    RETIRED_IDS="$(printf '%s\n' "$1" | awk -F'|' '$1 != "" { print $1 }')"
+    RETIRED_KNOWN=1
+}
+if [ -f "$META_ROOT/metadata/RETIRED_SETS.txt" ]; then
+    set_retired "$(retired_lines "$META_ROOT/metadata/RETIRED_SETS.txt")"
+elif [ -n "$TOOLS" ] && [ -f "$TOOLS/.lcsas-retired" ]; then
+    set_retired "$(retired_lines "$TOOLS/.lcsas-retired")"
+fi
+
+# in_archive ID: 0 when ID is one of ARCHIVE_SETS, or a retired set.
 in_archive() {
-    case "$NL$ARCHIVE_SETS$NL" in *"$NL$1$NL"*) return 0 ;; esac
+    case "$NL$ARCHIVE_SETS$NL$RETIRED_IDS$NL" in *"$NL$1$NL"*) return 0 ;; esac
     return 1
 }
 
+# is_retired ID: 0 when ID is a retired set of this archive (#992).
+is_retired() {
+    case "$NL$RETIRED_IDS$NL" in *"$NL$1$NL"*) return 0 ;; esac
+    return 1
+}
+
+# disc_all_retired DIR: 0 when the data disc at DIR holds backup sets
+# and every one of them is retired (#992).
+disc_all_retired() {
+    [ -n "$RETIRED_IDS" ] || return 1
+    _dr_any=0
+    for _dr in "$1/metadata"/*; do
+        [ -d "$_dr/keys" ] || continue
+        _dr_any=1
+        is_retired "${_dr##*/}" || return 1
+    done
+    [ "$_dr_any" = 1 ]
+}
+
+# say_retired ID: #959's sentence for the retired set ID (once a run):
+# when it is chosen, or a disc that holds only retired sets is in reach.
+RETIRED_SAID=""
+say_retired() {
+    case "$NL$RETIRED_SAID$NL" in *"$NL$1$NL"*) return 0 ;; esac
+    _sy_line="$(printf '%s\n' "$ARCHIVE_RETIRED" \
+                | awk -F'|' -v id="$1" '$1 == id { print; exit }')"
+    [ -n "$_sy_line" ] || return 0
+    RETIRED_SAID="$RETIRED_SAID$NL$1"
+    _sy_rest="${_sy_line#*|}"
+    _sy_lab="${_sy_rest%%|*}"
+    _sy_rest="${_sy_rest#*|}"
+    _sy_date="${_sy_rest%%|*}"
+    _sy_name="${_sy_rest#*|}"
+    # The name is text off a disc: printed as data with %s (#606).
+    printf '\nA retired backup set:\n' >&2
+    if [ -z "$_sy_lab" ] || [ "$_sy_lab" = - ]; then
+        printf '  %s: retired.  None of its backups is on a disc.\n' "$_sy_name" >&2
+    else
+        printf '  %s: retired after %s.  Its backups are on the discs\n' \
+               "$_sy_name" "$_sy_date" >&2
+        printf '  up to %s.  To restore it, use that disc as\n' "$_sy_lab" >&2
+        printf '  the "newest data disc".\n' >&2
+    fi
+}
+
+# say_retired_disc DIR: say_retired for each set on the disc at DIR.
+say_retired_disc() {
+    for _sd in "$1/metadata"/*; do
+        [ -d "$_sd/keys" ] || continue
+        say_retired "${_sd##*/}"
+    done
+}
+
 # disc_foreign DIR: 0 when the data disc at DIR holds backup sets and
-# none of them is this archive's.
+# none of them is this archive's (a retired set is, #992).
 disc_foreign() {
     [ -n "$ARCHIVE_SETS" ] || return 1
     _df_any=0
@@ -1761,6 +1852,26 @@ foreign_discs() {
         IFS=":"
     done
     IFS="$_fd_ifs"
+    return 0
+}
+
+# retired_discs: the folders under the mount directories that hold a
+# data disc whose sets are all retired (#992), one a line.
+retired_discs() {
+    [ -n "$RETIRED_IDS" ] || return 0
+    _rd_ifs="$IFS"; IFS=":"
+    for _rd_parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
+        IFS="$_rd_ifs"
+        if [ -z "$_rd_parent" ] || [ ! -d "$_rd_parent" ]; then IFS=":"; continue; fi
+        for _rd_mnt in "$_rd_parent" "$_rd_parent"/*; do
+            [ -d "$_rd_mnt/metadata" ] || continue
+            is_meta_mount "$_rd_mnt" && continue
+            is_meta_root "$_rd_mnt" && continue
+            if disc_all_retired "$_rd_mnt"; then printf '%s\n' "$_rd_mnt"; fi
+        done
+        IFS=":"
+    done
+    IFS="$_rd_ifs"
     return 0
 }
 
@@ -2049,6 +2160,19 @@ if [ -z "$ARCHIVE_SETS" ]; then
     fi
     unset _as_top
 fi
+# No retired-set list on the META disc (#992): the newest data disc's,
+# for the rest of the run and the next set's (.lcsas-retired).
+if [ "$RETIRED_KNOWN" != 1 ]; then
+    _as_top="$(data_discs | sed -n 1p)"
+    _as_top="${_as_top#*"$TAB"}"
+    if [ -n "$_as_top" ] && [ -f "$_as_top/metadata/RETIRED_SETS.txt" ]; then
+        set_retired "$(retired_lines "$_as_top/metadata/RETIRED_SETS.txt")"
+        if [ -n "$TOOLS" ]; then
+            printf '%s\n' "$ARCHIVE_RETIRED" > "$TOOLS/.lcsas-retired" 2>/dev/null || true
+        fi
+    fi
+    unset _as_top
+fi
 
 # ── A data disc that knows fewer backups than the copy in hand (#952) ─
 #
@@ -2260,6 +2384,14 @@ while IFS= read -r _fd_dir; do
     say_foreign "$_fd_dir"
 done <<EOF
 $(foreign_discs)
+EOF
+# A disc in reach that holds only retired sets is this archive's (#992):
+# #959's sentence says which disc each one is restored from.
+while IFS= read -r _rd_dir; do
+    [ -n "$_rd_dir" ] || continue
+    say_retired_disc "$_rd_dir"
+done <<EOF
+$(retired_discs)
 EOF
 
 REPO=""
@@ -2579,6 +2711,8 @@ fi
 printf '[restore.sh] using backup set folder %s\n' "$REPO" >&2
 SET_NAME="$(set_label "$REPO")"
 [ "$SET_NAME" = "${REPO##*/}" ] || printf '[restore.sh] backup set: %s\n' "$SET_NAME" >&2
+# A retired set (#992): where its newest files are (said once a run).
+say_retired "${REPO##*/}"
 
 # ── No-recovery-binary guard (issue #225) ─────────────────────────
 #
@@ -3003,7 +3137,20 @@ if [ -z "$RESTORE_FOLDER" ]; then
     else
         _rf_default="/tmp/restored"
     fi
-    if is_interactive; then
+    if [ "${LCSAS_ANOTHER_PASS:-0}" = 1 ] && [ -n "${LCSAS_NEXT_FOLDER:-}" ]; then
+        # The next backup set, chosen above (#984): by default a NEW
+        # folder beside the last one (offer_another_set).  Q, or the end
+        # of the input, restores no other set.
+        _rf_default="$LCSAS_NEXT_FOLDER"
+        if is_interactive; then
+            if ! ask_folder 'Folder to restore it into' "$_rf_default" 'no other set'; then
+                another_pass_done
+            fi
+            RESTORE_FOLDER="$ASK_DIR"
+        else
+            RESTORE_FOLDER="$_rf_default"
+        fi
+    elif is_interactive; then
         if ! ask_folder 'Restore to which folder?' "$_rf_default" 'stop'; then
             printf 'Stopped at your request.\n' >&2
             exit "$EXIT_USER_ABORT"
@@ -4110,11 +4257,10 @@ offer_another_set() {
     while [ -n "$(ls -A "$_os_base-$_os_n" 2>/dev/null)" ]; do
         _os_n=$((_os_n + 1))
     done
-    if ! ask_folder 'Folder to restore it into' "$_os_base-$_os_n" 'no other set'; then
-        printf 'No other backup set restored; %s is done.\n' "$SET_NAME" >&2
-        return 0
-    fi
-    _os_dir="$ASK_DIR"
+    # The folder is asked after the next run's set list, as restore.bat
+    # asks it (#984): pick the set, then where it goes.  This is its
+    # default.
+    LCSAS_NEXT_FOLDER="$_os_base-$_os_n"
     # This run's own files go now (exec skips the exit handler); the
     # tools folder stays for the next set.
     [ -z "${PWFILE_TMP:-}" ] || rm -f "$PWFILE_TMP"
@@ -4128,14 +4274,15 @@ offer_another_set() {
     LCSAS_NEWEST_DISC_PROMPT=0
     # Q at the next run's set list then ends with 0 (another_pass_done).
     LCSAS_ANOTHER_PASS=1
-    export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_PASS LCSAS_SETS_RESTORED
+    export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_PASS LCSAS_SETS_RESTORED \
+           LCSAS_NEXT_FOLDER
     if [ -n "$TOOLS" ]; then
         LCSAS_TOOLS_DIR="$TOOLS"
         export LCSAS_TOOLS_DIR
     fi
     printf '[restore.sh] starting again for the next backup set\n' >&2
     cd / 2>/dev/null || true
-    exec sh "$SCRIPT" --restore-folder "$_os_dir" --snapshot latest -- "$RECOVERY"
+    exec sh "$SCRIPT" --snapshot latest -- "$RECOVERY"
 }
 
 # restore_done: the set is restored.  resume.sh would carry on a

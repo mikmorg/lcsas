@@ -69,9 +69,9 @@ CATALOG_BYTES_PER_VOLUME = 4096
 #: volume_info.json lists every pack of the disc by its SHA-256.
 VOLUME_INFO_BYTES_PER_PACK = 80
 #: START_HERE.txt, RESTORE_INSTRUCTIONS.txt, PASSWORD_INFO.txt,
-#: CONFIG_SUMMARY.txt, DISC_CARE.txt, VOLUME_INFO.txt and the fixed part
-#: of volume_info.json: about 25 KB together; with headroom for long
-#: owner-written hints.
+#: CONFIG_SUMMARY.txt, DISC_CARE.txt, VOLUME_INFO.txt, the fixed part
+#: of volume_info.json and metadata/RETIRED_SETS.txt: about 27 KB
+#: together; with headroom for long owner-written hints.
 TEXT_FILES_BYTES = 64 * 1024
 #: Each repository's LCSAS_BACKUP_SET.txt.
 REPO_MARKER_BYTES = 4096
@@ -627,6 +627,51 @@ def _retired_sets_text(retired: Sequence[RetiredSet]) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: The name of the retired-set list in every disc's metadata/ (#992).
+RETIRED_SETS_FILE = "RETIRED_SETS.txt"
+
+_RETIRED_SETS_HEADER = """\
+# RETIRED_SETS.txt: the backup sets of this archive that were retired
+# (#992, #959).  A retired set's metadata is not on this disc; its files
+# are on older discs.  restore.sh and restore.bat read this file: a disc
+# that holds only retired sets is this archive's, not another's.
+# One line for each retired set, four fields separated by "|":
+#   id|label|date|name
+# id     the set's folder name under metadata/ on its discs
+# label  the last disc that holds its files: to restore the set, use
+#        that disc as the "newest data disc" ("-": none of its files is
+#        on a disc)
+# date   the date that disc was prepared, YYYY-MM-DD ("-": none)
+# name   the set's name: the rest of the line
+# Lines that start with "#" are comments.  With no line after them, no
+# set was retired when this disc was made.
+"""
+
+
+def render_retired_sets_file(retired: Sequence[RetiredSet]) -> str:
+    """metadata/RETIRED_SETS.txt (#992): one ``id|label|date|name`` line
+    per retired set.  The fixed fields come first and the free text
+    (the name) last, so a POSIX sh ``read`` and a cmd ``for /f`` split
+    it alike; an empty field is ``-``, as cmd joins two delimiters."""
+    lines = [_RETIRED_SETS_HEADER]
+    for rs in retired:
+        name = " ".join(rs.name.splitlines())
+        lines.append(f"{rs.repo_id}|{rs.last_label or '-'}|"
+                     f"{rs.last_date or '-'}|{name}\n")
+    return "".join(lines)
+
+
+def write_retired_sets_file(metadata_dir: Path,
+                            retired: Sequence[RetiredSet]) -> None:
+    """Write :func:`render_retired_sets_file` into *metadata_dir*, fsync'd."""
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    with open(metadata_dir / RETIRED_SETS_FILE, "w", encoding="utf-8",
+              newline="\n") as f:
+        f.write(render_retired_sets_file(retired))
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def _password_note(config: LCSASConfig) -> list[str]:
     """PASSWORD_INFO.txt's NOTE on how the repositories' passwords relate.
 
@@ -984,6 +1029,13 @@ class HolographicInjector:
         )
         text += _retired_sets_text(retired)
         self._write_text("VOLUME_INFO.txt", text)
+
+    def write_retired_sets(self, retired: Sequence[RetiredSet]) -> None:
+        """Write metadata/RETIRED_SETS.txt, the retired backup sets by id
+        (#992): the restore scripts count their ids among this archive's
+        sets.  Written on every disc, with no set line when none is
+        retired."""
+        write_retired_sets_file(self._metadata_dir, retired)
 
     def write_lcsas_source(self) -> None:
         """Copy the LCSAS restore subpackage source onto the disc.

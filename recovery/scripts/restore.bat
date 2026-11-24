@@ -339,6 +339,7 @@ if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') d
     if not exist "!TOOLS!\metadata\%%T\" echo                   metadata\%%T
     if not exist "!TOOLS!\metadata\%%T\" xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
 )
+call :copy_retired
 goto :relaunch
 
 :tools_fresh
@@ -399,6 +400,7 @@ if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') d
     xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
     if errorlevel 4 set "COPY_BAD=1"
 )
+call :copy_retired
 if defined SRC_ROOT if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!TOOLS!\catalog.db" >nul 2>nul
 call :archive_id
 if not defined ARCHIVE_ID goto :archive_saved
@@ -932,6 +934,8 @@ set "FOREIGN_SAID_%1=1"
 call :say_foreign "%1:\"
 goto :eof
 :scan_drive_ours
+REM A disc that holds only retired sets (#992): where each is restored from.
+if defined DF_ALLRET call :say_retired_disc "%1:\"
 call :scan_metadata "%1:\metadata"
 goto :eof
 
@@ -953,6 +957,8 @@ if not defined SET_NAME set "SET_NAME=!CAND_NAME_%SEL%!"
 set "SPLIT_K=!CAND_K_%SEL%!"
 set "SPLIT_N=!CAND_N_%SEL%!"
 set "SPLIT_SID=!CAND_SID_%SEL%!"
+REM A retired set (#992): where its newest files are (said once a run).
+call :say_retired "!REPO!" "!SET_ID!"
 
 REM ----- Ask for target directory -----------------------------------
 REM Another backup set goes into a folder of its own by default, so its
@@ -2524,14 +2530,21 @@ REM archive's sets are those of the META disc (or its copy in the tools
 REM folder, DISC_ROOT_S) and, once merged, of the tools folder's copy.  A
 REM META disc that carries none says nothing: then the first data disc
 REM accepted defines the archive, as its sets are merged.
+REM A retired set (#992) is this archive's too: its id is in the
+REM retired-set list (:retired_file).  DF_ALLRET = 1 when every set on the
+REM disc is a retired one.
 set "DF_FOREIGN="
 set "DF_ANY="
 set "DF_OURS="
 set "DF_KNOWN="
+set "DF_RET="
+set "DF_LIVE="
+set "DF_ALLRET="
 for /f "delims=" %%T in ('dir /ad /b "%DISC_ROOT_S%metadata" 2^>nul ^<nul') do set "DF_KNOWN=1"
 if defined METADATA_SET_HERE for /f "delims=" %%T in ('dir /ad /b "%TOOLS%\metadata" 2^>nul ^<nul') do set "DF_KNOWN=1"
 if not defined DF_KNOWN goto :eof
 for /f "delims=" %%T in ('dir /ad /b "%~1metadata" 2^>nul ^<nul') do call :df_one "%~1" "%%T"
+if defined DF_RET if not defined DF_LIVE set "DF_ALLRET=1"
 if defined DF_OURS goto :eof
 if defined DF_ANY set "DF_FOREIGN=1"
 goto :eof
@@ -2541,6 +2554,98 @@ if not exist "%~1metadata\%~2\keys\" goto :eof
 set "DF_ANY=1"
 if exist "%DISC_ROOT_S%metadata\%~2\keys\" set "DF_OURS=1"
 if defined METADATA_SET_HERE if exist "%TOOLS%\metadata\%~2\keys\" set "DF_OURS=1"
+call :retired_line "%~2"
+if defined RT_HIT set "DF_OURS=1"
+if defined RT_HIT set "DF_RET=1"
+if not defined RT_HIT set "DF_LIVE=1"
+goto :eof
+
+:retired_file
+REM RT_FILE = this archive's retired-set list, metadata\RETIRED_SETS.txt
+REM (#992): the META disc's (or its copy in the tools folder), else the
+REM newest data disc's, merged into the tools folder; nothing when there
+REM is none (discs made before the list existed).
+set "RT_FILE="
+if exist "%DISC_ROOT_S%metadata\RETIRED_SETS.txt" set "RT_FILE=%DISC_ROOT_S%metadata\RETIRED_SETS.txt"
+if defined RT_FILE goto :eof
+if defined METADATA_SET_HERE if exist "%TOOLS%\metadata\RETIRED_SETS.txt" set "RT_FILE=%TOOLS%\metadata\RETIRED_SETS.txt"
+goto :eof
+
+:retired_line
+REM %~1 = a backup set's id.  RT_HIT = 1 when the retired-set list names
+REM it; RT_LABEL and RT_DATE = the disc to start it from and the date
+REM that disc was prepared (nothing when none of its files is on a
+REM disc).  A line is "id|label|date|name" (the file's own comment lines
+REM say so).  Only the lines with "<id>|" in them reach the for body,
+REM and the name, the free text, never does (see :read_marker); findstr
+REM with /c only, as wine's findstr takes it.
+set "RT_HIT="
+set "RT_LABEL="
+set "RT_DATE="
+call :retired_file
+if not defined RT_FILE goto :eof
+for /f "tokens=1-3 delims=|" %%A in ('findstr /c:"%~1|" "%RT_FILE%" 2^>nul ^<nul') do (
+    set "RT_A=%%A"
+    set "RT_B=%%B"
+    set "RT_C=%%C"
+    if not defined RT_HIT call :retired_one "%~1"
+)
+if not defined RT_HIT goto :eof
+REM The label is text from a file on a disc: kept only as :label_ok
+REM keeps a disc's label ("-", none, is dropped too).  The date: digits
+REM and "-" only.
+set "RT_KEEP=!RL_LABEL!"
+set "RL_LABEL=!RT_LABEL!"
+call :label_ok
+set "RT_LABEL=!RL_LABEL!"
+set "RL_LABEL=!RT_KEEP!"
+if not defined RT_DATE goto :eof
+set "_T=!RT_DATE:"=#!"
+for /f "delims=0123456789-" %%x in ("0%_T%") do set "RT_DATE="
+goto :eof
+:retired_one
+REM %~1 = the id looked for; RT_A, RT_B, RT_C = a line's first fields.
+if not "!RT_A!"=="%~1" goto :eof
+set "RT_HIT=1"
+set "RT_LABEL=!RT_B!"
+set "RT_DATE=!RT_C!"
+goto :eof
+
+:copy_retired
+REM The META disc's retired-set list (#992) goes into the tools folder
+REM with the sets' metadata (META_SRC is the META disc's metadata\).
+if not defined META_SRC goto :eof
+if not exist "%META_SRC%\RETIRED_SETS.txt" goto :eof
+mkdir "%TOOLS%\metadata" 2>nul
+copy /Y "%META_SRC%\RETIRED_SETS.txt" "%TOOLS%\metadata\RETIRED_SETS.txt" >nul 2>nul <nul
+attrib -r "%TOOLS%\metadata\RETIRED_SETS.txt" >nul 2>nul <nul
+goto :eof
+
+:say_retired_disc
+REM %~1 = the root of a data disc whose sets are all retired (#992):
+REM #959's sentence for each of them.
+for /f "delims=" %%T in ('dir /ad /b "%~1metadata" 2^>nul ^<nul') do call :say_retired "%~1metadata\%%T" "%%T"
+goto :eof
+
+:say_retired
+REM %~1 = a backup set's folder, %~2 = its id.  When the set is retired
+REM (#992), #959's sentence: the disc to start it from.  Once a run for
+REM each set.  The name is its marker's name_cmd, as the menu shows it,
+REM printed with delayed expansion (never run); else its id.
+if defined RTS_SAID_%~2 goto :eof
+call :retired_line "%~2"
+if not defined RT_HIT goto :eof
+set "RTS_SAID_%~2=1"
+call :read_marker "%~1"
+set "RT_NAME=!MK_NC!"
+if not defined RT_NAME set "RT_NAME=%~2"
+echo.
+echo A retired backup set:
+if not defined RT_LABEL echo   !RT_NAME!: retired.  None of its backups is on a disc.
+if not defined RT_LABEL goto :eof
+echo   !RT_NAME!: retired after !RT_DATE!.  Its backups are on the discs
+echo   up to !RT_LABEL!.  To restore it, use that disc as
+echo   the "newest data disc".
 goto :eof
 
 :say_foreign
@@ -2793,6 +2898,11 @@ if not exist "%TOOLS%\metadata\" mkdir "%TOOLS%\metadata" 2>nul
 if not exist "%TOOLS%\metadata\" goto :merge_cannot
 echo [lcsas-restore] reading the backup sets on !NEWEST_LABEL!:
 for /f "delims=" %%T in ('dir /ad /b "!NEWEST_ROOT!metadata" 2^>nul') do call :merge_set "%%T"
+REM No retired-set list from the META disc (#992): the newest data disc's.
+if not exist "%TOOLS%\metadata\RETIRED_SETS.txt" if exist "!NEWEST_ROOT!metadata\RETIRED_SETS.txt" (
+    copy /Y "!NEWEST_ROOT!metadata\RETIRED_SETS.txt" "!TOOLS!\metadata\RETIRED_SETS.txt" >nul 2>nul <nul
+    attrib -r "!TOOLS!\metadata\RETIRED_SETS.txt" >nul 2>nul <nul
+)
 if exist "%TOOLS%\metadata-new\" rmdir /s /q "%TOOLS%\metadata-new" 2>nul
 (2>nul > "%TOOLS%\merged-from.txt" echo !NEWEST_LABEL!) 2>nul
 goto :eof

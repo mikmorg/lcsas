@@ -351,8 +351,10 @@ class RetiredSet:
     """A retired backup set and the disc an heir starts it from (#959)."""
 
     def __init__(self, name: str, last_label: str | None,
-                 last_date: str | None) -> None:
+                 last_date: str | None, repo_id: str = "") -> None:
         self.name = name
+        #: Its id: the folder name of its metadata on its discs (#992).
+        self.repo_id = repo_id
         #: The highest-numbered burned volume holding a pack of the set
         #: (None: none of its packs was ever burned).
         self.last_label = last_label
@@ -393,11 +395,11 @@ def retired_backup_sets(conn: sqlite3.Connection) -> list[RetiredSet]:
             (repo.repo_id,),
         ).fetchall()
         if not rows:
-            out.append(RetiredSet(repo.name, None, None))
+            out.append(RetiredSet(repo.name, None, None, repo.repo_id))
             continue
         label, created = max(
             ((str(r[0]), str(r[1] or "")) for r in rows),
             key=lambda lc: (label_seq(lc[0]) or 0, lc[0]),
         )
-        out.append(RetiredSet(repo.name, label, created[:10]))
+        out.append(RetiredSet(repo.name, label, created[:10], repo.repo_id))
     return out
