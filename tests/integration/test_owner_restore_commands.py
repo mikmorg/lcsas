@@ -11,8 +11,11 @@ a mounted disc), and every command through ``lcsas.cli.main.main``.
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import os
+import shutil
+import sqlite3
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -230,6 +233,98 @@ def test_from_disc_two_discs(
         )
     assert rc == 0, caplog.text
     assert _digests(out) == _digests(inst.data("alpha"))
+
+
+def _discs_of(catalog: Path, packs: set[str]) -> set[tuple[str, str]]:
+    """(pack, label) of every volume *catalog* puts each of *packs* on."""
+    conn = sqlite3.connect(f"file:{catalog}?mode=ro", uri=True)
+    try:
+        return {
+            (sha, label) for sha in packs for (label,) in conn.execute(
+                "SELECT v.label FROM volumes v "
+                "JOIN volume_packs vp ON vp.volume_id = v.volume_id "
+                "JOIN packs p ON p.pack_id = vp.pack_id WHERE p.sha256 = ?",
+                (sha,))
+        }
+    finally:
+        conn.close()
+
+
+def _from_disc_without_terminal(
+    world: _World, drive: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str],
+) -> tuple[str, str]:
+    """#983: ``restore from-disc`` with *drive* (the newest disc) in the
+    drive, the other disc nowhere, and no terminal.  Returns what
+    RESTORE_FAILURES.txt says above its rows, and the log."""
+    out = tmp_path / "restored"
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))     # no terminal
+    capfd.readouterr()
+    rc = _from_disc(str(drive), str(out), "--password-file",
+                    str(world.inst.key("alpha")), "--repo", "alpha")
+    log = capfd.readouterr().err
+    assert rc == 4, log
+    text = (out / "RESTORE_FAILURES.txt").read_text()
+    head, column, rows = text.partition("\npath\treason\tblob_id\n")
+    assert column, text
+    assert "pack not found: " in rows, text
+    # The lines above the rows hold no TAB: the scripts count only rows.
+    assert "\t" not in head, head
+    # No disc prompt was drawn.
+    assert "| It is on any disc labelled:" not in log, log
+    return head, log
+
+
+@_ordinary_user
+def test_from_disc_without_terminal_names_the_missing_disc(
+    world: _World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """#983: the packs not found are named by the disc that holds them,
+    from the catalog in reach, in RESTORE_FAILURES.txt and the log, in
+    the disc box's words; the exit code stays 4."""
+    withheld, newest = world.labels
+    drive = world.discs / newest
+    gone = _packs(world.inst.mirror("alpha")) - _disc_packs(drive)
+    assert gone
+    assert {lb for _p, lb in _discs_of(drive / "catalog.db", gone)} == {
+        withheld}
+    head, log = _from_disc_without_terminal(
+        world, drive, tmp_path, monkeypatch, capfd)
+    said = f"It is on any disc labelled: {withheld}"
+    assert said in head, head
+    assert said in log, log
+
+
+@_ordinary_user
+def test_from_disc_without_terminal_says_on_no_disc(
+    world: _World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """#983: a pack the catalog puts on no disc is said to be on none.
+    The disc's own catalog is edited (a copy of the disc): every catalog
+    in reach is read."""
+    withheld, newest = world.labels
+    drive = tmp_path / "drive"
+    shutil.copytree(world.discs / newest, drive)
+    gone = _packs(world.inst.mirror("alpha")) - _disc_packs(drive)
+    catalog = drive / "catalog.db"
+    drive.chmod(0o755)
+    catalog.chmod(0o644)
+    conn = sqlite3.connect(catalog)
+    conn.executemany(
+        "DELETE FROM volume_packs WHERE pack_id IN "
+        "(SELECT pack_id FROM packs WHERE sha256 = ?)",
+        [(sha,) for sha in gone])
+    conn.commit()
+    conn.close()
+    assert not _discs_of(catalog, gone)
+    head, log = _from_disc_without_terminal(
+        world, drive, tmp_path, monkeypatch, capfd)
+    said = "It is on none of the discs the catalog lists."
+    assert said in head, head
+    assert said in log, log
+    assert withheld not in head, head
 
 
 @_ordinary_user

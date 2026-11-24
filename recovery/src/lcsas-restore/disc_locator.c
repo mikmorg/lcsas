@@ -119,6 +119,9 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->owned_mtime         = 0;
     l->repo_id[0]          = '\0';
     l->has_repo_id         = 0;
+    l->index               = NULL;
+    l->index_packs         = NULL;
+    l->n_index_packs       = 0;
     l->cache_dir           = NULL;
     /* #791: no longer read from LCSAS_DRAIN_CHUNK_PACKS, a test hook
      * that shipped in every binary; a test sets the field directly. */
@@ -205,6 +208,13 @@ lcsas_disc_locator_set_repo(lcsas_disc_locator *l, const char *repo_path)
     l->has_repo_id = 1;
 }
 
+void
+lcsas_disc_locator_set_index(lcsas_disc_locator *l,
+                             const lcsas_blob_index *ix)
+{
+    l->index = ix;
+}
+
 /*
  * Free discovered-paths storage (locator-owned strings).
  */
@@ -249,6 +259,9 @@ lcsas_disc_locator_free(lcsas_disc_locator *l)
     free(l->seen_catalogs);
     l->seen_catalogs   = NULL;
     l->n_seen_catalogs = 0;
+    free(l->index_packs);
+    l->index_packs   = NULL;
+    l->n_index_packs = 0;
 }
 
 /*
@@ -422,6 +435,62 @@ push_discovered(lcsas_disc_locator *l, const char *path)
     return 1;
 }
 
+static int
+pack_id_cmp(const void *a, const void *b)
+{
+    return memcmp(a, b, LCSAS_BLOB_ID_LEN);
+}
+
+/*
+ * #993: the catalog `cat` (from `path`) does not know the backup set
+ * by the --repo folder's name.  Judge it by this repository's own packs
+ * (a pack id is unique across a catalog): when the ones it records all
+ * belong to one set, that set is the backup set from now on, and 1 is
+ * returned.  None recorded, or more than one set: 0, another archive's
+ * catalog.  The index's pack ids are listed, each once, the first time.
+ */
+static int
+adopt_set(lcsas_disc_locator *l, lcsas_catalog *cat, const char *path)
+{
+    const lcsas_blob_index *ix = l->index;
+    lcsas_catalog_pack p;
+    char hex[LCSAS_HEX_BLOB_ID_LEN + 1];
+    char set[sizeof p.repo_id];
+    size_t i, n;
+
+    if (!l->index_packs && ix && ix->count
+            && (l->index_packs = malloc(ix->count * sizeof *l->index_packs))
+               != NULL) {
+        for (i = 0; i < ix->count; i++)
+            memcpy(l->index_packs[i], ix->entries[i].pack_id,
+                   LCSAS_BLOB_ID_LEN);
+        qsort(l->index_packs, ix->count, sizeof *l->index_packs, pack_id_cmp);
+        for (i = n = 0; i < ix->count; i++)
+            if (n == 0 || pack_id_cmp(l->index_packs[n - 1],
+                                      l->index_packs[i]) != 0)
+                memmove(l->index_packs[n++], l->index_packs[i],
+                        LCSAS_BLOB_ID_LEN);
+        l->n_index_packs = n;
+    }
+    set[0] = '\0';
+    hex[LCSAS_HEX_BLOB_ID_LEN] = '\0';
+    for (i = 0; i < l->n_index_packs; i++) {
+        lcsas_hex_encode(l->index_packs[i], LCSAS_BLOB_ID_LEN, hex);
+        if (lcsas_catalog_find_pack(cat, hex, &p) != 0 || !p.repo_id[0])
+            continue;
+        if (set[0] && strcmp(set, p.repo_id) != 0) return 0;
+        strcpy(set, p.repo_id);
+    }
+    if (!set[0]) return 0;
+    fprintf(stderr,
+            "[lcsas-restore] the catalog %s does not know backup set %s, "
+            "but it knows the packs restored here as backup set %s (the "
+            "--repo folder is not named by the backup set's id), so it is "
+            "used.\n", path, l->repo_id, set);
+    strcpy(l->repo_id, set);
+    return 1;
+}
+
 /*
  * #950: look into the catalog at `path` (`mtime`: its file time) and
  * take it when it is usable and ranks above the one in use.  Returns
@@ -470,6 +539,8 @@ evaluate_catalog(lcsas_disc_locator *l, const char *path, long long mtime)
     if (cat && lcsas_catalog_check(cat) == 0)
         knows = l->has_repo_id ? lcsas_catalog_knows_repo(cat, l->repo_id)
                                : 1;
+    if (knows == 0)
+        knows = adopt_set(l, cat, path);       /* #993 */
     if (knows == 0) {
         fprintf(stderr,
                 "[lcsas-restore] the catalog %s does not know backup set "

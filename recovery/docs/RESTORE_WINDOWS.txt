@@ -740,12 +740,12 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
                RESTORE" below for details).  Install Python from
                python.org, then run:
                    python D:\python_reader.py ^
-                       --repo C:\lcsas-set ^
+                       --repo C:\lcsas-set\<id> ^
                        --password-file C:\path\to\pw.txt ^
                        --restore-folder C:\Users\me\restored ^
                        --mount-point E:\
                See "MANUAL PYTHON RESTORE" below for how to make
-               C:\lcsas-set, the password file and what
+               C:\lcsas-set\<id>, the password file and what
                --mount-point means.
 
 CASE D.  The restore seems stuck: nothing new appears in the window
@@ -1029,12 +1029,12 @@ in order of effort:
      python.org (Python 3.10 or newer; the script exits with a clear
      message on anything older), then run:
         python D:\python_reader.py ^
-            --repo C:\lcsas-set ^
+            --repo C:\lcsas-set\<id> ^
             --password-file C:\path\to\pw.txt ^
             --restore-folder C:\Users\me\restored ^
             --mount-point E:\
-     (C:\lcsas-set is the set's folder copied off your newest data
-     disc: see "MANUAL PYTHON RESTORE", STEP 4.)
+     (C:\lcsas-set\<id> is the set's folder copied off your newest
+     data disc: see "MANUAL PYTHON RESTORE", STEP 4.)
      This works on any Windows that runs Python 3.10 or newer,
      which rules out Windows 7 and older.  Note that
      restore.bat does NOT chain to this script for you any more --
@@ -1095,9 +1095,12 @@ STEP 4.  Copy the backup set's folder to this computer.  Each set's
          disc in drive E: (with one drive: take the meta disc out, put
          the data disc in, and use D: wherever E: is written here):
 
-             xcopy /e /i E:\metadata\<id> C:\lcsas-set
+             xcopy /e /i E:\metadata\<id> C:\lcsas-set\<id>
 
          A copy on this computer stays readable while you swap discs.
+         Keep <id> in the folder's name: the reader takes the set's id
+         from it to tell this archive's disc catalogs from another
+         archive's.
          Every data disc carries python_reader.py too, so STEP 5
          also works from a data disc's root.
 
@@ -1106,7 +1109,7 @@ STEP 5.  Run the Python reader.  --repo, --password-file and
          arguments.
 
              python python_reader.py ^
-                 --repo C:\lcsas-set ^
+                 --repo C:\lcsas-set\<id> ^
                  --password-file C:\Users\me\pw.txt ^
                  --restore-folder C:\Users\me\restored ^
                  --mount-point E:\

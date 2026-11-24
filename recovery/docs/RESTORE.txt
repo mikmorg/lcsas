@@ -60,9 +60,14 @@ DECISION FLOW
             (see "Manual pack assembly" in docs/TROUBLESHOOTING.md), then run:
 
          python3 /mnt/python_reader.py \
-             --repo /tmp/cache \
+             --repo /tmp/cache/<id> \
              --password-file /tmp/pwfile \
              --restore-folder ~/restored
+
+            (<id> is the backup set's id, the name of its folder
+            metadata/<id> on the disc.  Keep it in the folder's
+            name: the reader takes the set's id from it to tell
+            this archive's disc catalogs from another archive's.)
 
             No python3 on this computer?  Use the one on a meta
             disc instead of "python3" above (<meta> is where that
@@ -72,7 +77,7 @@ DECISION FLOW
 
          <meta>/recovery/bin/x86_64-unknown-linux-musl/python/lib/ld-musl-x86_64.so.1 \
              <meta>/recovery/bin/x86_64-unknown-linux-musl/python/bin/python3 \
-             /mnt/python_reader.py --repo /tmp/cache ...
+             /mnt/python_reader.py --repo /tmp/cache/<id> ...
 
             (64-bit ARM: aarch64 in place of x86_64, in all three
             places.)
@@ -390,7 +395,11 @@ to do:
     prints the command; on Windows "Resume LCSAS restore.bat"), or
     from the meta disc.  The files already restored are skipped.  Run
     it in a terminal window and it asks for each disc it needs by its
-    label.
+    label.  The Python reader (tier 3) also names those discs, from
+    the disc catalog, at the end of the restore and above the rows of
+    RESTORE_FAILURES.txt: "It is on any disc labelled: <label>", or
+    "It is on none of the discs the catalog lists." (then insert your
+    newest data disc: its catalog names it).
   * "pack damaged: <id>" or "pack unreadable: <id>": the copy of that
     part of the backup on the disc could not be read correctly (a
     scratched or failing disc).  Run the restore again with another

@@ -429,18 +429,6 @@ main(int argc, char **argv)
         }
     }
 
-    /* #950: --catalog is one candidate, judged as the catalogs found
-     * on the discs later are (after the cache dir is set: a catalog
-     * taken is copied there). */
-    if (catalog_path) {
-        lcsas_disc_locator_consider_catalog(&locator, catalog_path);
-        if (!locator.owned_catalog)
-            fprintf(stderr, "WARN: not using the catalog %s; continuing\n",
-                    catalog_path);
-        else if (verbose)
-            lcsas_catalog_describe(locator.owned_catalog);
-    }
-
     /* Determine the mount-parent list scanned on each retry to pick up
      * freshly-inserted discs.  Precedence (highest first):
      *   1. one or more --mount-parent CLI flags
@@ -593,6 +581,21 @@ main(int argc, char **argv)
     if (verbose)
         fprintf(stderr, "[lcsas-restore] indexed %lu blobs\n",
                 (unsigned long)ix.count);
+
+    /* #950: --catalog is one candidate, judged as the catalogs found
+     * on the discs later are (after the cache dir is set: a catalog
+     * taken is copied there).  #993: and after the index is loaded, so
+     * a catalog that does not know the set by the --repo folder's name
+     * is judged by this repository's own packs. */
+    lcsas_disc_locator_set_index(&locator, &ix);
+    if (catalog_path) {
+        lcsas_disc_locator_consider_catalog(&locator, catalog_path);
+        if (!locator.owned_catalog)
+            fprintf(stderr, "WARN: not using the catalog %s; continuing\n",
+                    catalog_path);
+        else if (verbose)
+            lcsas_catalog_describe(locator.owned_catalog);
+    }
 
     if (lcsas_repo_load_snapshots(repo_path, &mk, &snaps) != 0) {
         fprintf(stderr, "ERROR: snapshot load failed\n");

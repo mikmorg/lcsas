@@ -521,6 +521,38 @@ class DiscSearch:
             "in a drive; files already restored are skipped.")
         return lines
 
+    def name_discs(self, pack_ids: Iterable[str]) -> list[str]:
+        """#983: the end-of-restore lines naming the discs that hold
+        *pack_ids* (packs not found by a run that could not ask for a
+        disc), from the catalogs in reach, in the disc box's words; a
+        pack on no disc a catalog lists is said to be on none.  One line
+        per answer, with how many packs it is for; empty with no packs.
+        No line holds a TAB (they go above the rows of
+        RESTORE_FAILURES.txt)."""
+        counts: dict[str, int] = {}
+        for i, pack_id in enumerate(pack_ids):
+            # The catalogs in reach are found and copied once (#635).
+            found = self._lookup_volume_labels(pack_id, refresh=i == 0)
+            if found is None:
+                where = "No disc catalog was in reach to name its disc."
+            elif found[0]:
+                where = "It is on any disc labelled: " + ", ".join(found[0])
+            else:
+                where = "It is on none of the discs the catalog lists."
+                newest = self._newest_known_label
+                if found[1] == self._CATALOG_HIT_NO_VOLS and newest:
+                    where += f"  It is on a disc newer than: {newest}"
+            where = _visible(where)
+            counts[where] = counts.get(where, 0) + 1
+        if not counts:
+            return []
+        return [
+            "The packs not found, by the disc that holds them:",
+            *(f"  {n} pack(s): {where}" for where, n in counts.items()),
+            "Put those discs in a drive and run the same restore again; "
+            "files already restored are skipped.",
+        ]
+
     def set_index_packs(self, ids: Iterable[str]) -> None:
         """The pack ids this repository's index names: the only packs
         the pack cache copies off a disc."""
@@ -929,7 +961,8 @@ class DiscSearch:
         """(volumes holding the pack, pack known, every volume of the
         catalog), or None when the catalog cannot be opened or read, or
         does not know the backup set being restored (#950: another
-        archive's catalog, named once).
+        archive's catalog, named once; #993: unless it knows this
+        repository's own packs, see ``_adopt_set``).
         Each volume is ``(volume_id, label, status)``, newest first,
         DESTROYED ones included: ``_offered_labels`` and
         ``_newest_disc`` apply the rules.
@@ -941,11 +974,11 @@ class DiscSearch:
             self._name_bad_catalog(path)
             return None
         try:
+            shown = str(self._copy_origin.get(path, path))
             if self._repo_id is not None and conn.execute(
                 "SELECT 1 FROM packs WHERE repo_id = ? LIMIT 1",
                 (self._repo_id,),
-            ).fetchone() is None:
-                shown = str(self._copy_origin.get(path, path))
+            ).fetchone() is None and not self._adopt_set(conn, shown):
                 if shown not in self._foreign_named:
                     self._foreign_named.add(shown)
                     self._log(
@@ -989,6 +1022,32 @@ class DiscSearch:
             # and prevents `umount /media` during disc swaps.
             conn.close()
 
+    def _adopt_set(self, conn: sqlite3.Connection, shown: str) -> bool:
+        """#993: the catalog on *conn* (from *shown*) does not know the
+        backup set by the ``--repo`` folder's name.  Judge it by this
+        repository's own packs (a pack id is unique across a catalog):
+        when the ones it records all belong to one set, that set is the
+        backup set from now on (tier 1: disc_locator.c::adopt_set), and
+        True is returned.  None recorded, or more than one set: False,
+        another archive's catalog.  An error reading it is the caller's.
+        """
+        ours = self._repo_pack_ids()
+        sets = {
+            set_id for sha, set_id in conn.execute(
+                "SELECT sha256, repo_id FROM packs")
+            if sha in ours and isinstance(set_id, str) and set_id
+        }
+        if len(sets) != 1:
+            return False
+        (found,) = sets
+        self._log(
+            f"The catalog {shown} does not know backup set {self._repo_id}, "
+            f"but it knows the packs restored here as backup set {found} "
+            "(the --repo folder is not named by the backup set's id), so "
+            "it is used.")
+        self._repo_id = found
+        return True
+
     def _name_bad_catalog(self, path: Path) -> None:
         """Say once that the catalog at *path* (or the disc file it was
         copied from) is not used because it cannot be read: tier 1's
@@ -1001,7 +1060,7 @@ class DiscSearch:
                 "this program cannot read it; not using it.")
 
     def _lookup_volume_labels(
-        self, pack_id: str,
+        self, pack_id: str, *, refresh: bool = True,
     ) -> tuple[list[str], str] | None:
         """Resolve a pack ID to the labels of the discs the prompt offers.
 
@@ -1023,10 +1082,13 @@ class DiscSearch:
         catalog knows it.  Sets ``_newest_known_label`` to the newest
         disc that is not DESTROYED in the catalog that lists the most
         discs, for the prompt's "newer than" hint (``_newest_disc``).
+        ``refresh=False`` (#983: many packs in a row) consults the copies
+        already made, without looking for and reading the catalogs again.
         """
         primary = self._lookup_catalog_path(pack_id)
-        reachable = self._discover_catalogs()
-        if self.catalog_path is not None and self._fs.is_file(self.catalog_path):
+        reachable = self._discover_catalogs() if refresh else []
+        if (refresh and self.catalog_path is not None
+                and self._fs.is_file(self.catalog_path)):
             reachable.insert(0, self.catalog_path)
         for cat in reachable:
             self._keep_catalog_copy(cat)

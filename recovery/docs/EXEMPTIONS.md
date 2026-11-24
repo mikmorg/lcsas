@@ -62,20 +62,20 @@ permitted (ignored by the parser).
 catalog.c:171   INTRACTABLE   lcsas_catalog_check (#788): sqlite3_prepare_v2 of PRAGMA quick_check fails only on malloc inside SQLite (fault-inject cannot reach)
 
 # disc_locator.c
-disc_locator.c:1193  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
-disc_locator.c:1195  DEFENSIVE   "
-disc_locator.c:1202  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
-disc_locator.c:1204  DEFENSIVE   "
-disc_locator.c:1215  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
-disc_locator.c:1217  DEFENSIVE   "
-disc_locator.c:1222  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
-disc_locator.c:1224  DEFENSIVE   "
-disc_locator.c:1347   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
-disc_locator.c:1348   VOLATILE   "
-disc_locator.c:1356   VOLATILE   "
-disc_locator.c:1357   VOLATILE   "
-disc_locator.c:1359   VOLATILE   "  (#786: the disc that did not fit is remembered)
-disc_locator.c:1360   VOLATILE   "
+disc_locator.c:1264  DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:1266  DEFENSIVE   "
+disc_locator.c:1273  DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:1275  DEFENSIVE   "
+disc_locator.c:1286  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
+disc_locator.c:1288  DEFENSIVE   "
+disc_locator.c:1293  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
+disc_locator.c:1295  DEFENSIVE   "
+disc_locator.c:1418   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
+disc_locator.c:1419   VOLATILE   "
+disc_locator.c:1427   VOLATILE   "
+disc_locator.c:1428   VOLATILE   "
+disc_locator.c:1430   VOLATILE   "  (#786: the disc that did not fit is remembered)
+disc_locator.c:1431   VOLATILE   "
 
 # lcsas_io.c
 lcsas_io.c:30   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
@@ -86,11 +86,11 @@ lcsas_io.c:55   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs
 lcsas_io.c:56   INTRACTABLE   "
 
 # main.c
-main.c:696   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --restore-folder path; needs filesystem-full tmpfs (integration-only)
-main.c:700   INTRACTABLE   "  (exit 74)
-main.c:732   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
-main.c:738   INTRACTABLE   "
-main.c:739   INTRACTABLE   "
+main.c:699   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --restore-folder path; needs filesystem-full tmpfs (integration-only)
+main.c:703   INTRACTABLE   "  (exit 74)
+main.c:735   INTRACTABLE   main exit 74 after the tree walk stopped on a full target (LCSAS_TREE_DISK_FULL); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+main.c:741   INTRACTABLE   "
+main.c:742   INTRACTABLE   "
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator
