@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # sqlite3 is imported lazily where it is actually used
     import sqlite3
     from collections.abc import Callable, Collection, Iterator
 
+    from lcsas.db.repos import RetiredSet
     from lcsas.staging.repo_marker import RepoMarker
 
 from lcsas.config.settings import LCSASConfig
@@ -1465,9 +1466,15 @@ class MetaVolumeBuilder:
             retired = self._read_retired_repos(conn)
             packs_on_discs = self._read_packs_on_discs(conn)
             markers = self._read_repo_markers(conn, [r[0] for r in rows])
+            retired_sets = self._read_retired_sets(conn)
 
         meta_root = self._output / "metadata"
         meta_root.mkdir(parents=True, exist_ok=True)
+        # #992: the retired sets by id, as on the data discs: the restore
+        # scripts take this disc's list of sets, and a retired set's
+        # metadata is not bundled (its mirror is gone).
+        from lcsas.staging.metadata import write_retired_sets_file
+        write_retired_sets_file(meta_root, retired_sets)
         for repo_id, mirror_path in rows:
             is_retired = repo_id in retired
             n_on_discs = packs_on_discs.get(repo_id, 0)
@@ -1580,6 +1587,23 @@ class MetaVolumeBuilder:
             }
         except Exception:  # pragma: no cover - malformed catalog
             return set()
+
+    @staticmethod
+    def _read_retired_sets(conn: sqlite3.Connection) -> list[RetiredSet]:
+        """The catalog's retired backup sets with their last disc (#992).
+
+        Permissive like the readers above: a catalog older than v10 (no
+        ``status`` column), or a hand-rolled one without the volume
+        tables, has none.
+        """
+        from lcsas.db.repos import retired_backup_sets
+
+        if not MetaVolumeBuilder._read_retired_repos(conn):
+            return []
+        try:
+            return retired_backup_sets(conn)
+        except Exception:  # pragma: no cover - malformed catalog
+            return []
 
     @staticmethod
     def _read_packs_on_discs(conn: sqlite3.Connection) -> dict[str, int]:

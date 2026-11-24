@@ -47,6 +47,8 @@ following in the clear. The meta disc carries the same key files and
 - **Each repository's `LCSAS_BACKUP_SET.txt`** (its id, name and split K/N) and
   the disc's `VOLUME_INFO.txt` / `volume_info.json` (label, pack hashes,
   repository ids).
+- **`metadata/RETIRED_SETS.txt`** (#992): each retired repository's id and
+  name, its last disc's label and the date that disc was prepared.
 - **`START_HERE.txt` and `CONFIG_SUMMARY.txt`**: the archive owner,
   description and technical contact when the config sets them, and every
   configured repository's name and key id. Filesystem paths are left out.

@@ -645,6 +645,8 @@ class BurnOrchestrator:
                 repo_names={rid: m.name for rid, m in markers.items()},
                 retired=retired,
             )
+            # #992: the same sets by id, for the restore scripts.
+            injector.write_retired_sets(retired)
             injector.write_restore_instructions()
             injector.write_standalone_restorer()
             if not media_type.is_test:

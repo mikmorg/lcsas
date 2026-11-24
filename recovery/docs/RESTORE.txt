@@ -791,6 +791,13 @@ data disc in reach.  Two things can go wrong, and the script says so:
     archive.  Discs of different archives (a real one, a drill) are
     told apart by their label's first word when the owner gave each
     archive its own label prefix.
+    A disc whose backup sets were all retired later (the META disc's
+    metadata/RETIRED_SETS.txt names them) is this archive's: it is
+    used, and the script says which disc each retired set is
+    restored from:
+        photos: retired after 2026-03-02.  Its backups are on the discs
+        up to LCSAS_BD25_2026_0010.  To restore it, use that disc as
+        the "newest data disc".
 
 DISCS WITH THE SAME LABEL
 

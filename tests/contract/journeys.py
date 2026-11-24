@@ -357,8 +357,9 @@ class Expect:
     ``asked``: the questions in order, by key (tier 1's disc questions
     left out).  ``restored``: the set (or sets) whose every file must be
     in the folders restored into, byte-exact.  ``tools_folder``: "removed" or
-    "kept".  ``says``: regexes the output must match.  ``disc_asked``:
-    whether tier 1 asked for a disc at least once.
+    "kept".  ``says``: regexes the output must match; ``never_says``:
+    regexes it must not match.  ``disc_asked``: whether tier 1 asked for
+    a disc at least once.
     """
 
     exit: int
@@ -367,6 +368,7 @@ class Expect:
     tools_folder: str | None = None
     says: tuple[str, ...] = ()
     disc_asked: bool | None = None
+    never_says: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -645,11 +647,19 @@ class SessionsSpec:
 
     names: tuple[str, ...]
     foreign: bool = False
+    #: Instead (#992): the set ``retired`` alone backed up and burned on
+    #: the first disc, then retired (its mirror gone, its config table
+    #: removed); then the sets in ``names`` backed up and burned on the
+    #: second disc, and the META disc built from the catalog.  So the
+    #: first disc holds only a retired set, and neither the second disc
+    #: nor the META disc carries its metadata.
+    retired: str | None = None
 
 
 SESSIONS: dict[str, SessionsSpec] = {
     "two sessions": SessionsSpec(("documents",)),
     "two sessions, another archive's disc": SessionsSpec(("documents",), foreign=True),
+    "a retired set's disc": SessionsSpec(("documents",), retired="photos"),
 }
 
 #: The first backup of a set of a :class:`SessionsSpec` archive.
@@ -662,6 +672,8 @@ def build_sessions(spec: SessionsSpec, workdir: Path) -> Archive:
     from lcsas.staging.repo_marker import cmd_name
     from tests.integration.scratch_install import ScratchInstall
 
+    if spec.retired is not None:
+        return _build_retired(spec, spec.retired, workdir)
     inst = ScratchInstall(workdir / "install", repos=spec.names)
     manifests: list[dict[str, str]] = []
     for n in (1, 2):
@@ -710,6 +722,68 @@ def build_sessions(spec: SessionsSpec, workdir: Path) -> Archive:
         writable(d)
         _read_only(d)
     return Archive(meta=meta, discs=discs, sets=sets, foreign=foreign)
+
+
+def _build_retired(spec: SessionsSpec, retired: str, workdir: Path) -> Archive:
+    """The archive of a :class:`SessionsSpec` with ``retired`` (#992)."""
+    import re as _re
+
+    from lcsas.meta.builder import MetaVolumeBuilder
+    from lcsas.staging.repo_marker import cmd_name
+    from tests.integration.scratch_install import ScratchInstall
+
+    inst = ScratchInstall(workdir / "install", repos=(retired,))
+    passwords = {retired: inst.key(retired).read_text().strip()}
+    manifests: dict[str, dict[str, str]] = {}
+    repo_ids: dict[str, str] = {}
+    inst.backup(retired, "f1.bin")
+    manifests[retired] = _manifest(inst.data(retired))
+    assert inst.lcsas("repo", "add", retired, str(inst.mirror(retired))) == 0
+    assert inst.lcsas("scan") == 0
+    assert inst.lcsas("stage") == 0
+    inst.mark_burned(inst.sessions()[-1])
+    repo_ids[retired] = inst.repo_id(retired)
+    # Its mirror is gone for good: retired, and out of the config.
+    shutil.rmtree(inst.mirror(retired))
+    assert inst.lcsas("repo", "retire", retired) == 0
+    inst.config.write_text(_re.sub(
+        rf"\[repos\.{retired}\]\n(?:[^\[\n].*\n)*", "", inst.config.read_text()))
+    for i, name in enumerate(spec.names, start=1):
+        inst.config.write_text(
+            inst.config.read_text()
+            + f"[repos.{name}]\n"
+            f'mirror_path = "{inst.mirror(name)}"\n'
+            f'password_file = "{inst.key(name)}"\n')
+        inst.key(name).write_text(f"scratch-password-{name}-{i}\n")
+        passwords[name] = inst.key(name).read_text().strip()
+        inst.data(name).mkdir(parents=True, exist_ok=True)
+        inst.rustic(name, "init")
+        inst.backup(name, "f1.bin")
+        manifests[name] = _manifest(inst.data(name))
+        assert inst.lcsas("repo", "add", name, str(inst.mirror(name))) == 0
+        repo_ids[name] = inst.repo_id(name)
+    assert inst.lcsas("scan") == 0
+    assert inst.lcsas("stage") == 0
+    inst.mark_burned(inst.sessions()[-1])
+    discs: dict[str, Path] = {}
+    for label, tree in sorted(inst.disc_trees().items()):
+        discs[label] = workdir / "discs" / label
+        shutil.copytree(tree, discs[label])
+    meta = workdir / "meta" / "LCSAS_META"
+    meta.parent.mkdir()
+    MetaVolumeBuilder(meta, catalog_db_path=inst.db,
+                      allow_no_dvdisaster_source=True).build()
+    assert not (meta / "metadata" / repo_ids[retired]).exists()
+    sets = {
+        name: ArchiveSet(repo_id=repo_ids[name], name=name,
+                         name_cmd=cmd_name(name, repo_ids[name]),
+                         password=passwords[name], manifest=manifests[name])
+        for name in (retired, *spec.names)
+    }
+    for d in (*discs.values(), meta):
+        writable(d)
+        _read_only(d)
+    return Archive(meta=meta, discs=discs, sets=sets)
 
 
 def _manifest(folder: Path) -> dict[str, str]:
@@ -769,6 +843,9 @@ def _leg_mismatches(want: Expect, got: JourneyResult, archive: Archive) -> list[
     for rx in want.says:
         if not re.search(rx, got.output):
             out.append(f"does not say /{rx}/")
+    for rx in want.never_says:
+        if re.search(rx, got.output):
+            out.append(f"says /{rx}/")
     if want.disc_asked is not None and (got.disc_prompts > 0) != want.disc_asked:
         out.append(f"tier 1 asked for a disc {got.disc_prompts} time(s), "
                    f"want {'some' if want.disc_asked else 'none'}")
@@ -1192,6 +1269,16 @@ UNKNOWN_SET = "Garden photos"
 #: #952 b: what the readers say of the backup restored, by its date.
 _DATE = r"\d{4}-\d\d-\d\d \d\d:\d\d"
 
+#: #992: the retired set of the archive "a retired set's disc".
+RETIRED = "photos"
+#: #959's sentence (``RetiredSet.sentence``), as either script prints it
+#: (with its own line breaks).
+_RETIRED_WORDS = ('photos: retired after DATE.  Its backups are on the discs up to '
+                  'LABEL.  To restore it, use that disc as the "newest data disc".')
+_RETIRED_SENTENCE = r"\s+".join(
+    {"DATE.": r"\d{4}-\d\d-\d\d\.", "LABEL.": r"LCSAS_\w+\."}.get(w, re.escape(w))
+    for w in _RETIRED_WORDS.split())
+
 JOURNEYS: tuple[Journey, ...] = (
     # #952 b, #966 item 2: before the restore and at its end, the
     # backup is named by its date.
@@ -1574,6 +1661,22 @@ JOURNEYS: tuple[Journey, ...] = (
                       restored=DOC, tools_folder="removed",
                       says=(r"The disc labelled OTHER_\w+ belongs to a\s+different "
                             r"LCSAS archive",)),
+    ),
+    # #992: a disc whose every set is retired is this archive's, not
+    # another's: the META disc names the retired set (RETIRED_SETS.txt).
+    # Put in at the newest data disc question, as #959's sentence says,
+    # its set is listed and restored, and the sentence is printed.
+    Journey(
+        name="a disc whose sets are all retired put in at the question",
+        archive="a retired set's disc",
+        typed=(Insert("oldest"), Pick(RETIRED), Password(RETIRED), "n"),
+        expect=Expect(exit=ScriptExit.OK,
+                      asked=("newest data disc", "which set", "folder",
+                             "password", "another set"),
+                      restored=RETIRED, tools_folder="removed",
+                      says=(_RETIRED_SENTENCE,),
+                      never_says=(r"different\s+LCSAS\s+archive",)),
+        differs={"bat": Differs(because=("menu by number",))},
     ),
     # #966 item 1: an ENTER pressed late (after a disc mounted by itself)
     # answered "another set?" with No, and the tools folder and the pack

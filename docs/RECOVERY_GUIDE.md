@@ -191,6 +191,8 @@ LCSAS_BD25_2026_0001.iso
 ├── data/                    Encrypted backup data
 │   └── ab/abc123...         Pack files (named by pack ID)
 └── metadata/
+    ├── RETIRED_SETS.txt     The retired backup sets, by id, and the disc to
+    │                        start each from (id|label|date|name lines)
     └── <id>/                One folder per repository, named by its id
         ├── LCSAS_BACKUP_SET.txt   The repository's name, and whether its
         │                    password is split

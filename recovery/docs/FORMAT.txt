@@ -207,6 +207,25 @@ VOLUME LAYOUT (LCSAS data disc)
                              lines (format, id, name, name_cmd,
                              split, split_id).  Restore works
                              without it.
+  /metadata/RETIRED_SETS.txt the backup sets retired when the disc
+                             was staged (#992, since rc12), whose
+                             folders are only on older discs.  Lines
+                             that start with "#" are comments that
+                             repeat this format; then one line per
+                             retired set, four fields split by "|":
+                                 id|label|date|name
+                             id: its <repo_id> folder name; label:
+                             the last disc that holds its files (use
+                             it as the newest data disc to restore
+                             the set); date: the day that disc was
+                             prepared, YYYY-MM-DD; "-" for both when
+                             none of its files is on a disc; name:
+                             the rest of the line.  restore.sh and
+                             restore.bat count these ids among the
+                             archive's sets, so a disc that holds
+                             only retired sets is not taken for
+                             another archive's.  No set line: none
+                             retired.  Older discs have no file.
   /catalog.db                the disc catalog (see LCSAS CATALOG)
   /python_reader.py    the Python reader (tier 3)
   /volume_info.json          this disc: label, uuid, media type,
@@ -234,8 +253,8 @@ VOLUME LAYOUT (LCSAS data disc)
   scripts/restore.sh and these docs), the bundled tools/ and the
   LCSAS source are on the separate meta disc (label LCSAS_META), not
   on data discs.  A meta disc built from the catalog also carries
-  metadata/<repo_id>/ for each backup set, but no data/ and no
-  catalog.db.
+  metadata/<repo_id>/ for each backup set whose mirror it could read,
+  and metadata/RETIRED_SETS.txt, but no data/ and no catalog.db.
 
 SNAPSHOT FILE
 
