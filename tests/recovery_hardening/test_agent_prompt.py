@@ -255,3 +255,54 @@ def test_scripted_prompts_say_the_box_names_the_disc() -> None:
         assert "next unused data disc" not in text, prompt.name
         assert "`It is on any disc labelled:`" in text, prompt.name
         assert "with the disc the box names" in text, prompt.name
+
+
+# #942: what the agent waits for is what swap-loop prints.
+_END_PREFIX = "SWAP-LOOP END:"
+_ALL_PROMPTS = tuple(
+    AGENT_PROMPT.with_name(n)
+    for n in ("agent_prompt.txt", "agent_prompt_split.txt",
+              "agent_prompt_split_docs.txt")
+)
+
+
+def _shell_constant(name: str) -> str:
+    for line in RESTORE_SHELL.read_text().splitlines():
+        if line.startswith(f"{name}='"):
+            return line.split("'")[1]
+    raise AssertionError(f"restore-shell defines no {name}='...' constant")
+
+
+def test_swap_loop_end_lines_are_one_constant_each() -> None:
+    """The two final lines are sh constants, both starting with the
+    prefix the prompts say to wait for, and swap-loop prints them by
+    name, never as a retyped literal."""
+    done = _shell_constant("SWAP_LOOP_DONE")
+    stopped = _shell_constant("SWAP_LOOP_STOPPED")
+    assert done.startswith(_END_PREFIX) and stopped.startswith(_END_PREFIX)
+    assert "RESTORE COMPLETE" in done and "RESTORE COMPLETE" not in stopped
+    loop = _swap_loop_source()
+    assert 'echo "$SWAP_LOOP_DONE"' in loop
+    assert 'echo "$SWAP_LOOP_STOPPED"' in loop
+    assert done not in loop and stopped not in loop
+
+
+@pytest.mark.parametrize("prompt", _ALL_PROMPTS, ids=lambda p: p.name)
+def test_prompts_name_the_swap_loop_end_lines(prompt: Path) -> None:
+    """#942: the 2026-11-21 agent waited for a string swap-loop never
+    printed.  Each prompt names both end lines, exactly as the code
+    prints them, and the prefix to wait for."""
+    text = " ".join(prompt.read_text().split())
+    for name in ("SWAP_LOOP_DONE", "SWAP_LOOP_STOPPED"):
+        assert f"`{_shell_constant(name)}`" in text, (prompt.name, name)
+    assert f"wait for a line starting `{_END_PREFIX}`" in text, prompt.name
+
+
+def test_restore_shell_help_names_the_swap_loop_end_lines() -> None:
+    help_text = " ".join(
+        line.lstrip("#") for line in RESTORE_SHELL.read_text().splitlines()
+        if line.startswith("#")
+    )
+    help_text = " ".join(help_text.split())
+    for name in ("SWAP_LOOP_DONE", "SWAP_LOOP_STOPPED"):
+        assert _shell_constant(name) in help_text, name
