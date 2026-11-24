@@ -1091,10 +1091,11 @@ HOW TO RESTORE (pure Python — no native binaries needed)
 If no rustic/restic binary works (wrong architecture, missing libs):
 
   1. Extract the ISO images as described below.
-  2. Assemble a cache directory (copy metadata + packs — see manual steps).
+  2. Assemble a cache directory, /tmp/cache/REPO_ID (copy metadata +
+     packs — see manual steps).
   3. Run the Python reader included on this disc:
 
-       python3 python_reader.py --repo /tmp/cache \\
+       python3 python_reader.py --repo /tmp/cache/REPO_ID \\
            --password-file /path/to/password.txt --restore-folder /path/to/output
 
   This script requires only Python 3.10+ standard library.
@@ -1114,21 +1115,24 @@ HOW TO RESTORE (manual)
 2. Inspect catalog:
        sqlite3 /tmp/vol1/catalog.db "SELECT label FROM volumes"
 
-3. Copy the pack files of every disc into one cache folder.  On a disc
-   they are in data/<first 2 characters>/<name>; keep that layout:
+3. Copy the pack files of every disc into one cache folder,
+   /tmp/cache/REPO_ID: REPO_ID is the repository's ID (step 4 says
+   which), and the Python reader takes it from the folder's name.  On
+   a disc the packs are in data/<first 2 characters>/<name>; keep that
+   layout:
        for d in /tmp/vol*/data/*/; do
-           mkdir -p "/tmp/cache/data/$(basename "$d")"
-           cp "$d"* "/tmp/cache/data/$(basename "$d")/"
+           mkdir -p "/tmp/cache/REPO_ID/data/$(basename "$d")"
+           cp "$d"* "/tmp/cache/REPO_ID/data/$(basename "$d")/"
        done
 
 4. Copy metadata (index, snapshots, keys, config) from any disc.
    Each folder in metadata/ is one repository, named by its ID.  The
    LCSAS_BACKUP_SET.txt file in the folder gives the repository's name:
        grep -H '^name=' /tmp/vol1/metadata/*/LCSAS_BACKUP_SET.txt
-       cp -r /tmp/vol1/metadata/REPO_ID/* /tmp/cache/
+       cp -r /tmp/vol1/metadata/REPO_ID/* /tmp/cache/REPO_ID/
 
 5. Restore:
-       rustic restore latest /output -r /tmp/cache --password-file ~/password.txt
+       rustic restore latest /output -r /tmp/cache/REPO_ID --password-file ~/password.txt
 
 DISC CONTENTS
 --------------

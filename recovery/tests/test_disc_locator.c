@@ -904,6 +904,90 @@ test_catalog_of_another_archive(const char *tmpdir)
 }
 
 /*
+ * #993: the --repo folder is not named by its set id.  A catalog that
+ * does not know the set by that name is judged by the repository's own
+ * packs (lcsas_disc_locator_set_index): one that records them all under
+ * one set is taken, and that set's id is the backup set from then on;
+ * one that records them under two sets is another archive's.  The
+ * index names pack A twice and pack B once.  Returns the number of
+ * failures.
+ */
+static int
+test_catalog_adopts_set_993(const char *tmpdir)
+{
+    static const char *const sql[2] = {
+        /* A as set-x; a pack that is not ours as set-other. */
+        "INSERT INTO packs VALUES (1, '%s', 10, 'set-x');"
+        "INSERT INTO packs VALUES (2, '5555', 10, 'set-other');",
+        /* A as set-x, B as set-y. */
+        "INSERT INTO packs VALUES (1, '%s', 10, 'set-x');"
+        "INSERT INTO packs VALUES (2, '%s', 10, 'set-y');",
+    };
+    lcsas_disc_locator l;
+    lcsas_blob_loc e[3];
+    lcsas_blob_index ix;
+    char path[1024];
+    char all[2048];
+    char rows[512];
+    char a_hex[65];
+    char b_hex[65];
+    FILE *err;
+    int saved;
+    int bad = 0;
+    int i;
+
+    memset(e, 0, sizeof e);
+    memset(e[0].pack_id, 0xAA, 32);
+    memset(e[1].pack_id, 0xBB, 32);
+    memset(e[2].pack_id, 0xAA, 32);
+    ix.entries = e;
+    ix.count = 3;
+    ix.cap = 3;
+    lcsas_hex_encode(e[0].pack_id, 32, a_hex);
+    lcsas_hex_encode(e[1].pack_id, 32, b_hex);
+    a_hex[64] = b_hex[64] = '\0';
+    snprintf(path, sizeof path, "%s_adopt.db", tmpdir);
+
+    for (i = 0; i < 2; i++) {
+        snprintf(rows, sizeof rows, sql[i], a_hex, b_hex);
+        snprintf(all, sizeof all, "%s%s", GOOD_CATALOG_SQL, rows);
+        if (make_catalog(path, all) != 0) {
+            fprintf(stderr, "FAIL 993 (%d): fixture\n", i);
+            bad++;
+            continue;
+        }
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_repo(&l, "/tmp/cache/renamed");
+        lcsas_disc_locator_set_index(&l, &ix);
+        err = capture_stderr_begin(&saved);
+        lcsas_disc_locator_consider_catalog(&l, path);
+        capture_stderr_end(saved);
+        if (i == 0 && (!l.owned_catalog || strcmp(l.repo_id, "set-x") != 0
+                       || l.n_index_packs != 2 || !err
+                       || count_lines_with(err, "packs restored here "
+                                                "as backup set "
+                                                "set-x") != 1)) {
+            fprintf(stderr, "FAIL 993: a catalog that knows our packs as "
+                    "one set was not taken (set '%s', %lu index packs)\n",
+                    l.repo_id, (unsigned long)l.n_index_packs);
+            bad++;
+        }
+        if (i == 1 && (l.owned_catalog
+                       || strcmp(l.repo_id, "renamed") != 0 || !err
+                       || count_lines_with(err, "another archive's "
+                                                "catalog") != 1)) {
+            fprintf(stderr, "FAIL 993: a catalog that knows our packs as "
+                    "two sets was taken (set '%s')\n", l.repo_id);
+            bad++;
+        }
+        if (err) fclose(err);
+        lcsas_disc_locator_free(&l);
+    }
+    unlink(path);
+    return bad;
+}
+
+/*
  * #957: the catalog has the pack but lists no disc for it (the pack is
  * on a disc burned after this catalog's): name the newest disc this
  * catalog does list, and say to insert the newest data disc -- the
@@ -3375,6 +3459,7 @@ main(void)
     fails += test_skip_answer(tmpdir);
     fails += test_catalog_ranking(tmpdir);
     fails += test_catalog_of_another_archive(tmpdir);
+    fails += test_catalog_adopts_set_993(tmpdir);
     fails += test_newer_than_hint(tmpdir);
     fails += test_box_texts_966(tmpdir);
 

@@ -152,6 +152,10 @@ class DiscCat:
     foreign: bool = False
     #: Cut the file to this many bytes.
     cut_to: int | None = None
+    #: Also a data disc (#993): a ``volume_info.json`` with its label,
+    #: and a ``data/`` folder holding a copy of one pack of the
+    #: repository that is there (not a missing one).
+    data: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,6 +206,12 @@ class Faults:
     #: The disc whose catalog is passed with ``--catalog``, as the
     #: scripts pass the one with the newest file time.
     catalog_from: str | None = None
+    #: #993: the backup set id the catalogs record, when the ``--repo``
+    #: folder is not named by it (``None``: the folder's name).
+    set_id: str | None = None
+    #: Run with ``LCSAS_PACK_CACHE_DIR`` set (a folder in the run's own
+    #: work folder).
+    pack_cache: bool = False
 
 
 @dataclass(frozen=True)
@@ -218,7 +228,8 @@ class Outcome:
     ``discs``: what the first disc prompt names (``named_discs``): the
     labels in order, or ``NONE_LISTED`` / ``NO_RECORD`` / ``NO_CATALOG``
     / ``NO_PROMPT``; ``None`` = not compared.
-    ``says``: regexes searched in everything the reader printed.
+    ``says``: regexes searched in everything the reader printed;
+    ``never_says``: regexes that must not be found there.
     """
 
     exit: int
@@ -228,6 +239,7 @@ class Outcome:
     wrote_outside: bool = False
     discs: tuple[str, ...] | str | None = None
     says: tuple[str, ...] = ()
+    never_says: tuple[str, ...] = ()
     #: Only on an outcome a driver returns: the reader's output.
     output: str = field(default="", compare=False, repr=False)
 
@@ -317,6 +329,11 @@ _T1 = "LCSAS_TEST_TINY_2026_0001"
 _T2 = "LCSAS_TEST_TINY_2026_0002"
 _T3 = "LCSAS_TEST_TINY_2026_0003"
 _OTHER = "LCSAS_TEST_TINY_2026_0009"
+#: #993: the backup set id the catalogs record when the --repo folder
+#: is named otherwise, and the line a reader prints for a catalog it
+#: does not use because it is another archive's.
+_SET_ID = "5e7a11d0"
+_FOREIGN = r"another archive's catalog"
 
 
 def _catalog_choice(name: str, discs: tuple[DiscCat, ...], passed: str,
@@ -797,6 +814,37 @@ CASES: list[Case] = [
          DiscCat(_T2, (Vol(_T1, holds=False), Vol(_T2, holds=False)),
                  mark=2, age=100)),
         _OTHER, newer_than(_T2)),
+    # #993: the --repo folder is not named by its backup set id (a
+    # folder the heir named).  The catalogs know this repository's own
+    # packs, so they are used: the prompt names the disc, and a data
+    # disc is copied into the pack cache.
+    Case(
+        name="renamed repository folder: the prompt names the disc",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(missing=(b"b",), answers=b"q\n", set_id=_SET_ID,
+                      discs=(DiscCat(_T2, (Vol(_T1), Vol(_T2)), mark=2),),
+                      catalog_from=_T2),
+        expect=Outcome(exit=ReaderExit.READER_QUIT, restored=ANY,
+                       discs=(_T2, _T1), never_says=(_FOREIGN,)),
+        replaces="new (#993)",
+    ),
+    Case(
+        name="renamed repository folder: a data disc is copied to the "
+             "pack cache",
+        before=_MISSING_PACK_BEFORE,
+        tree=_MISSING_PACK_TREE,
+        faults=Faults(missing=(b"b",), answers=b"\nq\n", set_id=_SET_ID,
+                      pack_cache=True,
+                      discs=(DiscCat(_T1, (Vol(_T1, holds=False), Vol(_T2)),
+                                     mark=1, data=True),),
+                      catalog_from=_T1),
+        expect=Outcome(exit=ReaderExit.READER_QUIT, restored=ANY,
+                       discs=(_T2,),
+                       says=(rf"copying disc {_T1} to the cache",),
+                       never_says=(_FOREIGN, r"belongs to another archive")),
+        replaces="new (#993)",
+    ),
     # #967: the only catalog in reach cannot be read.  It is named as
     # not used, and the prompt has no catalog (tier 3 said "no catalog
     # available", and not why).
@@ -1117,13 +1165,21 @@ def _command(reader: str, repo: Path, target: Path, pwfile: Path,
 
 
 def _write_disc_catalogs(discs: tuple[DiscCat, ...], packs: list[str],
-                         mounts: Path, repo_id: str) -> None:
+                         mounts: Path, repo_id: str, repo: Path) -> None:
     """Each disc of *discs* as a folder in *mounts* holding its catalog,
-    whose file times are ``age`` seconds apart (#950)."""
+    whose file times are ``age`` seconds apart (#950).  A data disc also
+    holds a copy of the first pack of *repo* not in *packs* (#993)."""
     newest = 1_700_000_000
     for disc in discs:
         folder = mounts / disc.name
         folder.mkdir(parents=True)
+        if disc.data:
+            pack = min(p for p in (repo / "data").rglob("*")
+                       if p.is_file() and p.name not in packs)
+            (folder / "data" / pack.parent.name).mkdir(parents=True)
+            shutil.copyfile(pack, folder / "data" / pack.parent.name / pack.name)
+            (folder / "volume_info.json").write_text(
+                json.dumps({"label": disc.name}))
         path = folder / "catalog.db"
         write_catalog(path, packs, disc.vols, knows_pack=disc.knows_pack,
                       repo_id="another-archive" if disc.foreign else repo_id,
@@ -1134,9 +1190,11 @@ def _write_disc_catalogs(discs: tuple[DiscCat, ...], packs: list[str],
         os.utime(path, (newest - disc.age, newest - disc.age))
 
 
-def _run(cmd: list[str], stdin: bytes) -> subprocess.CompletedProcess[bytes]:
+def _run(cmd: list[str], stdin: bytes,
+         env: Mapping[str, str] | None = None,
+         ) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(cmd, input=stdin, capture_output=True,
-                          env=_env(), timeout=300)
+                          env={**_env(), **(env or {})}, timeout=300)
 
 
 def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
@@ -1167,13 +1225,16 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
         good_pw.write_bytes(PASSWORD + b"\n")
     empty = work / "no-discs"
     empty.mkdir()
+    # #993: the set id the catalogs record: the --repo folder's name,
+    # unless the case names the folder otherwise.
+    set_id = case.faults.set_id or repo.name
     if case.faults.catalog is not None:
         write_catalog(work / "catalog.db", built.missing_packs,
                       case.faults.catalog,
                       knows_pack=case.faults.catalog_knows_pack,
-                      repo_id=repo.name)
+                      repo_id=set_id)
     _write_disc_catalogs(case.faults.discs, built.missing_packs,
-                         work / "mnt", repo.name)
+                         work / "mnt", set_id, repo)
     _reset_outside(built.outside)
     outside_before = walk(built.outside)
 
@@ -1219,7 +1280,9 @@ def run_reader(reader: str, case: Case, built: Built, work: Path) -> Outcome:
         if case.faults.snapshot is not None:
             # Here, not in _command: an empty id is an argument too.
             cmd += ["--snapshot", case.faults.snapshot]
-        res = _run(cmd, case.faults.answers or b"")
+        env = ({"LCSAS_PACK_CACHE_DIR": str(work / "cache")}
+               if case.faults.pack_cache else None)
+        res = _run(cmd, case.faults.answers or b"", env)
         output = (res.stdout + res.stderr).decode("utf-8", "replace")
         root = target
         if built.src is not None:
@@ -1383,6 +1446,9 @@ def mismatches(case: Case, reader: str, got: Outcome, built: Built) -> list[str]
     for rx in want.says:
         if not re.search(rx, got.output):
             out.append(f"does not say /{rx}/")
+    for rx in want.never_says:
+        if re.search(rx, got.output):
+            out.append(f"says /{rx}/")
     return out
 
 

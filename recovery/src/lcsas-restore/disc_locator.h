@@ -11,6 +11,7 @@
 #define LCSAS_DISC_LOCATOR_H
 
 #include "catalog.h"
+#include "repo.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -85,12 +86,21 @@ typedef struct lcsas_disc_locator {
     long long      owned_mtime;
 
     /* #950: the backup set being restored: the --repo folder's name
-     * (metadata/<id>).  A catalog with no pack of it is another
-     * archive's: never used, and its disc never copied into the pack
-     * cache.  Without lcsas_disc_locator_set_repo (`has_repo_id` 0,
+     * (metadata/<id>), or (#993) the set a catalog records this
+     * repository's own packs under.  A catalog with no pack of it is
+     * another archive's: never used, and its disc never copied into the
+     * pack cache.  Without lcsas_disc_locator_set_repo (`has_repo_id` 0,
      * unit tests only) every catalog counts as knowing the set. */
     char repo_id[256];
     int  has_repo_id;
+
+    /* #993: this repository's index (borrowed; NULL until
+     * lcsas_disc_locator_set_index) and its pack ids, each once (owned),
+     * listed the first time a catalog that does not know `repo_id` is
+     * judged by them. */
+    const lcsas_blob_index *index;
+    unsigned char (*index_packs)[LCSAS_BLOB_ID_LEN];
+    size_t n_index_packs;
 
     /* Optional opt-in opportunistic pack cache.  When set (e.g. via
      * the LCSAS_PACK_CACHE_DIR env var, plumbed from main.c), every
@@ -243,6 +253,18 @@ void lcsas_disc_locator_free(lcsas_disc_locator *l);
  */
 void lcsas_disc_locator_set_repo(lcsas_disc_locator *l,
                                  const char *repo_path);
+
+/*
+ * #993: this repository's index (borrowed; it must outlive the
+ * locator).  A catalog that does not know the backup set by the --repo
+ * folder's name is then judged by the repository's own packs: when the
+ * ones it records all belong to one set, it is used, and that set's id
+ * is the backup set from then on.  None recorded, or more than one
+ * set: another archive's catalog.  Call it before any catalog is
+ * considered.
+ */
+void lcsas_disc_locator_set_index(lcsas_disc_locator *l,
+                                  const lcsas_blob_index *ix);
 
 /*
  * #950: consider the catalog at `catalog_path` (the --catalog

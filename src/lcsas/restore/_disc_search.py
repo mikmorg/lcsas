@@ -929,7 +929,8 @@ class DiscSearch:
         """(volumes holding the pack, pack known, every volume of the
         catalog), or None when the catalog cannot be opened or read, or
         does not know the backup set being restored (#950: another
-        archive's catalog, named once).
+        archive's catalog, named once; #993: unless it knows this
+        repository's own packs, see ``_adopt_set``).
         Each volume is ``(volume_id, label, status)``, newest first,
         DESTROYED ones included: ``_offered_labels`` and
         ``_newest_disc`` apply the rules.
@@ -941,11 +942,11 @@ class DiscSearch:
             self._name_bad_catalog(path)
             return None
         try:
+            shown = str(self._copy_origin.get(path, path))
             if self._repo_id is not None and conn.execute(
                 "SELECT 1 FROM packs WHERE repo_id = ? LIMIT 1",
                 (self._repo_id,),
-            ).fetchone() is None:
-                shown = str(self._copy_origin.get(path, path))
+            ).fetchone() is None and not self._adopt_set(conn, shown):
                 if shown not in self._foreign_named:
                     self._foreign_named.add(shown)
                     self._log(
@@ -988,6 +989,32 @@ class DiscSearch:
             # Leaving the connection open keeps a fd on the iso9660 mount
             # and prevents `umount /media` during disc swaps.
             conn.close()
+
+    def _adopt_set(self, conn: sqlite3.Connection, shown: str) -> bool:
+        """#993: the catalog on *conn* (from *shown*) does not know the
+        backup set by the ``--repo`` folder's name.  Judge it by this
+        repository's own packs (a pack id is unique across a catalog):
+        when the ones it records all belong to one set, that set is the
+        backup set from now on (tier 1: disc_locator.c::adopt_set), and
+        True is returned.  None recorded, or more than one set: False,
+        another archive's catalog.  An error reading it is the caller's.
+        """
+        ours = self._repo_pack_ids()
+        sets = {
+            set_id for sha, set_id in conn.execute(
+                "SELECT sha256, repo_id FROM packs")
+            if sha in ours and isinstance(set_id, str) and set_id
+        }
+        if len(sets) != 1:
+            return False
+        (found,) = sets
+        self._log(
+            f"The catalog {shown} does not know backup set {self._repo_id}, "
+            f"but it knows the packs restored here as backup set {found} "
+            "(the --repo folder is not named by the backup set's id), so "
+            "it is used.")
+        self._repo_id = found
+        return True
 
     def _name_bad_catalog(self, path: Path) -> None:
         """Say once that the catalog at *path* (or the disc file it was

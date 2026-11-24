@@ -110,6 +110,7 @@ def test_manual_steps_restore_a_two_disc_set(tmp_path: Path) -> None:
                    if line.strip().startswith(("python3 ", "--password-file")))
     reader = inst.disc_trees()[inst.labels()[0]] / "python_reader.py"
     cmd = (cmd.replace("/tmp/", f"{tmp}/")
+           .replace("REPO_ID", inst.repo_id("alpha"))
            .replace("python_reader.py", str(reader))
            .replace("/path/to/password.txt", str(inst.key("alpha")))
            .replace("/path/to/output", str(work / "output-py")))
